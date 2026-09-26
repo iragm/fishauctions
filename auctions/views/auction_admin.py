@@ -4,6 +4,7 @@ The auction admin's pages, plus ``AuctionStats``; the JSON behind its charts is 
 :mod:`auctions.views.auction_stats`.
 """
 
+import json
 import logging
 from datetime import datetime
 from datetime import timezone as date_tz
@@ -28,8 +29,9 @@ from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, ListView, TemplateView, View
 from django.views.generic.edit import (
     CreateView,
@@ -57,6 +59,7 @@ from auctions.models import (
     Auction,
     AuctionDropdown,
     AuctionHistory,
+    AuctionRandomOption,
     AuctionTOS,
     ClubMember,
     Invoice,
@@ -81,9 +84,11 @@ from .base import (
     AuctionViewMixin,
     HTMxTableView,
     _upsert_clubmember_shadow_tos,
+    browser_timezone,
     check_club_permission,
     close_modal_response,
 )
+from .invoices import MAX_ADJUSTMENT_AMOUNT
 
 logger = logging.getLogger(__name__)
 # return HttpResponse(f"Max bid: ${self.lot.max_bid: .2f}")
@@ -113,6 +118,9 @@ class PickupLocationsDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
+        if not self.auction:
+            # No auction, so no admin to check against.
+            raise Http404
         self.success_url = reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
         if self.get_object().auction.location_qs.count() < 2:
             self.success_url = reverse("auction_main", kwargs={"slug": self.auction.slug})
@@ -150,7 +158,7 @@ class PickupLocationForm:
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
         kwargs["auction"] = self.auction
-        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        kwargs["user_timezone"] = browser_timezone(self.request)
         return kwargs
 
     def get_success_url(self):
@@ -204,7 +212,9 @@ class PickupLocationsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
-        self.is_auction_admin
+        if not self.auction:
+            raise Http404
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
@@ -223,8 +233,8 @@ class PickupLocationsCreate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMi
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        self.is_auction_admin
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -260,7 +270,7 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["user"] = self.request.user
         kwargs["cloned_from"] = None
-        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        kwargs["user_timezone"] = browser_timezone(self.request)
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -359,7 +369,7 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
             )
 
         # Warn when an important time is set to midnight.
-        user_tz = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        user_tz = browser_timezone(self.request)
         try:
             user_tz = pytz_timezone(user_tz)
         except Exception:  # Catch any invalid timezone errors
@@ -395,7 +405,20 @@ class AuctionCustomFieldsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionVi
         context = super().get_context_data(**kwargs)
         context["title"] = f"{self.auction} - Custom fields"
         context["auction"] = self.auction
-        context["dropdown_options"] = AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon")
+        context["option_lists"] = [
+            {
+                "id": "custom-dropdown-options",
+                "title": "Custom dropdown options",
+                "url": reverse("auction_custom_dropdown_options", kwargs={"slug": self.auction.slug}),
+                "options": AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon"),
+            },
+            {
+                "id": "custom-random-options",
+                "title": "Custom random options",
+                "url": reverse("auction_custom_random_options", kwargs={"slug": self.auction.slug}),
+                "options": AuctionRandomOption.objects.filter(auction=self.auction).order_by("createdon"),
+            },
+        ]
         context["custom_dropdown_max_length"] = CUSTOM_DROPDOWN_MAX_LENGTH
         return context
 
@@ -406,12 +429,19 @@ class AuctionCustomFieldsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionVi
             messages.error(
                 self.request, "Custom dropdown requires a name and at least two options. It has been disabled."
             )
+        if getattr(form, "custom_random_auto_disabled", False):
+            messages.error(
+                self.request, "Custom random field requires a name and at least two options. It has been disabled."
+            )
         return super().form_valid(form)
 
 
 class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
+    """List, add, rename and remove one of an auction's option lists; admins only for writes."""
+
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
+    option_model = AuctionDropdown
 
     def dispatch(self, request, *args, **kwargs):
         # APIView.dispatch skips AuctionViewMixin.dispatch, so set self.auction here.
@@ -420,7 +450,7 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
 
     def get(self, request, *args, **kwargs):
         options = list(
-            AuctionDropdown.objects.filter(auction=self.auction)
+            self.option_model.objects.filter(auction=self.auction)
             .order_by("createdon")
             .values("id", "value", "user_id", "createdon")
         )
@@ -440,14 +470,14 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
                 return JsonResponse(
                     {"success": False, "error": f"Option value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"}
                 )
-            if AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exists():
+            if self.option_model.objects.filter(auction=self.auction, value__iexact=value).exists():
                 return JsonResponse({"success": False, "error": "That option already exists"})
-            option = AuctionDropdown.objects.create(auction=self.auction, user=request.user, value=value)
+            option = self.option_model.objects.create(auction=self.auction, user=request.user, value=value)
             return JsonResponse({"success": True, "option": {"id": option.pk, "value": option.value}})
 
-        if not option_id:
+        if not str(option_id or "").isdigit():
             return JsonResponse({"success": False, "error": "Option id is required"})
-        option = AuctionDropdown.objects.filter(pk=option_id, auction=self.auction).first()
+        option = self.option_model.objects.filter(pk=option_id, auction=self.auction).first()
         if not option:
             return JsonResponse({"success": False, "error": "Option not found"})
         option.user = request.user
@@ -459,7 +489,9 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
                 return JsonResponse(
                     {"success": False, "error": f"Option value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"}
                 )
-            duplicate = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exclude(pk=option.pk)
+            duplicate = self.option_model.objects.filter(auction=self.auction, value__iexact=value).exclude(
+                pk=option.pk
+            )
             if duplicate.exists():
                 return JsonResponse({"success": False, "error": "That option already exists"})
             option.value = value
@@ -469,6 +501,12 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
             option.delete()
             return JsonResponse({"success": True})
         return JsonResponse({"success": False, "error": "Invalid action"})
+
+
+class AuctionRandomOptionsAPI(AuctionDropdownOptionsAPI):
+    """The options ``Lot.custom_random`` is dealt from."""
+
+    option_model = AuctionRandomOption
 
 
 class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
@@ -571,6 +609,13 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["auction"] = self.auction
         return kwargs
+
+    def get_possible_filters(self):
+        # LotAdminFilter.STATUS_KEYWORDS
+        return [
+            ("<i class='bi bi-hourglass-split'></i> Active unsold", "active_unsold"),
+            ("<i class='bi bi-slash-circle'></i> Ended unsold", "ended_unsold"),
+        ]
 
 
 class AuctionHelp(LoginRequiredMixin, AuctionViewMixin, TemplateView):
@@ -793,7 +838,9 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
 
     def get(self, request, *args, **kwargs):
         tos = self.auctiontos
-        bidder_number = tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else ""
+        # Both typed by people (the name by the participant themselves), so both are escaped.
+        bidder_number = escape(tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else "")
+        name = escape(tos.name or "")
         check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
         html = f"""
 <div data-htmx-modal-root>
@@ -802,7 +849,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="checkInModalLabel">Check in {tos.name}</h5>
+        <h5 class="modal-title" id="checkInModalLabel">Check in {name}</h5>
         <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
@@ -954,10 +1001,14 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
         """
         try:
             amount_val = round(float(adjustment_amount))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return "", None
         if amount_val <= 0:
             return "", None
+        if amount_val > MAX_ADJUSTMENT_AMOUNT:
+            return "", JsonResponse(
+                {"ok": False, "message": f"Adjustments can be at most ${MAX_ADJUSTMENT_AMOUNT:,}."}, status=400
+            )
         invoice = Invoice.objects.filter(auctiontos_user=tos).first()
         if invoice and invoice.status != "DRAFT":
             return "", JsonResponse(
@@ -965,7 +1016,7 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
                 status=400,
             )
         if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+            invoice = Invoice.for_participant(tos, self.auction)
         InvoiceAdjustment.objects.create(
             invoice=invoice,
             user=acting_user,
@@ -973,6 +1024,7 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
             amount=amount_val,
             notes=adjustment_label[:150],
         )
+        invoice.recalculate()
         sign = "+" if adjustment_type == "ADD" else "-"
         return f"{sign}${amount_val} {adjustment_label}".strip(), None
 
@@ -1101,6 +1153,22 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
         )
 
 
+#: ``<``, ``>`` and ``&`` as JSON string escapes, the set ``django.utils.html.json_script`` uses.
+_CHART_JSON_ESCAPES = {ord(">"): "\\u003E", ord("<"): "\\u003C", ord("&"): "\\u0026"}
+
+
+def _chart_json(data):
+    """``data`` as JSON safe to write straight into a ``<script>`` block.
+
+    ``json.dumps`` does not escape ``<``, so a lot name or referrer containing ``</script>`` closed
+    the tag and everything after it ran as markup -- and a referrer reaches these charts from the
+    unauthenticated page-view beacon. ``ensure_ascii`` (the default) already escapes U+2028/U+2029.
+    Returns a ``SafeString``, so the template's ``|safe`` is a no-op rather than the only thing
+    standing between a stranger's text and the page.
+    """
+    return mark_safe(json.dumps(data).translate(_CHART_JSON_ESCAPES))  # noqa: S308 - escaped above
+
+
 class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
     """Fun facts about an auction"""
 
@@ -1186,33 +1254,31 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             messages.info(self.request, "Not all stats are available for old auctions.")
 
         # Add all stat data to context for template rendering
-        import json
-
-        context["stats_activity_json"] = json.dumps(auction.get_stat_activity)
-        context["stats_attrition_json"] = json.dumps(auction.get_stat_attrition)
-        context["stats_auctioneer_speed_json"] = json.dumps(auction.get_stat_auctioneer_speed)
-        context["stats_lot_sell_prices_json"] = json.dumps(auction.get_stat_lot_sell_prices)
-        context["stats_referrers_json"] = json.dumps(auction.get_stat_referrers)
-        context["stats_images_json"] = json.dumps(auction.get_stat_images)
-        context["stats_travel_distance_json"] = json.dumps(auction.get_stat_travel_distance)
-        context["stats_previous_auctions_json"] = json.dumps(auction.get_stat_previous_auctions)
-        context["stats_lots_submitted_json"] = json.dumps(auction.get_stat_lots_submitted)
-        context["stats_location_volume_json"] = json.dumps(auction.get_stat_location_volume)
-        context["stats_feature_use_json"] = json.dumps(auction.get_stat_feature_use)
+        context["stats_activity_json"] = _chart_json(auction.get_stat_activity)
+        context["stats_attrition_json"] = _chart_json(auction.get_stat_attrition)
+        context["stats_auctioneer_speed_json"] = _chart_json(auction.get_stat_auctioneer_speed)
+        context["stats_lot_sell_prices_json"] = _chart_json(auction.get_stat_lot_sell_prices)
+        context["stats_referrers_json"] = _chart_json(auction.get_stat_referrers)
+        context["stats_images_json"] = _chart_json(auction.get_stat_images)
+        context["stats_travel_distance_json"] = _chart_json(auction.get_stat_travel_distance)
+        context["stats_previous_auctions_json"] = _chart_json(auction.get_stat_previous_auctions)
+        context["stats_lots_submitted_json"] = _chart_json(auction.get_stat_lots_submitted)
+        context["stats_location_volume_json"] = _chart_json(auction.get_stat_location_volume)
+        context["stats_feature_use_json"] = _chart_json(auction.get_stat_feature_use)
 
         # Add comparison auction stats if available
         if "compare_auction" in context:
             compare_auction = context["compare_auction"]
-            context["compare_stats_activity_json"] = json.dumps(compare_auction.get_stat_activity)
-            context["compare_stats_attrition_json"] = json.dumps(compare_auction.get_stat_attrition)
-            context["compare_stats_auctioneer_speed_json"] = json.dumps(compare_auction.get_stat_auctioneer_speed)
-            context["compare_stats_lot_sell_prices_json"] = json.dumps(compare_auction.get_stat_lot_sell_prices)
-            context["compare_stats_referrers_json"] = json.dumps(compare_auction.get_stat_referrers)
-            context["compare_stats_images_json"] = json.dumps(compare_auction.get_stat_images)
-            context["compare_stats_travel_distance_json"] = json.dumps(compare_auction.get_stat_travel_distance)
-            context["compare_stats_previous_auctions_json"] = json.dumps(compare_auction.get_stat_previous_auctions)
-            context["compare_stats_lots_submitted_json"] = json.dumps(compare_auction.get_stat_lots_submitted)
-            context["compare_stats_location_volume_json"] = json.dumps(compare_auction.get_stat_location_volume)
-            context["compare_stats_feature_use_json"] = json.dumps(compare_auction.get_stat_feature_use)
+            context["compare_stats_activity_json"] = _chart_json(compare_auction.get_stat_activity)
+            context["compare_stats_attrition_json"] = _chart_json(compare_auction.get_stat_attrition)
+            context["compare_stats_auctioneer_speed_json"] = _chart_json(compare_auction.get_stat_auctioneer_speed)
+            context["compare_stats_lot_sell_prices_json"] = _chart_json(compare_auction.get_stat_lot_sell_prices)
+            context["compare_stats_referrers_json"] = _chart_json(compare_auction.get_stat_referrers)
+            context["compare_stats_images_json"] = _chart_json(compare_auction.get_stat_images)
+            context["compare_stats_travel_distance_json"] = _chart_json(compare_auction.get_stat_travel_distance)
+            context["compare_stats_previous_auctions_json"] = _chart_json(compare_auction.get_stat_previous_auctions)
+            context["compare_stats_lots_submitted_json"] = _chart_json(compare_auction.get_stat_lots_submitted)
+            context["compare_stats_location_volume_json"] = _chart_json(compare_auction.get_stat_location_volume)
+            context["compare_stats_feature_use_json"] = _chart_json(compare_auction.get_stat_feature_use)
 
         return context

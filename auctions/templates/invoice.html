@@ -437,7 +437,7 @@ document.addEventListener("DOMContentLoaded", function() {
               {{ lot.winner_name }}
             {% endif %}
           {% else %}
-            Not sold
+            Not sold{% if lot.ended_unsold %} <span class="badge bg-secondary">Ended unsold</span>{% endif %}
           {% endif %}
         </td>
         {% if auction.multi_location %}
@@ -461,7 +461,7 @@ document.addEventListener("DOMContentLoaded", function() {
         <td>{{ invoice.currency_symbol }}{{ lot.club_cut|floatformat:2 }}{% if lot.pre_register_discount %}*{% endif %}</td>
         <td>
           {% if lot.donation %}
-            Donation
+            Donation{% if lot.donation_forced %} <small class="text-muted">(sold for {{ invoice.currency_symbol }}{{ auction.force_donation_threshold }} or less)</small>{% endif %}
           {% else %}
             {{ invoice.currency_symbol }}{{ lot.your_cut|floatformat:2 }}
           {% endif %}

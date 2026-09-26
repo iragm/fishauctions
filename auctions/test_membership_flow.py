@@ -179,12 +179,12 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
             user=self.online_tos.user,
             name="Renew Me",
             email=self.online_tos.email,
-            membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
+            membership_last_paid=timezone.localdate() - datetime.timedelta(days=370),
         )
         self.invoice.refresh_from_db()
 
     def test_membership_reminder_due_updates_when_membership_changes(self):
-        self.member.membership_last_paid = timezone.now().date()
+        self.member.membership_last_paid = timezone.localdate()
         self.member.save()
         self.member.refresh_from_db()
         self.assertIsNotNone(self.member.membership_expiration_reminder_due)
@@ -192,7 +192,7 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
     def test_membership_reminder_due_not_set_for_free_membership(self):
         self.club.membership_annual_fee = None
         self.club.save(update_fields=["membership_annual_fee"])
-        self.member.membership_last_paid = timezone.now().date()
+        self.member.membership_last_paid = timezone.localdate()
         self.member.save()
         self.member.refresh_from_db()
         self.assertIsNone(self.member.membership_expiration_reminder_due)
@@ -230,7 +230,7 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.invoice.refresh_from_db()
         self.member.refresh_from_db()
         self.assertTrue(self.invoice.renewal_processed)
-        self.assertGreaterEqual(self.member.membership_last_paid, timezone.now().date())
+        self.assertGreaterEqual(self.member.membership_last_paid, timezone.localdate())
         self.assertTrue(InvoicePayment.objects.filter(club_member=self.member, payment_target="CLUB_MEMBER").exists())
 
     @patch_views("maybe_send_membership_renewal_confirmation")
@@ -361,7 +361,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             _apply_paypal_subscription_event(self.club, self._active_subscription())
         member.refresh_from_db()
         self.assertEqual(member.paypal_subscription_id, "I-SUB1")
-        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+        self.assertEqual(member.membership_expiration_date, timezone.localdate() + datetime.timedelta(days=365))
         mock_email.assert_called_once()
 
     def test_active_subscription_creates_member_when_none(self):
@@ -381,7 +381,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             _apply_paypal_subscription_event(self.club, self._active_subscription(last_payment="25.00"))
         entry = self._membership_money().get()
         self.assertEqual(entry.amount, Decimal("25.00"))
-        self.assertEqual(entry.date, timezone.now().date())
+        self.assertEqual(entry.date, timezone.localdate())
         self.assertIn("I-SUB1", entry.description)
         self.assertIn(str(member), entry.description)
         self.assertIsNone(entry.created_by)  # a webhook has no acting user
@@ -481,7 +481,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             _apply_paypal_subscription_event(self.club, self._active_subscription(next_days=730))
         self.assertEqual(mock_email.call_count, 2)
         member.refresh_from_db()
-        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=730)).date())
+        self.assertEqual(member.membership_expiration_date, timezone.localdate() + datetime.timedelta(days=730))
 
     def test_subscription_renewal_writes_club_history(self):
         from auctions.views.webhooks import _apply_paypal_subscription_event
@@ -580,7 +580,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             response = self._post_event(event)
         self.assertEqual(response.status_code, 200)
         member.refresh_from_db()
-        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+        self.assertEqual(member.membership_expiration_date, timezone.localdate() + datetime.timedelta(days=365))
 
     def test_unhandled_event_ignored_without_verification(self):
         from auctions.views import PayPalSubscriptionWebhookView
@@ -675,7 +675,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             name="Sub Member",
             email="subscriber@example.com",
             paypal_subscription_id="I-SUB1",
-            membership_expiration_date=(timezone.now() + datetime.timedelta(days=365)).date(),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=365),
         )
         with patch("auctions.tasks.send_club_member_email") as mock_send:
             maybe_send_membership_renewal_confirmation(member)
@@ -689,7 +689,7 @@ class PayPalSubscriptionWebhookTests(StandardTestCase):
             club=self.club,
             name="Manual Member",
             email="manual@example.com",
-            membership_expiration_date=(timezone.now() + datetime.timedelta(days=365)).date(),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=365),
         )
         with patch("auctions.tasks.send_club_member_email") as mock_send:
             maybe_send_membership_renewal_confirmation(member)
@@ -724,8 +724,8 @@ class ClubMemberDiscountTests(StandardTestCase):
             club=self.club,
             user=user,
             name=user.username,
-            membership_last_paid=timezone.now().date() - datetime.timedelta(days=265),
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=days),
+            membership_last_paid=timezone.localdate() - datetime.timedelta(days=265),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=days),
         )
 
     def test_no_discount_for_non_member(self):
@@ -940,7 +940,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
             user=self.online_tos.user,
             name="Renew Me",
             email=self.online_tos.email,
-            membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
+            membership_last_paid=timezone.localdate() - datetime.timedelta(days=370),
         )
         self.invoice.refresh_from_db()
 
@@ -1017,7 +1017,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
             user=None,
             name="Email Only",
             email="email_only_member@example.com",
-            membership_last_paid=timezone.now().date() - datetime.timedelta(days=400),
+            membership_last_paid=timezone.localdate() - datetime.timedelta(days=400),
         )
         first = _get_or_create_membership_invoice(self.club, email_member)
         second = _get_or_create_membership_invoice(self.club, email_member)
@@ -1058,8 +1058,8 @@ class ClubMembershipEmailTaskTests(TestCase):
             club=self.club,
             name="Email Member",
             email="member@example.com",
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
-            membership_last_paid=timezone.now().date(),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=30),
+            membership_last_paid=timezone.localdate(),
         )
 
     @patch("auctions.tasks.mail.send")
@@ -1116,7 +1116,7 @@ class ClubMembershipEmailTaskTests(TestCase):
 
         ClubMember.objects.filter(pk=self.member.pk).update(
             welcome_email_sent=True,
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=1),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=1),
             membership_expiration_reminder_due=timezone.now() - datetime.timedelta(minutes=1),
         )
 
@@ -1181,7 +1181,7 @@ class ClubBarcodeViewTests(TestCase):
         # membership_number is auto-generated as a 10-digit string
         self.assertTrue(member.membership_number)
         link = member.barcode_image_link
-        self.assertIn(f"/clubs/{self.club.slug}/barcode/{int(member.membership_number)}/", link)
+        self.assertIn(f"/clubs/{self.club.url_key}/barcode/{int(member.membership_number)}/", link)
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):

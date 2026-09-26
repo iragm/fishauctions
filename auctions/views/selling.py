@@ -13,10 +13,9 @@ import requests
 from asgiref.sync import async_to_sync
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import (
     Exists,
-    Max,
     OuterRef,
 )
 from django.db.models.base import Model as Model
@@ -33,6 +32,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from auctions import voice
+from auctions.bidding import MAX_BID
 from auctions.forms import (
     VolunteerJobForm,
 )
@@ -43,7 +43,6 @@ from auctions.models import (
     Invoice,
     InvoiceAdjustment,
     Lot,
-    LotHistory,
     LotQueueEntry,
     MobileDevice,
     VolunteerJob,
@@ -55,7 +54,13 @@ from auctions.tasks import (
     send_push_to_user,
 )
 
-from .base import AuctionViewMixin, _upsert_clubmember_shadow_tos
+from .base import (
+    AuctionViewMixin,
+    _lot_invoices,
+    _recalculate_invoices,
+    _upsert_clubmember_shadow_tos,
+    close_modal_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +141,11 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 error = "Enter the winning price"
             if action == "force_save":
                 error = "You can skip some errors, but you still need to enter a price"
+        # "NaN" quantizes without complaint and then raises on the first comparison; a negative or
+        # enormous price can't be skipped past with force_save either, since it can't be invoiced.
+        if result_price is not None and (not result_price.is_finite() or result_price < 0 or result_price > MAX_BID):
+            error = f"Enter a price between $0 and ${MAX_BID:,.2f}"
+            result_price = None
         if result_price is not None and self.auction.only_whole_dollar_bids:
             if result_price != result_price.to_integral_value():
                 error = "This auction only allows whole dollar amounts"
@@ -171,32 +181,11 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
     def end_unsold(self, lot):
         """Mark lot unsold"""
-        lot.date_end = timezone.now()
-        lot.winner = None
-        lot.auctiontos_winner = None
-        lot.winning_price = None
-        lot.active = False
-        lot.save()
-        message = f"{self.request.user} has marked lot {lot.lot_number_display} as not sold"
-        LotHistory.objects.create(
-            lot=lot,
-            user=self.request.user,
-            message=message,
-            changed_price=True,
-        )
-        lot.send_websocket_message(
-            {
-                "type": "chat_message",
-                "info": "ENDED_NO_WINNER",
-                "message": message,
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-            }
-        )
-        return message
+        return lot.end_unsold(self.request.user)
 
     def set_winner(self, lot, winning_tos, winning_price):
+        # A force_save over an earlier sale takes the lot off the old winner's invoice.
+        stale_invoices = _lot_invoices(lot)
         lot.auctiontos_winner = winning_tos
         lot.winning_price = winning_price
         lot.date_end = timezone.now()
@@ -224,6 +213,10 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             lot.add_winner_message(self.request.user, winning_tos, winning_price)
         except Exception:
             logger.exception("add_winner_message failed for lot %s", lot.pk)
+        try:
+            _recalculate_invoices(stale_invoices)
+        except Exception:
+            logger.exception("Recalculating the previous invoices failed for lot %s", lot.pk)
         # After add_winner_message, which creates the invoice this total reads.
         try:
             notify_running_total(lot)
@@ -290,6 +283,13 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         price = request.POST.get("price", None)
         winner = request.POST.get("winner", None)
         action = request.POST.get("action", "validate")
+        # A price of 0 and no winner is how the form says "unsold".
+        if action in ("save", "force_save") and not winner:
+            try:
+                if Decimal(str(price)) == 0:
+                    action = "end_unsold"
+            except (InvalidOperation, ValueError, TypeError):
+                pass
 
         result = {
             "price": None,
@@ -303,7 +303,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
-            result["success_message"] = lot.sell_to_online_high_bidder
+            result["success_message"] = lot.sell_to_online_high_bidder()
             result["last_sold_lot_number"] = lot.lot_number_display
             try:
                 lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
@@ -372,7 +372,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             # JS not in place; also remove from view_lot_simple.
         if lot and not lot_error:
             lot = "valid"
-        if price and not price_error:
+        if price is not None and not price_error:
             price = "valid"
         if winner and not winner_error:
             winner = "valid"
@@ -385,14 +385,50 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return JsonResponse(result)
 
 
+class LotEndUnsold(LoginRequiredMixin, AuctionViewMixin, View):
+    """The admin lot list's "End lot unsold": ``Lot.end_unsold`` by pk, with set-winners' checks."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False, auction__isnull=False)
+        self.auction = self.lot.auction
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        self.require_auction_admin()
+        lot = self.lot
+        error = None
+        if self.auction.is_online:
+            error = "Lots in an online auction end on their own"
+        elif lot.sold:
+            error = "This lot has already been sold"
+        elif lot.ended_unsold:
+            error = "This lot has already ended unsold"
+        elif lot.sellers_invoice and lot.sellers_invoice.status != "DRAFT":
+            error = "The seller's invoice is not open"
+        if error:
+            return close_modal_response(toast=f"Lot {lot.lot_number_display}: {error}", toast_type="danger")
+        lot.end_unsold(request.user)
+        self.auction.create_history(
+            applies_to="LOTS",
+            action=f"Marked lot {lot.lot_number_display} as ended without being sold",
+            user=request.user,
+        )
+        pop_lot_from_queue(self.auction, lot)
+        return close_modal_response("reload-page")
+
+
 class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
     def find_lot(self, lot_number):
         """Find a lot by this auction's numbering. Shared with the palette's ``undo_sale``."""
+        lot_number = str(lot_number or "").strip()
         if not lot_number:
             return None
         if self.auction.use_seller_dash_lot_numbering:
             return self.auction.lots_qs.filter(custom_lot_number=lot_number).first()
-        return self.auction.lots_qs.filter(lot_number_int=lot_number).first()
+        # An integer column: anything else raised ValueError.
+        if not lot_number.isdigit():
+            return None
+        return self.auction.lots_qs.filter(lot_number_int=int(lot_number)).first()
 
     def unsell(self, undo_lot):
         """Clear a lot's winner and record why. Returns the view's result dict. Shared with ``undo_sale``."""
@@ -401,6 +437,7 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
             "last_sold_lot_number": "",
             "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
         }
+        stale_invoices = _lot_invoices(undo_lot)
         undo_lot.winner = None
         undo_lot.auctiontos_winner = None
         undo_lot.winning_price = None
@@ -410,6 +447,7 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         undo_lot.active = True
         undo_lot.admin_validated = False
         undo_lot.save()
+        _recalculate_invoices(stale_invoices)
         undo_lot.auction.create_history(
             applies_to="LOTS",
             action=f"Cleared the winner on lot {undo_lot.lot_number_display} to make it unsold",
@@ -418,12 +456,25 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return result
 
     def post(self, request, *args, **kwargs):
+        from auctions.palette_actions import _settled_invoice_warning
+
+        if self.auction.is_online:
+            # Online winners come from bids, and reopening would leave the lot's end date in the past.
+            return JsonResponse({"message": "Sales in an online auction can't be undone here"})
         undo_lot = self.find_lot(request.POST.get("lot_number", None))
-        if undo_lot:
-            result = self.unsell(undo_lot)
-        else:
-            result = {"message": "No lot found"}
-        return JsonResponse(result)
+        if not undo_lot:
+            return JsonResponse({"message": "No lot found"})
+        # As the palette's undo_sale: refuse to change a settled invoice unless forced.
+        settled = _settled_invoice_warning(undo_lot)
+        if settled and not request.POST.get("force"):
+            return JsonResponse(
+                {
+                    "banner": "error",
+                    "last_sold_lot_number": undo_lot.lot_number_display,
+                    "success_message": f"{settled}. Reopen the invoice first.",
+                }
+            )
+        return JsonResponse(self.unsell(undo_lot))
 
     def get(self, request, *args, **kwargs):
         return self.http_method_not_allowed(request, *args, **kwargs)
@@ -564,7 +615,7 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
 
 
 def broadcast_queue_update(auction):
-    """Tell open queue and kiosk screens to re-fetch after a queue change. Best-effort."""
+    """Tell open queue and projector screens to re-fetch after a queue change. Best-effort."""
     try:
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(
@@ -593,9 +644,21 @@ def process_queue_notifications(auction):
 
 
 def queue_head_lot(auction):
-    """The lot at the top of the queue (sold next), or None if the queue is empty."""
-    entry = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order").first()
-    return entry.lot if entry else None
+    """The lot at the top of the queue (sold next), or None if the queue is empty.
+
+    A lot sold some other way (its own page, the palette) is still queued, so it's popped here.
+    """
+    head = None
+    popped = False
+    for entry in LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order"):
+        if not entry.lot.sold:
+            head = entry.lot
+            break
+        entry.delete()
+        popped = True
+    if popped:
+        process_queue_notifications(auction)
+    return head
 
 
 def pop_lot_from_queue(auction, lot):
@@ -661,10 +724,24 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
             return "No lot found"
         if lot.sold:
             return f"Lot {lot.lot_number_display} has already been sold"
-        if LotQueueEntry.objects.filter(auction=self.auction, lot=lot).exists():
+        # Two scanners on one lot at once: the loser's insert hits the one-to-one on lot.
+        try:
+            with transaction.atomic():
+                last_order = (
+                    LotQueueEntry.objects.select_for_update()
+                    .filter(auction=self.auction)
+                    .order_by("-order")
+                    .values_list("order", flat=True)
+                    .first()
+                ) or 0
+                _entry, created = LotQueueEntry.objects.get_or_create(
+                    lot=lot,
+                    defaults={"auction": self.auction, "order": last_order + 1, "added_by": self.request.user},
+                )
+        except IntegrityError:
+            created = False
+        if not created:
             return f"Lot {lot.lot_number_display} is already in the queue"
-        max_order = LotQueueEntry.objects.filter(auction=self.auction).aggregate(m=Max("order"))["m"] or 0
-        LotQueueEntry.objects.create(auction=self.auction, lot=lot, order=max_order + 1, added_by=self.request.user)
         # Sticky, for the queue-usage stat.
         if not lot.added_to_queue:
             lot.added_to_queue = True
@@ -737,7 +814,9 @@ class LotQueueView(LotQueueMixin, TemplateView):
                 error = self.add_lot(lot)
             return self.render_list(error=error)
         if action == "remove":
-            LotQueueEntry.objects.filter(auction=self.auction, pk=request.POST.get("entry_id")).delete()
+            entry_id = (request.POST.get("entry_id") or "").strip()
+            if entry_id.isdigit():
+                LotQueueEntry.objects.filter(auction=self.auction, pk=entry_id).delete()
             process_queue_notifications(self.auction)
             return self.render_list()
         if action == "reorder":
@@ -747,12 +826,12 @@ class LotQueueView(LotQueueMixin, TemplateView):
         return self.render_list(error="Unknown action")
 
 
-class LotQueueKioskView(LotQueueMixin, TemplateView):
-    """Projector partial: the head lot large, plus the next few. Refreshed over websocket, with a slow poll
-    fallback. No ViewLotSimple notification side effect.
+class LotQueueFullscreenView(LotQueueMixin, TemplateView):
+    """Fullscreen queue partial: the head lot large, plus the next few. Refreshed over websocket, with a
+    slow poll fallback. No ViewLotSimple notification side effect.
     """
 
-    template_name = "auctions/lot_queue_kiosk.html"
+    template_name = "auctions/lot_queue_fullscreen.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -760,6 +839,26 @@ class LotQueueKioskView(LotQueueMixin, TemplateView):
         context["auction"] = self.auction
         context["lot"] = entries[0].lot if entries else None
         context["upcoming"] = [entry.lot for entry in entries[1:6]]
+        return context
+
+
+class LotQueueCurrentLotView(LotQueueMixin, TemplateView):
+    """Fullscreen current lot: its own page for a projector, the lot set winners will sell next and only
+    its details (no bids, no queue). ``?partial=lot`` is the lot alone, re-fetched as the queue moves.
+    """
+
+    template_name = "auctions/lot_queue_current_lot.html"
+
+    def get_template_names(self):
+        if self.request.GET.get("partial") == "lot":
+            return ["auctions/lot_queue_current_lot_partial.html"]
+        return super().get_template_names()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        # Skip a lot sold elsewhere without popping it: a GET here stays side-effect free.
+        context["lot"] = next((entry.lot for entry in self.queue_entries() if not entry.lot.sold), None)
         return context
 
 
@@ -928,7 +1027,16 @@ class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if self.job.canceled:
             messages.info(request, "This job was canceled.")
             return redirect(redirect_url)
+        # Only the people the job was announced to, so a bounty goes to someone who's there.
+        tos = volunteer_eligible_tos(self.auction).filter(user=request.user).first()
+        if tos is None:
+            if self.auction.use_check_in_mode:
+                messages.info(request, "Check in at the auction first, then you can sign up to help.")
+            else:
+                messages.info(request, "Turn on notifications in the app to sign up to help.")
+            return redirect(redirect_url)
         filled = False
+        invoice = None
         with transaction.atomic():
             # Locked so two people can't take the last spot.
             job = VolunteerJob.objects.select_for_update().get(pk=self.job.pk)
@@ -939,15 +1047,20 @@ class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 messages.info(request, "This job already has enough people.")
                 return redirect(redirect_url)
             adjustment = None
-            if job.bounty:
+            # InvoiceAdjustment.amount is unsigned; a negative bounty would charge the volunteer anyway.
+            bounty = int(round(job.bounty)) if job.bounty else 0
+            if bounty > 0:
                 invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+                if invoice and invoice.status != "DRAFT":
+                    messages.info(request, "Your invoice for this auction is closed, so ask an admin to sign you up.")
+                    return redirect(redirect_url)
                 if not invoice:
-                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+                    invoice = Invoice.for_participant(tos, self.auction)
                 adjustment = InvoiceAdjustment.objects.create(
                     invoice=invoice,
                     user=request.user,
                     adjustment_type="DISCOUNT",
-                    amount=int(round(job.bounty)),
+                    amount=bounty,
                     notes=f"Volunteer: {job.description}"[:150],
                 )
             VolunteerSignup.objects.create(job=job, auctiontos=tos, invoice_adjustment=adjustment)
@@ -957,6 +1070,8 @@ class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 user=request.user,
             )
             filled = job.is_full
+        if invoice:
+            invoice.recalculate()
         if filled:
             self.auction.create_history(
                 applies_to="USERS", action=f"Volunteer job filled: {self.job.description}", user=None

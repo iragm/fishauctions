@@ -857,8 +857,12 @@ class PreferencesPushToggleTests(TestCase):
 # Part 2 — promo push job + weekly_promo skip
 
 
+@isolated_cache("promo-push")
 class PromoPushCommandTests(TestCase):
     def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()  # the enqueue claims; a local cache, so this touches no other worker
         now = timezone.now()
         self.seller = User.objects.create_user(username="promo_seller", password="x")
         self.auction = Auction.objects.create(
@@ -922,6 +926,14 @@ class PromoPushCommandTests(TestCase):
         with patch("auctions.tasks.send_push_to_user.delay") as delay:
             call_command("promo_push_notifications")
         delay.assert_not_called()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_a_push_still_in_the_queue_is_not_enqueued_again(self):
+        # delay is mocked, so nothing is delivered and the ledger stays empty, as with a backed-up queue.
+        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+            call_command("promo_push_notifications")
+            call_command("promo_push_notifications")
+        delay.assert_called_once()
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_skips_user_who_does_not_want_online_auctions(self):
@@ -2058,7 +2070,7 @@ class QueueRespectsTheAuctionNotificationSettingTests(StandardTestCase):
         self.in_person_auction.save()
         self._process().assert_not_called()
 
-    def test_kiosk_still_refreshes_when_the_setting_is_off(self):
+    def test_fullscreen_queue_still_refreshes_when_the_setting_is_off(self):
         self.in_person_auction.message_users_when_lots_sell = False
         self.in_person_auction.save()
         from auctions.views import process_queue_notifications

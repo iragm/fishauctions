@@ -36,11 +36,23 @@ DEFAULT_MAX_TOKENS = 2000
 DEFAULT_REASONING_EFFORT = "minimal"
 
 # Keys older models or compatible servers may not know; dropped one at a time on rejection.
-OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort")
+OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort", "tool_choice")
 
 
 class LLMError(Exception):
     """Any failure talking to the provider. Callers degrade gracefully."""
+
+
+class RateLimited(LLMError):
+    """The provider is refusing for now, not failing. Its own ``Retry-After`` is on ``retry_after``.
+
+    Worth its own class because the two want opposite handling: an outage should stop us calling for
+    a while, and this should make everyone wait a little and then work.
+    """
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class UnsupportedParameter(Exception):
@@ -116,11 +128,13 @@ class LLMProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        tool_choice: str = "",
     ) -> LLMResult:
         """Send ``system`` + ``messages`` and let the model call one of ``tools`` or answer.
 
         ``tools`` are MCP-shaped descriptors. Assistant ``tool_calls`` and ``tool`` result turns are built
-        with :func:`tool_call_message` and :func:`tool_result_message`. Raises :class:`LLMError`.
+        with :func:`tool_call_message` and :func:`tool_result_message`. ``tool_choice`` of ``"required"``
+        forbids a plain reply. Raises :class:`LLMError`.
         """
         msg = "complete must be implemented by a subclass"
         raise NotImplementedError(msg)
@@ -180,12 +194,15 @@ class OpenAIProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        tool_choice: str = "",
     ) -> LLMResult:
         payload = self._payload(system, messages, max_tokens)
         if tools:
             payload["tools"] = [as_openai_tool(tool) for tool in tools]
-            # "auto": answering in words is legitimate.
-            payload["tool_choice"] = "auto"
+            # The palette sends "required": every outcome it can show the user is a tool, so a bare
+            # paragraph is the one reply it cannot render. An endpoint that rejects the key falls
+            # back to "auto" through ``OPTIONAL_PARAMETERS``.
+            payload["tool_choice"] = tool_choice or "auto"
         return self._parse_tools(self._send(payload, max_tokens))
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -201,6 +218,15 @@ class OpenAIProvider(LLMProvider):
             for name in OPTIONAL_PARAMETERS:
                 if name in payload and name in response.text:
                     raise UnsupportedParameter(name)
+        if response.status_code == 429:
+            # Their own number if they sent one; OpenAI's is often well under a second.
+            try:
+                retry_after = float(response.headers.get("retry-after", "") or 0)
+            except ValueError:
+                retry_after = 0.0
+            logger.info("LLM provider is rate limiting us: %s", response.text[:200])
+            msg = "Language model is rate limiting this site"
+            raise RateLimited(msg, retry_after=retry_after)
         if response.status_code != 200:
             logger.warning("LLM provider returned %s: %s", response.status_code, response.text[:500])
             msg = f"Language model returned HTTP {response.status_code}"

@@ -1,0 +1,5 @@
+{% comment %}Plain-text twin of footer.html.{% endcomment %}
+--
+{{ site_name }}{% if mailing_address %}
+{{ mailing_address }}{% endif %}{% if unsubscribe %}
+Stop promotional emails: https://{{ domain }}/unsubscribe/{{ unsubscribe }}/{% endif %}

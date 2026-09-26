@@ -1,0 +1,13 @@
+{% comment %}Fullscreen current lot: the lot set winners sells next, details only. Context: auction, lot (or None).{% endcomment %}
+{% if lot %}
+<div class="text-center mb-2">
+  <span class="badge bg-primary fs-4">Lot {{ lot.lot_number_display }}</span>
+</div>
+{% include 'view_lot_simple.html' with lot_info_only=True %}
+{% else %}
+<div class="container mt-5">
+  <div class="alert alert-info text-center fs-4" role="alert">
+    <i class="bi bi-info-circle"></i> No lots are queued yet.
+  </div>
+</div>
+{% endif %}

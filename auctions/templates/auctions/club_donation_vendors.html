@@ -8,10 +8,13 @@
 the browser tab carries the title. Most club pages have none for that reason -- see
 style_reference.md.{% endcomment %}
 
+{% comment %}The count is the reason to be on this page, so it is the way to the list it counts: clicking it filters the table to exactly those vendors, the same ?status=due the menu below sets.{% endcomment %}
 {% if followup_due_count %}
 <div class="alert alert-warning text-dark py-2" role="alert">
   <i class="bi bi-exclamation-triangle me-1"></i>
-  {{ followup_due_count }} vendor{{ followup_due_count|pluralize }} due for a follow-up.
+  <a href="?status=due" data-donation-status="due">
+    {{ followup_due_count }} vendor{{ followup_due_count|pluralize }} due for a follow-up.
+  </a>
 </div>
 {% endif %}
 

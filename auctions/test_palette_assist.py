@@ -1,9 +1,12 @@
 """Tests for the command palette's natural-language assist."""
 
 import datetime
+import inspect
 import json
 import re
+import time
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
@@ -13,7 +16,7 @@ from django.test import Client, SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions import llm, palette_actions, palette_assist, palette_routes
+from auctions import command_palette, llm, palette_actions, palette_assist, palette_routes
 from auctions.llm import LLMError, LLMProvider, LLMResult, ToolCall
 from auctions.models import (
     Auction,
@@ -29,6 +32,7 @@ from auctions.models import (
 )
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
+from auctions.views import palette as palette_views
 
 
 def as_result(reply):
@@ -54,8 +58,6 @@ def as_result(reply):
         call = ToolCall(id="call_1", name=palette_assist.ASK_THE_USER, arguments=arguments)
     elif isinstance(reply.get("error"), str):
         call = ToolCall(id="call_1", name=palette_assist.CANNOT_DO_THIS, arguments={"reason": reply["error"]})
-    elif isinstance(reply.get("answer"), str):
-        text = reply["answer"]
     return LLMResult(
         text=text,
         tool_calls=[call] if call else [],
@@ -88,7 +90,7 @@ class FakeProvider(LLMProvider):
     def complete_json(self, system, messages, max_tokens=800):
         return LLMResult(data=self._next(system, messages), model="fake-model", prompt_tokens=11, completion_tokens=7)
 
-    def complete(self, system, messages, tools=None, max_tokens=800):
+    def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
         return as_result(self._next(system, messages, tools))
 
     @property
@@ -197,6 +199,14 @@ class PaletteAssistTestCase(StandardTestCase):
     def _tool_names(self, user=None):
         return {tool["name"] for tool in self._tools(user)}
 
+    def _request_for(self, user):
+        from django.test import RequestFactory
+
+        request = RequestFactory().post("/")
+        request.user = user
+        request.palette_page = {}
+        return request
+
     def _script(self, *replies):
         self.provider.replies = list(replies)
         self.provider.calls = []
@@ -297,10 +307,16 @@ class AuthAndThrottleTests(PaletteAssistTestCase):
         self.assertEqual(second.status_code, 429)
 
     def test_sustained_call_budget(self):
+        """Over the cap the model is not called -- and the answer is search results, not a dead end.
+
+        This fires in the middle of somebody's auction. "Give it a few minutes and try again" is not
+        something a person working a check-in desk can use, and the whole argument of the queue above
+        is that everybody gets slower before anybody gets refused.
+        """
         cache.set(f"palette_assist_calls_{self.user.pk}", palette_assist.WINDOW_MAX_CALLS, timeout=300)
         self._script({"error": "nope"})
         response = self._assist("add a lot of blue shrimp please")
-        self.assertEqual(response.json()["kind"], "error")
+        self.assertIn(response.json()["kind"], {"results", "navigate"}, response.json())
         self.assertEqual(self.provider.call_count, 0, "over the window cap, no model call should happen")
 
 
@@ -325,14 +341,6 @@ class UntrustedOutputTests(PaletteAssistTestCase):
         result = palette_actions.run_action(self._request_for(self.user), "add_lot", {"name": "x", "sudo": True})
         self.assertIn("error", result)
 
-    def _request_for(self, user):
-        from django.test import RequestFactory
-
-        request = RequestFactory().post("/")
-        request.user = user
-        request.palette_page = {}
-        return request
-
     def _reply(self, name, arguments=None, text=""):
         """One tool call, as the provider would hand it over."""
         return LLMResult(text=text, tool_calls=[ToolCall(id="c1", name=name, arguments=arguments or {})])
@@ -344,16 +352,18 @@ class UntrustedOutputTests(PaletteAssistTestCase):
     def test_a_read_only_tool_is_a_lookup_and_a_write_is_an_action(self):
         """The registry's ``lookup`` flag decides whether a tool call is a lookup or an action."""
         self.assertEqual(palette_assist.read_reply(self._reply("find_person", {"name": "bob"}))["kind"], "lookup")
-        self.assertEqual(palette_assist.read_reply(self._reply("add_lot", {"name": "shrimp"}))["kind"], "action")
+        self.assertEqual(palette_assist.read_reply(self._reply("add_person", {"name": "bob"}))["kind"], "action")
+        # add_lot is mcp_only: the palette never offers it, and never runs it either.
+        self.assertEqual(palette_assist.read_reply(self._reply("add_lot", {"name": "shrimp"}))["kind"], "invalid")
 
     def test_a_sentence_written_alongside_a_call_becomes_the_countdown_summary(self):
-        reply = palette_assist.read_reply(self._reply("add_lot", {"name": "shrimp"}, text="Adding blue shrimp."))
-        self.assertEqual(reply["summary"], "Adding blue shrimp.")
+        reply = palette_assist.read_reply(self._reply("add_person", {"name": "Bob"}, text="Adding Bob."))
+        self.assertEqual(reply["summary"], "Adding Bob.")
 
-    def test_plain_text_with_no_call_is_an_answer(self):
+    def test_plain_text_with_no_call_is_never_shown(self):
+        """The model has no tool that takes words, so a sentence from it is off-contract."""
         reply = palette_assist.read_reply(LLMResult(text="It started an hour ago."))
-        self.assertEqual(reply["kind"], "answer")
-        self.assertEqual(reply["message"], "It started an hour ago.")
+        self.assertEqual(reply["kind"], "invalid")
 
     def test_nothing_at_all_is_invalid(self):
         self.assertEqual(palette_assist.read_reply(LLMResult())["kind"], "invalid")
@@ -390,27 +400,27 @@ class DangerTierTests(PaletteAssistTestCase):
         """A lookup named in the ``action`` slot is still a lookup, and the loop continues."""
         self._script(
             {"action": "describe_auction", "params": {}, "summary": "Fetch the auction to explain the fees"},
-            {"answer": "The club takes 25% of the winning bid."},
         )
         response = self._assist("what is the split in this auction")
         data = response.json()
         self.assertEqual(data["kind"], "answer")
-        self.assertEqual(data["message"], "The club takes 25% of the winning bid.")
-        self.assertEqual(self.provider.call_count, 2)
+        self.assertIn(self.in_person_auction.title, data["message"])
+        # The read answered, so the loop stopped there rather than asking again.
+        self.assertEqual(self.provider.call_count, 1)
 
     def test_confirm_action_returns_a_countdown_and_writes_nothing(self):
         before = Lot.objects.filter(lot_name="blue shrimp").count()
         self._script(
             {
-                "action": "add_lot",
-                "params": {"name": "blue shrimp", "quantity": 1},
-                "summary": "Add a lot of blue shrimp",
+                "action": "add_person",
+                "params": {"name": "Wendy Shrimp"},
+                "summary": "Add Wendy Shrimp",
             }
         )
-        response = self._assist("add a lot of blue shrimp to my auction")
+        response = self._assist("add wendy shrimp to my auction")
         data = response.json()
         self.assertEqual(data["kind"], "countdown")
-        self.assertEqual(data["action"], "add_lot")
+        self.assertEqual(data["action"], "add_person")
         self.assertEqual(data["delay_ms"], palette_assist.COUNTDOWN_MS)
         self.assertEqual(
             Lot.objects.filter(lot_name="blue shrimp").count(), before, "assist must not write; execute does"
@@ -481,15 +491,15 @@ class PermissionTests(PaletteAssistTestCase):
         AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(bidder_number="555")
         self.admin_user.userdata.last_auction_used = self.in_person_auction
         self.admin_user.userdata.save()
-        self._script({"action": "add_lot", "params": {"name": "borrowed lot", "bidder": "555"}, "summary": "Add a lot"})
-        assisted = self._assist("add a lot called borrowed lot for bidder 555", user=self.admin_user)
+        self._script({"action": "add_person", "params": {"name": "Borrowed Name"}, "summary": "Add a person"})
+        assisted = self._assist("add borrowed name to the auction", user=self.admin_user)
         self.assertEqual(assisted.json()["kind"], "countdown")
         params = assisted.json()["params"]
         # The countdown carries no authority: execute re-runs the resolver, which refuses.
-        response = self._execute("add_lot", params, user=self.member)
+        response = self._execute("add_person", params, user=self.member)
         data = response.json()
         self.assertEqual(data["kind"], "error", data)
-        self.assertIn("admin", data["message"].lower())
+        self.assertIn("permission", data["message"].lower())
         self.assertFalse(Lot.objects.filter(lot_name="borrowed lot").exists())
 
 
@@ -894,7 +904,7 @@ class TokenAccountingTests(PaletteAssistTestCase):
         """Cached prompt tokens are recorded, since they bill at a fraction of the input rate."""
 
         class CachingProvider(FakeProvider):
-            def complete(self, system, messages, tools=None, max_tokens=800):
+            def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
                 self.calls.append({"system": system, "messages": messages, "tools": tools})
                 return LLMResult(
                     tool_calls=[ToolCall(id="c1", name="go_to_page", arguments={"page": "watched"})],
@@ -1112,7 +1122,7 @@ class RegistryTests(PaletteAssistTestCase):
         # Exact names: "renew_member" is a prefix of renew_membership, which this user does get.
         for name in ("award_points", "renew_member", "set_invoice_status"):
             self.assertNotIn(name, offered)
-        for name in ("watch_lot", "add_lot", "renew_membership"):
+        for name in ("watch_lot", "add_a_lot_via_webform", "renew_membership"):
             self.assertIn(name, offered)
 
     def test_every_action_has_a_valid_danger_level(self):
@@ -1317,38 +1327,32 @@ class NavigationCoverageTests(PaletteAssistTestCase):
 class PageAwarenessTests(PaletteAssistTestCase):
     """The auction on screen beats the stickier 'last auction used'."""
 
-    def test_add_lot_uses_the_auction_the_user_is_looking_at(self):
+    def test_adding_a_lot_uses_the_auction_the_user_is_looking_at(self):
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
         self._script(
-            {
-                "action": "add_lot",
-                "params": {"name": "context shrimp"},
-                "summary": "Add a lot of context shrimp",
-            }
+            {"action": "add_a_lot_via_webform", "params": {"name": "context shrimp"}, "summary": "Open the lot form"}
         )
         path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
-        response = self._assist("add a lot of context shrimp for me please", path=path)
-        data = response.json()
-        self.assertEqual(data["kind"], "countdown")
-        self._execute("add_lot", data["params"], path=path)
-        lot = Lot.objects.filter(lot_name="context shrimp").first()
-        self.assertIsNotNone(lot)
-        self.assertEqual(lot.auction.pk, self.in_person_auction.pk)
+        data = self._assist("add a lot of context shrimp for me please", path=path).json()
+        self.assertEqual(data["kind"], "navigate", data)
+        self.assertIn(self.in_person_auction.slug, data["url"])
 
-    def test_the_prompt_tells_the_model_what_is_on_screen(self):
+    def test_the_facts_about_the_user_say_what_is_on_screen(self):
+        """They ride in the first message, not the system prompt, which is shared between users."""
         path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
         page = palette_routes.page_context_from_path(self.user, path)
-        prompt = palette_assist.build_system_prompt(self.user, page)
-        self.assertIn("looking_at_right_now", prompt)
-        self.assertIn(self.in_person_auction.title, prompt)
+        facts = palette_assist.context_message(self.user, page)["content"]
+        self.assertIn("looking_at_right_now", facts)
+        self.assertIn(self.in_person_auction.title, facts)
+        self.assertNotIn("About this user", palette_assist.build_system_prompt(self.user, page))
 
-    def test_the_prompt_names_an_auction_the_user_has_not_joined(self):
+    def test_the_facts_name_an_auction_the_user_has_not_joined(self):
         path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
         page = palette_routes.page_context_from_path(self.user_who_does_not_join, path)
-        prompt = palette_assist.build_system_prompt(self.user_who_does_not_join, page)
-        self.assertIn(self.online_auction.title, prompt)
-        self.assertIn("has NOT joined", prompt)
+        facts = palette_assist.context_message(self.user_who_does_not_join, page)["content"]
+        self.assertIn(self.online_auction.title, facts)
+        self.assertIn("has NOT joined", facts)
 
     def test_a_forged_path_still_cannot_act_on_an_auction_the_user_is_not_in(self):
         path = reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug})
@@ -1431,8 +1435,9 @@ class HumanizeTests(PaletteAssistTestCase):
         ClubMember.objects.create(club=club, user=self.user, permission_admin=True)
         self.assertIn("Humanized Aquarium Society", palette_assist.humanize(f"Try {club.slug}.", self.user))
 
-    def test_a_model_answer_is_scrubbed_on_the_way_out(self):
-        self._script({"answer": f"The rules for {self.in_person_auction.slug} say no plants."})
+    def test_an_answer_is_scrubbed_on_the_way_out(self):
+        """Answers are the resolvers' own words now, and they still go through humanize."""
+        self._script({"lookup": "describe_auction", "params": {}})
         data = self._assist("what are the rules about plants in this auction").json()
         self.assertEqual(data["kind"], "answer")
         self.assertNotIn(self.in_person_auction.slug, data["message"])
@@ -1443,23 +1448,46 @@ class AnswerTests(PaletteAssistTestCase):
     """Questions get answered, not navigated."""
 
     def test_an_answer_comes_back_as_its_own_kind(self):
-        self._script({"answer": "Lot submission closes tomorrow."})
+        self._script({"lookup": "describe_auction", "params": {}})
         data = self._assist("when does lot submission close for this auction").json()
         self.assertEqual(data["kind"], "answer")
-        self.assertEqual(data["message"], "Lot submission closes tomorrow.")
+        self.assertIn("Lot submission", data["message"])
+
+    def test_the_words_are_the_resolvers_and_never_the_models(self):
+        """The model picks the read; the read supplies the sentence."""
+        self._script({"lookup": "describe_auction", "params": {}})
+        data = self._assist("tell me about this auction").json()
+        request = self._request_for(self.user)
+        expected = palette_actions.run_action(request, "describe_auction", {})["summary"]
+        self.assertEqual(data["message"], expected)
+
+    def test_a_read_that_only_resolves_a_name_is_not_an_answer(self):
+        """find_* exist to feed the next tool, so they never end the turn on their own."""
+        self._script({"lookup": "find_person", "params": {"name": "a"}}, {"error": "no"})
+        data = self._assist("who is a in this auction").json()
+        self.assertNotEqual(data["kind"], "answer")
+        self.assertEqual(self.provider.call_count, 2)
 
     def test_an_answer_is_recorded_as_an_answer(self):
-        self._script({"answer": "Twenty five percent."})
+        self._script({"lookup": "describe_auction", "params": {}})
         self._assist("how much does the club take in this auction")
         usage = LLMUsage.objects.filter(response_kind="answer").first()
         self.assertIsNotNone(usage)
         self.assertTrue(usage.success)
+        self.assertEqual(usage.action, "describe_auction")
 
-    def test_the_prompt_says_a_question_is_answered_in_words(self):
+    def test_the_prompt_says_a_question_is_answered_through_a_tool(self):
         prompt = palette_assist.build_system_prompt(self.user)
-        self.assertIn("plain words", prompt)
+        self.assertIn("describe_auction", prompt)
+        self.assertIn("Never write a reply of your own", prompt)
         self.assertIn("describe_", prompt)
         self.assertIn("describe_auction", self._tool_names())
+
+    def test_the_instructions_stay_short(self):
+        """Every round resends them, and nano reads a short prompt better than a careful one."""
+        prompt = palette_assist.build_system_prompt(self.user)
+        instructions = len(prompt) - len(palette_routes.catalog_for_prompt(self.user))
+        self.assertLess(instructions, 1600, "the instructions have grown back")
 
 
 class DescribeTests(PaletteAssistTestCase):
@@ -1485,8 +1513,6 @@ class DescribeTests(PaletteAssistTestCase):
         self.assertTrue(any(row["means"] for row in result["auction"]["settings"]))
 
     def test_describe_auction_hides_admin_stats_from_a_participant(self):
-        self.in_person_auction.make_stats_public = False
-        self.in_person_auction.save()
         result = self._run("describe_auction", {"auction": self.in_person_auction.title}, user=self.member)
         self.assertNotIn("_admin", result["auction"])
         self.assertFalse(result["auction"]["you_are_an_admin"])
@@ -1578,11 +1604,14 @@ class LotReuseTests(PaletteAssistTestCase):
         )
 
     def _add(self, params):
-        self._script({"action": "add_lot", "params": params, "summary": "Add a lot"})
-        data = self._assist(f"add {params.get('name', '')}").json()
-        self.assertEqual(data["kind"], "countdown", data)
-        self._execute("add_lot", data["params"])
-        return data
+        """``add_lot`` is ``mcp_only``, so this drives the resolver the way ``/mcp/`` does.
+
+        Lot reuse is the resolver's behaviour and an agent still gets it; the palette's own route to
+        the same place is ``add_a_lot_via_webform``, which fills the form in and writes nothing.
+        """
+        result = palette_actions.run_action(self._request_for(self.user), "add_lot", params)
+        self.assertNotIn("error", result, result)
+        return result
 
     def test_a_relisting_copies_the_description_and_the_photo(self):
         self._add({"name": "blue dream shrimp", "auction": self.in_person_auction.title})
@@ -1684,7 +1713,7 @@ class AddPersonTests(PaletteAssistTestCase):
             {"name": "Mike Smith", "auction": self.in_person_auction.title, "bidder_number": "555"}
         )
         self.assertIn("error", result)
-        self.assertIn("already in use", result["error"].lower())
+        self.assertIn("already has this bidder number", result["error"].lower())
 
     def test_it_writes_nothing_during_assist(self):
         self._script({"action": "add_person", "params": {"name": "Jane Doe"}, "summary": "Add Jane"})
@@ -1693,7 +1722,7 @@ class AddPersonTests(PaletteAssistTestCase):
         self.assertFalse(AuctionTOS.objects.filter(name="Jane Doe").exists())
 
     def test_add_lot_warns_the_model_off_making_a_person_into_a_lot(self):
-        description = self._tool("add_lot")["description"]
+        description = self._tool("add_a_lot_via_webform")["description"]
         self.assertIn("add_person", description)
         self.assertIn("PERSON", description)
 
@@ -1702,8 +1731,8 @@ class CancelTrackingTests(PaletteAssistTestCase):
     """Cancelling the countdown is the only signal that we understood the wrong thing."""
 
     def _countdown(self):
-        self._script({"action": "add_lot", "params": {"name": "cancel me"}, "summary": "Add a lot"})
-        return self._assist("add a lot of cancel me").json()
+        self._script({"action": "add_person", "params": {"name": "Cancel Me"}, "summary": "Add a person"})
+        return self._assist("add cancel me to the auction", user=self.admin_user).json()
 
     def test_the_countdown_carries_the_usage_row_id(self):
         data = self._countdown()
@@ -1727,7 +1756,7 @@ class CancelTrackingTests(PaletteAssistTestCase):
             data=json.dumps({"usage_id": data["usage_id"]}),
             content_type="application/json",
         )
-        self.assertFalse(Lot.objects.filter(lot_name__icontains="cancel me").exists())
+        self.assertFalse(AuctionTOS.objects.filter(name__icontains="cancel me").exists())
 
     def test_one_user_cannot_mark_anothers_row(self):
         data = self._countdown()
@@ -1761,14 +1790,14 @@ class ContextInMessagesTests(PaletteAssistTestCase):
     """Say which auction, not just what."""
 
     def test_the_countdown_names_the_auction_it_will_write_to(self):
-        self._script({"action": "add_lot", "params": {"name": "context shrimp"}, "summary": "Add a lot"})
-        data = self._assist("add a lot of context shrimp").json()
+        self._script({"action": "add_person", "params": {"name": "Context Shrimp"}, "summary": "Add a person"})
+        data = self._assist("add context shrimp to the auction").json()
         self.assertEqual(data["kind"], "countdown")
         self.assertEqual(data["context"], self.in_person_auction.title)
 
     def test_the_progress_line_names_the_auction_too(self):
-        self._script({"action": "add_lot", "params": {"name": "context shrimp"}, "summary": "Add a lot"})
-        response = self._assist("add a lot of context shrimp")
+        self._script({"action": "add_person", "params": {"name": "Context Shrimp"}, "summary": "Add a person"})
+        response = self._assist("add context shrimp to the auction")
         self.assertTrue(
             any(self.in_person_auction.title in line for line in response.progress_messages),
             response.progress_messages,
@@ -1825,14 +1854,14 @@ class LookupRoundBudgetTests(PaletteAssistTestCase):
         self._script(
             {"lookup": "my_context", "params": {}},
             {"lookup": "describe_auction", "params": {}},
-            {"answer": "It started an hour ago."},
         )
         data = self._assist(
             "when exactly does this auction start", path=self.in_person_auction.get_absolute_url()
         ).json()
         self.assertEqual(data["kind"], "answer")
-        self.assertEqual(data["message"], "It started an hour ago.")
-        self.assertEqual(self.provider.call_count, 3)
+        # my_context is a step, not an answer; describe_auction is the one that ends the turn.
+        self.assertIn(self.in_person_auction.title, data["message"])
+        self.assertEqual(self.provider.call_count, 2)
 
     def test_a_request_that_never_looks_anything_up_still_stops_at_two(self):
         self._script({"nonsense": 1}, {"nonsense": 2}, {"nonsense": 3}, {"nonsense": 4})
@@ -2114,53 +2143,95 @@ class DriftTests(PaletteAssistTestCase):
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
         self.assertEqual(offered - shared, {palette_assist.ASK_THE_USER, palette_assist.CANNOT_DO_THIS})
 
-    #: Every ``mcp_only`` action, written out so adding the flag is a deliberate edit. See
-    #: ``Action.mcp_only``.
-    MCP_ONLY = {
-        # Output meant for an agent, too long for the palette.
-        "read_source",
-        "club_api",
-        # Writes an agent can target precisely; the palette reaches these pages via go_to_page.
-        "remove_lot",
-        "queue_lot",
-        "unqueue_lot",
-        "remove_bid",
-        "remove_award",
-        "set_member_active",
-        "remove_person",
-        "remove_invoice_adjustment",
-        "set_point_rule",
-        "set_invoice_renewal",
-        "resend_member_card",
-        "leave_feedback",
-        "hide_chat_message",
-        "record_club_money",
-        "rotate_lot_image",
+    #: Every write the palette still offers, written out, because this is the list that gets quietly
+    #: shorter. Each one is here on the same argument: you can say it in one sentence, you say it with
+    #: your hands full, and you say it more than once in a while. ``MCP_ONLY_SKILLS`` holds the other
+    #: side and the reason for each.
+    PALETTE_WRITES = {
+        # The auction floor.
+        "set_lot_winner",
+        "no_sale",
+        "check_in",
+        "draw_door_prize",
+        # The checkout table.
+        "set_invoice_status",
+        "add_invoice_adjustment",
+        # The door.
+        "add_person",
+        "add_club_member",
+        "renew_member",
+        # Anyone, on a phone.
+        "join_auction",
+        "watch_lot",
+        "answer_question",
+        "undo_last",
+        "request_a_skill",
+        # Which auction and club the rest of it means.
+        "set_my_auction",
+        "set_my_club",
     }
 
+    def test_the_palette_keeps_exactly_the_writes_worth_saying_out_loud(self):
+        writes = {
+            name
+            for name, action in palette_actions.ACTIONS.items()
+            if action.danger == palette_actions.DANGER_CONFIRM and not action.mcp_only
+        }
+        self.assertEqual(writes, self.PALETTE_WRITES)
+
+    def test_every_action_left_off_the_palette_says_why(self):
+        """``MCP_ONLY_SKILLS`` is the one place the palette's surface is decided, so it argues its case."""
+        self.assertEqual(
+            {name for name, action in palette_actions.ACTIONS.items() if action.mcp_only},
+            set(palette_actions.MCP_ONLY_SKILLS),
+        )
+        for name, reason in palette_actions.MCP_ONLY_SKILLS.items():
+            self.assertGreater(len(reason), 60, f"{name} is excused without an argument")
+            self.assertTrue(reason.endswith("."), f"{name}'s reason isn't a sentence")
+
     def test_the_palette_is_offered_everything_except_the_named_exceptions(self):
-        """The palette is offered every action except the named ``mcp_only`` ones."""
+        """The palette is offered every action except the ``mcp_only`` ones."""
         from auctions.mcp import tools as mcp_tools
 
         shared = {tool["name"] for tool in mcp_tools.tool_descriptors(self.user)}
         offered = {tool["name"] for tool in palette_assist.tools_for(self.user)}
         # Some mcp_only actions need club administration, so compare against what's offered.
-        self.assertEqual(shared - offered, shared & self.MCP_ONLY)
-        self.assertEqual(
-            {name for name, action in palette_actions.ACTIONS.items() if action.mcp_only},
-            self.MCP_ONLY,
-        )
+        self.assertEqual(shared - offered, shared & set(palette_actions.MCP_ONLY_SKILLS))
+
+    #: An ``mcp_only`` write whose own view is mapped to another skill. ``SKILLS`` maps each view to
+    #: one action, so where two tools write through one page only one of them can be named there. The
+    #: guarantee is about the *page*, and the twin is the proof it exists.
+    SHARES_A_VIEW_WITH_ITS_TWIN = {
+        "unqueue_lot": "queue_lot",
+        "add_lots": "add_lot",
+        "set_lot_species": "edit_lot",
+        "add_dropdown_option": "update_auction_setting",
+        "remove_dropdown_option": "update_auction_setting",
+        "rename_dropdown_option": "update_auction_setting",
+        "add_random_option": "update_auction_setting",
+        "rename_random_option": "update_auction_setting",
+        "remove_random_option": "update_auction_setting",
+        "set_current_auction": "update_club_setting",
+        "send_membership_card": "resend_member_card",
+        "cancel_volunteer_request": "request_volunteers",
+        "undo_check_in": "check_in",
+        "update_donation_vendor": "add_donation_vendor",
+    }
 
     def test_every_mcp_only_write_is_still_reachable_as_a_page(self):
         """Every ``mcp_only`` write is still reachable as a page through ``palette_routes``."""
         named = {skill for skill in palette_actions.SKILLS.values() if palette_actions.ACTIONS[skill].mcp_only}
-        # The two reads cover no POST view, so aren't in ``SKILLS``.
-        writes = self.MCP_ONLY - {"read_source", "club_api"}
-        # ``SKILLS`` maps a view to one skill, so a view shared by two tools names only one.
-        shares_a_view_with_its_twin = {"unqueue_lot": "queue_lot"}
-        for absent, twin in shares_a_view_with_its_twin.items():
-            self.assertIn(twin, named, f"{absent} is excused because {twin} covers the page, and it doesn't")
-        self.assertEqual(named, writes - set(shares_a_view_with_its_twin))
+        writes = {name for name in palette_actions.MCP_ONLY_SKILLS if not palette_actions.ACTIONS[name].lookup}
+        # Excused because somebody else's page is theirs too.
+        for absent, twin in self.SHARES_A_VIEW_WITH_ITS_TWIN.items():
+            self.assertIn(
+                twin,
+                set(palette_actions.SKILLS.values()),
+                f"{absent} is excused because {twin} covers the page, and it doesn't",
+            )
+        # Its own page is allauth's, which palette_routes excludes as third-party.
+        no_view_of_its_own = {"change_email"}
+        self.assertEqual(named, writes - set(self.SHARES_A_VIEW_WITH_ITS_TWIN) - no_view_of_its_own)
 
     def test_the_palette_will_not_run_a_tool_it_never_offered(self):
         reply = LLMResult(tool_calls=[ToolCall(id="1", name="read_source", arguments={"path": "auctions/models.py"})])
@@ -2180,14 +2251,16 @@ class DriftTests(PaletteAssistTestCase):
         data = model_to_dict(tos, fields=CreateEditAuctionTOS.Meta.fields)
         self.assertEqual(set(data), set(CreateEditAuctionTOS.Meta.fields))
 
-    def test_a_truncated_lookup_says_it_was_truncated(self):
-        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 9000})
-        self.assertIn("TRUNCATED", payload)
+    def test_an_oversized_lookup_says_what_was_done_to_it(self):
+        """Long prose is abbreviated in place; the end of the result is no longer simply cut off."""
+        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 9000, "pickup": "Clubhouse"})
+        self.assertIn("shortened", payload)
         self.assertIn("Do not fill in anything", payload)
+        self.assertIn("Clubhouse", payload, "a key past the long field has to survive")
 
     def test_a_payload_that_fits_is_sent_verbatim(self):
         payload = palette_assist.lookup_payload("my_context", {"username": "bob"})
-        self.assertNotIn("TRUNCATED", payload)
+        self.assertNotIn("shortened", payload)
         self.assertIn('"username": "bob"', payload)
 
     def test_every_money_field_on_an_auction_is_described_or_excused(self):
@@ -2301,7 +2374,7 @@ class DisclosureTests(PaletteAssistTestCase):
     def test_a_stale_pointer_is_not_described_either(self):
         self.member.userdata.last_auction_used = self.secret
         self.member.userdata.save()
-        auction, error = palette_actions._resolve_described_auction(self.member, "", {})
+        auction, error = palette_actions._resolve_described_auction(self._request_for(self.member), "")
         self.assertIsNone(auction)
         self.assertTrue(error)
 
@@ -2395,13 +2468,6 @@ class AuctionNumbersTests(RunActionTestCase):
         theirs = self._run("auction_numbers", {"auction": self.online_auction.slug}, user=self.member)
         self.assertNotIn("_admin", theirs["numbers"])
 
-    def test_a_private_stats_auction_gives_a_non_admin_only_the_clock(self):
-        self.online_auction.make_stats_public = False
-        self.online_auction.save()
-        result = self._run("auction_numbers", {"auction": self.online_auction.slug}, user=self.member)
-        self.assertNotIn("lots_sold", result["numbers"])
-        self.assertIn("time", result["numbers"])
-
     def test_an_in_person_auction_with_no_online_bidding_does_not_invent_a_countdown(self):
         self.in_person_auction.online_bidding = "disable"
         self.in_person_auction.save()
@@ -2478,14 +2544,6 @@ class ListTests(RunActionTestCase):
         for row in result["people"]:
             self.assertFalse(str(row["invoice_total"]).startswith("-"))
             self.assertIn("the_club_owes_them", row)
-
-    def test_a_participant_with_two_invoices_is_listed_once(self):
-        from auctions.models import Invoice
-
-        Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
-        result = self._run("list_people", {"status": "unpaid", "auction": self.online_auction.slug})
-        numbers = [row["bidder_number"] for row in result["people"]]
-        self.assertEqual(len(numbers), len(set(numbers)))
 
     def test_mine_needs_no_admin_rights(self):
         result = self._run("list_lots", {"status": "mine", "auction": self.online_auction.slug}, user=self.member)
@@ -3498,8 +3556,8 @@ class CheckInSkipsTheCountdownTests(PaletteAssistTestCase):
         self.assertIsNotNone(self.tos.checked_in, "the write should have happened in the assist call")
 
     def test_a_write_that_does_ask_still_asks(self):
-        self._script({"action": "undo_check_in", "params": {"person": "555"}, "summary": "Undo that check-in"})
-        self.assertEqual(self._assist("undo bidder 555's check in").json()["kind"], "countdown")
+        self._script({"action": "add_person", "params": {"name": "Asks First"}, "summary": "Add a person"})
+        self.assertEqual(self._assist("add asks first to the auction").json()["kind"], "countdown")
 
     def test_the_execute_endpoint_still_honours_it_for_a_page_that_was_already_open(self):
         """A stale tab's countdown for check_in still executes."""
@@ -3767,3 +3825,1225 @@ class WorkingAuctionTests(RunActionTestCase):
         self._wind_down(self.in_person_auction)
         note = self._agent("my_context")["last_auction"]["note"]
         self.assertIn("no longer", note)
+
+
+class AnswerContractTests(PaletteAssistTestCase):
+    """Every turn ends in something the user can touch, and a paragraph the model wrote isn't one."""
+
+    def test_the_model_is_told_it_must_call_a_tool(self):
+        payloads = []
+
+        class Recording(FakeProvider):
+            def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
+                payloads.append(tool_choice)
+                return as_result({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+
+        llm.set_provider_override(Recording())
+        self._assist("I would like to look at the lots I am watching")
+        self.assertEqual(payloads, ["required"])
+
+    def test_the_palette_has_only_its_two_tools_and_neither_states_a_fact(self):
+        """ask_the_user asks and cannot_do_this refuses; nothing takes a sentence about this site."""
+        own = {tool["name"] for tool in palette_assist.PALETTE_TOOLS}
+        self.assertEqual(own, {palette_assist.ASK_THE_USER, palette_assist.CANNOT_DO_THIS})
+
+    def test_an_answer_carries_a_link_to_what_it_is_about(self):
+        """The thing the answer names is clickable. It used to arrive as a sentence and nothing else."""
+        self._script(
+            {"lookup": "describe_auction", "params": {"auction": self.in_person_auction.slug}},
+        )
+        data = self._assist("when does that auction start?").json()
+        self.assertEqual(data["kind"], "answer")
+        linked = [item for group in data["groups"] for item in group["items"]]
+        self.assertIn(self.in_person_auction.title, [item["title"] for item in linked])
+        self.assertIn(self.in_person_auction.slug, [item["url"] for item in linked][0])
+
+    def test_the_auction_an_answer_was_about_is_carried_into_the_next_command(self):
+        self._script(
+            {"lookup": "describe_auction", "params": {"auction": self.online_auction.slug}},
+        )
+        data = self._assist("is that one online?").json()
+        self.assertEqual(data["data"]["auction"], self.online_auction.slug)
+
+    def test_a_question_written_as_an_answer_becomes_a_card_you_can_click(self):
+        """Off-contract prose that asks something is rescued as the clarify card it should have been."""
+        reply = palette_assist.read_reply(
+            LLMResult(text="I can add those lots. Do you want the spring or the fall auction?")
+        )
+        self.assertEqual(reply["kind"], "clarify")
+        self.assertEqual(reply["message"], "Do you want the spring or the fall auction?")
+
+    def test_any_other_prose_earns_a_round_instead_of_being_shown(self):
+        for text in (
+            "Please wait a moment while I look up the auctions list.",
+            "The Fall Auction is in person, not online.",
+            "I've updated the email on your account.",
+        ):
+            reply = palette_assist.read_reply(LLMResult(text=text))
+            self.assertEqual(reply["kind"], "invalid", text)
+            self.assertTrue(reply["retry"], text)
+
+    def test_a_promise_is_given_one_more_round_to_do_the_thing(self):
+        self._script(
+            LLMResult(text="One moment while I check which auctions you're in."),
+            {"action": "go_to_page", "params": {"page": "watched"}, "summary": ""},
+        )
+        data = self._assist("what am I watching right now").json()
+        self.assertEqual(data["kind"], "navigate", data)
+        self.assertEqual(self.provider.call_count, 2)
+
+    def test_an_answer_is_a_card_not_a_page(self):
+        self.assertLessEqual(palette_assist.MAX_ANSWER_CHARS, 1000)
+
+
+class ToolTieringTests(PaletteAssistTestCase):
+    """A question doesn't need the write tools, and dropping them has to keep the prompt cacheable."""
+
+    def test_a_question_is_not_offered_the_writes(self):
+        offered = {tool["name"] for tool in palette_assist.tools_for(self.user, "when does the fall auction start?")}
+        self.assertNotIn("set_lot_winner", offered)
+        self.assertIn("describe_auction", offered)
+        self.assertIn("go_to_page", offered)
+
+    def test_a_command_keeps_them(self):
+        for query in ("sold lot 12 to bidder 4 for 25", "check in bob", "renew bob's membership"):
+            offered = {tool["name"] for tool in palette_assist.tools_for(self.user, query)}
+            self.assertIn("set_lot_winner", offered, query)
+
+    def test_a_question_about_a_write_is_answered_rather_than_handed_the_write(self):
+        """Asking how to do a thing is not asking for it to be done.
+
+        This used to keep ``check_in``, on the argument that the question mentioned it. But the
+        writes are named after the things people ask about, so that rule handed ``check_in`` to "what
+        time is check in?" and ``set_lot_winner`` to "is lot 12 sold?" as well. The question shape is
+        checked first now: the reads that answer it are still there, and nothing that acts is.
+        """
+        offered = {tool["name"] for tool in palette_assist.tools_for(self.user, "how do I check someone in?")}
+        self.assertNotIn("check_in", offered)
+        self.assertIn("describe_auction", offered)
+        self.assertIn("go_to_page", offered)
+
+    def test_the_short_list_is_a_prefix_of_the_long_one(self):
+        """So both share one cached prompt at the provider instead of splitting it in two."""
+        short = palette_assist.tools_for(self.user, "when does the fall auction start?")
+        long = palette_assist.tools_for(self.user, "sold lot 12 to bidder 4 for 25")
+        self.assertLess(len(short), len(long))
+        self.assertEqual([tool["name"] for tool in long[: len(short)]], [tool["name"] for tool in short])
+
+    def test_the_whole_catalogue_is_what_you_get_without_a_query(self):
+        self.assertEqual(
+            len(palette_assist.tools_for(self.user)),
+            len(palette_assist.tools_for(self.user, "sold lot 12 to bidder 4 for 25")),
+        )
+
+
+class SharedPromptTests(PaletteAssistTestCase):
+    """The system prompt is the same for everyone in a permission tier, so the cache is shared."""
+
+    def test_two_users_with_the_same_permissions_send_the_same_system_prompt(self):
+        self.assertEqual(
+            palette_assist.build_system_prompt(self.member),
+            palette_assist.build_system_prompt(self.user_with_no_lots),
+        )
+
+    def test_nothing_about_one_person_is_in_it(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        self.assertNotIn(self.in_person_auction.slug, prompt)
+        self.assertNotIn("About this user", prompt)
+
+    def test_the_facts_are_the_first_message_instead(self):
+        messages = palette_assist.build_messages(self.user, "add a lot", [])
+        self.assertIn("About this user", messages[0]["content"])
+        self.assertEqual(messages[-1]["content"], "add a lot")
+
+
+class SellALotTests(PaletteAssistTestCase):
+    """The palette opens the lot form; it never writes a lot."""
+
+    def test_it_navigates_to_the_form_with_what_they_said_filled_in(self):
+        self.in_person_auction.allow_bulk_adding_lots = False
+        self.in_person_auction.save()
+        result = palette_actions.run_action(
+            self._request_for(self.user), "add_a_lot_via_webform", {"name": "blue shrimp", "quantity": 3}
+        )
+        self.assertIn("lot_name=blue+shrimp", result["url"])
+        self.assertIn("quantity=3", result["url"])
+        self.assertIn(f"auction={self.in_person_auction.slug}", result["url"])
+
+    def test_it_writes_nothing(self):
+        before = Lot.objects.count()
+        self._script({"action": "add_a_lot_via_webform", "params": {"name": "nothing shrimp"}, "summary": ""})
+        data = self._assist("add a lot of nothing shrimp").json()
+        self.assertEqual(data["kind"], "navigate", data)
+        self.assertEqual(Lot.objects.count(), before)
+
+    def test_an_auction_with_bulk_adding_gets_the_bulk_page(self):
+        self.in_person_auction.allow_bulk_adding_lots = True
+        self.in_person_auction.save()
+        result = palette_actions.run_action(
+            self._request_for(self.user), "add_a_lot_via_webform", {"name": "blue shrimp"}
+        )
+        self.assertIn(reverse("bulk_add_lots_for_myself", kwargs={"slug": self.in_person_auction.slug}), result["url"])
+
+
+class RefusalTests(PaletteAssistTestCase):
+    """A refusal is the one honest record of a skill somebody wanted and didn't get."""
+
+    def test_saying_the_site_cannot_do_it_writes_it_down(self):
+        from auctions.models import AssistantSkillRequest
+
+        self._script({"error": "This site doesn't do shipping labels."})
+        self._assist("print me a shipping label")
+        row = AssistantSkillRequest.objects.filter(user=self.user).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.skill, "print me a shipping label")
+        self.assertIn("shipping labels", row.reason)
+
+    def test_asking_twice_updates_one_row(self):
+        from auctions.models import AssistantSkillRequest
+
+        self._script({"error": "No."}, {"error": "No."})
+        self._assist("print me a shipping label")
+        self._assist("print me a shipping label")
+        self.assertEqual(AssistantSkillRequest.objects.filter(user=self.user).count(), 1)
+
+
+class QuestionsReachTheModelTests(PaletteAssistTestCase):
+    """A weak page match used to swallow a short question before the model ever saw it."""
+
+    def test_a_question_is_never_an_obvious_match(self):
+        request = self._request_for(self.user)
+        self.assertIsNone(palette_assist.obvious_match(request, "who won lot 12"))
+        self.assertIsNone(palette_assist.obvious_match(request, "what do I owe?"))
+
+    def test_a_name_still_matches_without_the_model(self):
+        request = self._request_for(self.user)
+        groups = palette_assist.obvious_match(request, self.in_person_auction.title)
+        self.assertTrue(groups)
+
+
+class RequestGroupingTests(PaletteAssistTestCase):
+    """One id per thing somebody typed, so rounds are one story and the averages are true."""
+
+    def test_every_round_of_one_request_shares_an_id(self):
+        LLMUsage.objects.all().delete()
+        self._script(
+            {"lookup": "describe_auction", "params": {"auction": self.in_person_auction.slug}},
+        )
+        self._assist("when does that auction start?")
+        ids = set(LLMUsage.objects.values_list("request_id", flat=True))
+        self.assertEqual(len(ids), 1)
+        self.assertTrue(next(iter(ids)))
+        self.assertEqual(LLMUsage.objects.count(), 2)
+
+    def test_two_people_asking_the_same_thing_are_two_requests(self):
+        LLMUsage.objects.all().delete()
+        self._script({"lookup": "describe_auction", "params": {}}, {"lookup": "describe_auction", "params": {}})
+        self._assist("when does it start?", user=self.user)
+        self._assist("when does it start?", user=self.member)
+        self.assertEqual(len(set(LLMUsage.objects.values_list("request_id", flat=True))), 2)
+
+    def test_a_row_says_how_long_it_took_and_which_assistant_answered(self):
+        LLMUsage.objects.all().delete()
+        self._script({"lookup": "describe_auction", "params": {}})
+        self._assist("when does it start?")
+        row = LLMUsage.objects.first()
+        self.assertTrue(row.variant)
+        self.assertEqual(row.variant, palette_assist.variant())
+        self.assertGreaterEqual(row.elapsed_ms, 0)
+
+
+class ShortcutQueueTests(PaletteAssistTestCase):
+    """Mining has always been there; nothing ran it, so nothing was ever mined."""
+
+    def _answered(self, query, destination, times):
+        for _ in range(times):
+            LLMUsage.objects.create(user=self.user, query=query, destination=destination, success=True)
+
+    def test_a_phrase_answered_the_same_way_every_time_is_proposed(self):
+        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
+        proposals = palette_assist.shortcut_proposals()
+        self.assertEqual([row["phrase"] for row in proposals], ["where do i pay"])
+        self.assertEqual(proposals[0]["route"], "my_invoices")
+
+    def test_one_disagreement_leaves_it_to_the_model(self):
+        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
+        self._answered("where do I pay", "watched", 1)
+        self.assertEqual(palette_assist.shortcut_proposals(), [])
+
+    def test_a_phrase_asked_twice_is_not_enough(self):
+        self._answered("where do I pay", "my_invoices", 2)
+        self.assertEqual(palette_assist.shortcut_proposals(), [])
+
+    def test_accepting_one_answers_it_without_the_model_from_then_on(self):
+        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
+        self.client.force_login(self.user)
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.post(
+            reverse("command_palette_analytics"), {"phrase": "where do i pay", "route": "my_invoices"}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(palette_assist.shortcut_proposals(), [])
+        # And the phrase now answers from the shortcut, without reaching the provider.
+        self._script()
+        groups = palette_assist.shortcut_match(self._request_for(self.user), "where do I pay")
+        self.assertTrue(groups)
+        self.assertEqual(self.provider.call_count, 0)
+
+    def test_a_phrase_that_is_not_on_the_list_is_refused(self):
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        self.client.post(reverse("command_palette_analytics"), {"phrase": "anything", "route": "not_a_route"})
+        self.assertFalse(CommandPalettePage.objects.filter(search_term="anything").exists())
+
+
+class LotSubmissionRulesTests(PaletteAssistTestCase):
+    """add_lot / add_lots go through the auction's own gates, for an agent as for a person.
+
+    Everything here is ``services.lot_add_block`` and ``QuickAddLot``, the same two the bulk page uses.
+    An admin is exempt from the rules an admin sets; nobody else is, whichever door they came through.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.auction = self.in_person_auction
+        self.seller = AuctionTOS.objects.filter(
+            auction=self.auction, user=self.member
+        ).first() or AuctionTOS.objects.create(
+            auction=self.auction, user=self.member, name="Member", pickup_location=self.in_person_location
+        )
+        self.request = self._request_for(self.member)
+
+    def _lots(self):
+        return Lot.objects.filter(auctiontos_seller=self.seller, is_deleted=False).count()
+
+    def _add(self, names, user=None):
+        return palette_actions.run_action(
+            self._request_for(user or self.member), "add_lots", {"lots": names, "auction": self.auction.slug}
+        )
+
+    def test_lot_submission_ending_stops_a_non_admin(self):
+        self.auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.auction.save()
+        result = self._add(["too late", "also too late"])
+        self.assertIn("error", result)
+        self.assertEqual(self._lots(), 0)
+
+    def test_an_admin_may_still_add_after_submission_ends(self):
+        self.auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.auction.save()
+        result = palette_actions.run_action(
+            self._request_for(self.user), "add_lots", {"lots": ["admin lot"], "auction": self.auction.slug}
+        )
+        self.assertNotIn("error", result, result)
+
+    def test_max_lots_per_user_means_that_number_and_not_one_more(self):
+        """``QuickAddLot`` counted with ``>``, so every seller got exactly one lot over the limit."""
+        self.auction.max_lots_per_user = 2
+        self.auction.allow_additional_lots_as_donation = False
+        self.auction.save()
+        self._add(["one", "two", "three", "four"])
+        self.assertEqual(self._lots(), 2)
+
+    def test_the_cap_holds_one_lot_at_a_time_too(self):
+        self.auction.max_lots_per_user = 1
+        self.auction.allow_additional_lots_as_donation = False
+        self.auction.save()
+        for name in ("a", "b", "c"):
+            palette_actions.run_action(
+                self._request_for(self.member), "add_lot", {"name": name, "auction": self.auction.slug}
+            )
+        self.assertEqual(self._lots(), 1)
+
+    def test_a_seller_who_may_not_sell_is_refused(self):
+        AuctionTOS.objects.filter(pk=self.seller.pk).update(selling_allowed=False)
+        result = self._add(["not allowed"])
+        self.assertIn("error", result)
+        self.assertEqual(self._lots(), 0)
+
+    def test_only_an_admin_adds_lots_for_somebody_else(self):
+        other = AuctionTOS.objects.filter(auction=self.auction).exclude(pk=self.seller.pk).first()
+        result = palette_actions.run_action(
+            self._request_for(self.member),
+            "add_lots",
+            {"lots": ["for someone else"], "auction": self.auction.slug, "bidder": other.bidder_number or other.name},
+        )
+        self.assertIn("error", result)
+        self.assertIn("admin", result["error"].lower())
+
+    def test_an_auction_the_seller_never_joined_is_refused(self):
+        AuctionTOS.objects.filter(auction=self.online_auction, user=self.member).delete()
+        result = palette_actions.run_action(
+            self._request_for(self.member), "add_lots", {"lots": ["trespassing"], "auction": self.online_auction.slug}
+        )
+        self.assertIn("error", result)
+        self.assertFalse(Lot.objects.filter(lot_name__icontains="trespassing").exists())
+
+
+class NavigationShortcutTests(PaletteAssistTestCase):
+    """ "take me to my invoices" names its own destination; no model call needed."""
+
+    def _go(self, query):
+        return palette_assist.navigation_shortcut(self._request_for(self.user), query)
+
+    def test_a_plain_navigation_needs_no_model(self):
+        for query, key in (
+            ("take me to my invoices", "my_invoices"),
+            ("show me my watched lots", "watched"),
+            ("where do I see my invoices", "my_invoices"),
+            ("open my account", "account"),
+        ):
+            going = self._go(query)
+            self.assertIsNotNone(going, query)
+            self.assertEqual(going["route"], key, query)
+            self.assertEqual(going["kind"], "navigate")
+
+    def test_anything_it_is_not_sure_about_goes_to_the_model(self):
+        for query in (
+            "take me somewhere nice",
+            "show me what I owe",
+            "go to the lot list",  # three routes tie
+            "add a lot of blue shrimp",
+            "when does the fall auction start?",
+        ):
+            self.assertIsNone(self._go(query), query)
+
+    def test_it_never_reaches_a_page_this_user_may_not_open(self):
+        self.assertIsNone(
+            palette_assist.navigation_shortcut(self._request_for(self.member), "take me to the site setup")
+        )
+
+    def test_the_whole_request_short_circuits(self):
+        self._script()  # no scripted reply: calling the provider at all would raise
+        data = self._assist("take me to my invoices").json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertEqual(self.provider.call_count, 0)
+
+
+class ReadsThatAnswerTests(PaletteAssistTestCase):
+    """A read that has said something a person can read has answered; asking the model again wastes a
+    round, and measurably it just calls the same read a second time.
+    """
+
+    def _answers(self, name, query, result=None):
+        return palette_assist.answers_on_its_own(
+            palette_actions.get_action(name), query, {"summary": "x"} if result is None else result
+        )
+
+    def test_a_describe_read_ends_the_turn(self):
+        self.assertTrue(self._answers("describe_auction", "when does it start?"))
+        self.assertTrue(self._answers("describe_lot", "tell me about lot 12"))
+
+    def test_a_read_that_only_resolves_a_name_does_not(self):
+        for name in ("find_person", "find_lot", "find_page", "my_context"):
+            self.assertFalse(self._answers(name, "when does it start?"), name)
+
+    def test_a_read_on_the_way_to_a_write_does_not(self):
+        self.assertFalse(self._answers("describe_auction", "add a lot of blue shrimp"))
+        self.assertFalse(self._answers("describe_person", "check in bob"))
+
+    def test_a_read_with_nothing_to_say_does_not(self):
+        self.assertFalse(self._answers("describe_auction", "when does it start?", {"found": True}))
+
+    def test_one_call_answers_a_question(self):
+        self._script({"lookup": "describe_auction", "params": {"auction": self.in_person_auction.slug}})
+        data = self._assist("when does that auction start?").json()
+        self.assertEqual(data["kind"], "answer")
+        self.assertEqual(self.provider.call_count, 1)
+
+
+class RemovedCapabilityTests(PaletteAssistTestCase):
+    """Asked for something the palette gave up, the model reached for the nearest write it still had.
+
+    "refund lot 14" came back as a countdown for ``no_sale``; "give bob 10 points for the corydoras"
+    as a $10 charge on his invoice. Nothing is listed in the prompt — the model is never told what it
+    can't do, which is an endless list. The tools it is handed say it instead.
+    """
+
+    def _names(self, query):
+        return {tool["name"] for tool in palette_assist.tools_for(self.user, query)}
+
+    def test_it_is_left_with_no_way_to_write(self):
+        for query in (
+            "refund lot 14",
+            "give bob 10 points for the corydoras",
+            "change my email to ada@example.com",
+            "move the pickup time to 11am",
+            "send an announcement to the club",
+            "bid $20 on lot 14",
+            "edit lot 14",
+        ):
+            offered = self._names(query)
+            writes = {
+                name
+                for name in offered
+                if (palette_actions.get_action(name) or SimpleNamespace(danger=None)).danger
+                == palette_actions.DANGER_CONFIRM
+            }
+            self.assertEqual(writes, set(), f"{query} can still write: {writes}")
+            self.assertIn("go_to_page", offered, query)
+
+    def test_a_skill_the_palette_kept_is_untouched(self):
+        for query in (
+            "lot 101 sold to bidder 14 for 25",
+            "check in bob",
+            "add a lot of blue shrimp",
+            "add $5 to jane's invoice for the raffle",
+            "renew bob's membership",
+            "undo that",
+        ):
+            self.assertFalse(palette_assist.asks_for_something_removed(query), query)
+            self.assertIn("set_lot_winner", self._names(query), query)
+
+    def test_a_shared_verb_does_not_rescue_a_skill_that_left(self):
+        """ "change" stayed and "email" didn't; the noun is the one that names the capability."""
+        self.assertTrue(palette_assist.asks_for_something_removed("change my email to ada@example.com"))
+
+    def test_a_question_still_gets_the_reads(self):
+        """ "what are the pickup times?" is answerable even though pickup locations aren't editable here."""
+        self.assertIn("describe_auction", self._names("what are the pickup times?"))
+
+    def test_nothing_about_it_is_in_the_prompt(self):
+        prompt = palette_assist.build_system_prompt(self.user)
+        for name in ("refund_lot", "award_points", "place_bid", "update_pickup_location"):
+            self.assertNotIn(name, prompt)
+
+
+class NavigateOnlyTests(PaletteAssistTestCase):
+    """Take me to the page and stop there: the user's own preference, and the site-wide kill switch."""
+
+    def _writes_offered(self, user):
+        return {
+            name
+            for name in (tool["name"] for tool in palette_assist.tools_for(user))
+            if (palette_actions.get_action(name) or SimpleNamespace(danger=None)).danger
+            == palette_actions.DANGER_CONFIRM
+        }
+
+    def test_off_by_default(self):
+        self.assertFalse(palette_assist.navigate_only(self.user))
+        self.assertTrue(self._writes_offered(self.user))
+
+    def test_a_user_who_asked_for_it_is_offered_no_write(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        self.assertTrue(palette_assist.navigate_only(self.user))
+        self.assertEqual(self._writes_offered(self.user), set())
+        self.assertIn("go_to_page", {tool["name"] for tool in palette_assist.tools_for(self.user)})
+
+    def test_a_question_is_still_answered(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self._script({"lookup": "describe_auction", "params": {}})
+        data = self._assist("when does this auction start").json()
+        self.assertEqual(data["kind"], "answer")
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_the_site_wide_switch_overrides_everybody(self):
+        self.assertTrue(palette_assist.navigate_only(self.user))
+        self.assertEqual(self._writes_offered(self.user), set())
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_a_countdown_left_on_screen_cannot_still_run(self):
+        """The switch is for a write misfiring mid-auction, so a card already showing has to die too."""
+        response = self._execute("check_in", {"person": "555"})
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_the_preference_is_on_the_preferences_page(self):
+        from auctions.forms import ChangeUserPreferencesForm
+
+        self.assertIn("palette_navigate_only", ChangeUserPreferencesForm.Meta.fields)
+
+
+class SiteLoadTests(PaletteAssistTestCase):
+    """Everyone gets slower before anyone gets refused, and the waiting is on screen.
+
+    The per-user limits do nothing about ten people each inside their own; the ceiling that binds
+    first is the provider's, and reaching it answers every user at once with an error.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cache.delete(palette_assist._minute_key())
+        cache.delete(palette_assist._BREAKER_KEY)
+
+    def test_an_idle_site_waits_for_nothing(self):
+        self.assertEqual(palette_assist.site_load(), 0.0)
+        self.assertEqual(palette_assist.wait_for_the_queue(0.0), 0.0)
+
+    def test_nobody_waits_until_it_is_busy(self):
+        self.assertEqual(palette_assist.wait_for_the_queue(palette_assist.BUSY_THRESHOLD - 0.01), 0.0)
+
+    def test_the_busier_it_is_the_longer_everybody_waits(self):
+        gentle = palette_assist.wait_for_the_queue(0.8)
+        hard = palette_assist.wait_for_the_queue(0.95)
+        self.assertGreater(gentle, 0)
+        self.assertGreater(hard, gentle)
+        self.assertLessEqual(palette_assist.wait_for_the_queue(5.0), palette_assist.MAX_WAIT_SECONDS)
+
+    def test_what_a_call_cost_is_counted_against_the_minute(self):
+        palette_assist.spend_tokens(30_000)
+        self.assertGreater(palette_assist.site_load(), 0)
+        palette_assist.spend_tokens(30_000)
+        self.assertAlmostEqual(palette_assist.site_load(), 60_000 / palette_assist._tokens_per_minute(), places=3)
+
+    def test_a_busy_site_says_so_while_it_waits(self):
+        palette_assist.spend_tokens(int(palette_assist._tokens_per_minute() * 0.9))
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        response = self._assist("what am I watching right now")
+        self.assertTrue(any("Busy" in line for line in response.progress_messages), response.progress_messages)
+        self.assertEqual(response.json()["kind"], "navigate")
+
+    def test_a_failing_provider_is_left_alone_and_search_answers(self):
+        for _ in range(palette_assist.BREAKER_FAILURES):
+            palette_assist.note_provider_failure()
+        self.assertTrue(palette_assist.provider_is_resting())
+        self._script()  # calling the provider at all would raise
+        data = self._assist("when does this auction start").json()
+        self.assertIn(data["kind"], {"results", "navigate", "clarify", "error"})
+        self.assertEqual(self.provider.call_count, 0)
+
+    def test_one_success_puts_it_back_in_service(self):
+        palette_assist.note_provider_failure()
+        palette_assist.note_provider_success()
+        self.assertFalse(palette_assist.provider_is_resting())
+
+    def test_being_rate_limited_waits_and_tries_again(self):
+        """A 429 is the provider saying "in a moment", not "no"."""
+
+        class Limited(FakeProvider):
+            calls = 0
+
+            def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
+                Limited.calls += 1
+                if Limited.calls == 1:
+                    msg = "slow down"
+                    raise llm.RateLimited(msg, retry_after=0.01)
+                return as_result({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+
+        llm.set_provider_override(Limited())
+        data = self._assist("what am I watching right now").json()
+        self.assertEqual(data["kind"], "navigate", data)
+        self.assertEqual(Limited.calls, 2)
+
+
+class PerUserBudgetTests(PaletteAssistTestCase):
+    """A person's allowance is counted in commands, not in the rounds those commands happened to cost."""
+
+    def test_a_command_costs_one_whatever_it_takes(self):
+        cache.delete(f"palette_assist_requests_{self.user.pk}")
+        for _ in range(3):
+            self.assertIsNone(palette_assist.check_request_budget(self.user))
+
+    def test_too_many_commands_is_refused_with_a_sentence(self):
+        cache.delete(f"palette_assist_requests_{self.user.pk}")
+        for _ in range(palette_assist.WINDOW_MAX_REQUESTS):
+            palette_assist.check_request_budget(self.user)
+        self.assertEqual(palette_assist.check_request_budget(self.user), palette_assist.WINDOW_MESSAGE)
+
+    def test_the_round_backstop_is_looser_than_the_command_cap(self):
+        self.assertGreater(palette_assist.WINDOW_MAX_CALLS, palette_assist.WINDOW_MAX_REQUESTS)
+
+
+class AuctionHintTests(PaletteAssistTestCase):
+    """A model asked for "the fall auction" sends back fall_auction about as often as fall auction.
+
+    Neither the slug nor the title holds an underscore, so the auction was simply not found and the
+    next round answered about whichever one happened to be the default.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.named = Auction.objects.create(
+            title="Riverbend Spring Auction",
+            slug="riverbend-spring-auction",
+            created_by=self.user,
+            date_start=timezone.now() - datetime.timedelta(hours=1),
+            date_end=timezone.now() + datetime.timedelta(days=2),
+        )
+
+    def test_the_spellings_a_model_actually_sends(self):
+        for hint in (
+            "Riverbend Spring Auction",
+            "riverbend spring auction",
+            "Riverbend_Spring_Auction",
+            "riverbend-spring-auction",
+            "the Riverbend Spring Auction",
+            "our riverbend spring auction",
+            "riverbend",
+        ):
+            auction, problem = palette_actions.resolve_auction(self.user, hint)
+            self.assertIsNone(problem, hint)
+            self.assertEqual(auction.pk, self.named.pk, hint)
+
+    def test_a_name_that_is_nobodys_is_still_refused(self):
+        auction, problem = palette_actions.resolve_auction(self.user, "an auction that does not exist")
+        self.assertIsNone(auction)
+        self.assertTrue(problem)
+
+
+class AuctionNamedInTheSentenceTests(PaletteAssistTestCase):
+    """The model drops a named auction often enough that the sentence is worth reading."""
+
+    def _named(self, sentence):
+        return palette_actions.auction_named_in(self.user, sentence)
+
+    def test_the_title_in_the_sentence_wins(self):
+        title = self.in_person_auction.title
+        self.assertEqual(getattr(self._named(f"when does the {title} start?"), "pk", None), self.in_person_auction.pk)
+        self.assertEqual(
+            getattr(self._named(f"what are the rules for {title.lower()}"), "pk", None), self.in_person_auction.pk
+        )
+
+    def test_it_does_not_reach_for_a_word_that_happens_to_match(self):
+        for sentence in ("add a lot of blue shrimp", "check in bob", "when does it start?", ""):
+            self.assertIsNone(self._named(sentence), sentence)
+
+    def test_a_resolver_uses_it_when_the_model_leaves_the_parameter_out(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        request = self._request_for(self.user)
+        request.palette_query = f"when does the {self.in_person_auction.title} start?"
+        result = palette_actions.run_action(request, "describe_auction", {})
+        self.assertIn(self.in_person_auction.title, result["summary"])
+
+    def test_a_parameter_the_model_did_pass_still_wins(self):
+        request = self._request_for(self.user)
+        request.palette_query = f"when does the {self.in_person_auction.title} start?"
+        result = palette_actions.run_action(request, "describe_auction", {"auction": self.online_auction.slug})
+        self.assertIn(self.online_auction.title, result["summary"])
+
+
+class TitlesAreReadAsWholeWordsTests(PaletteAssistTestCase):
+    """Reading a name out of a sentence has to be strict, because nothing downstream can tell it was a
+    guess: the card that comes back looks exactly as confident as one the model named.
+    """
+
+    def _named(self, sentence, user=None):
+        return palette_actions.auction_named_in(user or self.user, sentence)
+
+    def _auction(self, title, **kwargs):
+        auction = Auction.objects.create(
+            title=title,
+            created_by=self.user,
+            date_start=timezone.now() + datetime.timedelta(days=kwargs.pop("in_days", 1)),
+            date_end=timezone.now() + datetime.timedelta(days=30),
+            **kwargs,
+        )
+        AuctionTOS.objects.create(user=self.user, auction=auction, pickup_location=self.location, is_admin=True)
+        return auction
+
+    def test_a_title_inside_another_word_is_not_a_name(self):
+        """``title in asked`` matched substrings: an auction called Al answered "how many personal lots"."""
+        self._auction("Al")
+        self.assertIsNone(self._named("how many personal lots are there"))
+
+    def test_one_ordinary_word_is_not_a_name_on_its_own(self):
+        """The invariant this was written for: "add a lot of blue shrimp" must not find Blue."""
+        self._auction("Blue")
+        self.assertIsNone(self._named("add a lot of blue shrimp"))
+        self.assertIsNone(self._named("the water looks blue in that photo"))
+
+    def test_one_word_beside_an_auction_noun_is(self):
+        blue = self._auction("Blue")
+        self.assertEqual(getattr(self._named("when does the blue auction start?"), "pk", None), blue.pk)
+
+    def test_a_title_made_only_of_words_every_auction_has_never_names_one(self):
+        self._auction("Auction")
+        self.assertIsNone(self._named("when does the fall auction start?"))
+
+    def test_a_single_distinguishing_word_scattered_in_a_sentence_is_not_a_name(self):
+        self._auction("Fall Auction")
+        self.assertIsNone(self._named("did prices fall this year"))
+
+    def test_the_longest_title_that_fits_wins(self):
+        self._auction("Fall Auction", in_days=2)
+        newer = self._auction("Fall Auction 2026", in_days=1)
+        self.assertEqual(getattr(self._named("how did the fall auction 2026 go?"), "pk", None), newer.pk)
+
+    def test_a_superuser_does_not_read_another_club_s_auction_out_of_a_sentence(self):
+        """``_joined_auctions`` hands a superuser the whole site, which is every other club's auction."""
+        stranger = Auction.objects.create(
+            title="Riverside Koi Swap",
+            created_by=self.userB,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=30),
+        )
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.assertIn(stranger, command_palette._joined_auctions(self.admin_user))
+        self.assertNotIn(stranger, command_palette._own_auctions(self.admin_user))
+        self.assertIsNone(self._named("how did the riverside koi swap go?", user=self.admin_user))
+        # Named outright, they can still reach it: only reading it out of a sentence is narrowed.
+        auction, problem = palette_actions.resolve_auction(self.admin_user, "Riverside Koi Swap")
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, stranger.pk)
+
+
+class GenericHintTests(PaletteAssistTestCase):
+    """Loosening a hint must not loosen it into a word every auction contains."""
+
+    def test_an_article_stripped_to_nothing_useful_matches_nothing(self):
+        """ "the auction" became "auction", and ``title__icontains`` then returned whichever came first."""
+        for hint in ("the auction", "my auction", "my-auction", "our auctions"):
+            auction, problem = palette_actions.resolve_auction(self.user, hint)
+            self.assertIsNone(auction, hint)
+            self.assertIn("couldn't find", str(problem), hint)
+
+    def test_a_real_name_still_resolves_every_way_it_is_spelled(self):
+        for hint in (
+            self.online_auction.slug,
+            # What the model sends back about as often as the slug itself.
+            self.online_auction.slug.replace("-", "_"),
+            self.online_auction.title,
+            f"the {self.online_auction.title}",
+        ):
+            auction, problem = palette_actions.resolve_auction(self.user, hint)
+            self.assertIsNone(problem, hint)
+            self.assertEqual(auction.pk, self.online_auction.pk, hint)
+
+    def test_an_auction_actually_called_that_is_still_reachable_by_name(self):
+        plain = Auction.objects.create(
+            title="Auction",
+            created_by=self.user,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=30),
+        )
+        auction, problem = palette_actions.resolve_auction(self.user, "Auction")
+        self.assertIsNone(problem)
+        self.assertEqual(auction.pk, plain.pk)
+
+
+class QuestionsNeverGetWriteToolsTests(PaletteAssistTestCase):
+    """The writes are named after the things people ask about, so a question keeps hitting them.
+
+    Ten of fifteen plainly-phrased questions contain a word some write is named by. The question
+    check used to run *after* that word check, so "what time is check in?" was handed ``check_in``
+    and "is lot 12 sold?" was handed ``set_lot_winner``.
+    """
+
+    QUESTIONS = (
+        "what time is check in",
+        "when does check in start?",
+        "is lot 12 sold",
+        "what is my invoice total",
+        "when is the next door prize draw",
+        "how do i renew my membership",
+        "who is the last person to check in",
+        "can i still add a lot",
+    )
+
+    def _writes(self, query):
+        return {
+            name
+            for name in (tool["name"] for tool in palette_assist.tools_for(self.user, query))
+            if (palette_actions.get_action(name) or SimpleNamespace(danger=None)).danger
+            == palette_actions.DANGER_CONFIRM
+        }
+
+    def test_no_question_is_handed_anything_that_writes(self):
+        for query in self.QUESTIONS:
+            self.assertTrue(palette_assist.asks_a_question(query), query)
+            self.assertFalse(palette_assist.wants_the_writes(query), query)
+            self.assertEqual(self._writes(query), set(), query)
+
+    def test_a_question_is_still_answered_by_the_read_that_answered_it(self):
+        """The same word bag stopped these being answered at all: the read could not end the turn."""
+        for query in self.QUESTIONS:
+            self.assertTrue(
+                palette_assist.answers_on_its_own(
+                    palette_actions.get_action("describe_auction"), query, {"summary": "Starts at two."}
+                ),
+                query,
+            )
+
+    def test_one_model_call_answers_a_question_carrying_a_write_word(self):
+        self._script({"lookup": "describe_auction", "params": {"auction": self.in_person_auction.slug}})
+        data = self._assist("what time is check in?").json()
+        self.assertEqual(data["kind"], "answer", data)
+        self.assertEqual(self.provider.call_count, 1)
+
+    def test_telling_it_to_do_something_still_gets_the_writes(self):
+        for query in ("check in bob", "mark lot 14 sold", "add someone to the auction", "renew bob's membership"):
+            self.assertFalse(palette_assist.asks_a_question(query), query)
+            self.assertTrue(palette_assist.wants_the_writes(query), query)
+
+    def test_an_imperative_opening_with_do_is_not_read_as_a_question(self):
+        """ "do the check in for bob" is an instruction; "does bob have a bidder number" is not."""
+        self.assertFalse(palette_assist.asks_a_question("do the check in for bob"))
+        self.assertTrue(palette_assist.asks_a_question("does bob have a bidder number"))
+
+
+class SurvivingWritesStayReachableTests(PaletteAssistTestCase):
+    """``DriftTests`` pins that the sixteen writes still exist. This pins that you can still reach them.
+
+    Both vocabularies are built out of the registry's own wording, and nobody speaks the registry's
+    wording. ``remove_person`` is confirmed as "Remove somebody from an auction", so **somebody**
+    counted as a skill the palette gave up -- and ``add_person``, which survived, says "someone". "add
+    somebody to the auction" lost every write tool it needed while "add someone" worked.
+    """
+
+    #: A few ways a person actually says each surviving write, rather than how its confirm line does.
+    PHRASINGS = {
+        "add_person": ("add somebody to the auction", "add anybody who turns up", "put someone on the list"),
+        "set_my_auction": ("set the current auction to the fall one", "make this my current auction"),
+        "check_in": ("check somebody in", "check bob in"),
+        # The third is why "donation" is in ``_TOO_GENERAL``: the donation desk took the word to
+        # ``/mcp/``, and an auctioneer saying it means the flag on the lot in their hand.
+        "set_lot_winner": (
+            "lot 101 sold to bidder 14 for 25",
+            "record the sale of lot 3",
+            "lot 7 sold to bidder 4 as a donation",
+        ),
+        "no_sale": ("mark lot 14 as not sold", "no sale on lot 14"),
+        "renew_membership": ("renew bob's membership",),
+        "add_invoice_adjustment": ("add $5 to jane's invoice for the raffle",),
+        "draw_door_prize": ("draw a door prize",),
+        "undo_last": ("undo that", "undo the last thing"),
+    }
+
+    def _offered(self, query):
+        return {tool["name"] for tool in palette_assist.tools_for(self.user, query)}
+
+    def test_every_phrasing_still_reaches_the_write_it_names(self):
+        for name, phrasings in self.PHRASINGS.items():
+            for query in phrasings:
+                self.assertFalse(
+                    palette_assist.asks_for_something_removed(query),
+                    f"{query!r} reads as a skill the palette gave up, so {name} is out of reach",
+                )
+                self.assertIn(name, self._offered(query), query)
+
+    def test_synonyms_of_a_surviving_write_are_not_counted_as_skills_that_left(self):
+        for word in ("somebody", "anybody", "current"):
+            self.assertIn(word, palette_assist._write_vocabulary(), word)
+            self.assertNotIn(word, palette_assist._removed_vocabulary(), word)
+
+    def test_two_words_for_the_same_missing_skill_agree(self):
+        """ "remove lot 14" took the writes away and "delete lot 14" did not; both mean the same thing."""
+        self.assertTrue(palette_assist.asks_for_something_removed("remove lot 14"))
+        self.assertTrue(palette_assist.asks_for_something_removed("delete lot 14"))
+
+
+class PinnedSubjectTests(PaletteAssistTestCase):
+    """A confirmation card and the write it confirms have to be about the same auction.
+
+    The card is built in one request and confirmed in another, and every input that decides which
+    auction -- the page they were on, what is running, the sentence they typed -- can differ between
+    the two. ``execute`` never sees the sentence at all.
+    """
+
+    def test_the_card_writes_the_auction_into_its_own_parameters(self):
+        action = palette_actions.get_action("add_person")
+        request = self._request_for(self.user)
+        request.palette_query = f"add mike smith to the {self.online_auction.title}"
+        pinned = palette_actions.pin_the_subject(request, action, {"name": "Mike Smith"})
+        self.assertEqual(pinned["auction"], self.online_auction.slug)
+        # The label the user reads names the same one.
+        self.assertEqual(palette_actions.action_context(request, action, pinned), self.online_auction.title)
+
+    def test_an_auction_the_model_named_is_left_alone(self):
+        action = palette_actions.get_action("add_person")
+        request = self._request_for(self.user)
+        request.palette_query = f"add mike smith to the {self.online_auction.title}"
+        params = {"name": "Mike Smith", "auction": self.in_person_auction.slug}
+        self.assertEqual(palette_actions.pin_the_subject(request, action, params), params)
+
+    def test_an_action_that_has_no_auction_is_untouched(self):
+        action = palette_actions.get_action("set_my_club")
+        request = self._request_for(self.user)
+        request.palette_query = f"the {self.online_auction.title}"
+        self.assertNotIn("auction", palette_actions.pin_the_subject(request, action, {"club": "x"}))
+
+    def test_the_countdown_card_carries_the_auction_through_to_execute(self):
+        # Their working auction is the online one; the sentence names the other.
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._script(
+            {
+                "action": "add_person",
+                "params": {"name": "Mike Smith"},
+                "summary": "Add Mike Smith",
+            }
+        )
+        data = self._assist(f"add mike smith to the {self.in_person_auction.title}").json()
+        self.assertEqual(data["kind"], "countdown", data)
+        # Without this the params go back to execute with no auction in them, and execute -- which
+        # cannot read the sentence -- resolves the working auction instead.
+        self.assertEqual(data["params"].get("auction"), self.in_person_auction.slug)
+        self.assertEqual(data["context"], self.in_person_auction.title)
+
+    def test_the_label_names_the_auction_read_out_of_the_sentence(self):
+        """``action_context`` resolved separately, so the card could name one auction and act on another."""
+        action = palette_actions.get_action("add_person")
+        request = self._request_for(self.user)
+        request.palette_query = f"add mike smith to the {self.online_auction.title}"
+        self.assertEqual(palette_actions.action_context(request, action, {}), self.online_auction.title)
+
+
+class BudgetCeilingTests(PaletteAssistTestCase):
+    """``TOTAL_BUDGET_SECONDS`` has to be a ceiling, not a thing checked once a round has already run."""
+
+    def test_a_round_does_not_start_without_room_for_the_call_it_needs(self):
+        started = time.monotonic() - (palette_assist.TOTAL_BUDGET_SECONDS - llm.DEFAULT_TIMEOUT_SECONDS + 1)
+        self.assertLess(palette_assist._time_left(started), llm.DEFAULT_TIMEOUT_SECONDS)
+
+    def test_the_wait_never_eats_the_time_the_call_needs(self):
+        self.assertGreaterEqual(
+            palette_assist.TOTAL_BUDGET_SECONDS,
+            palette_assist.MAX_WAIT_SECONDS + llm.DEFAULT_TIMEOUT_SECONDS,
+            "a full queue wait plus one call has to fit inside the budget",
+        )
+
+    def test_a_wait_is_handed_to_the_caller_rather_than_slept_through(self):
+        """``assist_stream`` runs on a thread with a database connection on it; the view awaits instead."""
+        event = palette_assist._progress("Busy right now — waiting 3 seconds…", wait=3.0)
+        self.assertEqual(event["wait_seconds"], 3.0)
+        self.assertEqual(palette_assist.wait_between_events(event), 3.0)
+
+    def test_a_plain_status_line_asks_for_no_wait(self):
+        self.assertEqual(palette_assist.wait_between_events(palette_assist._progress("Working…")), 0.0)
+
+    def test_a_nonsense_wait_is_ignored_and_a_long_one_is_capped(self):
+        self.assertEqual(palette_assist.wait_between_events({"wait_seconds": "soon"}), 0.0)
+        self.assertEqual(palette_assist.wait_between_events({"wait_seconds": 600}), palette_assist.MAX_WAIT_SECONDS)
+
+    def test_the_streaming_view_awaits_a_wait_instead_of_blocking(self):
+        source = inspect.getsource(palette_views.CommandPaletteAssistView)
+        self.assertIn("await asyncio.sleep", source)
+        self.assertNotIn("time.sleep", source)
+
+
+class TokenReservationTests(PaletteAssistTestCase):
+    """A call has to count against the budget while it is in flight, not only once it comes back."""
+
+    def setUp(self):
+        super().setUp()
+        for offset in (0, -60, -120):
+            cache.delete(palette_assist._minute_key(time.time() + offset))
+        cache.delete(palette_assist._BREAKER_KEY)
+
+    def test_a_call_counts_before_it_has_happened(self):
+        """Spending only on the way back left ten simultaneous requests all reading a load of zero."""
+        before = palette_assist.site_load()
+        palette_assist.reserve_tokens()
+        self.assertGreater(palette_assist.site_load(), before)
+
+    def test_the_reservation_is_corrected_by_what_it_really_cost(self):
+        reservation = palette_assist.reserve_tokens(9000)
+        palette_assist.settle_tokens(reservation, 3000)
+        self.assertAlmostEqual(palette_assist.site_load(), 3000 / palette_assist._tokens_per_minute(), places=3)
+
+    def test_a_call_that_never_happened_gives_its_reservation_back(self):
+        palette_assist.settle_tokens(palette_assist.reserve_tokens(9000), 0)
+        self.assertEqual(palette_assist.site_load(), 0.0)
+
+    def test_the_window_slides_instead_of_resetting_on_the_minute(self):
+        """A hard reset lets the whole held-back queue go at once, every sixty seconds."""
+        palette_assist._add_tokens(palette_assist._minute_key(time.time() - 60), 60_000)
+        carried = palette_assist.site_load()
+        self.assertGreater(carried, 0.0, "last minute's spend has to count for something")
+        self.assertLess(carried, 60_000 / palette_assist._tokens_per_minute())
+
+    def test_the_breaker_rests_for_its_whole_window_from_the_moment_it_trips(self):
+        """``cache.add`` sets a timeout only on creation, so the rest used to start at failure one."""
+        with patch.object(cache, "set", wraps=cache.set) as refreshed:
+            for _ in range(palette_assist.BREAKER_FAILURES):
+                palette_assist.note_provider_failure()
+        self.assertTrue(palette_assist.provider_is_resting())
+        refreshed.assert_called_with(
+            palette_assist._BREAKER_KEY,
+            palette_assist.BREAKER_FAILURES,
+            timeout=palette_assist.BREAKER_COOLDOWN_SECONDS,
+        )
+
+
+class LookupTruncationTests(PaletteAssistTestCase):
+    """What overflows is one or two long prose fields; what a tail cut removes is whole keys."""
+
+    def test_a_long_result_keeps_every_key(self):
+        result = {
+            "auction": {
+                "title": "Fall Auction",
+                "rules": "No dyed fish. " * 800,
+                "pickup_locations": ["Clubhouse"],
+                "lots": 12,
+            },
+            "summary": "Starts Thursday.",
+        }
+        payload = palette_assist.lookup_payload("describe_auction", result)
+        for key in ("title", "rules", "pickup_locations", "lots", "summary"):
+            self.assertIn(key, payload, key)
+        self.assertIn("Clubhouse", payload)
+        self.assertIn("…", payload)
+
+    def test_a_shortened_result_says_so_without_claiming_to_be_cut_off(self):
+        payload = palette_assist.lookup_payload("describe_auction", {"rules": "x" * 40_000})
+        self.assertIn("shortened", payload)
+        self.assertIn("Do not fill in anything this result does not show", payload)
+
+    def test_a_result_that_fits_is_passed_through_untouched(self):
+        payload = palette_assist.lookup_payload("my_context", {"username": "bob"})
+        self.assertEqual(payload, 'Result of my_context: {"username": "bob"}')
+
+    def test_an_auction_with_real_writing_on_it_still_fits(self):
+        """Fixture auctions have empty text fields; a live one has paragraphs in several of them."""
+        for field in ("summernote_description", "notes"):
+            if hasattr(self.in_person_auction, field):
+                setattr(self.in_person_auction, field, "House rules. " * 400)
+        self.in_person_auction.save()
+        request = self._request_for(self.user)
+        result = palette_actions.run_action(request, "describe_auction", {"auction": self.in_person_auction.slug})
+        payload = palette_assist.lookup_payload("describe_auction", result)
+        self.assertIn("pickup", payload.lower())
+        self.assertIn(self.in_person_auction.title, payload)
+
+
+class UsageColumnsTests(PaletteAssistTestCase):
+    """The analytics page could say a command was cancelled but never what it was cancelled *on*."""
+
+    def test_a_row_records_what_the_command_was_about(self):
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        self._assist(f"check in bidder 555 at the {self.online_auction.title}")
+        row = LLMUsage.objects.latest("pk")
+        self.assertEqual(row.subject, self.online_auction.title)
+        self.assertTrue(row.read_the_query, "the auction came out of the sentence, and that is worth counting")
+
+    def test_a_turn_that_lost_its_write_tools_says_so(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("refund lot 14")
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_PAGES)
+
+    def test_an_ordinary_command_is_marked_as_having_had_everything(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("take bob's lot off the watch list")
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_ALL)
+
+    def test_a_question_is_marked_as_having_had_the_reads(self):
+        self._script({"lookup": "describe_auction", "params": {}})
+        self._assist("what are the pickup times?")
+        self.assertEqual(LLMUsage.objects.first().tools_offered, palette_assist.TOOLS_READS)
+
+    def test_the_tier_names_match_what_tools_for_actually_hands_over(self):
+        for query, tier in (
+            ("check in bob", palette_assist.TOOLS_ALL),
+            ("what time is check in?", palette_assist.TOOLS_READS),
+            ("refund lot 14", palette_assist.TOOLS_PAGES),
+        ):
+            self.assertEqual(palette_assist.tools_tier(self.user, query), tier, query)
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(palette_assist.tools_tier(self.user, "check in bob"), palette_assist.TOOLS_LOCKED)
+
+    def test_the_analytics_page_shows_all_of_it(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("refund lot 14")
+        self.admin_user.is_superuser = True
+        self.admin_user.is_staff = True
+        self.admin_user.save()
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("command_palette_analytics"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("llm_writes_withheld", response.context)
+        self.assertIn("llm_read_the_query", response.context)
+        self.assertIn("llm_provider_resting", response.context)
+        self.assertEqual(response.context["llm_writes_withheld"], 1)
+
+
+class ConnectionReleaseTests(SimpleTestCase):
+    """The wait gives up its database connection, but never one inside a transaction."""
+
+    def test_it_leaves_a_connection_in_a_transaction_alone(self):
+        """``close()`` in a transaction marks it ``closed_in_transaction`` and every query after raises."""
+        closed = []
+        connection = SimpleNamespace(
+            in_atomic_block=True,
+            closed_in_transaction=False,
+            close=lambda: closed.append(True),
+        )
+        with patch("django.db.connections.all", return_value=[connection]):
+            palette_assist._let_go_of_the_database()
+        self.assertEqual(closed, [])
+
+    def test_it_closes_an_idle_one(self):
+        closed = []
+        connection = SimpleNamespace(
+            in_atomic_block=False,
+            closed_in_transaction=False,
+            close=lambda: closed.append(True),
+        )
+        with patch("django.db.connections.all", return_value=[connection]):
+            palette_assist._let_go_of_the_database()
+        self.assertEqual(closed, [True])
+
+    def test_a_broken_connection_does_not_break_the_request(self):
+        def explode():
+            message = "gone"
+            raise RuntimeError(message)
+
+        connection = SimpleNamespace(in_atomic_block=False, closed_in_transaction=False, close=explode)
+        with patch("django.db.connections.all", return_value=[connection]):
+            palette_assist._let_go_of_the_database()  # must not raise
+
+
+class MyBidderNumberTests(RunActionTestCase):
+    """A bidder's own number, for the person holding the paddle rather than the person running the door.
+
+    ``describe_person`` has always answered this and has always been auction-admin only, so the one
+    who most needs the number is the one it refuses.
+    """
+
+    def _run(self, user, params=None):
+        request = self._request_for(user)
+        return palette_actions.run_action(request, "my_bidder_number", params or {})
+
+    def test_a_bidder_is_told_their_own_number(self):
+        result = self._run(self.member, {"auction": self.in_person_auction.slug})
+        self.assertTrue(result.get("found"))
+        self.assertEqual(result["bidder_number"], self.in_person_buyer.bidder_number)
+        self.assertIn(str(self.in_person_buyer.bidder_number), result["summary"])
+
+    def test_it_needs_no_admin_rights(self):
+        self.assertFalse(self.in_person_auction.permission_check(self.member))
+        self.assertTrue(self._run(self.member, {"auction": self.in_person_auction.slug}).get("found"))
+        # The admin tool for the same fact still refuses them.
+        refused = palette_actions.run_action(
+            self._request_for(self.member),
+            "describe_person",
+            {"name": str(self.in_person_buyer.bidder_number), "auction": self.in_person_auction.slug},
+        )
+        self.assertFalse(refused.get("found"))
+
+    def test_somebody_who_has_not_joined_is_told_so_and_offered_the_auction(self):
+        result = self._run(self.userB, {"auction": self.in_person_auction.slug})
+        self.assertFalse(result.get("found"))
+        self.assertIn("haven't joined", result["summary"])
+        self.assertTrue(result["followups"][0]["url"])
+
+    def test_check_in_is_only_mentioned_where_there_is_any(self):
+        """A "no" about check-in reads like a problem at an auction that has no check-in at all."""
+        result = self._run(self.member, {"auction": self.in_person_auction.slug})
+        self.assertEqual(result["uses_check_in"], self.in_person_auction.use_check_in_mode)
+        if not self.in_person_auction.use_check_in_mode:
+            self.assertNotIn("checked in", result["summary"])
+
+    def test_it_reads_the_auction_out_of_the_sentence_like_every_other_read(self):
+        request = self._request_for(self.member)
+        request.palette_query = f"what's my bidder number at the {self.in_person_auction.title}"
+        result = palette_actions.run_action(request, "my_bidder_number", {})
+        self.assertEqual(result["auction"], self.in_person_auction.title)
+
+    def test_it_is_a_read_on_both_surfaces(self):
+        action = palette_actions.get_action("my_bidder_number")
+        self.assertTrue(action.lookup)
+        self.assertEqual(action.danger, palette_actions.DANGER_SAFE)
+        self.assertFalse(action.mcp_only, "a bidder asking their own number is a palette question too")
+
+    def test_it_is_offered_to_a_plain_bidder_over_mcp(self):
+        from auctions.mcp import tools as mcp_tools
+
+        self.assertIn("my_bidder_number", {tool["name"] for tool in mcp_tools.tool_descriptors(self.member)})

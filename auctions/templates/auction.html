@@ -83,7 +83,7 @@ src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callbac
 async
 ></script>
 <script>
-
+{% comment %}The info window's HTML is built in JS: a location's name is HTML-escaped and then JS-escaped, since escaped only for HTML a \x3c in it came out as a tag.{% endcomment %}
 function initMap() {
     var map;
     var bounds = new google.maps.LatLngBounds();
@@ -92,7 +92,7 @@ function initMap() {
     var markers = [
         {% for location in pickup_locations %}
         {%if location.has_coordinates %}
-        ['{{ location.name }}', {{ location.latitude }},{{ location.longitude }}],
+        ["{{ location.name|escapejs }}", {{ location.latitude }},{{ location.longitude }}],
         {% endif %}
         {% endfor %}
     ];
@@ -100,8 +100,8 @@ function initMap() {
         {% for location in pickup_locations %}
         {%if location.has_coordinates %}
         ['<div class="info_content" style="color:black;">' +
-        '<h5>{{ location.name }}</h5>' +
-        `{% include 'location_fragment_map.html' %}</div>`],
+        '<h5>{{ location.name|force_escape|escapejs }}</h5>' +
+        "{% filter escapejs %}{% include 'location_fragment_map.html' %}{% endfilter %}</div>"],
         {% endif %}
         {% endfor %}
     ];
@@ -151,9 +151,12 @@ function initMap() {
             to deliver one link.{% endcomment %}
             <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
               <span class="d-none d-md-inline"><i class="bi bi-star"></i> Pin this auction to {{ auction.club.name }}'s sidebar.</span>
-              <a href="{% url 'auction_main' slug=auction.slug %}?make_current_auction=true" class="btn btn-sm btn-info">
-                <i class="bi bi-pin-angle"></i> Make this the current club auction
-              </a>
+              <form method="post" action="{% url 'club_detail' slug=auction.club.slug %}?next={{ auction.get_absolute_url|urlencode }}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="make_current">
+                <input type="hidden" name="auction" value="{{ auction.pk }}">
+                <button type="submit" class="btn btn-sm btn-info"><i class="bi bi-pin-angle"></i> Make this the current club auction</button>
+              </form>
             </div>
             {% endif %}
 

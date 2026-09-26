@@ -32,7 +32,6 @@ from auctions.models import (
     Auction,
     BapAward,
     Category,
-    Club,
     ClubHistory,
     ClubMember,
     Lot,
@@ -66,10 +65,26 @@ from auctions.species_matching import (
     visible_species,
 )
 
-from .base import IsAuthenticatedOrAPIKey, check_club_permission
+from .base import IsAuthenticatedOrAPIKey, check_club_permission, club_from_url
 from .club_members import renew_club_member
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_field_dump(data):
+    """Field names, with values only for the fields the ingest accepts.
+
+    Enough to diagnose a failed import without copying whatever a caller sent into a club's history.
+    """
+    from auctions.services import INGEST_ALLOWED_FIELDS
+
+    parts = []
+    for key in sorted(data):
+        if key in INGEST_ALLOWED_FIELDS:
+            parts.append(f"{key}={str(data[key])[:60]!r}")
+        else:
+            parts.append(f"{key}=(not a member field)")
+    return ", ".join(parts)[:400]
 
 
 class ClubAPIViewMixin:
@@ -83,7 +98,9 @@ class ClubAPIViewMixin:
     def get_club(self):
         if not hasattr(self, "_club"):
             slug = self.kwargs.get("slug")
-            self._club = get_object_or_404(Club, slug=slug)
+            self._club = club_from_url(slug)
+            if self._club is None:
+                raise Http404
             api_key = getattr(self.request, "api_key", None)
             if api_key and api_key.club_id != self._club.pk:
                 msg = "API key does not belong to this club."
@@ -109,6 +126,16 @@ class ClubAPIViewMixin:
         if not check_club_permission(self.request.user, club, user_permission):
             self.permission_denied(self.request, message=message)
         return club
+
+    def require_bap_permission_for_points(self, serializer, instance=None):
+        """Changing a member's BAP/HAP totals is awarding points, whatever else the caller may edit."""
+        changed = any(
+            field in serializer.validated_data
+            and serializer.validated_data[field] != (getattr(instance, field) if instance else 0)
+            for field in ("bap_points", "hap_points")
+        )
+        if changed and not check_club_permission(self.request.user, self.get_club(), "permission_manage_bap"):
+            self.permission_denied(self.request, message="You do not have permission to change points for this club.")
 
     def get_serializer_class(self):
         if self.is_api_key_request() and self.request.method in {"POST", "PUT", "PATCH"}:
@@ -153,22 +180,31 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         if not self.is_api_key_request():
             return super().create(request, *args, **kwargs)
+        # Before validating: a key without this permission must not be able to write anything at
+        # all, not even a history line naming what it tried.
+        self.require_club_permission(
+            "permission_add_edit",
+            "can_add_club_members",
+            "You do not have permission to add members to this club.",
+        )
         serializer = self.get_serializer(data=self.get_mapped_request_data())
         try:
             serializer.is_valid(raise_exception=True)
         except Exception:
-            # Logged with the raw POST so admins can diagnose it.
+            # Logged with the field names, and values only for the fields we expect. The whole raw
+            # POST used to go in, which put arbitrary caller text in the club's audit log and
+            # silently overran action's 800 characters.
             try:
                 club = self.get_club()
                 actor = f"API key [{request.api_key.prefix}] ({request.api_key.name})"
-                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                field_dump = _safe_field_dump(request.data)
                 errors = serializer.errors
                 ClubHistory.objects.create(
                     club=club,
                     user=None,
                     action=(
                         f"Failed to create member via {actor} — validation errors: {errors} — POST data: {field_dump}"
-                    ),
+                    )[:800],
                     applies_to="MEMBERS",
                 )
             except Exception:
@@ -190,6 +226,7 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
             save_kwargs["source"] = self.request.api_key.name
         else:
             save_kwargs["added_by"] = self.request.user
+            self.require_bap_permission_for_points(serializer)
         member = serializer.save(**save_kwargs)
         actor = (
             f"API key [{self.request.api_key.prefix}] ({self.request.api_key.name})"
@@ -235,6 +272,8 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             "can_update_club_members",
             "You do not have permission to edit members of this club.",
         )
+        if not self.is_api_key_request():
+            self.require_bap_permission_for_points(serializer, serializer.instance)
         member = serializer.save()
         actor = (
             f"API key [{self.request.api_key.prefix}] ({self.request.api_key.name})"
@@ -295,7 +334,7 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
             serializer.is_valid(raise_exception=True)
         except Exception:
             try:
-                field_dump = ", ".join(f"{k}={v!r}" for k, v in request.data.items())
+                field_dump = _safe_field_dump(request.data)
                 ClubHistory.objects.create(
                     club=club,
                     user=None,
@@ -353,7 +392,7 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
         serializer.is_valid(raise_exception=True)
         award = BapAward.objects.create(
             club_member=member,
-            date=serializer.validated_data.get("date") or timezone.now().date(),
+            date=serializer.validated_data.get("date") or timezone.localdate(),
             points=serializer.validated_data["points"],
             notes=serializer.validated_data.get("notes", ""),
             awarded_by=None if self.is_api_key_request() else request.user,
@@ -505,6 +544,7 @@ LOT_TEXT_FILTERS = {
     "custom_field_1": "custom_field_1__icontains",
     # A controlled vocabulary (``lot_fields.custom_dropdown_options``), so the whole value.
     "custom_dropdown": "custom_dropdown__iexact",
+    "custom_random": "custom_random__iexact",
 }
 
 #: Plain boolean columns. ``sold`` is a property, handled separately.
@@ -521,6 +561,7 @@ LOT_GENERIC_FILTER_COLUMNS = (
     "summernote_description__icontains",
     "custom_field_1__icontains",
     "custom_dropdown__icontains",
+    "custom_random__iexact",
     "custom_lot_number__iexact",
     "species__scientific_name__icontains",
     "species__common_name__icontains",
@@ -715,8 +756,8 @@ class ClubAuctionLotListAPIView(ClubAuctionReadMixin, APIView):
     """The lots in one auction, in lot number order. ``GET …/auctions/<identifier>/lots/``
 
     ``?limit=`` ``?offset=`` ``?filter=`` (all public columns) ``?lot_name=`` ``?description=``
-    ``?custom_field_1=`` ``?custom_dropdown=`` ``?lot_number=`` ``?category=`` ``?category_id=``
-    ``?species_id=`` ``?sold=`` ``?donation=`` ``?i_bred_this_fish=`` ``?custom_checkbox=``
+    ``?custom_field_1=`` ``?custom_dropdown=`` ``?custom_random=`` ``?lot_number=`` ``?category=``
+    ``?category_id=`` ``?species_id=`` ``?sold=`` ``?donation=`` ``?i_bred_this_fish=`` ``?custom_checkbox=``
     ``?seller=`` / ``?winner=`` (privacy flag) ``?ordering=`` (:data:`LOT_ORDERING`) ``?fields=``
 
     Removed lots are left out unless the key can read private information.

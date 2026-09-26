@@ -26,7 +26,7 @@ from django.db.models.functions import Coalesce
 from django.http import (
     JsonResponse,
 )
-from django.shortcuts import redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import View
@@ -57,7 +57,7 @@ class AuctionChartView(View, AuctionStatsPermissionsMixin):
     """GET methods for generating auction charts"""
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
+        self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
             return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
@@ -217,7 +217,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
     dates_messed_with = False
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
+        self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
             return redirect(reverse("home"))
 
@@ -327,7 +327,7 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
     ignore_percent = 10
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
+        self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
             return redirect(reverse("home"))
 
@@ -433,7 +433,7 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
     # allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
+        self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
             return redirect(reverse("home"))
 
@@ -688,7 +688,7 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
             ]:
                 try:
                     medians.append(median_value(lots, "winning_price"))
-                except:
+                except Exception:
                     medians.append(0)
                 averages.append(lots.aggregate(avg_value=Avg("winning_price"))["avg_value"])
                 counts.append(lots.count())
@@ -1034,12 +1034,12 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             searches = (
                 SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values("user").distinct().count()
             )
-            seach_percent = (
-                int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
-            )
+            # Every percent below is of this; an auction nobody with an account has joined has none.
+            with_account = auctiontos_with_account.count() or 1
+            seach_percent = int(searches / with_account * 100)
             watch_qs = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct()
             watches = watch_qs.count()
-            watch_percent = int(watches / auctiontos_with_account.count() * 100)
+            watch_percent = int(watches / with_account * 100)
             notifications = (
                 PushInformation.objects.filter(
                     user__in=watch_qs, user__userdata__push_notifications_when_lots_sell=True
@@ -1048,12 +1048,12 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
                 .distinct()
                 .count()
             )
-            notification_percent = int(notifications / auctiontos_with_account.count() * 100)
+            notification_percent = int(notifications / with_account * 100)
             has_used_proxy_bidding = UserData.objects.filter(
                 has_used_proxy_bidding=True,
                 user__in=auctiontos_with_account.values_list("user"),
             ).count()
-            has_used_proxy_bidding_percent = int(has_used_proxy_bidding / auctiontos_with_account.count() * 100)
+            has_used_proxy_bidding_percent = int(has_used_proxy_bidding / with_account * 100)
             chat = (
                 LotHistory.objects.filter(
                     changed_price=False,
@@ -1064,7 +1064,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
                 .distinct()
                 .count()
             )
-            chat_percent = int(chat / auctiontos_with_account.count() * 100)
+            chat_percent = int(chat / with_account * 100)
             mobile_app = (
                 auctiontos_with_account.filter(user__mobile_devices__isnull=False).values("user").distinct().count()
             )

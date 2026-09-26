@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Download my data{% endblock %}
+{% block content %}
+{% comment %}No heading: the sidebar names this page. Same reading width as account_delete.html, which this is the other half of.{% endcomment %}
+<div class="mt-3">
+
+<p>
+  One file with everything {{ navbar_brand }} holds about your account: your profile and preferences,
+  the auctions and clubs you've joined, the lots you've bought and sold, your bids, invoices, chat
+  messages, watched lots and searches.
+</p>
+
+<p>
+  <a class="btn btn-primary" href="?download=1"><i class="bi bi-download" aria-hidden="true"></i> Download my data</a>
+</p>
+
+<h5 class="mt-4">What isn't in it</h5>
+<ul>
+  {% for line in not_included %}<li>{{ line }}</li>{% endfor %}
+</ul>
+
+<p class="text-muted">
+  Read the <a href="{% url 'privacy_policy' %}">privacy policy</a> for who else sees any of this, or
+  <a href="{% url 'account_delete' %}">delete your account</a> instead.
+</p>
+</div>
+{% endblock %}

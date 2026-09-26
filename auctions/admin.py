@@ -4,7 +4,6 @@ Mostly registrations. The species bulk actions (approve, merge, not a duplicate)
 home, and ``export_to_csv`` serves every changelist. Not a permission boundary anything relies on.
 """
 
-import csv
 import datetime
 
 from django.contrib import admin, messages
@@ -74,13 +73,14 @@ from .models import (
     guess_category,
 )
 from .services import attachment_filename
+from .services import csv_writer as safe_csv_writer
 
 
 def export_to_csv(modeladmin, request, queryset):
     opts = modeladmin.model._meta
     response = HttpResponse(content_type="text/csv")
     response["Content-Disposition"] = f'attachment;filename="{attachment_filename(opts.verbose_name)}.csv"'
-    writer = csv.writer(response)
+    writer = safe_csv_writer(response)
     fields = [field for field in opts.get_fields() if not field.many_to_many and not field.one_to_many]
     # Write a first row with header information
     writer.writerow([field.verbose_name for field in fields])
@@ -882,7 +882,7 @@ class AuctionAdmin(admin.ModelAdmin):
     def export_user_emails(self, request, queryset):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = "attachment;filename=auctions.csv"
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(["Auction", "Name", "Email"])
         for obj in queryset:
             writer.writerow([obj.title, obj.created_by.first_name, obj.created_by.email])
@@ -984,6 +984,7 @@ class LotAdmin(admin.ModelAdmin):
         "added_by",
         "buyer_invoice",
         "seller_invoice",
+        "custom_random",
     )
     inlines = [
         BidInline,

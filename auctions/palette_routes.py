@@ -215,6 +215,12 @@ ROUTE_LIST: list[Route] = [
         "Account",
         keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai"],
     ),
+    _r(
+        "account_data_export",
+        "Download everything this site knows about me",
+        "Account",
+        keywords=["export my data", "download my data", "copy of my data", "what do you know about me", "gdpr"],
+    ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
     _r("paypal_connect", "Connect PayPal", "Account", keywords=["link paypal", "set up paypal"]),
@@ -332,12 +338,12 @@ ROUTE_LIST: list[Route] = [
         keywords=["queue", "running order", "what's next"],
     ),
     _r(
-        "auction_lot_queue_kiosk",
-        "Lot queue on a second screen",
+        "auction_lot_queue_current_lot",
+        "Current lot on a projector",
         "Running an auction",
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
-        keywords=["kiosk", "projector", "display"],
+        keywords=["kiosk", "projector", "display", "second screen", "fullscreen"],
     ),
     _r(
         "auction_printing",
@@ -1146,6 +1152,7 @@ EXCLUDED: dict[str, str] = {
     "check_username": _AUTOCOMPLETE,
     "guess_category": _AUTOCOMPLETE,
     "get_auction_info": _API,
+    "auction_page_action": "POST-only: the auction page's banner buttons. Nothing to look at.",
     # JSON / HTMX fragments
     "get_ad": _API,
     "click_ad": _API,
@@ -1162,6 +1169,7 @@ EXCLUDED: dict[str, str] = {
     "lot_page_view_history": _API,
     "my_lots_page_view_history": _API,
     "auction_custom_dropdown_options": _API,
+    "auction_custom_random_options": _API,
     "auctiontosadmin": _API,
     "auctiontosdelete": _API,
     "auctiontosmemo": _API,
@@ -1170,6 +1178,7 @@ EXCLUDED: dict[str, str] = {
     "save_lot_ajax": _API,
     "auction_barcode_scan": _API,
     "auction_quick_checkout_htmx": _API,
+    "auction_lot_queue_fullscreen": _API,
     "auction_lot_map_data": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
@@ -1184,6 +1193,7 @@ EXCLUDED: dict[str, str] = {
     "api_club_species_common_names": _API,
     "auction_no_show_dialog": _API,
     "lot_refund": _API,
+    "lot_end_unsold": _ACTION_ONLY,
     "bulk_set_lots_won": _API,
     "auction_unsell_lot": _ACTION_ONLY,
     "auction_voice_vocabulary": (
@@ -1266,6 +1276,7 @@ EXCLUDED: dict[str, str] = {
     "club_donation_vendor": _API,
     "club_donation_vendor_create": _API,
     "club_donation_contact": _API,
+    "club_donation_dossier": _API,
     "club_donation_email": _API,
     "club_donation_vendor_delete": _ACTION_ONLY,
     "club_announcement_retract": (
@@ -1324,6 +1335,7 @@ EXCLUDED: dict[str, str] = {
     # excused by the `apple_` third-party prefix by accident.
     "android_assetlinks": _INFRA,
     "apple_app_site_association": _INFRA,
+    "openai_apps_challenge": _INFRA,
     # Remote print: the waiting page polls the first; the others are its Try again and Cancel.
     "remote_print_job": _API,
     "remote_print_job_retry": _API,
@@ -1521,6 +1533,11 @@ def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
     """Rank this user's permitted destinations by token overlap with a query: a simple safety net for when
     the model sends a description instead of a key.
     """
+    return [route for route, _ in match_routes_with_scores(query, user, limit)]
+
+
+def match_routes_with_scores(query: str, user=None, limit: int = 5) -> list[tuple[Route, float]]:
+    """:func:`match_routes` with each route's score, for callers deciding whether it is sure enough."""
     words = _tokens(query)
     if not words:
         return []
@@ -1540,7 +1557,7 @@ def match_routes(query: str, user=None, limit: int = 5) -> list[Route]:
             # Index keeps ties stable, favouring earlier entries.
             scored.append((score, -index, route))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [route for _, _, route in scored[:limit]]
+    return [(route, score) for score, _, route in scored[:limit]]
 
 
 def get_route(key: str) -> Route | None:

@@ -42,6 +42,15 @@ def _create_discord_scheduled_event(guild_id, name, start_time, end_time, locati
     )
 
 
+def _mark_sent(auction, *flags):
+    """Set the sent flags with a queryset update: a full save of a row read at the start of the run
+    overwrote concurrent edits and re-ran the auction's pre_save fix-ups.
+    """
+    for flag in flags:
+        setattr(auction, flag, True)
+    Auction.objects.filter(pk=auction.pk).update(**dict.fromkeys(flags, True))
+
+
 class Command(BaseCommand):
     help = "Send reminder emails to auction creators: welcome, invoice, and follow-up emails."
 
@@ -57,100 +66,105 @@ class Command(BaseCommand):
         )
 
         for auction in auctions:
-            userData = auction.created_by.userdata
-            if userData.has_unsubscribed:
-                # Mark all emails as sent for unsubscribed users
-                auction.welcome_email_sent = True
-                auction.invoice_email_sent = True
-                auction.followup_email_sent = True
-                auction.save()
-                continue
-
-            # Welcome email: sent 24 hours after auction creation
-            if not auction.welcome_email_sent and auction.welcome_email_due and now >= auction.welcome_email_due:
-                # Determine subject based on admin checklist completion
-                if not (
-                    auction.admin_checklist_location_set
-                    and auction.admin_checklist_rules_updated
-                    and auction.admin_checklist_joined
-                ):
-                    subject = f"Finish setting up {auction}!"
-                else:
-                    subject = f"Thanks for creating {auction}!"
-
-                notify_user(
-                    auction.created_by,
-                    category="auction_admin",
-                    title=subject,
-                    body=f"Tap to manage {auction}.",
-                    url=f"https://{current_site.domain}{auction.get_absolute_url()}",
-                    send_email=lambda: mail.send(
-                        auction.created_by.email,
-                        template="auction_welcome",
-                        context={
-                            "auction": auction,
-                            "domain": current_site.domain,
-                            "unsubscribe": userData.unsubscribe_link,
-                            "subject": subject,
-                            "enable_help": settings.ENABLE_HELP,
-                        },
-                    ),
-                    auction_pk=auction.pk,
-                )
-                logger.info("Sent welcome notification to %s for auction %s", auction.created_by.email, auction.slug)
-                auction.welcome_email_sent = True
-                auction.save()
-
-            # Invoice email: sent 1 hour after auction end (online auctions only)
-            if not auction.invoice_email_sent and auction.invoice_email_due and now >= auction.invoice_email_due:
-                notify_user(
-                    auction.created_by,
-                    category="auction_admin",
-                    title=f"Invoices are ready for {auction}",
-                    body=f"Tap to review invoices for {auction}.",
-                    url=f"https://{current_site.domain}{auction.get_absolute_url()}",
-                    send_email=lambda: mail.send(
-                        auction.created_by.email,
-                        template="auction_invoices",
-                        context={
-                            "auction": auction,
-                            "domain": current_site.domain,
-                            "unsubscribe": userData.unsubscribe_link,
-                        },
-                    ),
-                    auction_pk=auction.pk,
-                )
-                logger.info("Sent invoice notification to %s for auction %s", auction.created_by.email, auction.slug)
-                auction.invoice_email_sent = True
-                auction.save()
-
-            # Follow-up/thanks email: sent 24 hours after auction end (online) or start (in-person)
-            if not auction.followup_email_sent and auction.followup_email_due and now >= auction.followup_email_due:
-                notify_user(
-                    auction.created_by,
-                    category="auction_admin",
-                    title=f"Thanks for running {auction}",
-                    body=f"Tap to see how {auction} went.",
-                    url=f"https://{current_site.domain}{auction.get_absolute_url()}",
-                    send_email=lambda: mail.send(
-                        auction.created_by.email,
-                        template="auction_thanks",
-                        context={
-                            "auction": auction,
-                            "domain": current_site.domain,
-                            "unsubscribe": userData.unsubscribe_link,
-                        },
-                    ),
-                    auction_pk=auction.pk,
-                )
-                logger.info("Sent follow-up notification to %s for auction %s", auction.created_by.email, auction.slug)
-                auction.followup_email_sent = True
-                auction.save()
+            # One auction's problem is logged, not a reason nobody else's email goes out.
+            try:
+                self._send_admin_emails(auction, now, current_site)
+            except Exception:
+                logger.exception("Auction emails failed for auction %s", auction.pk)
 
         # Discord auction channel notifications
         self._send_discord_notifications(now, current_site.domain)
         # Discord scheduled event creation
         self._create_discord_events(now, current_site.domain)
+
+    def _send_admin_emails(self, auction, now, current_site):
+        """The welcome, invoices-ready and thank-you messages to one auction's creator, whichever are due."""
+        if not auction.created_by_id or auction.created_by.userdata.has_unsubscribed:
+            # Nobody to write to: the creator unsubscribed, or their account is gone (SET_NULL).
+            _mark_sent(auction, "welcome_email_sent", "invoice_email_sent", "followup_email_sent")
+            return
+        userData = auction.created_by.userdata
+
+        # Welcome email: sent 24 hours after auction creation
+        if not auction.welcome_email_sent and auction.welcome_email_due and now >= auction.welcome_email_due:
+            # Determine subject based on admin checklist completion
+            if not (
+                auction.admin_checklist_location_set
+                and auction.admin_checklist_rules_updated
+                and auction.admin_checklist_joined
+            ):
+                subject = f"Finish setting up {auction}!"
+            else:
+                subject = f"Thanks for creating {auction}!"
+
+            notify_user(
+                auction.created_by,
+                category="auction_admin",
+                title=subject,
+                body=f"Tap to manage {auction}.",
+                url=f"https://{current_site.domain}{auction.get_absolute_url()}",
+                # Bound by default argument: the lambda captures the *variable*, so if
+                # notify_user ever defers the call every queued email would go out with the
+                # last auction of the loop.
+                send_email=lambda auction=auction, userData=userData, subject=subject: mail.send(
+                    auction.created_by.email,
+                    template="auction_welcome",
+                    context={
+                        "auction": auction,
+                        "domain": current_site.domain,
+                        "unsubscribe": userData.unsubscribe_link,
+                        "subject": subject,
+                        "enable_help": settings.ENABLE_HELP,
+                    },
+                ),
+                auction_pk=auction.pk,
+            )
+            logger.info("Sent welcome notification to %s for auction %s", auction.created_by.email, auction.slug)
+            _mark_sent(auction, "welcome_email_sent")
+
+        # Invoice email: sent 1 hour after auction end (online auctions only)
+        if not auction.invoice_email_sent and auction.invoice_email_due and now >= auction.invoice_email_due:
+            notify_user(
+                auction.created_by,
+                category="auction_admin",
+                title=f"Invoices are ready for {auction}",
+                body=f"Tap to review invoices for {auction}.",
+                url=f"https://{current_site.domain}{auction.get_absolute_url()}",
+                send_email=lambda auction=auction, userData=userData: mail.send(
+                    auction.created_by.email,
+                    template="auction_invoices",
+                    context={
+                        "auction": auction,
+                        "domain": current_site.domain,
+                        "unsubscribe": userData.unsubscribe_link,
+                    },
+                ),
+                auction_pk=auction.pk,
+            )
+            logger.info("Sent invoice notification to %s for auction %s", auction.created_by.email, auction.slug)
+            _mark_sent(auction, "invoice_email_sent")
+
+        # Follow-up/thanks email: sent 24 hours after auction end (online) or start (in-person)
+        if not auction.followup_email_sent and auction.followup_email_due and now >= auction.followup_email_due:
+            notify_user(
+                auction.created_by,
+                category="auction_admin",
+                title=f"Thanks for running {auction}",
+                body=f"Tap to see how {auction} went.",
+                url=f"https://{current_site.domain}{auction.get_absolute_url()}",
+                send_email=lambda auction=auction, userData=userData: mail.send(
+                    auction.created_by.email,
+                    template="auction_thanks",
+                    context={
+                        "auction": auction,
+                        "domain": current_site.domain,
+                        "unsubscribe": userData.unsubscribe_link,
+                    },
+                ),
+                auction_pk=auction.pk,
+            )
+            logger.info("Sent follow-up notification to %s for auction %s", auction.created_by.email, auction.slug)
+            _mark_sent(auction, "followup_email_sent")
 
     def _send_discord_notifications(self, now, domain):
         # Only promoted auctions are broadcast to a club's Discord channel, excluded at the DB level

@@ -97,7 +97,7 @@ class WalletHeaderTextTests(TestCase):
             membership_system=membership_system,
             membership_annual_fee=Decimal(fee),
         )
-        expiration = timezone.now().date() + datetime.timedelta(days=30 if paid else -30)
+        expiration = timezone.localdate() + datetime.timedelta(days=30 if paid else -30)
         return ClubMember.objects.create(club=club, name="M", membership_expiration_date=expiration)
 
     def test_paid_member_of_fee_charging_club(self):
@@ -138,19 +138,19 @@ class WalletStatusTextTests(TestCase):
             membership_annual_fee=Decimal(25),
         )
         if expiration is None and last_paid is None:
-            expiration = timezone.now().date() + datetime.timedelta(days=30 if paid else -30)
+            expiration = timezone.localdate() + datetime.timedelta(days=30 if paid else -30)
         return ClubMember.objects.create(
             club=club, name="M", membership_expiration_date=expiration, membership_last_paid=last_paid
         )
 
     def test_current_member_shows_valid_through(self):
-        expiration = timezone.now().date() + datetime.timedelta(days=30)
+        expiration = timezone.localdate() + datetime.timedelta(days=30)
         member = self._member(expiration=expiration)
         self.assertEqual(member.wallet_status_text, f"Valid through {expiration.strftime('%-d %b %Y')}")
 
     def test_lapsed_member_shows_printed_expiration_date(self):
         """A lapsed membership prints its past expiration date."""
-        expiration = timezone.now().date() - datetime.timedelta(days=5)
+        expiration = timezone.localdate() - datetime.timedelta(days=5)
         member = self._member(expiration=expiration)
         self.assertEqual(member.wallet_status_text, f"Expired {expiration.strftime('%-d %b %Y')}")
 
@@ -172,7 +172,7 @@ class WalletStatusTextTests(TestCase):
         """No validTimeInterval in the Google PATCH: it auto-archives lapsed passes."""
         from auctions.google_wallet import update_generic_object_for_member
 
-        member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
+        member = self._member(expiration=timezone.localdate() - datetime.timedelta(days=5))
         resp = MagicMock(status_code=200)
         with override_settings(
             GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
@@ -195,7 +195,7 @@ class WalletStatusTextTests(TestCase):
         """No expirationDate in pass.json: it greys out and archives lapsed passes."""
         from auctions.apple_wallet import _build_pass_json
 
-        member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
+        member = self._member(expiration=timezone.localdate() - datetime.timedelta(days=5))
         with patch("auctions.apple_wallet.ensure_apple_pass_auth_token", return_value="tok"):
             pass_json = _build_pass_json(member)
         self.assertNotIn("expirationDate", pass_json)
@@ -583,7 +583,7 @@ class ClubMemberMembershipStatusFilterTests(TestCase):
     """
 
     def setUp(self):
-        self.today = timezone.now().date()
+        self.today = timezone.localdate()
         self.club = Club.objects.create(
             name="Membership Filter Club",
             membership_system="rolling",
@@ -801,7 +801,7 @@ class MembershipEmailWalletButtonTests(TestCase):
         self.assertLess(google_at, apple_at)
         self.assertIn(self.GOOGLE_URL, html)
         apple_path = reverse(
-            "club_member_apple_wallet_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.member.uuid}
+            "club_member_apple_wallet_by_uuid", kwargs={"slug": self.club.url_key, "uuid": self.member.uuid}
         )
         self.assertIn(apple_path, html)
 
@@ -864,7 +864,7 @@ class ClubMemberRenewAPITests(TestCase):
         )
         self.raw_key = raw_key
         self.url = reverse("api_club_member_renew", kwargs={"slug": self.club.slug})
-        self.today = timezone.now().date()
+        self.today = timezone.localdate()
 
     def _enable(self):
         self.api_key.can_renew_memberships = True
@@ -1018,7 +1018,7 @@ class ClubManagedMergeKeepsMembershipDatesTests(TestCase):
         self.location = PickupLocation.objects.create(
             name="merge location", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=2)
         )
-        self.today = timezone.now().date()
+        self.today = timezone.localdate()
 
     def _shadow_tos(self, member):
         """The AuctionTOS the club-managed auction auto-creates for a new member."""
@@ -1091,15 +1091,15 @@ class CloseModalResponseEscapingTests(TestCase):
         self.assertEqual(body.count("</script>"), 1)
         self.assertIn("\\u003C", body)
 
-    def test_a_toast_is_html_escaped_for_the_toast_plugin(self):
-        """A toast title is HTML-escaped for the plugin and then JSON-escaped for the script tag."""
+    def test_a_toast_title_is_left_as_text_for_the_toast_plugin(self):
+        """A toast title is left as text (the plugin escapes it) and JSON-escaped for the script tag."""
         from auctions.views import close_modal_response
 
         response = close_modal_response(toast="<b>Bob</b> & Sons has no email address on file.")
         body = response.content.decode()
         self.assertNotIn("<b>", body)
         title = json.loads(body.split("toast(")[1].split(");")[0])["title"]
-        self.assertEqual(title, "&lt;b&gt;Bob&lt;/b&gt; &amp; Sons has no email address on file.")
+        self.assertEqual(title, "<b>Bob</b> & Sons has no email address on file.")
 
     def test_extra_triggers_still_ride_along_as_a_plain_json_header(self):
         from auctions.views import close_modal_response

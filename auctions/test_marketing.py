@@ -36,7 +36,7 @@ class MailchimpHelperTests(TestCase):
         self.member = ClubMember.objects.create(club=self.club, name="Jane Q Public", email="jane@example.com")
 
     def test_subscriber_hash_lowercases_and_trims(self):
-        self.assertEqual(mc.subscriber_hash(" Jane@Example.COM "), hashlib.md5(b"jane@example.com").hexdigest())
+        self.assertEqual(mc.subscriber_hash(" Jane@Example.COM "), hashlib.md5(b"jane@example.com").hexdigest())  # noqa: S324 - Mailchimp keys members by md5
 
     def test_name_split(self):
         self.assertEqual(self.member.first_name, "Jane")
@@ -57,7 +57,7 @@ class MailchimpHelperTests(TestCase):
         self.assertEqual(mc._desired_status(self.member), "archived")
 
     def test_lifecycle_tags(self):
-        today = timezone.now().date()
+        today = timezone.localdate()
         self.member.membership_expiration_date = today + datetime.timedelta(days=10)
         tags = self.member.compute_mailchimp_tags()
         self.assertTrue(tags["expiring-soon"])
@@ -443,7 +443,12 @@ class MailchimpSelfServiceTests(TestCase):
             "club_member_contact_pref",
             kwargs={"slug": self.club.slug, "uuid": self.member.uuid, "level": "essential"},
         )
+        # Opening the link only asks; a mail scanner opening it changes nothing.
         self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertNotEqual(self.member.contact_status, "non_essential")
+        self.assertFalse(ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").exists())
+        self.assertEqual(self.client_http.post(url).status_code, 200)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "non_essential")
         history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()

@@ -297,7 +297,7 @@ def _site_domain():
 
 
 def _self_service_url(member, urlname):
-    path = reverse(urlname, kwargs={"slug": member.club.slug, "uuid": member.uuid})
+    path = reverse(urlname, kwargs={"slug": member.club.url_key, "uuid": member.uuid})
     return f"https://{_site_domain()}{path}"
 
 
@@ -462,6 +462,8 @@ def _archive_member(client, member, list_id):
     """Soft-delete (archive) the contact; ignore 404 if they were never synced."""
     from mailchimp_marketing.api_client import ApiClientError
 
+    if not member.email:
+        return
     try:
         client.lists.delete_list_member(list_id, subscriber_hash(member.email))
     except ApiClientError as e:
@@ -565,7 +567,7 @@ def _clear_error(club):
 
 
 def _webhook_url(club):
-    path = reverse("mailchimp_webhook", kwargs={"slug": club.slug, "secret": club.mailchimp_webhook_secret})
+    path = reverse("mailchimp_webhook", kwargs={"slug": club.url_key, "secret": club.mailchimp_webhook_secret})
     return f"https://{_site_domain()}{path}"
 
 

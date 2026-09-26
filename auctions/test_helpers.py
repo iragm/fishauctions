@@ -595,14 +595,29 @@ class FormsUtilityTestCase(TestCase):
         self.assertEqual(clean_summernote("<svg><desc><img src=x onerror=alert(1)></desc></svg>"), "")
         self.assertEqual(clean_summernote("<p>Keep <acme>this</acme></p>"), "<p>Keep this</p>")
 
-    def test_summernote_widget_includes_upload_url_in_rendered_html(self):
+    def test_summernote_uploads_are_off(self):
+        """The endpoint was open to anonymous posts and kept the client's extension (stored XSS)."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
         from django.urls import reverse
+
+        gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+        from django.contrib.auth.models import User
+        from django_summernote.models import Attachment
+
+        for user in (None, User.objects.create_user("uploader", "uploader@example.com", "pw")):
+            if user:
+                self.client.force_login(user)
+            response = self.client.post(
+                reverse("django_summernote-upload_attachment"),
+                {"files": SimpleUploadedFile("x.html", gif, content_type="text/html")},
+            )
+            self.assertNotEqual(response.status_code, 200)
+        self.assertFalse(Attachment.objects.exists())
+
+    def test_summernote_widget_disables_drag_and_drop(self):
         from django_summernote.widgets import SummernoteWidget
 
-        upload_url = reverse("django_summernote-upload_attachment")
         html = SummernoteWidget().render("description", "", attrs={"id": "id_description"})
-
-        self.assertIn(upload_url, html)
         self.assertIn('"disableDragAndDrop": true', html)
 
 
@@ -1166,8 +1181,8 @@ class ContextProcessorsTestCase(TestCase):
         user.userdata.refresh_from_db()
         self.assertEqual(user.userdata.last_ip_address, "192.168.1.1")
 
-    def test_add_location_handles_x_forwarded_for(self):
-        """Test add_location handles X-Forwarded-For header"""
+    def test_add_location_ignores_a_client_supplied_forwarded_for(self):
+        """add_location records the proxy's address, not the one the caller put in a header."""
         from django.contrib.sessions.middleware import SessionMiddleware
         from django.test import RequestFactory
 
@@ -1179,7 +1194,10 @@ class ContextProcessorsTestCase(TestCase):
         request.user = user
         request.COOKIES = {}
         request.META = {
+            # The caller's own header. nginx appends the real address to whatever arrived, so the
+            # left-most entry is written by the client and must not be believed.
             "HTTP_X_FORWARDED_FOR": "10.0.0.1, 192.168.1.1",
+            "HTTP_X_REAL_IP": "198.51.100.4",
             "REMOTE_ADDR": "192.168.1.1",
         }
 
@@ -1190,9 +1208,9 @@ class ContextProcessorsTestCase(TestCase):
 
         add_location(request)
 
-        # Should use first IP from X-Forwarded-For
+        # X-Real-IP, which nginx sets from $remote_addr; never the client-supplied XFF entry.
         user.userdata.refresh_from_db()
-        self.assertEqual(user.userdata.last_ip_address, "10.0.0.1")
+        self.assertEqual(user.userdata.last_ip_address, "198.51.100.4")
 
     def test_dismissed_cookies_tos_with_cookie(self):
         """Test dismissed_cookies_tos with cookie present"""

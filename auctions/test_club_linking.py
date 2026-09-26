@@ -391,7 +391,9 @@ class MakeClubAdminButtonTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
     def _press(self, auction):
-        return self.client.get(reverse("auction_main", kwargs={"slug": auction.slug}) + "?make_club_admin=true")
+        return self.client.post(
+            reverse("auction_page_action", kwargs={"slug": auction.slug}), {"action": "make_creator_club_admin"}
+        )
 
     def test_it_makes_the_creator_an_admin_and_files_their_auction(self):
         self._press(self.online_auction)
@@ -409,7 +411,10 @@ class MakeClubAdminButtonTests(StandardTestCase):
 
     def test_an_ordinary_user_cannot_press_it(self):
         self.client.login(username="no_lots", password="testpassword")
-        self.client.get(reverse("auction_main", kwargs={"slug": self.online_auction.slug}) + "?make_club_admin=true")
+        self.client.post(
+            reverse("auction_page_action", kwargs={"slug": self.online_auction.slug}),
+            {"action": "make_creator_club_admin"},
+        )
         self.online_auction.refresh_from_db()
         self.assertIsNone(self.online_auction.club)
 

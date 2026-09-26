@@ -34,6 +34,10 @@ CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
+# One AR solve at a time: the beat is a minute, and a big auction's solve can take longer.
+AR_POSITIONS_LOCK_KEY = "update_ar_positions_running"
+AR_POSITIONS_LOCK_SECONDS = 15 * 60
+
 # One-shot backfill of PageView.auction. SCAN bounds primary keys looked at, so a run over rows with
 # no lot views can't turn into a full scan. The beat name must match fishauctions/celery.py: the task
 # switches its own PeriodicTask row off.
@@ -103,7 +107,7 @@ def wallet_links(member, current_site=None):
     google_url = google_wallet_save_url(member) or ""
     apple_url = ""
     if apple_wallet.is_configured():
-        path = reverse("club_member_apple_wallet_by_uuid", kwargs={"slug": member.club.slug, "uuid": member.uuid})
+        path = reverse("club_member_apple_wallet_by_uuid", kwargs={"slug": member.club.url_key, "uuid": member.uuid})
         apple_url = f"https://{current_site.domain}{path}"
     return google_url, apple_url
 
@@ -559,10 +563,24 @@ def delete_marketing_contact(self, club_pk, email):
 
 
 @shared_task(bind=True, ignore_result=True)
+def clearsessions(self):
+    """Delete expired sessions; ``django_session`` has no other reaper."""
+    call_command("clearsessions")
+
+
+@shared_task(bind=True, ignore_result=True)
 def cleanup_mail(self):
     """Delete sent mail older than MAIL_RETENTION_DAYS, attachments included. Otherwise a deleted user's
     address survives in post_office.
     """
+    from django.utils import timezone
+    from post_office.models import Email
+
+    # post_office's own command deletes `id__in` a sliced queryset, which MariaDB refuses (error 1235), so the
+    # mail goes here and the command is left only the orphaned attachments.
+    cutoff = timezone.now() - datetime.timedelta(days=settings.MAIL_RETENTION_DAYS)
+    while ids := list(Email.objects.filter(created__lt=cutoff).values_list("id", flat=True)[:1000]):
+        Email.objects.filter(id__in=ids).delete()
     call_command("cleanup_mail", days=settings.MAIL_RETENTION_DAYS, delete_attachments=True)
 
 
@@ -851,6 +869,9 @@ def _safely(label, do_it):
     """Run one step of a nightly job, logging and swallowing whatever it raises."""
     try:
         do_it()
+    except SoftTimeLimitExceeded:
+        # An Exception subclass: swallowing it left the job running on to the hard kill.
+        raise
     except Exception:
         logger.exception("Nightly step %s failed", label)
 
@@ -933,6 +954,8 @@ def _send_one_welcome(member):
             update_fields.append("send_welcome_email")
         member.save(update_fields=update_fields)
         return
+    # Marked first: if anything after the send raises, the member is not welcomed again every night.
+    member.save(update_fields=update_fields)
     if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
         sent = send_club_member_email(
             member,
@@ -947,7 +970,6 @@ def _send_one_welcome(member):
                 action=f"Sent welcome letter to {member} ({member.email})",
                 applies_to="MEMBERS",
             )
-    member.save(update_fields=update_fields)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -1090,8 +1112,20 @@ def promo_push_notifications(self):
 
 @shared_task(bind=True, ignore_result=True)
 def update_ar_positions(self):
-    """Fuse AR lot sightings for flagged auctions; prune observations older than 24 hours. Every minute."""
-    call_command("update_ar_positions")
+    """Fuse AR lot sightings for flagged auctions; prune observations older than 24 hours. Every minute.
+
+    Locked like ``endauctions``. A skipped tick loses nothing: every auction with live observations is
+    re-solved next run whether or not its dirty flag survived.
+    """
+    from django.core.cache import cache
+
+    if not cache.add(AR_POSITIONS_LOCK_KEY, "1", timeout=AR_POSITIONS_LOCK_SECONDS):
+        logger.info("update_ar_positions is already running; skipping this tick.")
+        return
+    try:
+        call_command("update_ar_positions")
+    finally:
+        cache.delete(AR_POSITIONS_LOCK_KEY)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -1727,3 +1761,14 @@ def geocode_speaker(self, pk):
     found = geocoding.geocode(speaker.location)
     if found:
         Speaker.objects.filter(pk=pk).update(latitude=found["latitude"], longitude=found["longitude"])
+
+
+@shared_task(ignore_result=True)
+def summarize_donation_email(email_pk):
+    """Summarize an inbound donation reply and update its vendor's status; queued by the inbound webhook."""
+    from auctions import donations
+    from auctions.models import DonationEmail
+
+    email_row = DonationEmail.objects.select_related("vendor__club").filter(pk=email_pk).first()
+    if email_row and not email_row.summary:
+        donations.summarize_incoming(email_row)

@@ -2,6 +2,7 @@ import logging
 
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from post_office import mail
 
 from auctions.models import Auction, Lot
@@ -15,22 +16,25 @@ def declare_winners_on_lots(lots):
         if lot.ended:
             # Lots in in-person auctions don't reach here: active ones always have ended=False, and
             # whatever sells them sets active=False. See issue #116.
-            # Mark inactive and set winner/price; everything after that is "extra" and guarded, so
-            # it cannot stop the lot being sold.
+            # Selling the lot and invoicing it are one transaction, on a fresh locked row: the list
+            # was read at the start of a run that can take minutes, and a lot deactivated before its
+            # invoice failed was never picked up again, leaving a sale nobody was charged for. A
+            # failure now leaves the lot active for the next run. Everything after is "extra" and
+            # guarded, so it cannot stop the lot being sold.
             try:
-                lot.active = False
-                if not lot.sold:
-                    lot.send_lot_end_message()
-                lot.save()
+                with transaction.atomic():
+                    lot = Lot.objects.select_for_update().filter(pk=lot.pk, active=True).first()
+                    if lot is None or not lot.ended:
+                        continue
+                    lot.active = False
+                    if not lot.sold:
+                        lot.send_lot_end_message()
+                    lot.save()
+                    lot.create_update_invoices()
             except Exception as e:
                 logger.warning('Unable to set winner on "%s":', lot)
                 logger.exception(e)
                 continue
-
-            try:
-                lot.create_update_invoices()
-            except Exception:
-                logger.exception("create_update_invoices failed for lot %s", lot.pk)
 
             try:
                 lot.send_non_auction_lot_emails()
@@ -50,7 +54,13 @@ def declare_winners_on_lots(lots):
                     mail.send(
                         lot.user.email,
                         template="lot_ended_relist",
-                        context={"domain": current_site.domain, "lot": lot},
+                        # A nudge to list something again is a commercial message, so it carries the
+                        # opt-out the shared footer draws from this token.
+                        context={
+                            "domain": current_site.domain,
+                            "lot": lot,
+                            "unsubscribe": lot.user.userdata.unsubscribe_link,
+                        },
                     )
                 except Exception:
                     logger.exception("Failed to send relist warning email for lot %s", lot.pk)

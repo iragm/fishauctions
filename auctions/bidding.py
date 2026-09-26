@@ -19,6 +19,13 @@ from .models import Bid, Invoice, Lot, LotHistory, UserInterestCategory
 
 logger = logging.getLogger(__name__)
 
+#: The largest bid anyone may place. ``Bid.amount`` is ``max_digits=10``, so 99,999,999.99 fits the
+#: column -- but an invoice sums several lots into ``Invoice.calculated_total`` at the same width, so
+#: two such lots overflow it and the buyer's invoice can never be saved again. Well under any real
+#: fish, and it also stops a max bid locking a lot: the next allowed bid after one is 11 digits, so
+#: nobody could outbid it and the DataError only showed as "something went wrong".
+MAX_BID = Decimal("999999.99")
+
 
 def check_bidding_permissions(lot, user):
     """False when everything is OK, or a string error message. Call check_all_permissions first."""
@@ -76,6 +83,9 @@ def bid_on_lot(lot, user, amount):
         # if True:
         try:
             amount_decimal = Decimal(str(amount))
+            if not amount_decimal.is_finite():
+                # "Infinity" raised from quantize() below and reached the admins as an error email.
+                raise InvalidOperation
         except (InvalidOperation, ValueError):
             result = {
                 "type": "ERROR",
@@ -102,6 +112,18 @@ def bid_on_lot(lot, user, amount):
             }
             return result
         amount = amount_decimal.quantize(Decimal("0.01"))
+        if amount > MAX_BID:
+            result = {
+                "type": "ERROR",
+                "message": f"The most you can bid is ${MAX_BID:,.2f}",
+                "send_to": "user",
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+                "winner": None,
+                "date_end": None,
+            }
+            return result
         if amount <= 0:
             result = {
                 "type": "ERROR",
@@ -369,6 +391,9 @@ def bid_on_lot(lot, user, amount):
             )
             return result
     except Exception as e:
+        # Returns None, which place_bid_and_broadcast turns into "Something went wrong placing your
+        # bid". Logged at exception level and mailed to admins (see LOGGING): a bid that failed for
+        # a reason the bidder can't see is something to go and look at.
         logger.exception(e)
 
 
@@ -407,7 +432,10 @@ def place_bid_and_broadcast(lot, user, amount):
         else:
             result = bid_on_lot(lot, user, amount)
             if result is None:
-                # bid_on_lot returns None on unexpected errors; surface that as an error.
+                # bid_on_lot returns None on unexpected errors; surface that as an error, and undo
+                # whatever it had written before failing (a buy-now can save the lot and then fail
+                # on the invoice, leaving a sale nobody was told about).
+                transaction.set_rollback(True)
                 result = _bid_error_result("Something went wrong placing your bid")
     try:
         broadcast_bid_result(lot, user, result)

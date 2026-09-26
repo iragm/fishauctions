@@ -190,6 +190,15 @@ class SupportFormDeliveryTests(TestCase):
     def test_the_captcha_is_required_when_the_site_has_keys(self):
         self.assertIn("captcha", ContactForm().fields)
 
+    @override_settings(RECAPTCHA_ENABLED=True)
+    def test_the_captcha_can_submit_a_form_whose_button_is_named_submit(self):
+        # The Send button is named "submit", which shadows form.submit(); django_recaptcha's own
+        # callback calls exactly that, so the check passed and the message was never sent.
+        html = self.client.get(self.url).content.decode()
+        self.assertIn('name="submit"', html)
+        self.assertIn("HTMLFormElement.prototype.submit.call(form)", html)
+        self.assertNotIn(".closest('form').submit()", html)
+
     def test_one_address_cannot_fill_the_inbox(self):
         """The floor under reCAPTCHA: a site with no keys has no captcha, and a solved one is not a promise
         about the next thousand messages.

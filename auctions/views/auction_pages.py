@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -23,7 +24,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
-from django.views.generic import DetailView, TemplateView
+from django.views.generic import DetailView, TemplateView, View
 from django.views.generic.edit import (
     CreateView,
     FormMixin,
@@ -60,7 +61,17 @@ from auctions.services import (
     readable_list,
 )
 
-from .base import AuctionViewMixin, _ensure_invoice_renewal_state, _find_club_member, close_modal_response
+from .base import (
+    AuctionViewMixin,
+    _ensure_invoice_renewal_state,
+    _find_club_member,
+    _lot_invoices,
+    _recalculate_invoices,
+    browser_timezone,
+    check_club_permission,
+    close_modal_response,
+    safe_next_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +86,9 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
-        pk = kwargs.pop("pk")
-        self.auctiontos = AuctionTOS.objects.filter(pk=pk).first()
+        pk = str(kwargs.pop("pk"))
+        # The route is <str:pk>.
+        self.auctiontos = AuctionTOS.objects.filter(pk=pk).first() if pk.isdigit() else None
         if not self.auctiontos:
             raise Http404
         self.auction = self.auctiontos.auction
@@ -183,6 +195,8 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         )
 
     def _get_merge_target(self, target_pk):
+        if not str(target_pk or "").isdigit():
+            raise Http404
         return get_object_or_404(AuctionTOS, pk=target_pk, auction=self.auction)
 
     def get(self, request, *args, **kwargs):
@@ -235,9 +249,13 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
             if form.cleaned_data["delete_lots"]:
                 sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
                 won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
+                # The other side of each lot: its buyer, or the seller who just lost the sale.
+                touched_invoices = []
                 for lot in sold_lots:
+                    touched_invoices += _lot_invoices(lot)
                     lot.delete()
                 for lot in won_lots:
+                    touched_invoices += _lot_invoices(lot)
                     LotHistory.objects.create(
                         lot=lot,
                         user=request.user,
@@ -251,6 +269,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     lot.winning_price = None
                     lot.active = True
                     lot.save()
+                _recalculate_invoices(touched_invoices)
                 self.auction.create_history(
                     applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
                 )
@@ -400,7 +419,13 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         feedback.id = "id_name_feedback";
         feedback.className = "valid-feedback d-block cursor-pointer";
         var buttonText = response.id_email ? "Click to use " + response.id_email : "Click to fill in details";
-        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>" + buttonText + "</button>";
+        // textContent: the email is whatever was stored, not necessarily an address.
+        var button = document.createElement("button");
+        button.setAttribute("role", "button");
+        button.className = "btn btn-sm btn-info";
+        button.id = "autocompleteTosForm";
+        button.textContent = buttonText;
+        feedback.appendChild(button);
         var autocomplete = response;
         document.getElementById('id_name').parentNode.appendChild(feedback);
 
@@ -496,7 +521,8 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
 
     $("#id_bidder_number, #id_name, #id_email").on("blur", validateField);
         </script>"""
-        context["extra_script"] = mark_safe(extra_script)
+        # S308: a literal script above; the only interpolation is the csrf token.
+        context["extra_script"] = mark_safe(extra_script)  # noqa: S308
         return context
 
     def post(self, request, *args, **kwargs):
@@ -528,7 +554,10 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             obj.email = form.cleaned_data["email"]
             obj.phone_number = form.cleaned_data["phone_number"]
             obj.address = form.cleaned_data["address"]
-            obj.is_admin = form.cleaned_data["is_admin"]
+            # Making someone an auction admin is the auction admin's call: this view also opens for club
+            # add/edit-people, who could otherwise tick it on their own row.
+            if self.auction.permission_check(request.user):
+                obj.is_admin = form.cleaned_data["is_admin"]
             obj.bidding_allowed = form.cleaned_data["bidding_allowed"]
             obj.selling_allowed = form.cleaned_data["selling_allowed"]
             obj.is_club_member = form.cleaned_data["is_club_member"]
@@ -603,7 +632,7 @@ def _add_club_admins_as_auction_tos(auction, requesting_user):
             )
 
 
-class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
+class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
     """Creating a new auction."""
 
     model = Auction
@@ -665,7 +694,7 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
     def get_form_kwargs(self, *args, **kwargs):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["user"] = self.request.user
-        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        kwargs["user_timezone"] = browser_timezone(self.request)
         data = self.request.GET.copy()
         self.cloned_from = data.get("copy", None)
         kwargs["cloned_from"] = self.cloned_from
@@ -731,6 +760,74 @@ class AuctionCreateView(FormFrictionMixin, CreateView, LoginRequiredMixin):
         return super().form_valid(form)
 
 
+class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
+    """The auction page's banner buttons, POSTed: hide a setup prompt, or, for site staff, trust the
+    creator or make them an admin of their club. These were query-string flags on the page itself, so
+    a link or an ``<img>`` could set them.
+    """
+
+    #: action -> (field, on what, who may). "admin" is any auction admin; "creator" the creator only.
+    DISMISSALS = {
+        "dismiss_promo_banner": ("dismissed_promo_banner", "auction", "admin"),
+        "dismiss_customize_event_banner": ("dismissed_customize_event_banner", "auction", "admin"),
+        "dismiss_paypal_banner": ("dismissed_paypal_banner", "auction", "creator"),
+        "dismiss_square_banner": ("dismissed_square_banner", "auction", "creator"),
+        "never_show_paypal_connect": ("never_show_paypal_connect", "userdata", "creator"),
+        "never_show_square_connect": ("never_show_square_connect", "userdata", "creator"),
+    }
+    NEVER_SHOW_MESSAGES = {
+        "never_show_paypal_connect": "You won't see the PayPal connection prompt again.  You can always "
+        "enable PayPal under Preferences>More>Connect your PayPal account.",
+        "never_show_square_connect": "You won't see the Square connection prompt again.  You can always "
+        "enable Square under Preferences>More>Connect your Square account.",
+    }
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get("action", "")
+        if action in self.DISMISSALS:
+            field, target, who = self.DISMISSALS[action]
+            # created_by is nullable.
+            if who == "creator" and self.auction.created_by_id != request.user.pk:
+                raise PermissionDenied()
+            row = self.auction if target == "auction" else request.user.userdata
+            setattr(row, field, True)
+            row.save(update_fields=[field])
+            if action in self.NEVER_SHOW_MESSAGES:
+                messages.info(request, self.NEVER_SHOW_MESSAGES[action])
+        elif action == "trust_creator" and request.user.is_superuser and self.auction.created_by:
+            userdata = self.auction.created_by.userdata
+            userdata.is_trusted = True
+            userdata.save(update_fields=["is_trusted"])
+            messages.success(request, f"{self.auction.created_by.username} is now trusted")
+        elif action == "make_creator_club_admin" and request.user.is_superuser and self.auction.created_by:
+            self._make_creator_club_admin(request)
+        else:
+            raise PermissionDenied()
+        return redirect(self.auction.get_absolute_url())
+
+    def _make_creator_club_admin(self, request):
+        creator = self.auction.created_by
+        creator_club = getattr(creator.userdata, "club", None)
+        if not creator_club:
+            return
+        # Count before saving: granting permission_admin files these auctions via a signal.
+        assigned_count = Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False).count()
+        # Shared with assign_auction_to_club and the unlinked auctions page.
+        note = "via the auction admin panel" + (
+            f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
+        )
+        newly_admin = ensure_club_admin(creator_club, creator, note=note, actor=request.user)
+        if not newly_admin and assigned_count:
+            # Already an admin, so no save fires the filing signal; file them directly.
+            for clubless in Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False):
+                link_auction_to_club(clubless, creator_club, note=note, actor=request.user, grant_admin=False)
+        messages.success(
+            request,
+            f"{creator.username} is now an admin of {creator_club.name}"
+            + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
+        )
+
+
 class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
     """Main view of a single auction"""
 
@@ -740,81 +837,6 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
     rewrite_url = None
     auction = None
     allow_non_admins = True
-
-    def get(self, request, *args, **kwargs):
-        if self.is_auction_admin:
-            if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
-                self.auction.dismissed_promo_banner = True
-                self.auction.save()
-            if str(request.GET.get("dismissed_customize_event_banner", "")).lower() in ("1", "true"):
-                self.auction.dismissed_customize_event_banner = True
-                self.auction.save()
-            if str(request.GET.get("make_current_auction", "")).lower() in ("1", "true") and self.auction.club_id:
-                club = self.auction.club
-                club.current_auction = self.auction
-                club.save(update_fields=["current_auction"])
-                messages.success(request, f"This is now the current auction for {club.name}.")
-                return redirect("auction_main", slug=self.auction.slug)
-            if request.user.is_superuser:
-                if str(request.GET.get("trust_user", "")).lower() in ("1", "true"):
-                    self.auction.created_by.userdata.is_trusted = True
-                    self.auction.created_by.userdata.save()
-                    messages.success(request, f"{self.auction.created_by.username} is now trusted")
-                if str(request.GET.get("make_club_admin", "")).lower() in ("1", "true"):
-                    creator = self.auction.created_by
-                    creator_club = getattr(creator.userdata, "club", None)
-                    if creator_club:
-                        # Count before saving: granting permission_admin files these auctions via a signal.
-                        assigned_count = Auction.objects.filter(
-                            created_by=creator, club__isnull=True, is_deleted=False
-                        ).count()
-                        # Shared with assign_auction_to_club and the unlinked auctions page.
-                        note = "via the auction admin panel" + (
-                            f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
-                        )
-                        newly_admin = ensure_club_admin(creator_club, creator, note=note, actor=request.user)
-                        if not newly_admin and assigned_count:
-                            # Already an admin, so no save fires the filing signal; file them directly.
-                            for clubless in Auction.objects.filter(
-                                created_by=creator, club__isnull=True, is_deleted=False
-                            ):
-                                link_auction_to_club(
-                                    clubless, creator_club, note=note, actor=request.user, grant_admin=False
-                                )
-                        messages.success(
-                            request,
-                            f"{creator.username} is now an admin of {creator_club.name}"
-                            + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
-                        )
-            # created_by is nullable.
-            if self.auction.created_by_id == request.user.pk:
-                if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
-                    self.auction.enable_online_payments = True
-                    self.auction.save()
-                if str(request.GET.get("enable_square_payments", "")).lower() in ("1", "true"):
-                    self.auction.enable_square_payments = True
-                    self.auction.save()
-                if str(request.GET.get("dismissed_paypal_banner", "")).lower() in ("1", "true"):
-                    self.auction.dismissed_paypal_banner = True
-                    self.auction.save()
-                if str(request.GET.get("dismissed_square_banner", "")).lower() in ("1", "true"):
-                    self.auction.dismissed_square_banner = True
-                    self.auction.save()
-                if str(request.GET.get("never_show_paypal_connect", "")).lower() in ("1", "true"):
-                    messages.info(
-                        request,
-                        "You won't see the PayPal connection prompt again.  You can always enable PayPal under Preferences>More>Connect your PayPal account.",
-                    )
-                    request.user.userdata.never_show_paypal_connect = True
-                    request.user.userdata.save()
-                if str(request.GET.get("never_show_square_connect", "")).lower() in ("1", "true"):
-                    messages.info(
-                        request,
-                        "You won't see the Square connection prompt again.  You can always enable Square under Preferences>More>Connect your Square account.",
-                    )
-                    request.user.userdata.never_show_square_connect = True
-                    request.user.userdata.save()
-        return super().get(request, *args, **kwargs)
 
     def get_object(self, *args, **kwargs):
         if self.auction:
@@ -830,13 +852,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         return self.object
 
     def get_success_url(self):
-        data = self.request.GET.copy()
-        try:
-            if not data["next"]:
-                data["next"] = self.auction.view_lot_link
-            return data["next"]
-        except Exception:
-            return self.auction.view_lot_link
+        return safe_next_url(self.request, self.auction.view_lot_link)
 
     def get_form_kwargs(self):
         form_kwargs = super().get_form_kwargs()
@@ -866,8 +882,14 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        # Posts to the club page's own "make current", so the same club permission as there.
         context["can_make_current_auction"] = bool(
-            self.auction.club_id and self.is_auction_admin and self.auction.club.current_auction_id != self.auction.pk
+            self.auction.club_id
+            and self.auction.club.current_auction_id != self.auction.pk
+            and (
+                check_club_permission(self.request.user, self.auction.club, "permission_admin")
+                or check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
+            )
         )
         # Superusers: offer "make club admin" if the creator isn't one yet, or the auction has no club.
         if self.request.user.is_superuser and self.auction.created_by:

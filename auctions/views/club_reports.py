@@ -5,7 +5,6 @@ because they are a reporting job, and they share the column matching in
 :mod:`auctions.views.bulk_add`.
 """
 
-import csv
 import logging
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -49,6 +48,7 @@ from auctions.models import (
     normalize_email,
 )
 from auctions.services import attachment_filename
+from auctions.services import csv_writer as safe_csv_writer
 from auctions.tables import (
     ClubHistoryHTMxTable,
 )
@@ -117,7 +117,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         """One definition of "paid member" for the whole site — see filters.membership_paid_q."""
         from auctions.filters import membership_paid_q
 
-        return membership_paid_q(timezone.now().date())
+        return membership_paid_q(timezone.localdate())
 
     def _get_cached_club_stats(self, auction):
         cached_stats = auction.cached_stats or {}
@@ -170,7 +170,7 @@ class ClubStatsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         }
 
     def get_membership_growth_chart_data(self):
-        end_date = timezone.now().date()
+        end_date = timezone.localdate()
         start_date = end_date - timedelta(days=self.membership_window_days)
         total_days = (end_date - start_date).days
         start_dt = timezone.make_aware(
@@ -391,7 +391,7 @@ class ClubTreasurerReportExportView(LoginRequiredMixin, ClubViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         filename = attachment_filename(f"{self.club.slug}-treasurer-report")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(["date", "amount", "description", "category"])
         for entry in ClubMoney.objects.filter(club=self.club, date__range=(start_date, end_date)).order_by(
             "date", "pk"
@@ -595,6 +595,9 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
         email, name = fields["email"], fields["name"]
         if not email and not name:
             return {**base, "action": "skip", "reason": "Row has no name or email"}
+        bad_email = self.bad_email_reason(email)
+        if bad_email:
+            return {**base, "action": "skip", "reason": bad_email}
         if email:
             existing = self.club.find_member(email=email)
             if existing:
@@ -735,7 +738,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         response = HttpResponse(content_type="text/csv")
         filename = attachment_filename(f"{self.club.slug}-members")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         # The column is omitted entirely when the club has membership numbers off: nothing in the
         # UI may reference a number that isn't in use.
         include_membership_number = self.club.show_member_barcode
@@ -785,7 +788,7 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                 member.bap_points,
                 member.hap_points,
                 member.membership_last_paid or "",
-                member.createdon.date(),
+                timezone.localtime(member.createdon).date(),
                 member.source,
                 member.contact_status,
                 member.discord_id or "",

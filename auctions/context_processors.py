@@ -11,6 +11,8 @@ import zoneinfo
 from django.conf import settings  # import the settings file
 
 from auctions import dmca
+from auctions.client_ip import client_ip
+from auctions.helper_functions import cookie_coordinates
 
 DEFAULT_USER_TIMEZONE = "America/New_York"
 GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
@@ -171,48 +173,34 @@ def add_location(request):
     # missing: an unconditional assignment is a django_session UPDATE on every page load.
     if request.session.get("status") != "started":
         request.session["status"] = "started"
-    has_user_location = False
-    latitude_cookie = request.COOKIES.get("latitude")
-    longitude_cookie = request.COOKIES.get("longitude")
-    if latitude_cookie and longitude_cookie:
-        has_user_location = True
+    # Validated: a cookie is whatever the browser sends, and float("nan") or 1e400 is a float.
+    latitude_cookie, longitude_cookie = cookie_coordinates(request)
+    has_user_location = latitude_cookie is not None
 
-    # Batch all user data updates into a single save operation
-    needs_save = False
+    # Only the fields that changed: request.user.userdata was read at the start of the request, and a
+    # full save would write back whatever it held then over anything saved since.
+    changed = []
     if request.user.is_authenticated:
+        userdata = request.user.userdata
         # No cookies: the IP gives a location later, see set_user_location.py.
-        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(",")[0]
-        else:
-            ip = request.META.get("REMOTE_ADDR")
-        # Only update if IP address has changed
-        if request.user.userdata.last_ip_address != ip:
-            request.user.userdata.last_ip_address = ip
-            needs_save = True
+        ip = client_ip(request) or None
+        if userdata.last_ip_address != ip:
+            userdata.last_ip_address = ip
+            changed.append("last_ip_address")
 
         # The cookie is saved into userdata, never the other way.
-        if latitude_cookie and longitude_cookie:
-            # Compare as floats for precision.
-            try:
-                lat_float = float(latitude_cookie)
-                lon_float = float(longitude_cookie)
-                if request.user.userdata.latitude != lat_float or request.user.userdata.longitude != lon_float:
-                    request.user.userdata.latitude = lat_float
-                    request.user.userdata.longitude = lon_float
-                    needs_save = True
-            except (ValueError, TypeError):
-                # Invalid cookie values, skip update
-                pass
+        if has_user_location and (userdata.latitude != latitude_cookie or userdata.longitude != longitude_cookie):
+            userdata.latitude = latitude_cookie
+            userdata.longitude = longitude_cookie
+            changed += ["latitude", "longitude"]
 
         timezone_cookie = _safe_timezone(request.COOKIES.get("user_timezone"))
-        if timezone_cookie and request.user.userdata.timezone != timezone_cookie:
-            request.user.userdata.timezone = timezone_cookie
-            needs_save = True
+        if timezone_cookie and userdata.timezone != timezone_cookie:
+            userdata.timezone = timezone_cookie
+            changed.append("timezone")
 
-        # Save only once if any changes were made
-        if needs_save:
-            request.user.userdata.save()
+        if changed:
+            userdata.save(update_fields=changed)
 
     return {"has_user_location": has_user_location}
 
@@ -229,7 +217,7 @@ def dismissed_cookies_tos(request):
             hide_tos_banner = True
         elif hide_tos_cookie:
             request.user.userdata.dismissed_cookies_tos = True
-            request.user.userdata.save()
+            request.user.userdata.save(update_fields=["dismissed_cookies_tos"])
     return {"hide_tos_banner": hide_tos_banner}
 
 

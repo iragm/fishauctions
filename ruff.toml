@@ -3,9 +3,29 @@ line-length = 120
 [lint]
 ignore = [
     "E501",
-    "E722",
     "PT009",
     "PT027",
+    # Bandit rules that are noise in this codebase, so that S308 (mark_safe) and S113 (no request
+    # timeout) can be on. A stored XSS and a hung Celery task both got through while S was off, and
+    # the `# noqa: S308` comments left behind made the rule look enabled when it wasn't.
+    "S101",  # assert -- every test uses it
+    "S105",  # hardcoded password string -- test fixtures and field-name constants
+    "S106",  # hardcoded password func arg -- test fixtures
+    "S107",  # hardcoded password default -- test helpers
+    "S311",  # random for bidder numbers and shuffling lots; nothing here is a secret
+    # Bugbear rules that are style, not bugs. B018 (useless expression) stays on: the auction
+    # permission check is a bare `self.is_auction_admin` whose only effect is to raise, and a
+    # tidy-up that deleted it would silently make the view public.
+    "B008",  # function call in default argument -- Django fields do this everywhere
+    "B905",  # zip() without strict= -- reads worse than it helps
+    "B904",  # raise ... from -- worth doing, but 25 pre-existing sites is its own change
+    "B007",  # unused loop variable -- style
+    "B017",  # assertRaises(Exception) -- two tests that mean it
+    # try/except/pass. 19 of these swallow an exception with no log line, which is worth going
+    # through one at a time (each needs a decision about what should happen instead) rather than
+    # papering over here. Left off so the rest of flake8-bandit can be on today.
+    "S110",
+    "S112",
 ]
 # `select`, not `extend-select`. Ruff 0.16.0 changed what its *default* selection is, so
 # `extend-select` -- which adds to that default -- silently pulled in RUF, PL, SIM, TRY and the
@@ -16,7 +36,7 @@ ignore = [
 select = [
     "A",    # flake8-builtins
     # "ARG",  # flake8-unused-arguments
-    # "B",    # flake8-bugbear
+    "B",    # flake8-bugbear
     "C4",    # flake8-comprehensions
     # "C90",  # McCabe Complexity
     # "D",    # pydocstyle
@@ -37,7 +57,7 @@ select = [
     "PTH",  # flake8-use-pathlib
     # "RET",  # flake8-return
     # "RUF",  # ruff-specific rules
-    # "S",    # flake8-bandit
+    "S",    # flake8-bandit
     # "SIM",  # flake8-simplify
     "TID",  # flake8-tidy-imports
     "T20",  # flake8-print
@@ -51,3 +71,8 @@ select = [
 # was never in the formatter's scope here and a version bump is not the moment to put it there,
 # so it stays out. Linting is unaffected -- ruff never linted Markdown.
 exclude = ["*.md"]
+
+[lint.per-file-ignores]
+# This file measures what touching a cached property costs, so reading one and discarding the
+# result is the test, not a mistake.
+"auctions/test_query_counts.py" = ["B018"]

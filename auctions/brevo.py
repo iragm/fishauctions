@@ -358,6 +358,9 @@ def _delete_contact(client, member):
 
 
 def _delete_contact_by_email(client, email):
+    if not email:
+        # No address, no contact: "/contacts/" alone is the collection, not a contact.
+        return
     try:
         client.request("DELETE", f"/contacts/{quote(email)}")
     except BrevoApiError as e:
@@ -435,7 +438,7 @@ def _clear_error(club):
 
 
 def _webhook_url(club):
-    path = reverse("brevo_webhook", kwargs={"slug": club.slug, "secret": club.brevo_webhook_secret})
+    path = reverse("brevo_webhook", kwargs={"slug": club.url_key, "secret": club.brevo_webhook_secret})
     return f"https://{_site_domain()}{path}"
 
 

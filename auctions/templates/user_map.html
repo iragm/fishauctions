@@ -20,17 +20,17 @@ function initMap() {
     // Multiple Markers
     var markers = [
         {% for user in users %}
-        ["{{ user.username }}", {{ user.userdata.latitude }}, {{ user.userdata.longitude }}],
+        ["{{ user.username|escapejs }}", {{ user.userdata.latitude }}, {{ user.userdata.longitude }}],
         {% endfor %}
     ];
 
     var infoWindowContent = [
         {% for user in users %}
         ['<div class="info_content" style="color:black;">' +
-        '<h5>{{ user.first_name }} {{ user.last_name }}</h5>' +
-        '<p>{{ user.username }}<br>{{ user.email }}<br> Volume top: {{user.userdata.volume_percentile}}%<br>' +
+        '<h5>{{ user.first_name|force_escape|escapejs }} {{ user.last_name|force_escape|escapejs }}</h5>' +
+        '<p>{{ user.username|force_escape|escapejs }}<br>{{ user.email|force_escape|escapejs }}<br> Volume top: {{user.userdata.volume_percentile}}%<br>' +
         'Last active {{user.userdata.last_activity}}<br>' +
-        '<a href="/user/{{ user.username }}" target="_blank">Userpage</a><br>' +
+        '<a href="/user/{{ user.username|force_escape|escapejs }}" target="_blank">Userpage</a><br>' +
         '<a href="/admin/auth/user/{{ user.pk }}/change/" target="_blank">Admin</a><br>' +
         '</div></p>'],
         {% endfor %}

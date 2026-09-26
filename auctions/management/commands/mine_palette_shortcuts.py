@@ -22,12 +22,11 @@ Usage::
 """
 
 import logging
-from collections import defaultdict
 
 from django.core.management.base import BaseCommand
 
 from auctions import command_palette, palette_assist, palette_routes
-from auctions.models import CommandPalettePage, LLMUsage
+from auctions.models import CommandPalettePage
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +55,8 @@ class Command(BaseCommand):
         min_count = options["min_count"]
         apply_changes = options["apply"]
 
-        candidates, rejected = self.mine(min_count)
-        lookups = self.mine_lookups(min_count)
+        candidates, rejected = palette_assist.mine_shortcuts(min_count)
+        lookups = palette_assist.mine_preloaded_lookups(min_count)
 
         if not candidates and not rejected and not lookups:
             self.stdout.write(
@@ -66,7 +65,7 @@ class Command(BaseCommand):
             )
             return
 
-        existing = self.existing_phrases()
+        existing = palette_assist.phrases_with_a_shortcut()
         created = skipped = 0
         for phrase, (route_key, count) in sorted(candidates.items(), key=lambda item: -item[1][1]):
             if phrase in existing:
@@ -108,67 +107,3 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"Created {created} shortcut(s)."))
         elif candidates:
             self.stdout.write("Nothing was written. Re-run with --apply to create these.")
-
-    def mine(self, min_count):
-        """Group recorded navigations by normalized phrase.
-
-        Returns ``(candidates, rejected)``: phrases that always resolved to one destination, and phrases
-        common enough to qualify that didn't.
-
-        ``lookup:<name>`` rows are dropped: a lookup has no URL to point a shortcut at and its answer
-        differs per user. They are already handled by ``palette_assist.preloadable_lookup``, and
-        :meth:`mine_lookups` reports them so the command still shows the whole picture.
-        """
-        destinations = defaultdict(set)
-        counts = defaultdict(int)
-        rows = LLMUsage.objects.filter(success=True).exclude(destination="").exclude(query="")
-        for query, destination in rows.values_list("query", "destination"):
-            phrase = palette_assist.normalize_query(query)
-            if not phrase or destination.startswith(palette_assist.LOOKUP_DESTINATION_PREFIX):
-                continue
-            destinations[phrase].add(destination)
-            counts[phrase] += 1
-
-        candidates = {}
-        rejected = {}
-        for phrase, routes in destinations.items():
-            if counts[phrase] < min_count:
-                continue
-            if len(routes) == 1:
-                candidates[phrase] = (next(iter(routes)), counts[phrase])
-            else:
-                rejected[phrase] = routes
-        return candidates, rejected
-
-    def mine_lookups(self, min_count):
-        """Phrases the assistant keeps answering out of one lookup, and how often.
-
-        Nothing to create -- ``palette_assist.preloadable_lookup`` already acts on these -- but "why is this
-        phrase not in the shortcut list" has an answer and it should be on screen.
-        """
-        counts = defaultdict(int)
-        names = defaultdict(set)
-        rows = (
-            LLMUsage.objects.filter(success=True, destination__startswith=palette_assist.LOOKUP_DESTINATION_PREFIX)
-            .exclude(query="")
-            .values_list("query", "destination")
-        )
-        for query, destination in rows:
-            phrase = palette_assist.normalize_query(query)
-            if not phrase:
-                continue
-            counts[phrase] += 1
-            names[phrase].add(destination[len(palette_assist.LOOKUP_DESTINATION_PREFIX) :])
-        return {
-            phrase: (sorted(names[phrase]), count)
-            for phrase, count in counts.items()
-            if count >= min_count and len(names[phrase]) == 1
-        }
-
-    def existing_phrases(self):
-        """Every phrase already covered by a shortcut, normalized the same way as the queries."""
-        phrases = set()
-        for page in CommandPalettePage.objects.all():
-            for phrase in command_palette._page_phrases(page):
-                phrases.add(palette_assist.normalize_query(phrase))
-        return phrases

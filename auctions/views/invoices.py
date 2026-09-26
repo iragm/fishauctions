@@ -16,6 +16,7 @@ from django.db.models.base import Model as Model
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
+    HttpResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -38,6 +39,7 @@ from auctions.models import (
     AuctionTOS,
     Invoice,
     InvoiceAdjustment,
+    email_q,
 )
 from auctions.tables import (
     InvoiceHTMxTable,
@@ -46,6 +48,9 @@ from auctions.tables import (
 from .base import AuctionViewMixin, HTMxTableView, _ensure_invoice_renewal_state, check_club_permission
 
 logger = logging.getLogger(__name__)
+
+#: Whole dollars. InvoiceAdjustmentForm has no ceiling, and past the column's range the save 500s.
+MAX_ADJUSTMENT_AMOUNT = 99999
 
 
 class Invoices(LoginRequiredMixin, HTMxTableView):
@@ -65,7 +70,7 @@ class Invoices(LoginRequiredMixin, HTMxTableView):
         """
         return (
             Invoice.objects.filter(
-                Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
+                Q(auctiontos_user__user=self.request.user) | email_q("auctiontos_user__email", self.request.user.email)
             )
             .select_related("auction", "auction__club", "auctiontos_user")
             .order_by("-date")
@@ -95,10 +100,19 @@ class Invoices(LoginRequiredMixin, HTMxTableView):
 
 
 class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
-    """Create a new invoice for a user in an auction"""
+    """Create a new invoice for a user in an auction. POST only: it also checks the person in."""
 
-    def get(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         """Create invoice and redirect to invoice detail page"""
+        response = self._create(request)
+        if request.htmx:
+            # The link is in an HTMx table; a plain redirect would be swapped into it.
+            hx_response = HttpResponse(status=204)
+            hx_response["HX-Redirect"] = response["Location"]
+            return hx_response
+        return response
+
+    def _create(self, request):
         # Get the auctiontos
         auctiontos_pk = self.kwargs.get("pk")
         try:
@@ -129,28 +143,12 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
                 user=request.user,
             )
 
-        # Check for existing invoices - get the oldest one (first created)
-        existing_invoice = (
-            Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).order_by("date").first()
-        )
-
+        existing_invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).first()
         if existing_invoice:
-            # Check for and delete any duplicate invoices (keep the oldest)
-            duplicate_invoices = Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).exclude(
-                pk=existing_invoice.pk
-            )
-
-            duplicate_count = duplicate_invoices.count()
-            if duplicate_count > 0:
-                duplicate_invoices.delete()
-                messages.info(request, f"Removed {duplicate_count} duplicate invoice(s)")
-
-            # Redirect to existing invoice
             messages.info(request, "Invoice already exists for this user")
             return redirect(existing_invoice.get_absolute_url())
 
-        # Create new invoice
-        invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=auctiontos.auction)
+        invoice = Invoice.for_participant(auctiontos)
         invoice.recalculate()
 
         messages.success(request, f"Invoice created for {auctiontos.name}")
@@ -186,7 +184,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             ).get(pk=self.kwargs.get(self.pk_url_kwarg))
         except Invoice.DoesNotExist:
             self.object = None
-            if self.request.user.is_authenticated:
+            # Only the /auctions/<slug>/invoice/ route has a slug; /invoices/<pk>/ has none.
+            if self.request.user.is_authenticated and self.kwargs.get("slug"):
                 self.object = Invoice.objects.filter(
                     auctiontos_user__user=self.request.user,
                     auction__slug=self.kwargs["slug"],
@@ -199,7 +198,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         self.is_admin = False
         invoice = self.get_object()
         if not invoice:
-            auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.kwargs["slug"]).first()
+            slug = self.kwargs.get("slug")
+            auction = Auction.objects.exclude(is_deleted=True).filter(slug=slug).first() if slug else None
             if auction:
                 messages.error(
                     request,
@@ -224,7 +224,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 and invoice.buyer == request.user
                 or invoice.auctiontos_user
                 and (
-                    invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+                    (request.user.email and invoice.auctiontos_user.email == request.user.email)
+                    or invoice.auctiontos_user.user == request.user
                 )
             ):
                 mark_invoice_viewed_by_user = True
@@ -237,7 +238,9 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             return redirect(reverse("home"))
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True)  # this will set printed or opened as appropriate
-            invoice.save()
+            # The one column: a full save here wrote a copy loaded before Square's webhook marked the
+            # invoice paid back over PAID, on the page Square's success redirect lands on.
+            invoice.save(update_fields=[self.form_view])
         self.InvoiceAdjustmentFormSet = modelformset_factory(
             InvoiceAdjustment, extra=1, can_delete=True, form=InvoiceAdjustmentForm
         )
@@ -292,6 +295,10 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             form_kwargs={"invoice": self.get_object()},
             queryset=self.queryset,
         )
+        if adjustment_formset.is_valid():
+            for form in adjustment_formset.forms:
+                if (form.cleaned_data.get("amount") or 0) > MAX_ADJUSTMENT_AMOUNT:
+                    form.add_error("amount", f"Adjustments can be at most ${MAX_ADJUSTMENT_AMOUNT:,}")
         if adjustment_formset.is_valid() and self.is_admin:
             adjustments = adjustment_formset.save(commit=False)
             for adjustment in adjustments:
@@ -351,10 +358,12 @@ class InvoiceNoLoginView(InvoiceView):
         self.uuid = kwargs.get("uuid", None)
         invoice = self.get_object()
         invoice.opened = True
-        invoice.save()
+        # Only this column: a payment webhook marking the invoice PAID runs concurrently with this
+        # page load, and a full-row save would write our stale status back over it.
+        invoice.save(update_fields=["opened"])
         if invoice.auctiontos_user:
             invoice.auctiontos_user.email_address_status = "VALID"
-            invoice.auctiontos_user.save()
+            invoice.auctiontos_user.save(update_fields=["email_address_status"])
         if invoice.club and not invoice.auction:
             return render(
                 request,
@@ -372,9 +381,10 @@ class SquarePaymentSuccessView(InvoiceNoLoginView):
     def dispatch(self, request, *args, **kwargs):
         self.uuid = kwargs.get("uuid", None)
         invoice = self.get_object()
-        # Mark invoice as opened but don't verify email
+        # Mark invoice as opened but don't verify email. Only this column: Square's webhook marks the
+        # same invoice PAID at the same moment as this redirect, and a full-row save undoes it.
         invoice.opened = True
-        invoice.save()
+        invoice.save(update_fields=["opened"])
         # Skip the parent's dispatch, which marks the email VALID, and call InvoiceView's.
         return InvoiceView.dispatch(self, request, *args, **kwargs)
 

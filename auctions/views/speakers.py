@@ -31,6 +31,7 @@ from auctions.forms import (
     SpeakerCommentForm,
     SpeakerForm,
 )
+from auctions.helper_functions import static_html
 from auctions.models import (
     ClubMember,
     Speaker,
@@ -256,7 +257,7 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         message = (
             format_html("<p class='text-muted mb-2'>No speakers match <strong>{}</strong>.</p>", query)
             if query
-            else format_html("<p class='text-muted mb-2'>No speakers match these filters.</p>")
+            else static_html("<p class='text-muted mb-2'>No speakers match these filters.</p>")
         )
         return format_html(
             "<div class='text-center py-3'>{}<a class='btn btn-info btn-sm' href='{}'>"

@@ -68,6 +68,7 @@ from .base import (
     auctions_available_for_contact_autofill,
     check_club_permission,
     close_modal_response,
+    club_from_url,
     club_ids_available_for_contact_autofill,
 )
 
@@ -223,8 +224,8 @@ class ClubMemberAdminView(APIView):
 
     def _get_auctiontos(self, request, member):
         """Return the AuctionTOS from the ``tos`` query param, or None."""
-        tos_pk = request.query_params.get("tos") or request.POST.get("_tos_pk")
-        if not tos_pk:
+        tos_pk = str(request.query_params.get("tos") or request.POST.get("_tos_pk") or "")
+        if not tos_pk.isdigit():
             return None
         try:
             tos = AuctionTOS.objects.select_related("auction").get(pk=tos_pk, clubmember=member)
@@ -244,7 +245,9 @@ class ClubMemberAdminView(APIView):
             "club_member": member,
             "modal_title": title,
             "form": form,
-            "extra_script": mark_safe(extra_script),
+            # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+            # and the csrf token.
+            "extra_script": mark_safe(extra_script),  # noqa: S308
             "read_only": read_only,
         }
         # Opened from an auction's user list (?tos=): show the invoice summary and status controls
@@ -660,7 +663,9 @@ class ClubMemberCreateView(APIView):
             "club": club,
             "modal_title": title,
             "form": form,
-            "extra_script": mark_safe(extra_script),
+            # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+            # and the csrf token.
+            "extra_script": mark_safe(extra_script),  # noqa: S308
         }
         return render(request, "auctions/generic_admin_form.html", context)
 
@@ -699,9 +704,9 @@ class ClubMemberCreateView(APIView):
         post_url = self._post_url(slug, auction)
 
         # Check if the user is checking in an existing club member
-        existing_pk = request.POST.get("_existing_member_pk")
+        existing_pk = str(request.POST.get("_existing_member_pk") or "")
         existing_member = None
-        if existing_pk and auction:
+        if existing_pk.isdigit() and auction:
             try:
                 existing_member = ClubMember.objects.get(pk=existing_pk, club=club, is_deleted=False)
             except ClubMember.DoesNotExist:
@@ -714,7 +719,11 @@ class ClubMemberCreateView(APIView):
                 request.POST, instance=existing_member, post_url=post_url, club=club, auction=auction
             )
             if form.is_valid():
-                # Don't save the ClubMember: no changes are intended from the check-in form.
+                # Don't save the ClubMember: no changes are intended from the check-in form. Validating
+                # copied the posted fields onto the instance, so go back to the stored row, or the
+                # auction record would take them and split from the member (and could take someone
+                # else's bidder number).
+                existing_member.refresh_from_db()
                 tos = self._create_auction_tos(auction, existing_member, form.cleaned_data)
                 action_detail = f"Checked in existing member {existing_member} to auction {auction}"
                 if not tos:
@@ -738,7 +747,9 @@ class ClubMemberCreateView(APIView):
                 "club": club,
                 "modal_title": title,
                 "form": form,
-                "extra_script": mark_safe(extra_script),
+                # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+                # and the csrf token.
+                "extra_script": mark_safe(extra_script),  # noqa: S308
             }
             return render(request, "auctions/generic_admin_form.html", context)
 
@@ -786,7 +797,9 @@ class ClubMemberCreateView(APIView):
             "club": club,
             "modal_title": title,
             "form": form,
-            "extra_script": mark_safe(extra_script),
+            # S308: _get_validation_script is a literal; it interpolates a pk, a reversed url
+            # and the csrf token.
+            "extra_script": mark_safe(extra_script),  # noqa: S308
         }
         return render(request, "auctions/generic_admin_form.html", context)
 
@@ -797,7 +810,7 @@ def renew_club_member(member, *, acting_user=None, actor="", money_description="
     Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
     ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key.
     """
-    today = timezone.now().date()
+    today = timezone.localdate()
     member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
     member.membership_last_paid = today
     member.save(
@@ -843,7 +856,8 @@ class ClubMemberRenewView(APIView):
 
     def _get_member(self, pk, request):
         try:
-            member = ClubMember.objects.get(pk=pk)
+            # Not a deactivated member: renewing one also booked dues into the club's ledger.
+            member = ClubMember.objects.get(pk=pk, is_deleted=False)
         except ClubMember.DoesNotExist:
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
@@ -855,7 +869,7 @@ class ClubMemberRenewView(APIView):
 
     def get(self, request, pk):
         member = self._get_member(pk, request)
-        today = timezone.now().date()
+        today = timezone.localdate()
         context = {
             "member": member,
             "new_expiration": self._new_expiration(member, today),
@@ -878,7 +892,8 @@ class ClubMembershipNumberView(APIView):
 
     def _get_member(self, pk, request):
         try:
-            member = ClubMember.objects.get(pk=pk)
+            # Not a deactivated member: renewing one also booked dues into the club's ledger.
+            member = ClubMember.objects.get(pk=pk, is_deleted=False)
         except ClubMember.DoesNotExist:
             raise Http404
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
@@ -959,10 +974,10 @@ class ClubMemberResendCardView(APIView):
 
 
 class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
-    """Serve a signed .pkpass for a member.
+    """Serve a signed .pkpass to the member's own signed-in account.
 
-    Only the member's own account may download it: UUID renewal links must not reach somebody else's
-    card. Same check as the Google Wallet save URL.
+    Emailed links use :class:`ClubMemberAppleWalletByUUIDView` instead, where the member UUID is the
+    capability. The 10-digit membership number is weaker and only ever reaches renewal.
     """
 
     def get(self, request, pk):
@@ -993,7 +1008,7 @@ class ClubMemberAppleWalletByUUIDView(View):
 
         if not is_configured():
             raise Http404
-        member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
+        member = get_object_or_404(ClubMember, club=club_from_url(slug), uuid=uuid, is_deleted=False)
         if not member.club.show_member_barcode:
             raise Http404
         member.update_last_club_activity()

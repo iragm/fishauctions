@@ -15,6 +15,7 @@ from rest_framework import serializers
 from .models import (
     Auction,
     AuctionDropdown,
+    AuctionRandomOption,
     AuctionTOS,
     BapAward,
     ClubMember,
@@ -25,40 +26,23 @@ from .models import (
     normalize_species_name,
 )
 
-CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS = frozenset(
-    {
-        "id",
-        "user",
-        "club",
-        "uuid",
-        "createdon",
-        "added_by",
-        "is_deleted",
-        "possible_duplicate",
-        "last_discord_role_assigned",
-        "discord_role_override",
-        "membership_number",
-        "source",  # # server-set from the API key name
-        "permission_admin",
-        "permission_view",
-        "permission_export",
-        "permission_add_edit",
-        "permission_edit_club",
-        "permission_money",
-        "permission_manage_auctions",
-        "permission_manage_bap",
-        "permission_manage_donations",
-        "permission_send_announcements",
-        "bap_points",
-        "hap_points",
-        "culture_points",
-        "bap_points_ytd",
-        "hap_points_ytd",
-        "culture_points_ytd",
-    }
-)
-CLUB_MEMBER_API_KEY_WRITE_FIELDS = tuple(
-    field.name for field in ClubMember._meta.fields if field.name not in CLUB_MEMBER_API_KEY_EXCLUDED_FIELDS
+#: What an API key may write on a member: an allowlist, so a new column is never writable by default.
+#: The denylist this replaced let a key set the expiration date (renewals only, so the ledger agrees),
+#: the Apple Wallet auth token, sync bookkeeping, cached totals and coordinates.
+CLUB_MEMBER_API_KEY_WRITE_FIELDS = (
+    "name",
+    "email",
+    "phone_number",
+    "address",
+    "memo",
+    "discord_id",
+    "discord_username",
+    "membership_last_paid",
+    "contact_status",
+    "send_welcome_email",
+    "bidder_number",
+    "bidding_allowed",
+    "selling_allowed",
 )
 CLUB_MEMBER_API_KEY_MAPPING_FIELDS = (*CLUB_MEMBER_API_KEY_WRITE_FIELDS, "first_name", "last_name")
 
@@ -684,6 +668,7 @@ class ClubApiLotSerializer(SparseFieldsMixin, PrivateBlockMixin, serializers.Mod
             "custom_checkbox",
             "custom_field_1",
             "custom_dropdown",
+            "custom_random",
             "i_bred_this_fish",
             "donation",
             "reference_link",
@@ -779,6 +764,11 @@ class ClubApiAuctionSerializer(PrivateBlockMixin, serializers.ModelSerializer):
             "custom_dropdown_name": obj.custom_dropdown_name or "",
             "custom_dropdown_options": list(
                 AuctionDropdown.objects.filter(auction=obj).order_by("createdon").values_list("value", flat=True)
+            ),
+            "use_custom_random_field": obj.use_custom_random_field,
+            "custom_random_name": obj.custom_random_name or "",
+            "custom_random_options": list(
+                AuctionRandomOption.objects.filter(auction=obj).order_by("createdon").values_list("value", flat=True)
             ),
         }
 

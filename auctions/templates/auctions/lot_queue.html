@@ -8,16 +8,15 @@
 </span>
 
 <div class="container hide-fullscreen">
-  <div class="alert alert-info" role="alert">
-    <h5 class="mb-2"><i class="bi bi-list-ol"></i> Lot queue</h5>
+  <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
     <p class="mb-1">Build the order lots will be sold in. Add lots any of these ways:</p>
     <ul class="mb-1">
       <li>Scan a lot's QR code with a USB barcode scanner &mdash; it works anywhere on this page.</li>
       <li>On a phone, tap <strong>Scan with camera</strong> and point it at the QR code.</li>
       <li>Type a lot number below and press <strong>Add</strong>.</li>
     </ul>
-    <p class="mb-0">Drag the <i class="bi bi-grip-vertical"></i> handle to reorder, or the <i class="bi bi-x-lg"></i> to remove. The <strong>Set lot winners</strong> page sells the top lot next automatically. Tap <strong>Projector / kiosk mode</strong> to put the current lot up on a screen for the room.</p>
-  </div>
+    <p class="mb-0">Drag the <i class="bi bi-grip-vertical"></i> handle to reorder, or the <i class="bi bi-x-lg"></i> to remove. The <strong>Set lot winners</strong> page sells the top lot next automatically. <strong>Fullscreen queue</strong> and <strong>Fullscreen current lot</strong> put it up on a screen for the room.</p>
+  </div></div>
 
   <form id="queue-add-form" class="mb-2"
         hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
@@ -32,7 +31,8 @@
 
   <div class="mb-2">
     <button type="button" id="queue-camera-btn" class="btn btn-primary btn-sm"><i class="bi bi-camera"></i> Scan with camera</button>
-    <button type="button" id="fullscreen-btn" class="btn btn-primary btn-sm d-none d-sm-inline-block ms-1"><i class="bi bi-fullscreen"></i> Projector / kiosk mode</button>
+    <button type="button" id="fullscreen-btn" class="btn btn-primary btn-sm d-none d-sm-inline-block ms-1"><i class="bi bi-fullscreen"></i> Fullscreen queue</button>
+    <a href="{% url 'auction_lot_queue_current_lot' slug=auction.slug %}" class="btn btn-primary btn-sm ms-1"><i class="bi bi-display"></i> Fullscreen current lot</a>
   </div>
 
   <div id="queue-camera-wrapper" class="mb-2 d-none">
@@ -50,14 +50,14 @@
 
 {% block undiv_content %}
 {% comment %}
-Kiosk / projector view: hidden until fullscreen. Refreshed in real time over the admin auction
+Fullscreen queue: hidden until fullscreen. Refreshed in real time over the admin auction
 websocket (queue_updated) as winners are set on another device; the slow htmx poll is a fallback
 for a dropped socket. (Multi-line comments must use {% comment %} -- a multi-line {# #} is not
 parsed as a comment and leaks into the page.)
 {% endcomment %}
-<div id="kiosk" class="d-none">
-  <div id="kiosk-content"
-       hx-get="{% url 'auction_lot_queue_kiosk' slug=auction.slug %}"
+<div id="fullscreen-queue" class="d-none">
+  <div id="fullscreen-queue-content"
+       hx-get="{% url 'auction_lot_queue_fullscreen' slug=auction.slug %}"
        hx-trigger="load, queue-updated from:body, every 30s" hx-swap="innerHTML">
   </div>
 </div>
@@ -178,7 +178,7 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
       }
     });
 
-    // Fullscreen / kiosk mode: hide the admin chrome, show the projector view.
+    // Fullscreen queue: hide the admin chrome, show the projector view.
     $('#fullscreen-btn').on('click', function () {
       var elem = document.documentElement;
       if (!document.fullscreenElement && !document.webkitFullscreenElement) {
@@ -195,16 +195,16 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
     $(document).on('fullscreenchange webkitfullscreenchange', function () {
       if (document.fullscreenElement || document.webkitFullscreenElement) {
         $('.hide-fullscreen').hide();
-        $('#kiosk').removeClass('d-none');
+        $('#fullscreen-queue').removeClass('d-none');
       } else {
         $('.hide-fullscreen').show();
-        $('#kiosk').addClass('d-none');
+        $('#fullscreen-queue').addClass('d-none');
       }
     });
 
     // Real-time queue updates over the admin auction websocket: when a winner is set (or the queue
     // is edited) on another device, the server broadcasts queue_updated and we re-fetch both the
-    // editable list and the kiosk view immediately, instead of waiting for the 30s poll fallback.
+    // editable list and the fullscreen queue immediately, instead of waiting for the 30s poll fallback.
     try {
       var wsProtocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
       var queueSocket = new WebSocket(wsProtocol + window.location.host + '/ws/auctions/{{ auction.pk }}/');
@@ -213,13 +213,13 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
         if (data.type === 'queue_updated') {
           if (window.htmx) {
             htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
-            // Fire the htmx trigger the kiosk listens for (hx-trigger="queue-updated from:body").
+            // Fire the htmx trigger the fullscreen queue listens for (hx-trigger="queue-updated from:body").
             document.body.dispatchEvent(new Event('queue-updated'));
           }
         }
       };
     } catch (err) {
-      // Websocket unavailable -- the htmx poll fallback keeps the kiosk fresh.
+      // Websocket unavailable -- the htmx poll fallback keeps the fullscreen queue fresh.
     }
   });
 </script>

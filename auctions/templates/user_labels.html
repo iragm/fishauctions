@@ -151,7 +151,9 @@ $(document).ready(function() {
             show_hide_advanced();
             widthEl.value = w.toFixed(2);
             heightEl.value = h.toFixed(2);
-            document.getElementById('printing-prefs').submit();
+            // Not form.submit(): the Save button is named "submit", which shadows the method.
+            var prefsForm = document.getElementById('printing-prefs');
+            if (prefsForm.requestSubmit) { prefsForm.requestSubmit(); } else { HTMLFormElement.prototype.submit.call(prefsForm); }
         });
         sizeEl.appendChild(label);
         sizeEl.appendChild(useBtn);

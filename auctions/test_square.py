@@ -524,10 +524,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
         self.tosA = self.online_tos
         self.auctionA = self.online_auction
         self.userA = self.user
-        self.invoice = Invoice.objects.create(
-            auctiontos_user=self.tosA,
-            auction=self.auctionA,
-        )
+        self.invoice = Invoice.for_participant(self.tosA)
         self.invoice.save()
 
     def test_square_payment_success_view_marks_invoice_opened(self):
@@ -695,6 +692,9 @@ class SquareOAuthRevocationTests(StandardTestCase):
 
         # Create an invoice for the test
         test_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
+        # The merchant is the auction's own: payments into anyone else's account don't count for it.
+        self.square_seller.user = self.online_auction.created_by
+        self.square_seller.save()
 
         # Mock the entire Square orders.get flow
         mock_order = Mock()
@@ -744,6 +744,43 @@ class SquareOAuthRevocationTests(StandardTestCase):
             self.assertEqual(payment.currency, "USD")
             self.assertEqual(payment.payment_method, "Square")
             self.assertFalse(hasattr(payment, "status") and payment.status)
+
+    def test_another_merchants_payment_does_not_pay_the_invoice(self):
+        """The reference id is the paying merchant's to set: an order naming an invoice this merchant
+        doesn't collect for (here the seller is admin_user, the auction's creator is user) records nothing.
+        """
+        from unittest.mock import Mock
+
+        from django.urls import reverse
+
+        from auctions.models import Invoice, InvoicePayment, SquareSeller
+
+        test_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
+        mock_client = Mock()
+        mock_client.orders.get.return_value = Mock(order=Mock(reference_id=str(test_invoice.pk)))
+        with patch.object(SquareSeller, "get_square_client", return_value=mock_client):
+            response = self.client.post(
+                reverse("square_webhook"),
+                data={
+                    "merchant_id": "MLF3WZS2N9WVG",
+                    "type": "payment.updated",
+                    "data": {
+                        "object": {
+                            "payment": {
+                                "id": "PAYMENT_FORGED",
+                                "status": "COMPLETED",
+                                "order_id": "ORDER_FORGED",
+                                "amount_money": {"amount": 5000, "currency": "USD"},
+                            }
+                        }
+                    },
+                },
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(InvoicePayment.objects.filter(external_id="PAYMENT_FORGED").exists())
+        test_invoice.refresh_from_db()
+        self.assertNotEqual(test_invoice.status, "PAID")
 
 
 class SquareWebhookSignatureValidationTests(StandardTestCase):

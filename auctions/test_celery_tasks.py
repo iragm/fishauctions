@@ -1114,3 +1114,18 @@ class PageViewAuctionBackfillTestCase(TestCase):
         tasks.backfill_page_view_auctions()
         view.refresh_from_db()
         self.assertIsNone(view.auction)
+
+
+class CleanupMailTestCase(TestCase):
+    def test_deletes_expired_mail_on_mariadb(self):
+        """post_office's own cleanup deletes `id__in` a sliced queryset, which MariaDB rejects with error 1235."""
+        from post_office.models import Email, Log
+
+        old = Email.objects.create(from_email="a@example.com", to=["b@example.com"], subject="old")
+        Log.objects.create(email=old, status=0)
+        new = Email.objects.create(from_email="a@example.com", to=["b@example.com"], subject="new")
+        Email.objects.filter(pk=old.pk).update(created=timezone.now() - datetime.timedelta(days=365))
+
+        tasks.cleanup_mail()
+
+        self.assertEqual(list(Email.objects.values_list("pk", flat=True)), [new.pk])

@@ -29,6 +29,8 @@ from django.db.models.functions import Coalesce
 from django.forms.widgets import HiddenInput, NumberInput, Select, TextInput
 from django.utils import timezone
 
+from auctions.helper_functions import cookie_coordinates
+
 from .models import (
     Auction,
     AuctionHistory,
@@ -43,6 +45,7 @@ from .models import (
     Invoice,
     Location,
     Lot,
+    LotHistory,
     LotPosition,
     PageView,
     Speaker,
@@ -52,6 +55,10 @@ from .models import (
     distance_to,
 )
 from .queryset_annotations import add_tos_info
+
+#: LotFilter's search box: at most this many characters and this many " or " alternatives.
+TEXT_FILTER_MAX_LENGTH = 200
+TEXT_FILTER_MAX_FRAGMENTS = 5
 
 
 class AuctionFilter(django_filters.FilterSet):
@@ -79,7 +86,8 @@ class AuctionFilter(django_filters.FilterSet):
     def auction_search(self, queryset, name, value):
         if value == "joined":
             return queryset.exclude(joined=False).exclude(joined=0)
-        if value.isnumeric():
+        # isdecimal, not isnumeric: "½" and "²" are numeric and int() raised on them.
+        if value.isdecimal():
             return queryset.filter(distance__lte=int(value))
         else:
             return queryset.filter(
@@ -233,8 +241,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
         Reused as ``AuctionTOSFilter.generic(qs, value)``.
         """
 
-        # sketchy users
-        pattern = re.compile(r"^sus|\ssus\s|\ssus$")
+        # sketchy users. Whole words only: a bare ^sus took "susan" for "sus" + "an".
+        pattern = re.compile(r"(?:^|\s)sus(?=\s|$)")
         if pattern.search(value):
             value = pattern.sub("", value)
             qs = add_tos_info(qs)
@@ -268,7 +276,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
             # Apply filters based on patterns
             for keyword, filter_data in invoice_patterns.items():
                 keyword_pattern = re.escape(keyword)
-                pattern = re.compile(rf"^{keyword_pattern}|\s{keyword_pattern}\s|\s{keyword_pattern}$")
+                # Whole words only, so "openshaw" is a name and not "open" + "shaw".
+                pattern = re.compile(rf"(?:^|\s){keyword_pattern}(?=\s|$)")
                 if pattern.search(value):
                     value = pattern.sub("", value)
                     if keyword == "can bid":
@@ -330,8 +339,26 @@ class LotAdminFilter(django_filters.FilterSet):
         model = Lot
         fields = []  # nothing here so no buttons show up
 
+    #: The Filters dropdown's keywords (AuctionLots.possible_filters), whole words anywhere in the query.
+    STATUS_KEYWORDS = {
+        # What the unsold lot fee is charged on; see add_price_info.
+        "ended unsold": Q(winning_price__isnull=True, active=False)
+        & (Q(ended_unsold=True) | Q(auction__is_online=True)),
+        "active unsold": Q(winning_price__isnull=True, auctiontos_winner__isnull=True, active=True),
+    }
+
     def generic(self, queryset, value):
-        if value.isnumeric():
+        # Class, not self: exports and bulk actions call this unbound with a view or None as self.
+        for keyword, q in LotAdminFilter.STATUS_KEYWORDS.items():
+            pattern = re.compile(rf"(?:^|\s){re.escape(keyword)}(?=\s|$)", re.IGNORECASE)
+            if pattern.search(value):
+                value = pattern.sub(" ", value)
+                queryset = queryset.filter(q, banned=False)
+        value = value.strip()
+        if not value:
+            return queryset
+        # isdecimal, not isnumeric: "½" is numeric and the integer lookups raised on it.
+        if value.isdecimal():
             queryset = queryset.filter(
                 Q(auctiontos_seller__bidder_number=value)
                 | Q(auctiontos_winner__bidder_number=value)
@@ -341,6 +368,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(lot_number_int=value)
                 | Q(custom_field_1=value)
                 | Q(custom_dropdown=value)
+                | Q(custom_random=value)
             )
         else:
             try:
@@ -357,7 +385,7 @@ class LotAdminFilter(django_filters.FilterSet):
 
             def get_colon_filter(key, val):
                 if key == "lot":
-                    if val.isnumeric():
+                    if val.isdecimal():
                         return Q(lot_number_int=val) | Q(custom_lot_number=val)
                     return Q(custom_lot_number=val)
                 elif key == "seller":
@@ -415,6 +443,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_lot_number=value)
                 | Q(custom_field_1__icontains=value)
                 | Q(custom_dropdown__icontains=value)
+                | Q(custom_random__iexact=value)
                 | Q(auction__title__icontains=value)
             )
         return queryset
@@ -515,8 +544,9 @@ class LotFilter(django_filters.FilterSet):
             self.request = kwargs["request"]
             self.user = self.request.user
             # get location from cookie
-            self.latitude = self.request.COOKIES.get("latitude", self.latitude)
-            self.longitude = self.request.COOKIES.get("longitude", self.longitude)
+            latitude, longitude = cookie_coordinates(self.request)
+            if latitude is not None:
+                self.latitude, self.longitude = latitude, longitude
         else:
             self.user = kwargs.pop("user")
 
@@ -742,7 +772,8 @@ class LotFilter(django_filters.FilterSet):
         if self.regardingUser:
             # show all lots if you are dealing with a single user
             self.status = "all"
-        if self.status == "ended":
+        # STATUS offers "closed"; "ended" was never a choice, so picking "Ended" showed open lots.
+        if self.status in ("closed", "ended"):
             primary_queryset = primary_queryset.filter(active=False)
         if self.status == "open":
             primary_queryset = primary_queryset.filter(active=True)
@@ -810,21 +841,26 @@ class LotFilter(django_filters.FilterSet):
                 )
             )
         if self.order == "popularity" or self.order == "-popularity":
+            # One subquery per count: joining pageview and lothistory into a single aggregate
+            # multiplied the rows (views x chats x bids per lot), and PageView is kept forever.
+            def count_of(model, lot_field, **filters):
+                return Coalesce(
+                    Subquery(
+                        model.objects.filter(**{lot_field: OuterRef("pk")}, **filters)
+                        .order_by()
+                        .values(lot_field)
+                        .annotate(total=Count("pk"))
+                        .values("total")[:1],
+                        output_field=IntegerField(),
+                    ),
+                    Value(0),
+                )
+
             primary_queryset = primary_queryset.annotate(
-                popularity=2 * Count("pageview", distinct=True)
-                + Count(
-                    "lothistory",
-                    filter=Q(lothistory__changed_price=False),
-                    distinct=True,
-                )
-                +
+                popularity=2 * count_of(PageView, "lot_number")
+                + count_of(LotHistory, "lot", changed_price=False)
                 # this is better than bids
-                2.5
-                * Count(
-                    "lothistory",
-                    filter=Q(lothistory__changed_price=True),
-                    distinct=True,
-                )
+                + 2.5 * count_of(LotHistory, "lot", changed_price=True)
             )
         if self.order == "-recommended":
             primary_queryset = primary_queryset.annotate(recommended=Sum(0, output_field=IntegerField()))
@@ -965,7 +1001,10 @@ class LotFilter(django_filters.FilterSet):
         return queryset
 
     def text_filter(self, queryset, name, value):
-        if value.isnumeric():
+        # Each fragment is ten LIKEs over the whole lot table, so an endless query is an endless scan.
+        value = value[:TEXT_FILTER_MAX_LENGTH]
+        # isdecimal, not isnumeric: "½" is numeric and int() raised on it.
+        if value.isdecimal():
             return queryset.filter(
                 Q(lot_number=int(value))
                 | Q(lot_name__icontains=value)
@@ -975,7 +1014,7 @@ class LotFilter(django_filters.FilterSet):
                 | Q(auctiontos_seller__bidder_number=value)
             )
         else:
-            split = re.split(r"\bor\b", value)
+            split = re.split(r"\bor\b", value)[:TEXT_FILTER_MAX_FRAGMENTS]
             qList = Q()  # empty
             for fragment in split:
                 fragment = fragment.strip()
@@ -989,6 +1028,9 @@ class LotFilter(django_filters.FilterSet):
                     | Q(user__username=fragment)
                     | Q(custom_lot_number=fragment)
                     | Q(custom_field_1__icontains=fragment)
+                    # Whole value: "Table 1" shouldn't find tables 10-19. Left out of the all-digit
+                    # branch above, where a number means a lot number.
+                    | Q(custom_random__iexact=fragment)
                     | Q(auctiontos_seller__bidder_number=fragment)
                 )
             return queryset.filter(qList)
@@ -1072,10 +1114,11 @@ def get_recommended_lots(
     latitude=0,
     longitude=0,
     qty=10,
-    keywords=[],
+    keywords=None,
     exclude_pk=None,  # lot pk to leave out (e.g. the lot the user is currently viewing)
 ):
     """The recommendation system: a queryset of lots ready for a template."""
+    keywords = keywords or []
     if auction:
         listType = "auction"
     qs = LotFilter(
@@ -1213,7 +1256,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         if nonbrevo_filter:
             queryset = queryset.filter(brevo_last_synced__isnull=True)
         if status_filter:
-            today = timezone.now().date()
+            today = timezone.localdate()
             if status_filter == "current":
                 queryset = queryset.filter(membership_paid_q(today))
             elif status_filter == "expired":
@@ -1757,7 +1800,7 @@ class DonationVendorFilter(django_filters.FilterSet):
     )
     status = django_filters.ChoiceFilter(
         label="Status",
-        choices=DonationVendor.STATUS_CHOICES,
+        choices=DonationVendor.STATUS_FILTER_CHOICES,
         method="filter_by_status",
         widget=HiddenInput(),
     )
@@ -1781,13 +1824,17 @@ class DonationVendorFilter(django_filters.FilterSet):
     def filter_by_status(self, queryset, name, value):
         if not value:
             return queryset
+        if value == DonationVendor.FOLLOWUP_DUE:
+            # Whose turn it is, which is what the list is usually opened to find out. Not a status of
+            # its own: a vendor is due whatever they last said.
+            return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(status=value)
 
     def vendor_search(self, queryset, name, value):
         value = (value or "").strip()
         if not value:
             return queryset
-        # "due" as a keyword: not worth a permanent control.
+        # Typing it still works, now that ?status=due is the control.
         if value.lower() in ("due", "overdue", "followup", "follow up"):
             return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(Q(name__icontains=value) | Q(contact_name__icontains=value) | Q(email__icontains=value))

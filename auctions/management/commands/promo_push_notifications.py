@@ -4,6 +4,9 @@ The push analogue of ``weekly_promo``: users with ``push_notifications_instead_o
 by the weekly promo email and instead get a per-auction push as each promoted auction crosses its
 send-at gate. Each user is notified at most once per auction, ever (``PushNotificationSent`` is the
 dedupe ledger). Runs hourly.
+
+The ledger is written on delivery, so a push still in the queue isn't in it yet; :func:`claim` covers
+the gap, or a backed-up queue would get the same promotion enqueued again every hour.
 """
 
 import datetime
@@ -11,6 +14,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.management.base import BaseCommand
 from django.db.models import F
 from django.utils import timezone
@@ -19,6 +23,14 @@ from auctions.models import Auction, PushNotificationSent
 from auctions.templatetags.distance_filters import distance_display
 
 logger = logging.getLogger(__name__)
+
+#: Past the 7-day promotion window, so a claim outlives any chance of the auction being promoted again.
+CLAIM_SECONDS = 8 * 24 * 60 * 60
+
+
+def claim(auction_pk, user_pk):
+    """True the first time a promotion of this auction is enqueued for this user."""
+    return cache.add(f"promo_push:{auction_pk}:{user_pk}", 1, timeout=CLAIM_SECONDS)
 
 
 class Command(BaseCommand):
@@ -97,6 +109,8 @@ class Command(BaseCommand):
             distance_text = distance_display(distance, user)
             if distance_text:
                 body += f", {distance_text} away"
+            if not claim(auction.pk, user.pk):
+                continue
             send_push_to_user.delay(
                 user.pk,
                 title="New auction",

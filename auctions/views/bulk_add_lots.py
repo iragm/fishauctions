@@ -41,6 +41,7 @@ from auctions.models import (
     Category,
     Invoice,
     Lot,
+    email_q,
     normalize_email,
 )
 from auctions.services import (
@@ -169,15 +170,20 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             raise Http404
         bidder_number = kwargs.pop("bidder_number", None)
         self.tos = None
-        if bidder_number:
-            self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
         if self.is_auction_admin:
             self.is_admin = True
+        if bidder_number:
+            # As BulkAddLotsAuto: only an admin works on somebody else's lots. This looked the number up
+            # for anyone, so any participant could add or edit lots under another bidder's number.
+            if not self.is_admin:
+                messages.error(request, "Only auction admins can add lots for other users")
+                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+            self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
         if not self.tos:
             # Without permission to edit the auction, you can only add lots for yourself.
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
-                .filter(Q(email=request.user.email) | Q(user=request.user))
+                .filter(email_q("email", request.user.email) | Q(user=request.user))
                 .first()
             )
         block = lot_add_block(self.auction, self.tos, self.is_admin)
@@ -296,7 +302,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             # Without permission to edit the auction, you can only add lots for yourself.
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
-                .filter(Q(email=request.user.email) | Q(user=request.user))
+                .filter(email_q("email", request.user.email) | Q(user=request.user))
                 .first()
             )
         block = lot_add_block(self.auction, self.tos, self.is_admin)
@@ -343,7 +349,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                 # Adding lots for yourself
                 self.tos = (
                     AuctionTOS.objects.filter(auction=self.auction)
-                    .filter(Q(email=request.user.email) | Q(user=request.user))
+                    .filter(email_q("email", request.user.email) | Q(user=request.user))
                     .first()
                 )
                 if not self.tos:
@@ -593,9 +599,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     )
 
             # Update invoice
-            invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
-            if not invoice:
-                invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
+            invoice = Invoice.for_participant(self.tos, self.auction)
             invoice.recalculate()
 
             return JsonResponse(
@@ -645,7 +649,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
         else:
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
-                .filter(Q(email=request.user.email) | Q(user=request.user))
+                .filter(email_q("email", request.user.email) | Q(user=request.user))
                 .first()
             )
 
@@ -800,6 +804,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMi
             return {**base, "action": "skip", "reason": "Missing lot number and complete bidder information"}
         if not fields["lot_name"]:
             return {**base, "action": "skip", "reason": "Missing required lot information (lot name)"}
+        bad_email = self.bad_email_reason(fields["email"])
+        if bad_email:
+            return {**base, "action": "skip", "reason": bad_email}
         # Step 3: an exact email match attaches silently; a name-only match is a duplicate.
         seller_by_email = self.auction.find_user(email=fields["email"])
         if seller_by_email:

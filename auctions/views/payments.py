@@ -7,6 +7,7 @@ connect/callback pairs for both follow. Provider webhooks are in :mod:`auctions.
 import base64
 import json
 import logging
+import secrets
 from decimal import Decimal
 from urllib.parse import urlencode, urlparse
 
@@ -34,6 +35,7 @@ from auctions.models import (
     PayPalSeller,
     SquareSeller,
     UserData,
+    note_email_if_unusable,
 )
 
 from .base import (
@@ -44,6 +46,10 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: A fresh random OAuth state per Square connect, kept in the session. It used to be the user's
+#: unsubscribe UUID, which is printed in the footer of every email they get.
+SQUARE_OAUTH_STATE_SESSION_KEY = "square_oauth_state"
 
 
 class PayPalRequestError(Exception):
@@ -263,7 +269,7 @@ class PayPalAPIMixin:
             purchase_unit["payee"] = {"merchant_id": paypal_merchant_id}
             if settings.PAYPAL_PLATFORM_FEE and settings.PAYPAL_PLATFORM_FEE > 0:
                 amt_value = Decimal(purchase_unit["amount"]["value"])
-                fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal(100)).quantize(Decimal(0.01))
+                fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal(100)).quantize(Decimal("0.01"))
                 if fee_amount > 0:
                     purchase_unit["payment_instruction"] = {
                         "platform_fees": [
@@ -390,6 +396,8 @@ class PayPalAPIMixin:
 
         if invoice.auctiontos_user:
             if payer_email and not invoice.auctiontos_user.email:
+                # The payment already went through; a odd-looking address is worth keeping and saying.
+                payer_email = note_email_if_unusable(payer_email, "a PayPal payment")
                 invoice.auctiontos_user.email = payer_email
                 invoice.auctiontos_user.save()
                 if invoice.auction:
@@ -631,6 +639,17 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
         return redirect(action_url)
 
 
+def _enable_payments_on_last_auction(user, field):
+    """Turn a just-connected payment account on for the auction the connect banner was on: the last one
+    this person created, when they created it. This used to be a ``?enable_…=True`` on the auction page,
+    which any link could set.
+    """
+    auction = user.userdata.last_auction_created
+    if auction and auction.created_by_id == user.pk and not getattr(auction, field):
+        setattr(auction, field, True)
+        auction.save(update_fields=[field])
+
+
 class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
     """After onboarding, PayPal redirects here"""
 
@@ -646,8 +665,9 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
                 )
             return redirect(reverse("club_membership_settings", kwargs={"slug": self.linked_club.slug}))
         success_url = reverse("home")
-        if self.request.user.userdata.last_auction_created:
-            success_url = self.request.user.userdata.last_auction_created.get_absolute_url()
+        last_auction = self.request.user.userdata.last_auction_created
+        if last_auction:
+            success_url = last_auction.get_absolute_url()
         if self.error:
             messages.error(self.request, self.error)
         else:
@@ -655,7 +675,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
                 self.request,
                 "You're all set - PayPal account linked!  Your users will see a PayPal button on invoices.",
             )
-            success_url += "?enable_online_payments=True"
+            _enable_payments_on_last_auction(self.request.user, "enable_online_payments")
         return redirect(success_url)
 
     def get(self, request):
@@ -691,6 +711,16 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         merchant_info = self.get_from_paypal(
             f"v1/customer/partners/{partner_merchant_id}/merchant-integrations/{merchant_id}"
         )
+        # merchantIdInPayPal is only a query parameter: the merchant must have onboarded under this
+        # user's tracking_id, or a link could attach someone else's PayPal account to this user.
+        if str(merchant_info.get("tracking_id") or "") != str(tracking_id):
+            logger.warning(
+                "PayPal callback merchant %s was onboarded under a different tracking_id than user %s",
+                merchant_id,
+                request.user.pk,
+            )
+            self.error = "PayPal account does not match the logged-in user"
+            return self.get_success_url()
         # Checklist: payments_receivable, confirmed email, oauth_third_party.
         currency = merchant_info.get("primary_currency", "USD")
         if not merchant_info.get("payments_receivable"):
@@ -872,8 +902,8 @@ class SquareConnectView(LoginRequiredMixin, View):
         if session_opened_by_app(request) or request.GET.get("return_to_app"):
             mark_session_opened_by_app(request.session)
         _stash_club_for_payment_oauth(request)
-        # The user's unsubscribe_link is the OAuth state.
-        state = request.user.userdata.unsubscribe_link
+        state = secrets.token_urlsafe(32)
+        request.session[SQUARE_OAUTH_STATE_SESSION_KEY] = state
 
         square_auth_url = (
             "https://connect.squareupsandbox.com/oauth2/authorize"
@@ -914,8 +944,8 @@ class SquareCallbackView(LoginRequiredMixin, View):
             messages.error(request, "Missing authorization code from Square")
             return redirect(reverse("square_seller"))
 
-        # Verify state matches user's unsubscribe_link for security
-        if state != request.user.userdata.unsubscribe_link:
+        expected_state = request.session.pop(SQUARE_OAUTH_STATE_SESSION_KEY, "")
+        if not expected_state or not secrets.compare_digest(state, expected_state):
             messages.error(request, "Invalid state parameter - please try again")
             return redirect(reverse("square_seller"))
 
@@ -1014,11 +1044,8 @@ class SquareCallbackView(LoginRequiredMixin, View):
 
             # Redirect to last auction or home
             if request.user.userdata.last_auction_created:
-                return self._done(
-                    request,
-                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True",
-                    seller,
-                )
+                _enable_payments_on_last_auction(request.user, "enable_square_payments")
+                return self._done(request, request.user.userdata.last_auction_created.get_absolute_url(), seller)
             return self._done(request, reverse("square_seller"), seller)
 
         except Exception as e:

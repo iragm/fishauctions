@@ -55,7 +55,7 @@ def _our_forms():
     for model, model_admin in django_admin.site._registry.items():
         owners = [(type(model_admin), lambda a=model_admin: a.get_form(request))]
         owners += [
-            (inline, lambda c=inline: c(model, django_admin.site).get_formset(request).form)
+            (inline, lambda c=inline, m=model: c(m, django_admin.site).get_formset(request).form)
             for inline in model_admin.inlines
         ]
         for owner, build in owners:

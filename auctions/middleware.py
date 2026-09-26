@@ -2,6 +2,69 @@
 Custom middleware for the auctions application.
 """
 
+from django.conf import settings
+
+
+class ContentSecurityPolicyMiddleware:
+    """Send ``settings.CONTENT_SECURITY_POLICY`` on every response that doesn't already have one.
+
+    See the setting for what it deliberately leaves out. A response that sets its own header keeps
+    it, so a page needing something looser can say so.
+
+    ``frame-ancestors`` comes off a response Django has marked ``xframe_options_exempt`` -- the five
+    club-website embeds in ``auctions/views/embeds.py``, which exist to be iframed on somebody
+    else's site. CSP wins over ``X-Frame-Options`` in every browser that reads both, so a blanket
+    ``frame-ancestors 'self'`` would silently undo the decorator those views already carry.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    @staticmethod
+    def _without_frame_ancestors(policy):
+        directives = [directive.strip() for directive in policy.split(";")]
+        return "; ".join(
+            directive for directive in directives if directive and not directive.lower().startswith("frame-ancestors")
+        )
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        policy = getattr(settings, "CONTENT_SECURITY_POLICY", "")
+        if policy and "Content-Security-Policy" not in response:
+            if getattr(response, "xframe_options_exempt", False):
+                policy = self._without_frame_ancestors(policy)
+            if policy:
+                response["Content-Security-Policy"] = policy
+        return response
+
+
+class ShortAnonymousSessionMiddleware:
+    """Expire a session that never signed in after ``ANONYMOUS_SESSION_COOKIE_AGE``.
+
+    ``SESSION_COOKIE_AGE`` is the signed-in lifetime. Anonymous sessions are the bulk of the table
+    -- ``/api/pageview/`` creates one per beacon -- and keeping those for a year would mean
+    ``clearsessions`` never reclaims anything.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        session = getattr(request, "session", None)
+        user = getattr(request, "user", None)
+        if session is None or getattr(user, "is_authenticated", False):
+            return response
+        # Only a session that already exists or is about to be written anyway. set_expiry() marks
+        # the session modified, so touching an untouched one would *create* a row -- the opposite of
+        # the point.
+        if not session.session_key and not session.modified:
+            return response
+        short = getattr(settings, "ANONYMOUS_SESSION_COOKIE_AGE", None)
+        if short and session.get_expiry_age() > short:
+            session.set_expiry(short)
+        return response
+
 
 class MobileAppMiddleware:
     """Flag requests coming from the native mobile app's WebView.

@@ -405,7 +405,12 @@ $(document).ready(function() {
         if (result.new) {
             redirectLink = result.link + "?next={% firstof request.path '/' %}";
             var distanceUnit = result.distance_unit || 'miles';
-            $('#auctionText').html("The " + result.name + " is happening now<br><small>" + result.distance + " " + distanceUnit + " from you</small>");
+            // The name is an auction title somebody typed: text, never markup.
+            $('#auctionText').empty().append(
+                document.createTextNode("The " + result.name + " is happening now"),
+                $('<br>'),
+                $('<small>').text(result.distance + " " + distanceUnit + " from you")
+            );
             $('#joinAuction').modal('show');
             ignoreAuction = result.slug;
         }

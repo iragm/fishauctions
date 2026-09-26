@@ -57,7 +57,7 @@ class ClubEventModelTests(TestCase):
 
     def test_the_subscribe_link_falls_back_to_our_own_feed(self):
         """The subscribe link falls back to our own webcal:// feed. Compared whole, not by prefix."""
-        path = reverse("club_events_ical", kwargs={"slug": self.club.slug})
+        path = reverse("club_events_ical", kwargs={"slug": self.club.url_key})
         self.assertEqual(self.club.calendar_subscribe_url("example.com"), f"webcal://example.com{path}")
         self.assertEqual(self.club.calendar_feed_url("example.com"), f"https://example.com{path}")
 
@@ -712,7 +712,7 @@ class ClubEventsEmbedTests(TestCase):
         self.member = User.objects.create_user(username="em_member", password="pw", email="em@example.com")
         ClubMember.objects.create(club=self.club, user=self.member)
         self.start = timezone.now() + datetime.timedelta(days=1)
-        self.url = reverse("club_events_embed", kwargs={"slug": self.club.slug})
+        self.url = reverse("club_events_embed", kwargs={"slug": self.club.url_key})
 
     def _events(self, count):
         for i in range(count):
@@ -1060,7 +1060,7 @@ class EventsEmbedUsageTrackingTests(TestCase):
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.member = User.objects.create_user(username="tr_member", password="pw", email="trm@example.com")
         ClubMember.objects.create(club=self.club, user=self.member)
-        self.url = reverse("club_events_embed", kwargs={"slug": self.club.slug})
+        self.url = reverse("club_events_embed", kwargs={"slug": self.club.url_key})
 
     def _views(self):
         self.club.refresh_from_db()
@@ -1185,7 +1185,10 @@ class CustomizeEventPromptTests(TestCase):
     def test_dismissing_it_sticks(self):
         self.client.force_login(self.admin)
         url = reverse("auction_main", kwargs={"slug": self.auction.slug})
-        self.client.get(url, {"dismissed_customize_event_banner": "true"})
+        self.client.post(
+            reverse("auction_page_action", kwargs={"slug": self.auction.slug}),
+            {"action": "dismiss_customize_event_banner"},
+        )
         self.auction.refresh_from_db()
         self.assertTrue(self.auction.dismissed_customize_event_banner)
         self.assertIsNone(self.auction.event_needing_custom_wording)
@@ -1314,6 +1317,22 @@ class GoogleCalendarSyncTests(TestCase):
         self.assertEqual(event.google_event_id, "g-1")
         self.assertFalse(event.needs_google_sync)
         self.assertEqual(request.call_args[0][1], "POST")
+
+    def test_an_edit_saved_during_the_push_stays_queued(self):
+        event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start)
+
+        def edited_meanwhile(*args, **kwargs):
+            other_copy = ClubEvent.objects.get(pk=event.pk)
+            other_copy.title = "Meeting, moved"
+            other_copy.needs_google_sync = True
+            other_copy.save()
+            return {"id": "g-1"}
+
+        with patch.object(gcal, "_request", side_effect=edited_meanwhile):
+            self.assertTrue(gcal.push_event(event))
+        event.refresh_from_db()
+        self.assertEqual(event.google_event_id, "g-1")
+        self.assertTrue(event.needs_google_sync)
 
     def test_pushing_an_existing_event_updates_rather_than_duplicating(self):
         event = ClubEvent.objects.create(club=self.club, title="Meeting", date_start=self.start, google_event_id="g-1")

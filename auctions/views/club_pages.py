@@ -6,6 +6,7 @@ below it are what a membership card's barcode resolves to.
 
 import logging
 import re
+import uuid
 from urllib.parse import quote_plus
 
 from django.conf import settings
@@ -52,9 +53,19 @@ from .base import (
     _last_n_month_starts,
     _process_invoice_membership_renewal,
     _ytd_month_starts,
+    safe_next_url,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_uuid(value):
+    """Whether ``value`` parses as a UUID: filtering a UUIDField on anything else raises."""
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True
 
 
 # Club management views
@@ -76,7 +87,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if self.request.user.is_authenticated:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
         requested_member_uuid = self.request.GET.get("user", "")
-        if requested_member_uuid:
+        if requested_member_uuid and _is_uuid(requested_member_uuid):
             member = ClubMember.objects.filter(club=self.club, uuid=requested_member_uuid, is_deleted=False).first()
         context["member"] = member
         # Only the owner -- not a holder of the UUID renewal link -- sees the Google Wallet save
@@ -214,7 +225,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         # Both of these subscribe, so the calendar keeps updating. There's deliberately no plain
         # link to the .ics: that only downloads a one-time import.
         absolute_ical_url = self.request.build_absolute_uri(
-            reverse("club_events_ical", kwargs={"slug": self.club.slug})
+            reverse("club_events_ical", kwargs={"slug": self.club.url_key})
         )
         context["club_ical_subscribe_url"] = re.sub(r"^https?://", "webcal://", absolute_ical_url)
         context["club_ical_google_url"] = "https://calendar.google.com/calendar/r?cid=" + quote_plus(absolute_ical_url)
@@ -247,14 +258,18 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 "permission_manage_auctions"
             )
             if can_manage_auctions:
-                auction = Auction.objects.filter(
-                    pk=request.POST.get("auction"), club=self.club, is_deleted=False
-                ).first()
+                auction_pk = str(request.POST.get("auction") or "")
+                auction = (
+                    Auction.objects.filter(pk=auction_pk, club=self.club, is_deleted=False).first()
+                    if auction_pk.isdigit()
+                    else None
+                )
                 if auction:
                     self.club.current_auction = auction
                     self.club.save(update_fields=["current_auction"])
                     messages.success(request, f"{auction} is now the current auction.")
-            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+            # The auction's own page posts here too, and asks to go back to it.
+            return redirect(safe_next_url(request, reverse("club_detail", kwargs={"slug": self.club.slug})))
         if action == "update":
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
             if member:
@@ -332,7 +347,7 @@ def _get_or_create_membership_invoice(club, member):
 
 def _membership_renewal_state(club, member):
     """Return (is_expired, expiring_soon, should_show_payment, can_pay)."""
-    today = timezone.now().date()
+    today = timezone.localdate()
     expiration = member.membership_expiration_date
     is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
     expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
@@ -515,7 +530,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
                 )
             )
         body = "".join(str(b) for b in bits)
-        return format_html('<div class="text-center py-3">{}</div>', mark_safe(body))
+        # S308: body is the join of format_html() results built just above.
+        return format_html('<div class="text-center py-3">{}</div>', mark_safe(body))  # noqa: S308
 
     def get_table_kwargs(self, **kwargs):
         kwargs = super().get_table_kwargs(**kwargs)

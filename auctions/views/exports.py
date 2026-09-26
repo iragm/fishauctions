@@ -4,7 +4,6 @@ Everything an auction admin downloads or emails, plus the two views that push pa
 club or a marketing list.
 """
 
-import csv
 import logging
 from datetime import timedelta
 from urllib.parse import quote_plus, unquote
@@ -52,9 +51,11 @@ from auctions.models import (
     LotHistory,
     PageView,
     add_price_info,
+    email_q,
     find_image,
 )
 from auctions.services import attachment_filename
+from auctions.services import csv_writer as safe_csv_writer
 from auctions.species_matching import (
     suggest_species,
 )
@@ -69,7 +70,7 @@ class MyWonLotCSV(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email))
+            Lot.objects.filter(Q(winner=request.user) | email_q("auctiontos_winner__email", request.user.email))
             .exclude(is_deleted=True)
             # auction as well as species: lot.scientific_name reads the auction's setting.
             .select_related("species", "auction")
@@ -78,7 +79,7 @@ class MyWonLotCSV(LoginRequiredMixin, View):
         response = HttpResponse(content_type="text/csv")
         domain = attachment_filename(current_site.domain.replace(".", "_"))
         response["Content-Disposition"] = f'attachment; filename="my_won_lots_from_{domain}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
         for lot in lots:
             writer.writerow(
@@ -99,7 +100,7 @@ class MyLotReportView(LoginRequiredMixin, View):
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email))
+            Lot.objects.filter(Q(user=request.user) | email_q("auctiontos_seller__email", request.user.email))
             .exclude(is_deleted=True)
             # auction too: lot.scientific_name reads the auction's setting.
             .select_related("bap_award__club_member__club", "species", "auction")
@@ -108,7 +109,7 @@ class MyLotReportView(LoginRequiredMixin, View):
         response = HttpResponse(content_type="text/csv")
         domain = attachment_filename(current_site.domain.replace(".", "_"))
         response["Content-Disposition"] = f'attachment; filename="my_lots_from_{domain}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(
             [
                 "Lot number",
@@ -230,7 +231,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         else:
             filename = self.auction.slug + "-report-" + query + "-" + end
         response["Content-Disposition"] = f'attachment; filename="{attachment_filename(filename)}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(
             [
                 "Join date",
@@ -581,7 +582,7 @@ class MarketingList(LoginRequiredMixin, View):
     def get(self, request):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         found = []
         writer.writerow(["Name", "Email", "Phone"])
         auctions = Auction.objects.filter(
@@ -611,7 +612,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         current_site = Site.objects.get_current()
         filename = attachment_filename(f"{self.auction.slug}-paypal-{chunk}")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         writer.writerow(
             [
                 "Recipient Email",
@@ -704,7 +705,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             query = unquote(query)
         filename = attachment_filename(f"{self.auction.slug}-{filename}")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
-        writer = csv.writer(response)
+        writer = safe_csv_writer(response)
         custom_dropdown_enabled = (
             self.auction.use_custom_dropdown_field != "disable"
             and bool(self.auction.custom_dropdown_name)
@@ -736,6 +737,9 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             first_row_fields.append(self.auction.custom_field_1_name)
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
+        custom_random_enabled = self.auction.use_custom_random_field and bool(self.auction.custom_random_name)
+        if custom_random_enabled:
+            first_row_fields.append(self.auction.custom_random_name)
         writer.writerow(first_row_fields)
         # Every row names the seller and winner and where each collects, reaching the AuctionTOS,
         # its pickup location and its auction.
@@ -779,6 +783,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 row.append(lot.custom_field_1)
             if custom_dropdown_enabled:
                 row.append(lot.custom_dropdown)
+            if custom_random_enabled:
+                row.append(lot.custom_random)
             writer.writerow(row)
         self.auction.create_history(
             applies_to="LOTS",
@@ -842,8 +848,8 @@ class FindImageIcon(APIView):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        name = request.POST["name"]
-        result = find_image(name, None, self.auction)
+        name = request.POST.get("name") or ""
+        result = find_image(name, None, self.auction) if name else None
         if result:
             return HttpResponse("image available")
         return HttpResponse("")
@@ -930,7 +936,7 @@ class AuctionChatDeleteUndelete(APIView, AuctionViewMixin):
         self.auction = self.history.lot.auction
         if not self.auction:
             raise Http404
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -959,13 +965,14 @@ class AuctionShowHighBidder(APIView, AuctionViewMixin):
         pk = kwargs.get("pk")
         self.lot = get_object_or_404(Lot, pk=pk, is_deleted=False, auction__isnull=False)
         self.auction = self.lot.auction
-        self.is_auction_admin
+        self.require_auction_admin()
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
         if not self.lot.max_bid_revealed_by:
             self.lot.max_bid_revealed_by = request.user
-            self.lot.save()
+            # The one column: bids change this row while it's open, and a full save put them back.
+            self.lot.save(update_fields=["max_bid_revealed_by"])
             LotHistory.objects.create(
                 lot=self.lot,
                 user=self.request.user,

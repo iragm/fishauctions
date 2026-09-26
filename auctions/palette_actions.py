@@ -50,7 +50,7 @@ from django.utils.http import urlencode
 from django.utils.text import Truncator
 
 from . import command_palette, palette_routes, source_code
-from .models import AuctionTOS, ClubMember, Lot
+from .models import AuctionTOS, ClubMember, DonationVendor, Lot, email_q
 from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
@@ -116,17 +116,21 @@ class Action:
     #: Whether repeating a call leaves the same state. ``None`` derives it (reads yes, writes no); set
     #: ``True`` on writes that set rather than append. See ``mcp.tools.idempotent``.
     idempotent: bool | None = None
-    #: MCP ``openWorldHint``: true only for ``read_source``, which fetches the public repository.
+    #: MCP ``openWorldHint``. True where the point of the tool is to reach somebody or something
+    #: outside this site: an email to an address we don't own, a Discord post, a push notification,
+    #: a Google Calendar, the public repository ``read_source`` reads. It is about the tool's
+    #: purpose, not its side effects -- half the writes here send a notification of some kind, and a
+    #: rule that counted those would mark the whole registry and tell a reader nothing.
+    #:
+    #: **A lot being publicly visible on this site is not open-world.** A bounded service somebody
+    #: is signed in to stays closed however public its pages are; that is the line a plugin
+    #: directory draws, and the same line ``add_lot`` and ``answer_question`` sit on the near side of.
     open_world: bool = False
-    #: Offered over ``/mcp/`` only, never in the palette's tool list. Permissions are never checked
-    #: differently, and ``go_to_page`` still reaches every page.
+    #: Offered over ``/mcp/`` only, never in the palette's tool list. Not set here: set from
+    #: :data:`MCP_ONLY_SKILLS`, which is where the reason for each one is written down.
     #:
-    #: Two reasons. The palette's answer is a sentence paid from this site's model budget, so a page
-    #: of text (``read_source``, ``club_api``) is wrong for it. And the excuses for many writes were
-    #: about mishearing speech, which doesn't apply to an agent sending a lot number it just read
-    #: (``remove_lot`` and below).
-    #:
-    #: Never a way to give an agent something a person may not do.
+    #: Permissions are never checked differently, ``go_to_page`` still reaches every page, and this
+    #: is never a way to give an agent something a person may not do.
     mcp_only: bool = False
 
     def accepts(self, key: str) -> bool:
@@ -190,9 +194,16 @@ def _decimal(params: dict[str, Any], key: str) -> Decimal | None:
     if value in (None, ""):
         return None
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
+    # "NaN" and "Infinity" parse, then raise on the first comparison a resolver makes.
+    return number if number.is_finite() else None
+
+
+def _query(request) -> str:
+    """What the person actually said, when a resolver needs to read a name out of it. "" for an agent."""
+    return str(getattr(request, "palette_query", "") or "")
 
 
 def _page(request) -> dict[str, Any]:
@@ -233,16 +244,10 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None, ig
     """
     joined = command_palette._joined_auctions(user)
     if hint:
-        match = joined.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
-        if not match:
-            match = joined.filter(title__icontains=hint).first()
+        match = _auction_matching(joined, hint)
         if not match:
             # Promoted auctions are public; writes still check admin rights.
-            public = command_palette._visible_auctions(user).filter(promote_this_auction=True)
-            match = (
-                public.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
-                or public.filter(title__icontains=hint).first()
-            )
+            match = _auction_matching(command_palette._visible_auctions(user).filter(promote_this_auction=True), hint)
         if not match:
             return None, (
                 f"I couldn't find an auction called “{hint}”. It has to be one you run, one "
@@ -288,6 +293,56 @@ def resolve_auction(user, hint: str = "", page: dict[str, Any] | None = None, ig
     return auction, None
 
 
+def _auction_hints(hint: str) -> list[str]:
+    """The spellings of one hint worth trying, most literal first.
+
+    A model asked for "the fall auction" sends back ``fall_auction`` about as often as ``fall
+    auction``, and neither the slug nor the title contains an underscore, so the auction was simply
+    not found and the next round landed on whichever one was the default.
+    """
+    hints = [hint]
+    loosened = re.sub(r"[_-]+", " ", hint).strip()
+    without_article = re.sub(r"^(the|my|our)\s+", "", loosened, flags=re.IGNORECASE).strip()
+    for candidate in (loosened, without_article):
+        if candidate and candidate not in hints:
+            hints.append(candidate)
+    return hints
+
+
+#: Hints that name nothing on their own. Stripping the article off "the auction" leaves a word every
+#: auction on the site contains, and matching it loosely used to return whichever one came first --
+#: where saying nothing at all is a clear "I couldn't find an auction called that".
+_GENERIC_HINTS = frozenset("auction auctions sale sales swap show club event my our the".split())
+
+#: Shortest hint worth matching loosely. Two letters inside a title is a coincidence, not a name.
+MIN_FUZZY_HINT = 3
+
+
+def _worth_matching_loosely(candidate: str) -> bool:
+    """Whether a hint says enough to be matched against part of a title rather than the whole of one."""
+    return len(candidate) >= MIN_FUZZY_HINT and candidate.lower() not in _GENERIC_HINTS
+
+
+def _auction_matching(queryset, hint: str):
+    """The first auction in *queryset* any spelling of *hint* names, or ``None``.
+
+    Every spelling is tried exactly first, so a real auction called "Auction" is still reachable by
+    name; only the loose pass is fussy about what it will accept.
+    """
+    candidates = _auction_hints(hint)
+    for candidate in candidates:
+        match = queryset.filter(Q(slug=candidate) | Q(title__iexact=candidate)).first()
+        if match:
+            return match
+    for candidate in candidates:
+        if not _worth_matching_loosely(candidate):
+            continue
+        match = queryset.filter(title__icontains=candidate).first()
+        if match:
+            return match
+    return None
+
+
 def remember_auction(request, auction) -> None:
     """Record ``last_auction_used`` whenever an action resolves an auction, so agents (with no page) keep
     their context between commands.
@@ -302,15 +357,126 @@ def remember_auction(request, auction) -> None:
     userdata.save(update_fields=["last_auction_used"])
 
 
+#: Title words the whole site is named by, so spelling one out names no particular auction.
+_TITLE_STOPWORDS = frozenset("auction auctions sale sales swap show event the a an of and for at".split())
+
+#: Auction nouns a lone distinguishing word has to sit beside before it counts as a name: "the blue
+#: auction" names the Blue auction and "add a lot of blue shrimp" names nothing.
+_TITLE_ANCHORS = frozenset("auction auctions sale sales swap show event".split())
+
+#: Distinguishing words a title needs before scattered mentions of them add up to a name.
+MIN_TITLE_WORDS_NAMED = 2
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower())
+
+
+def _says_in_a_row(asked: list[str], title: list[str]) -> bool:
+    """Whether *asked* contains *title* as a run of consecutive whole words."""
+    if not title or len(title) > len(asked):
+        return False
+    return any(asked[start : start + len(title)] == title for start in range(len(asked) - len(title) + 1))
+
+
+def _beside_an_anchor(word: str, asked: list[str]) -> bool:
+    """Whether *word* appears in *asked* next to an auction noun."""
+    for index, spoken in enumerate(asked):
+        if spoken == word and any(
+            neighbour in _TITLE_ANCHORS for neighbour in asked[max(0, index - 1) : index] + asked[index + 1 : index + 2]
+        ):
+            return True
+    return False
+
+
+def auction_named_in(user, sentence: str):
+    """The auction whose own title the sentence spells out, or ``None``.
+
+    The model drops the auction parameter for "when does the fall auction start?" often enough to
+    matter, and the answer that comes back is about whichever auction was the default -- as confident
+    as the right one. The name is right there in what they said, so read it off.
+
+    Whole words only, and one of three ways: the title said straight through ("the spring online
+    auction"), every distinguishing word of it said somewhere, or -- for a title with only one word
+    that isn't what every auction is called -- that word said next to an auction noun. So "add a lot
+    of blue shrimp" does not find an auction called Blue, "did prices fall this year" does not find
+    the Fall Auction, and "the blue auction" finds Blue. The longest title that fits wins, so "Fall
+    Auction 2026" beats "Fall Auction" when both are spelled out.
+
+    Scoped to :func:`command_palette._own_auctions` rather than ``_joined_auctions``: a superuser is
+    handed every auction on the site, and reading a name out of a sentence against all of them makes
+    another club's auction a candidate for any word this person happened to say.
+    """
+    asked = _words(sentence)
+    if not asked:
+        return None
+    spoken = set(asked)
+    best = None
+    best_strength = 0
+    for auction in command_palette._own_auctions(user).order_by("-date_start")[:LIST_LIMIT]:
+        title = _words(auction.title)
+        if not title or len(title) <= best_strength:
+            continue
+        distinguishing = [word for word in title if word not in _TITLE_STOPWORDS]
+        if not distinguishing:
+            continue
+        named = (
+            (len(title) > 1 and _says_in_a_row(asked, title))
+            or (len(distinguishing) >= MIN_TITLE_WORDS_NAMED and spoken.issuperset(distinguishing))
+            or (len(distinguishing) == 1 and _beside_an_anchor(distinguishing[0], asked))
+        )
+        if named:
+            best, best_strength = auction, len(title)
+    return best
+
+
+def _named_or_resolved(request, hint: str, ignore_current: bool = False):
+    """``(auction, problem)``, reading the name out of what they said when no hint was passed.
+
+    The one place the sentence is consulted, so the action, the label on its confirmation card and
+    the run after that card all decide the same way. Nothing is remembered here -- see
+    :func:`_auction_or_problem` -- because this also answers questions nobody has agreed to yet.
+    """
+    if not hint:
+        # They named one and the model didn't pass it on.
+        named = auction_named_in(request.user, _query(request))
+        if named is not None:
+            # For the analytics page: which answers came from reading the sentence rather than from
+            # a parameter is the only way to tell whether doing so helps.
+            request.palette_read_the_query = True
+            return named, None
+    return resolve_auction(request.user, hint, _page(request), ignore_current=ignore_current)
+
+
 def _auction_or_problem(request, params: dict[str, Any], key: str = "auction", ignore_current: bool = False):
     """The auction an action acts on, or a result to return. One entry point, so the ambiguity question
     and ``remember_auction`` happen everywhere.
     """
-    auction, problem = resolve_auction(request.user, _str(params, key), _page(request), ignore_current=ignore_current)
+    auction, problem = _named_or_resolved(request, _str(params, key), ignore_current=ignore_current)
     if problem is not None:
         return None, (problem if isinstance(problem, dict) else _error(problem))
     remember_auction(request, auction)
     return auction, None
+
+
+def pin_the_subject(request, action: Action, params: dict[str, Any]) -> dict[str, Any]:
+    """*params* with the auction this command is about written into them.
+
+    A confirmation card is built in one request and confirmed in another, and everything that decides
+    which auction -- the page they were on, what is running, the sentence they typed -- can differ
+    between the two. The card said Fall Auction and the write landed on whichever auction the next
+    request resolved to, with nothing on screen to say so. So whatever *this* request decided is
+    written down instead of worked out again.
+
+    ``run_action`` still re-resolves and re-checks every permission on the way through; this only
+    removes an ambiguity it would otherwise settle differently.
+    """
+    if not action.accepts("auction") or _str(params, "auction"):
+        return params
+    auction, problem = _named_or_resolved(request, "")
+    if problem is not None or auction is None:
+        return params
+    return {**params, "auction": auction.slug}
 
 
 def resolve_person(user, auction, hint: str):
@@ -378,7 +544,7 @@ def _club_member_arriving(auction, hint: str):
 
 
 def _own_tos(user, auction):
-    return AuctionTOS.objects.filter(auction=auction).filter(Q(user=user) | Q(email=user.email)).first()
+    return AuctionTOS.objects.filter(auction=auction).filter(Q(user=user) | email_q("email", user.email)).first()
 
 
 def _is_auction_admin(user, auction) -> bool:
@@ -451,6 +617,33 @@ def _slugs(items) -> list[str]:
     return found
 
 
+def _sentence(*parts: Any) -> str:
+    """Join the parts that aren't empty into one line: "A — b, c. d"."""
+    return " ".join(str(part).strip() for part in parts if part)
+
+
+def _said_plainly(pairs: list[tuple[str, Any]]) -> str:
+    """ "2 lots, 31 people, 1 seller" from (label, value) pairs, dropping the empty ones.
+
+    A label ending in s loses it for a count of one, which covers lots/people/bids/members and leaves
+    "sold", "won" and "checked in" alone.
+    """
+    said = []
+    for label, value in pairs:
+        if not value:
+            continue
+        said.append(f"{value} {label[:-1] if value == 1 and label.endswith('s') else label}")
+    return ", ".join(said)
+
+
+def _money(value: Any) -> str:
+    """A money figure as somebody would write it. ``str(Decimal)`` gave "$0E-8"."""
+    try:
+        return f"{Decimal(str(value)).quantize(Decimal('0.01')):,}"
+    except (InvalidOperation, TypeError, ValueError):
+        return str(value)
+
+
 def _lot_echo(lot) -> dict[str, Any]:
     """What a tool that acted on one lot says it acted on: number, name, auction, link, so a wrong lot is
     noticed. The link is ``lot_link`` (``/auctions/<auction>/lots/<number>/``), the label's address.
@@ -473,7 +666,18 @@ def _auction_followup(auction) -> dict[str, str]:
 
 def _lot_label_followup(lot) -> dict[str, str]:
     """A "print this lot's label" followup."""
-    return {"label": f"Print label for {lot.lot_name}", "url": reverse("single_lot_label", kwargs={"pk": lot.pk})}
+    return {
+        "label": f"Print label for {untrusted_short(lot.lot_name)}",
+        "url": reverse("single_lot_label", kwargs={"pk": lot.pk}),
+    }
+
+
+def _lot_history(request, lot, what: str) -> None:
+    """One ``LOTS`` history line on the lot's auction naming the surface, as ``edit_lot`` writes one. A
+    lot in no auction has no history to write to.
+    """
+    if lot.auction:
+        lot.auction.create_history(applies_to="LOTS", action=f"{what} {via(request)}", user=request.user)
 
 
 def local_time(auction, value) -> str | None:
@@ -725,8 +929,11 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
     if buy_now is not None:
         data["buy_now_price"] = buy_now
     for key in ("donation", "i_bred_this_fish", "custom_checkbox"):
-        if key in params:
-            data[key] = bool(params.get(key))
+        if params.get(key) not in (None, ""):
+            flag = _flag(params, key)
+            if flag is None:
+                return _need(f"Yes or no for the {dict(_LOT_FIELDS)[key]} on {untrusted_short(lot_name)}?")
+            data[key] = flag
     for key in ("custom_field_1", "custom_dropdown"):
         if params.get(key):
             data[key] = _str(params, key)
@@ -762,7 +969,7 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
             "from_lot": untrusted_short(previous.lot_name),
             "copied": what,
             "why": (
-                f"There was already a lot called “{previous.lot_name}” that {whose}, so its {what} "
+                f"There was already a lot called “{untrusted_short(previous.lot_name)}” that {whose}, so its {what} "
                 "were copied onto this one. Edit the lot to change that."
             ),
         }
@@ -940,6 +1147,64 @@ def add_lots(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+#: What a spoken lot maps to on the lot form. ``LotCreateView.get_initial`` pre-fills any of its own
+#: fields from the query string, so the page arrives filled in and nothing has been written yet.
+_LOT_PREFILL: dict[str, str] = {
+    "name": "lot_name",
+    "quantity": "quantity",
+    "reserve_price": "reserve_price",
+    "buy_now_price": "buy_now_price",
+    "donation": "donation",
+    "i_bred_this_fish": "i_bred_this_fish",
+    "description": "summernote_description",
+}
+
+
+def add_a_lot_via_webform(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Open the page for adding a lot, with whatever the user described already filled in. Never writes.
+
+    The palette's half of a pair: this one and ``add_lot``/``add_lots`` (both ``mcp_only``) are the
+    same skill for two different callers, and no caller is ever offered both. The difference is who is looking: the form does the species matching, the auction's own field
+    rules and the validation, and the seller sees exactly what they are about to create before any of
+    it is saved -- none of which a countdown card can do. It also ends the add_lot/add_lots split,
+    which the model could never pick between: an auction with bulk adding on gets the bulk page, which
+    is the right answer for one lot and for ten.
+    """
+    auction, problem = resolve_auction(request.user, _str(params, "auction"), _page(request))
+    if isinstance(problem, dict):
+        # Several auctions running and nothing to prefer: a question with the names in it.
+        return problem
+    if auction:
+        remember_auction(request, auction)
+    # A string problem just means we can't tell which auction; the page has its own picker.
+    if auction and command_palette._use_bulk_add_lots(auction):
+        return _ok(
+            f"Opening the bulk lot page for {auction.title}.",
+            url=reverse("bulk_add_lots_for_myself", kwargs={"slug": auction.slug}),
+            auction=auction.slug,
+            **_about(auction=auction),
+        )
+    prefill = {}
+    for spoken, form_field in _LOT_PREFILL.items():
+        value = params.get(spoken)
+        if isinstance(value, bool):
+            prefill[form_field] = "true" if value else "false"
+        elif value not in (None, ""):
+            prefill[form_field] = str(value)[:MAX_SPOKEN_DESCRIPTION_CHARS]
+    if auction:
+        prefill["auction"] = auction.slug
+    url = reverse("new_lot")
+    if prefill:
+        url += "?" + urlencode(prefill)
+    named = _str(params, "name")
+    where = f" in {auction.title}" if auction else ""
+    return _ok(
+        f"Opening the new lot page{where}" + (f", filled in for {tidy_lot_name(named)}." if named else "."),
+        url=url,
+        **({"auction": auction.slug, **_about(auction=auction)} if auction else {}),
+    )
+
+
 def _category_pk(lot_name: str = ""):
     """The category for a lot of this name via ``guess_category``, else Uncategorized. Category drives
     browsing, notifications and BAP eligibility.
@@ -1007,7 +1272,7 @@ def set_lot_winner(request, params: dict[str, Any]) -> dict[str, Any]:
     view.kwargs = {}
     # ignore_errors is the page's "Ignore errors and save": the overridden checks catch a clerk and
     # auctioneer disagreeing, which needs a decision, not a dead end.
-    forced = bool(params.get("ignore_errors"))
+    forced = bool(_flag(params, "ignore_errors"))
     action = "force_save" if forced else "save"
 
     lot, lot_error = view.validate_lot(_str(params, "lot"), action)
@@ -1128,7 +1393,7 @@ def draw_door_prize(request, params: dict[str, Any]) -> dict[str, Any]:
             return _error(f"Nobody has checked in to {auction.title} yet, so there's no one to draw from.")
         return _error(f"Everyone who's checked in to {auction.title} has already won a door prize.")
     return _ok(
-        f"{winner.name} wins! (bidder {winner.bidder_number})",
+        f"{untrusted_short(winner.name)} wins! (bidder {winner.bidder_number})",
         bidder_number=winner.bidder_number,
         auction=auction.slug,
         followups=[
@@ -1176,7 +1441,7 @@ def check_in(request, params: dict[str, Any]) -> dict[str, Any]:
         bidder_number=_str(params, "bidder_number"),
         note=via(request),
     )
-    who = tos.name or f"bidder {tos.bidder_number}"
+    who = untrusted_short(tos.name) or f"bidder {tos.bidder_number}"
     if already:
         return _ok(
             f"{who} was already checked in to {auction.title}.",
@@ -1206,7 +1471,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
     """Un-check-in one person; the reversal of ``check_in``.
 
     **One person per call; no "everybody" switch.** The agent lists people and clears them one at a
-    time, which keeps the prompt-injection bound: no tool changes more than one row.
+    time, which keeps the prompt-injection bound: no tool writes over a filter.
     """
     from .views import user_can_add_edit_people
 
@@ -1220,7 +1485,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
     tos, problem = resolve_person(user, auction, _str(params, "person") or _str(params, "bidder"))
     if problem:
         return problem
-    who = tos.name or f"bidder {tos.bidder_number}"
+    who = untrusted_short(tos.name) or f"bidder {tos.bidder_number}"
     if not tos.checked_in:
         return _ok(f"{who} wasn't checked in to {auction.title} anyway.", auction=auction.slug)
     undo_check_in_auctiontos(tos, acting_user=user, note=via(request))
@@ -1228,7 +1493,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
         f"{who} is no longer checked in to {auction.title}.",
         auction=auction.slug,
         bidder_number=tos.bidder_number,
-        person=tos.name,
+        person=untrusted_short(tos.name),
     )
 
 
@@ -1355,11 +1620,32 @@ _PERSON_ADMIN_FIELDS = (
 
 _PERSON_FIELDS = _CONTACT_FIELDS + _PERSON_ADMIN_FIELDS
 
+#: Fields ``update_person``'s undo may put back to blank, through the unadvertised ``clear_fields``: a
+#: blank parameter means "not said", so an undo restoring an empty email can't send one.
+_PERSON_CLEARABLE = frozenset({"email", "phone_number", "address", "memo"})
+
+
+def _cleared_fields(params: dict[str, Any], allowed) -> list[str]:
+    """The ``clear_fields`` an undo sent, limited to ``allowed``."""
+    raw = params.get("clear_fields") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list | tuple):
+        return []
+    return [str(name) for name in raw if str(name) in allowed]
+
+
+def _flag(params: dict[str, Any], key: str) -> bool | None:
+    """A yes/no parameter, read as ``update_preferences`` reads one: ``bool("false")`` is True."""
+    return _preference_boolean(params.get(key))
+
 
 def _change_phrase(label: str, value: Any) -> str:
     """How one change reads back ("bidding on", "email to bob@example.com")."""
     if isinstance(value, bool):
         return f"{label} {'on' if value else 'off'}"
+    if value in (None, ""):
+        return f"{label} to blank"
     return f"{label} to {value}"
 
 
@@ -1419,10 +1705,17 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
     new_name = _str(params, "new_name")
     if new_name:
         changes["name"] = new_name
+    for key in _cleared_fields(params, _PERSON_CLEARABLE):
+        changes.setdefault(key, "")
     for key in ("bidding_allowed", "selling_allowed"):
-        # Booleans: sent-and-false is a real change.
-        if key in params:
-            changes[key] = bool(params[key])
+        # Booleans: sent-and-false is a real change; something that isn't yes or no is not.
+        if params.get(key) not in (None, ""):
+            flag = _flag(params, key)
+            if flag is None:
+                return _need(
+                    f"Should {untrusted_short(tos.name)} be allowed to {'bid' if key == 'bidding_allowed' else 'sell'}?"
+                )
+            changes[key] = flag
     if not changes:
         return _need(
             f"What should I change about {tos.name}? I can set their email, phone, address, "
@@ -1486,8 +1779,13 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
         "auction": auction.slug,
     }
     for key, value in previous.items():
+        if value in (None, ""):
+            # A blank parameter is "not said"; say "clear it".
+            if key in _PERSON_CLEARABLE:
+                undo_params.setdefault("clear_fields", []).append(key)
+            continue
         # ``person`` finds; ``new_name`` renames.
-        undo_params["new_name" if key == "name" else key] = "" if value is None else value
+        undo_params["new_name" if key == "name" else key] = value
     return _ok(
         f"Set {tos.name}'s {told}.",
         followups=[{"label": f"{tos.name}'s details", "url": _edit_person_url(auction, tos)}],
@@ -1573,7 +1871,73 @@ def find_person(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def my_context(request, params: dict[str, Any]) -> dict[str, Any]:
     """Who the user is and what they're working on: clubs, auctions, role."""
-    return user_context(request.user, _page(request))
+    data = user_context(request.user, _page(request))
+    running = data.get("auctions") or []
+    working_on = (data.get("last_auction") or {}).get("title")
+    data["summary"] = _sentence(
+        f"You're working on {working_on}." if working_on else "",
+        (
+            f"{len(running)} auction{'s' if len(running) != 1 else ''} running: "
+            + ", ".join(row["title"] for row in running[:4])
+            + "."
+            if running
+            else "Nothing of yours is running right now."
+        ),
+        ("You help run " + ", ".join(data["admin_clubs"][:3]) + ".") if data.get("admin_clubs") else "",
+    )
+    return data
+
+
+def my_bidder_number(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The signed-in user's own bidder number in one auction, and whether they're checked in yet.
+
+    ``describe_person`` already answers this about anybody, and is auction-admin only -- so the
+    person who most needs the number, standing at the door about to bid with it, is exactly the one
+    it refuses. This is about the caller and nobody else, which is what lets it be open to everybody.
+    """
+    auction, problem = _auction_or_problem(request, params)
+    if problem is not None:
+        return problem
+    tos = _own_tos(request.user, auction)
+    if tos is None:
+        return {
+            "found": False,
+            "auction": auction.title,
+            "summary": f"You haven't joined {auction.title}, so you don't have a bidder number there yet.",
+            # Its own page, which is where joining happens; ``join_auction`` is the tool for doing it.
+            "followups": [_auction_followup(auction)],
+            **_about(auction=auction),
+        }
+    if not tos.bidder_number:
+        return {
+            "found": True,
+            "auction": auction.title,
+            "bidder_number": "",
+            "summary": (
+                f"You're in {auction.title}, but you haven't been given a bidder number yet. "
+                "Whoever runs the auction sets it, usually at check-in."
+            ),
+            **_about(auction=auction),
+        }
+    checked_in = ""
+    if auction.use_check_in_mode:
+        checked_in = "You're checked in." if tos.checked_in else "You haven't checked in yet."
+    return _ok(
+        _sentence(
+            f"You're bidder {tos.bidder_number} at {auction.title}.",
+            checked_in,
+            f"Pickup at {tos.pickup_location.name}." if tos.pickup_location else "",
+        ),
+        found=True,
+        bidder_number=tos.bidder_number,
+        auction=auction.title,
+        checked_in=bool(tos.checked_in),
+        # An auction that doesn't use check-in has nobody to check you in, so the flag above means
+        # nothing there and saying so is better than a "no" that reads like a problem.
+        uses_check_in=auction.use_check_in_mode,
+        pickup_location=tos.pickup_location.name if tos.pickup_location else "",
+        **_about(auction=auction, person=tos),
+    )
 
 
 def lot_fields_in_use(auction) -> dict[str, Any]:
@@ -1608,6 +1972,11 @@ def lot_fields_in_use(auction) -> dict[str, Any]:
             "label": auction.custom_dropdown_name or "Category",
             "required": auction.use_custom_dropdown_field == "required",
             "options": options,
+        }
+    if auction.use_custom_random_field and auction.custom_random_name:
+        fields["custom_random"] = {
+            "label": auction.custom_random_name,
+            "means": "dealt to each lot at random; nobody sets it",
         }
     if auction.use_reference_link:
         # Short: this rides on every describe_auction under a 5000-character budget. Advice is in the
@@ -2049,15 +2418,17 @@ def update_preferences(request, params: dict[str, Any]) -> dict[str, Any]:
         return _need(f"What should “{field.verbose_name or field_name}” be?")
     else:
         data[field_name] = raw
-    was = getattr(userdata, field_name)
+    stored_was = getattr(userdata, field_name)
+    # Said and undone in the form's units: a km user's radius is stored in miles.
+    was = unbound.initial.get(field_name, stored_was)
 
     form = form_class(user, data, instance=userdata)
     if not form.is_valid():
         return _form_problem(form)
     form.save()
     userdata.refresh_from_db()
-    now = getattr(userdata, field_name)
-    if was == now:
+    now = form_class(user, instance=userdata).initial.get(field_name, getattr(userdata, field_name))
+    if stored_was == getattr(userdata, field_name):
         return _ok(f"“{_preference_label(field)}” was already {_preference_phrase(field, now)}.")
     return _ok(
         f"Set “{_preference_label(field)}” to {_preference_phrase(field, now)}.",
@@ -2626,7 +2997,7 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
 
     user = request.user
     hint = _str(params, "auction") or _str(params, "name")
-    auction, problem = _resolve_described_auction(user, hint, _page(request))
+    auction, problem = _resolve_described_auction(request, hint)
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -2983,7 +3354,13 @@ def _lots_matching(lots, query: str) -> list:
     by_number = list(lots.filter(number_q).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
     if by_number:
         return by_number
-    return list(lots.filter(lot_name__icontains=query).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
+    if number.isdigit():
+        # A lot number that isn't there (deleted, say) is a miss, not "OptiMax 1150" and "PR11509";
+        # only a name with the number as a word of its own ("150 gallon tank") is worth offering.
+        name_q = Q(lot_name__iregex=rf"\b{number}\b")
+    else:
+        name_q = Q(lot_name__icontains=query)
+    return list(lots.filter(name_q).select_related("auction")[: AMBIGUOUS_LIMIT + 1])
 
 
 def _lots_matching_here_first(request, lots, query: str):
@@ -3139,20 +3516,28 @@ POINTS_NOT_DESCRIBED: dict[str, str] = {
 }
 
 
-def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None):
-    """An auction to describe: a named one they can see (``_visible_auctions``), else the one on their page
-    (unscoped: it's on their screen), else ``resolve_auction``'s order.
+def _resolve_described_auction(request, hint: str):
+    """An auction to describe: a named one they can see (``_visible_auctions``), else the one named in
+    what they said, else the one on their page (unscoped: it's on their screen), else
+    ``resolve_auction``'s order.
+
+    Takes the request rather than its pieces so the sentence, the page and the "read out of the
+    sentence" flag all come from the one place :func:`_named_or_resolved` gets them.
     """
     from .models import Auction
 
+    user = request.user
+    page = _page(request)
     visible = command_palette._visible_auctions(user)
     if hint:
-        match = visible.filter(Q(slug=hint) | Q(title__iexact=hint)).first()
-        if not match:
-            match = visible.filter(title__icontains=hint).first()
+        match = _auction_matching(visible, hint)
         if not match:
             return None, f"I couldn't find an auction called “{hint}”."
         return match, None
+    named = auction_named_in(user, _query(request))
+    if named is not None:
+        request.palette_read_the_query = True
+        return named, None
     page_slug = (page or {}).get("auction")
     if page_slug:
         # Not re-scoped: every field is on the page they're on.
@@ -3187,7 +3572,7 @@ def _resolve_described_auction(user, hint: str, page: dict[str, Any] | None):
 def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     """One auction: dates, rules, fees, lot fields, and admin stats for admins."""
     user = request.user
-    auction, problem = _resolve_described_auction(user, _str(params, "auction") or _str(params, "name"), _page(request))
+    auction, problem = _resolve_described_auction(request, _str(params, "auction") or _str(params, "name"))
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
@@ -3214,11 +3599,10 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         # Fees before rules: truncation takes prose, not numbers.
         "settings": _settings_block(auction, _AUCTION_SETTINGS),
     }
-    if is_admin or auction.make_stats_public:
-        lots = Lot.objects.filter(auction=auction, is_deleted=False)
-        data["participants"] = AuctionTOS.objects.filter(auction=auction).count()
-        data["lots"] = lots.count()
-        data["lots_sold"] = lots.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count()
+    lots = Lot.objects.filter(auction=auction, is_deleted=False)
+    data["participants"] = AuctionTOS.objects.filter(auction=auction).count()
+    data["lots"] = lots.count()
+    data["lots_sold"] = lots.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count()
     if is_admin:
         # Not cached_stats: chart data that answers nothing and ate the budget.
         data["_admin"] = {
@@ -3227,7 +3611,31 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     # Rules as plain text, truncated.
     data["rules"] = untrusted(plain_text(auction.summernote_description, limit=RULES_LIMIT))
     data["url"] = auction.get_absolute_url()
-    return {"found": True, "auction": data, **_about(auction=auction)}
+    # Pickup locations are strings for some auctions and rows for others.
+    where = ", ".join(
+        str(location.get("name", "") if isinstance(location, dict) else location)
+        for location in (data.get("pickup_locations") or [])
+    ).strip(", ")
+    summary = _sentence(
+        f"{auction.title} —",
+        ("online" if auction.is_online else "in person") + (f", run by {auction.club.name}." if auction.club else "."),
+        f"Starts {data['starts']}." if data.get("starts") else "",
+        (
+            f"Lot submission is open until {data['lot_submission_closes']}."
+            if data.get("lot_submission_open_now") and data.get("lot_submission_closes")
+            else (
+                "Lot submission has closed." if data.get("starts") and not data.get("lot_submission_open_now") else ""
+            )
+        ),
+        f"Pickup at {where}." if where else "",
+        # The counts are what "how many lots", "how big is it" and "how many people" are asking.
+        _said_plainly(
+            [("lots", data.get("lots")), ("sold", data.get("lots_sold")), ("people", data.get("participants"))]
+        )
+        + ".",
+        ("This auction is over." if data.get("over") else ""),
+    )
+    return {"found": True, "summary": summary, "auction": data, **_about(auction=auction)}
 
 
 def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -3283,7 +3691,17 @@ def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
             "members_with_an_account": members.filter(user__isnull=False).count(),
             "points_last_recalculated": club.last_bap_recalculation,
         }
-    return {"found": True, "club": data, **_about(club=club)}
+    summary = _sentence(
+        f"{club.name}.",
+        (
+            f"Membership is ${_money(club.membership_annual_fee)} a year."
+            if club.enable_membership and club.membership_annual_fee
+            else ""
+        ),
+        ("You're a member." if membership else ("You're not a member." if club.enable_membership else "")),
+        f"Contact: {club.contact_email}." if club.contact_email else "",
+    )
+    return {"found": True, "summary": summary, "club": data, **_about(club=club)}
 
 
 def _club_events(club, limit: int = 5, user=None) -> list[dict[str, Any]]:
@@ -3338,6 +3756,11 @@ def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         "images": [_image_echo(image) for image in lot.images],
         "yours": bool(lot.user_id and lot.user_id == user.pk),
     }
+    if lot.custom_random_label:
+        data["assigned_at_random"] = {
+            "field": untrusted_short(lot.auction.custom_random_name),
+            "value": untrusted_short(lot.custom_random_label),
+        }
     data.update(_lot_live_state(lot, user))
     data.update(_lot_whereabouts(lot, user))
     if is_admin:
@@ -3347,7 +3770,24 @@ def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             "seller_bidder_number": seller.bidder_number if seller else None,
             "winner_bidder_number": lot.auctiontos_winner.bidder_number if lot.auctiontos_winner else None,
         }
-    return {"found": True, "lot": data, **_about(lot=lot)}
+    summary = _sentence(
+        f"Lot {data['lot_number']} {data['name']} in {data['auction']} —",
+        (
+            f"sold for ${_money(data['winning_price'])}."
+            if data.get("sold")
+            else _said_plainly([("bids", data.get("bids"))])
+            + (f" at ${_money(data['current_price'])}." if data.get("bids") else "")
+        )
+        or (f"${_money(data['reserve_price'])} minimum, no bids yet." if data.get("reserve_price") else "No bids yet."),
+        f"{data['quantity']} in the lot." if (data.get("quantity") or 0) > 1 else "",
+        f"Bidding closes {data['bidding_closes']}." if data.get("bidding_closes") and not data.get("sold") else "",
+        (
+            f"{data['assigned_at_random']['field']}: {data['assigned_at_random']['value']}."
+            if lot.custom_random_label
+            else ""
+        ),
+    )
+    return {"found": True, "summary": summary, "lot": data, **_about(lot=lot)}
 
 
 def _lot_live_state(lot, user) -> dict[str, Any]:
@@ -3418,8 +3858,18 @@ def describe_person(request, params: dict[str, Any]) -> dict[str, Any]:
     lots = Lot.objects.filter(auctiontos_seller=tos, is_deleted=False)
     won = Lot.objects.filter(auctiontos_winner=tos, is_deleted=False)
     invoice = tos.invoice
+    summary = _sentence(
+        f"{untrusted_short(tos.name)}" + (f", bidder {tos.bidder_number}," if tos.bidder_number else ""),
+        f"in {auction.title}.",
+        "Checked in." if tos.checked_in else "",
+        _said_plainly([("lots brought", lots.count()), ("lots won", won.count())]) + "."
+        if lots.count() or won.count()
+        else "",
+        (f"Invoice: {invoice.get_status_display().lower()}, ${_money(invoice.rounded_net)}." if invoice else ""),
+    )
     return {
         "found": True,
+        "summary": summary,
         "person": {
             "name": untrusted_short(tos.name),
             "bidder_number": tos.bidder_number,
@@ -3490,24 +3940,43 @@ def _time_left(auction) -> dict[str, Any]:
     return data
 
 
+def _time_phrase(data: dict[str, Any]) -> str:
+    """ "closes in 2 hours" / "already closed", from the ``time`` block :func:`_time_left` built."""
+    time = data.get("time") or {}
+    left = time.get("time_left")
+    if not left:
+        return ""
+    return "already closed." if "already" in str(left) else f"{left} left."
+
+
+def _numbers_summary(auction, data: dict[str, Any]) -> str:
+    """The counts anyone allowed to see them is asking for."""
+    return _sentence(
+        f"{auction.title}:",
+        _said_plainly(
+            [
+                ("lots", data.get("lots_total")),
+                ("sold", data.get("lots_sold")),
+                ("people", data.get("participants")),
+                ("checked in", data.get("checked_in")),
+            ]
+        )
+        + ".",
+        _time_phrase(data),
+    )
+
+
 def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     """Running totals for an auction ("how many sold?", "what's the gross?"), from the auction's own
-    properties. Counts for admins or public-stats auctions; money for admins only.
+    properties. Counts for anyone; money for admins only.
     """
     user = request.user
-    auction, problem = _resolve_described_auction(user, _str(params, "auction") or _str(params, "name"), _page(request))
+    auction, problem = _resolve_described_auction(request, _str(params, "auction") or _str(params, "name"))
     if problem:
         return problem if isinstance(problem, dict) else _error(problem)
     remember_auction(request, auction)
     is_admin = _is_auction_admin(user, auction)
     data: dict[str, Any] = {"auction": auction.title, "time": _time_left(auction)}
-    if not (is_admin or auction.make_stats_public):
-        data["note"] = (
-            f"{auction.title} doesn't publish its numbers, so I can only say how long is left. "
-            "Its admins can see the rest."
-        )
-        return {"found": True, "numbers": data}
-
     lots = Lot.objects.filter(auction=auction, is_deleted=False)
     sold = auction.total_sold_lots
     data.update(
@@ -3526,7 +3995,7 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
         data["checked_in"] = AuctionTOS.objects.filter(auction=auction, checked_in__isnull=False).count()
         data["not_checked_in"] = AuctionTOS.objects.filter(auction=auction, checked_in__isnull=True).count()
     if not is_admin:
-        return {"found": True, "numbers": data}
+        return {"found": True, "summary": _numbers_summary(auction, data), "numbers": data}
     from .models import Invoice
 
     invoices = Invoice.objects.filter(auction=auction)
@@ -3539,7 +4008,14 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
         "invoices_paid": invoices.filter(status="PAID").count(),
         "invoices_unpaid": invoices.exclude(status="PAID").count(),
     }
-    return {"found": True, "numbers": data}
+    summary = _sentence(
+        _numbers_summary(auction, data),
+        f"${_money(auction.gross)} gross, ${_money(auction.club_profit)} to the club.",
+        _said_plainly([("invoices unpaid", data["_admin"]["invoices_unpaid"])]) + "."
+        if data["_admin"]["invoices_unpaid"]
+        else "",
+    )
+    return {"found": True, "summary": summary, "numbers": data}
 
 
 def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -3552,14 +4028,14 @@ def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         # Not an error: memberships still answer, and the problem becomes a note.
         data["note"] = problem.get("more_info_needed") if isinstance(problem, dict) else problem
-        return {"found": True, "activity": data}
+        return {"found": True, "summary": _membership_summary(data), "activity": data}
     remember_auction(request, auction)
 
     tos = _own_tos(user, auction)
     data["auction"] = auction.title
     if not tos:
         data["note"] = f"You haven't joined {auction.title}, so you have nothing in it yet."
-        return {"found": True, "activity": data}
+        return {"found": True, "summary": data["note"], "activity": data}
 
     mine = Lot.objects.filter(auctiontos_seller=tos, is_deleted=False)
     won = Lot.objects.filter(auctiontos_winner=tos, is_deleted=False)
@@ -3597,7 +4073,35 @@ def my_activity(request, params: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         data["watching_ending_soon"] = soon
-    return {"found": True, "activity": data}
+    invoice_line = ""
+    if data.get("invoice"):
+        owed = "you owe" if data["invoice"]["you_owe_the_club"] else "you're owed"
+        invoice_line = f"Your invoice: {owed} ${_money(data['invoice']['total'])}, {data['invoice']['status'].lower()}."
+    summary = _sentence(
+        f"In {auction.title}" + (f", bidder {tos.bidder_number}" if tos.bidder_number else "") + ":",
+        _said_plainly(
+            [
+                ("lots in", data.get("lots_submitted")),
+                ("sold", data.get("lots_sold")),
+                ("won", data.get("lots_won")),
+                ("watched", data.get("watching")),
+            ]
+        )
+        + "."
+        if any(data.get(key) for key in ("lots_submitted", "lots_sold", "lots_won", "watching"))
+        else "nothing yet.",
+        invoice_line,
+    )
+    return {"found": True, "summary": summary, "activity": data}
+
+
+def _membership_summary(data: dict[str, Any]) -> str:
+    """What to say when there is no auction to talk about: the memberships, and why there isn't one."""
+    clubs = data.get("memberships") or []
+    if clubs:
+        named = ", ".join(f"{row['club']} ({'paid up' if row['paid_up'] else 'lapsed'})" for row in clubs[:4])
+        return _sentence(f"Your memberships: {named}.", data.get("note") or "")
+    return _sentence(data.get("note") or "You aren't a member of any club yet.")
 
 
 def _membership_facts(user) -> list[dict[str, Any]]:
@@ -3888,8 +4392,10 @@ def _comparable_sales(user, *, text: str = "", species=None, exclude_lot=None, y
     return sales.select_related("auction", "auctiontos_seller").order_by("-date_posted")
 
 
-def _money(value: Decimal) -> Decimal:
-    """A price to two decimal places."""
+def _cents(value: Decimal) -> Decimal:
+    """A price to two decimal places, as a Decimal. Not ``_money``, which formats one for a sentence: this
+    had the same name, so it replaced that one for the whole module.
+    """
     return Decimal(value).quantize(Decimal("0.01"))
 
 
@@ -3902,9 +4408,9 @@ def _price_stats(prices: list[Decimal]) -> dict[str, Any]:
     median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
     return {
         "sales": len(ordered),
-        "low": str(_money(ordered[0])),
-        "median": str(_money(median)),
-        "high": str(_money(ordered[-1])),
+        "low": str(_cents(ordered[0])),
+        "median": str(_cents(median)),
+        "high": str(_cents(ordered[-1])),
     }
 
 
@@ -3919,7 +4425,7 @@ def _suggested_opening(prices: list[Decimal], minimum: Decimal | None) -> Decima
     start = ordered[max(0, (len(ordered) - 1) // 4)].to_integral_value(rounding=ROUND_DOWN)
     if minimum is not None and start < minimum:
         start = Decimal(minimum)
-    return _money(start)
+    return _cents(start)
 
 
 def _sale_row(lot) -> dict[str, Any]:
@@ -4271,8 +4777,8 @@ def club_history(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def lot_queue(request, params: dict[str, Any]) -> dict[str, Any]:
-    """The lot being sold now and what's queued behind it. **Open to anyone in the room**: the kiosk
-    projects the same thing; only editing the queue is admin.
+    """The lot being sold now and what's queued behind it. **Open to anyone in the room**: the fullscreen
+    queue projects the same thing; only editing the queue is admin.
 
     ``query`` filters by lot name and keeps each lot's real queue position. An auction not using the
     queue is told so.
@@ -4454,7 +4960,19 @@ def club_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
             "balance": str(balance if balance is not None else Decimal("0.00")),
             "note": "This is the club's book balance, the same figure the treasurer report opens with.",
         }
-    return {"found": True, "club_numbers": data}
+    summary = _sentence(
+        f"{club.name}:",
+        _said_plainly(
+            [
+                ("members", data.get("members")),
+                ("paid up", data.get("paid_up")),
+                ("lapsed", data.get("lapsed")),
+            ]
+        )
+        + ".",
+        (f"Balance ${_money(data['_money']['balance'])}." if data.get("_money") else ""),
+    )
+    return {"found": True, "summary": summary, "club_numbers": data}
 
 
 def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -4567,7 +5085,7 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     # One query for joined status.
     joined_mine = set(
         AuctionTOS.objects.filter(auction__in=[auction.pk for auction in ours])
-        .filter(Q(user=user) | Q(email=user.email))
+        .filter(Q(user=user) | email_q("email", user.email))
         .values_list("auction_id", flat=True)
     )
     mine = [
@@ -4602,7 +5120,7 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     # One query for joined status.
     joined = set(
         AuctionTOS.objects.filter(auction__in=[auction.pk for auction, _ in nearest])
-        .filter(Q(user=user) | Q(email=user.email))
+        .filter(Q(user=user) | email_q("email", user.email))
         .values_list("auction_id", flat=True)
     )
     rows = []
@@ -4939,15 +5457,19 @@ def undo_sale(request, params: dict[str, Any]) -> dict[str, Any]:
     # unsell also reverses a "no sale", so a winnerless inactive lot is undoable too.
     if not sold and lot.active:
         return _error(f"Lot {lot.lot_number_display} is still up for sale, so there's nothing to undo.")
-    forced = bool(params.get("ignore_errors"))
+    forced = bool(_flag(params, "ignore_errors"))
     settled = _settled_invoice_warning(lot)
     if settled and not forced:
         return _error(_with_override(settled, forced))
     result = view.unsell(lot)
     if not sold:
         result["success_message"] = f"Lot {lot.lot_number_display} {lot.lot_name} is back up for sale."
+    message = str(result.get("success_message") or f"Un-sold lot {lot.lot_number_display}.")
+    # The view's message names the lot; fence the name where it says it.
+    named = f"{lot.lot_number_display} {lot.lot_name}"
+    message = message.replace(named, f"{lot.lot_number_display} {untrusted_short(lot.lot_name)}", 1)
     return _ok(
-        str(result.get("success_message") or f"Un-sold lot {lot.lot_number_display}."),
+        message,
         lot_id=lot.pk,
         **_lot_echo(lot),
     )
@@ -5028,7 +5550,8 @@ def undo_last(request, params: dict[str, Any]) -> dict[str, Any]:
         return result
     # Popped only on success, before anything else, so it can't be applied twice.
     cache.set(_undo_key(user), stack[:-1], timeout=UNDO_WINDOW_SECONDS)
-    what = entry.get("describes") or f"the last {entry.get('was', 'command').replace('_', ' ')}"
+    # ``describes`` names people and lots in their own words; fenced whole, with any fence inside it lifted.
+    what = untrusted_short(entry.get("describes") or "") or f"the last {entry.get('was', 'command').replace('_', ' ')}"
     return _ok(
         f"Undid {what}. {result.get('summary', '')}".strip(),
         **{key: value for key, value in result.items() if key in ("lot_id", "lot_name", "bidder_number", "auction")},
@@ -5044,12 +5567,24 @@ def _resolve_lot(request, params):
     """
     hint = _str(params, "lot") or _str(params, "query") or _str(params, "name")
     if not hint:
-        # The lot on screen; not re-scoped.
-        lot_id = _int(params, "lot_id") or _page(request).get("lot_id")
-        if lot_id:
-            lot = Lot.objects.filter(pk=lot_id, is_deleted=False).select_related("auction").first()
-            if lot:
-                return lot, None
+        # The lot on screen is not re-scoped. One named by id in the parameters is, as find_lot scopes
+        # a name: walking lot_id from 1 watched and echoed lots in auctions nobody had shown this user.
+        page_lot_id = _page(request).get("lot_id")
+        param_lot_id = _int(params, "lot_id")
+        lots = Lot.objects.filter(is_deleted=False).select_related("auction")
+        lot = None
+        if param_lot_id and param_lot_id != page_lot_id:
+            user = request.user
+            scoped = (
+                lots
+                if user.is_superuser
+                else lots.filter(Q(user=user) | Q(auction__in=command_palette._joined_auctions(user)))
+            )
+            lot = scoped.filter(pk=param_lot_id).first()
+        elif page_lot_id or param_lot_id:
+            lot = lots.filter(pk=page_lot_id or param_lot_id).first()
+        if lot:
+            return lot, None
         return None, _need("Which lot? Give me a lot number or its name.")
     found = find_lot(request, params)
     if "error" in found:
@@ -5091,14 +5626,14 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return problem
     # Watching is the default.
-    watching = params.get("watching")
+    watching = _flag(params, "watching")
     if watching is None:
         watching = not (_str(params, "action").lower() in {"unwatch", "remove", "stop"} or params.get("unwatch"))
     existing = Watch.objects.filter(lot_number=lot, user=user).first()
     if watching:
         if not existing:
             Watch.objects.create(lot_number=lot, user=user)
-        summary = f"Lot {lot.lot_number_display}, {lot.lot_name}, is on your watch list."
+        summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is on your watch list."
         followups = [
             {"label": "View this lot", "url": lot.lot_link},
             {"label": "Everything I'm watching", "url": reverse("watched")},
@@ -5116,20 +5651,64 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             undo={
                 "action": "watch_lot",
                 "params": {"lot_id": lot.pk, "watching": False},
-                "describes": f"watching {lot.lot_name}",
+                "describes": f"watching {untrusted_short(lot.lot_name)}",
             },
         )
     if existing:
         existing.delete()
     return _ok(
-        f"Took lot {lot.lot_number_display}, {lot.lot_name}, off your watch list.",
+        f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, off your watch list.",
         lot_id=lot.pk,
         **_lot_echo(lot),
         followups=[{"label": "Everything I'm watching", "url": reverse("watched")}],
         undo={
             "action": "watch_lot",
             "params": {"lot_id": lot.pk, "watching": True},
-            "describes": f"un-watching {lot.lot_name}",
+            "describes": f"un-watching {untrusted_short(lot.lot_name)}",
+        },
+    )
+
+
+def hide_category(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Hide a category's lots from the user, or show them again: the ``UserIgnoreCategory`` row the
+    ignore-categories page writes.
+    """
+    from .models import Category, UserIgnoreCategory
+
+    user = request.user
+    name = _str(params, "category") or _str(params, "name")
+    if not name:
+        return _need("Which category should I hide?")
+    category = Category.objects.filter(name__iexact=name).first()
+    if not category:
+        matches = list(Category.objects.filter(name__icontains=name).order_by("name")[:6])
+        if len(matches) != 1:
+            if not matches:
+                return _error(f"There's no category called “{untrusted_short(name)}” on this site.")
+            return _need(
+                f"Which category did you mean by “{untrusted_short(name)}”?",
+                [{"label": match.name, "value": match.name} for match in matches],
+            )
+        category = matches[0]
+    hidden = _flag(params, "hidden")
+    if hidden is None:
+        hidden = True
+    followups = [{"label": "Hidden categories", "url": reverse("ignore_categories")}]
+    if hidden:
+        UserIgnoreCategory.objects.get_or_create(category=category, user=user)
+        summary = f"{category.name} is hidden: its lots won't show up in most lists."
+    else:
+        UserIgnoreCategory.objects.filter(category=category, user=user).delete()
+        summary = f"{category.name} lots will show up again."
+    return _ok(
+        summary,
+        category=category.name,
+        hidden=hidden,
+        followups=followups,
+        undo={
+            "action": "hide_category",
+            "params": {"category": category.name, "hidden": not hidden},
+            "describes": f"{'hiding' if hidden else 'showing'} {category.name}",
         },
     )
 
@@ -5214,6 +5793,10 @@ _LOT_FIELDS = (
     ("reference_link", "reference link"),
 )
 
+#: Fields ``edit_lot``'s undo may put back to blank through ``clear_fields`` (see ``_PERSON_CLEARABLE``).
+#: Not ``reference_link``: ``Lot.save`` fills a blank one in, so it never was blank.
+_LOT_CLEARABLE = frozenset({"buy_now_price", "custom_field_1", "custom_dropdown", "summernote_description"})
+
 
 def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     """Change a lot's price, quantity or name through ``QuickAddLot`` with the lot as instance. Permission is
@@ -5253,11 +5836,16 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             changes[target or key] = value
     for key in ("donation", "i_bred_this_fish", "custom_checkbox"):
-        if key in params:
-            changes[key] = bool(params.get(key))
+        if params.get(key) not in (None, ""):
+            flag = _flag(params, key)
+            if flag is None:
+                return _need(f"Yes or no for the {dict(_LOT_FIELDS)[key]} on {untrusted_short(lot.lot_name)}?")
+            changes[key] = flag
     for key in ("custom_field_1", "custom_dropdown"):
         if params.get(key):
             changes[key] = _str(params, key)
+    for key in _cleared_fields(params, _LOT_CLEARABLE):
+        changes.setdefault(key, "")
     switched_off = _lot_field_switched_off(auction, params)
     if switched_off:
         return _error(switched_off)
@@ -5300,7 +5888,13 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     undo_params: dict[str, Any] = {"lot_id": lot.pk}
     for key, value in previous.items():
-        undo_params["new_name" if key == "lot_name" else key] = "" if value is None else value
+        if value in (None, ""):
+            # A blank parameter is "not said"; say "clear it".
+            if key in _LOT_CLEARABLE:
+                undo_params.setdefault("clear_fields", []).append(key)
+            continue
+        # The advertised names: "summernote_description" was refused as an unknown parameter.
+        undo_params[{"lot_name": "new_name", "summernote_description": "description"}.get(key, key)] = value
     return _ok(
         f"Changed the {told} on lot {lot.lot_number_display}, {lot.lot_name}.",
         lot_id=lot.pk,
@@ -5352,7 +5946,7 @@ def _invoice_for(tos, auction, *, create: bool):
     invoice = tos.invoice or Invoice.objects.filter(auctiontos_user=tos, auction=auction).first()
     if invoice or not create:
         return invoice
-    return Invoice.objects.create(auctiontos_user=tos, auction=auction)
+    return Invoice.for_participant(tos, auction)
 
 
 def find_invoice(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -5464,7 +6058,8 @@ def add_invoice_adjustment(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     direction = "off" if kind == "DISCOUNT" else "to"
     return _ok(
-        f"Put {adjustment.display} {direction} {tos.name}'s invoice for “{label}”. It {invoice.invoice_summary_short}.",
+        f"Put {adjustment.display} {direction} {untrusted_short(tos.name)}'s invoice for “{label}”. "
+        f"It {invoice.invoice_summary_short}.",
         person=untrusted_short(tos.name),
         bidder_number=tos.bidder_number,
         auction=auction.slug,
@@ -5503,7 +6098,7 @@ def _club_funded_refund(request, lot, percent: int, label: str) -> dict[str, Any
     user = request.user
     auction = lot.auction
     tax = Decimal(auction.tax or 0)
-    gross = _money(Decimal(lot.winning_price) * Decimal(percent) / 100 * (100 + tax) / 100)
+    gross = _cents(Decimal(lot.winning_price) * Decimal(percent) / 100 * (100 + tax) / 100)
     if gross <= 0:
         return _error("That works out to nothing to give back.")
     if gross != gross.to_integral_value():
@@ -5566,8 +6161,8 @@ def _club_funded_refund(request, lot, percent: int, label: str) -> dict[str, Any
     seller = lot.auctiontos_seller
     return _ok(
         f"Took {auction.currency_symbol}{gross} off the buyer's invoice for lot "
-        f"{lot.lot_number_display}, “{lot.lot_name}”. It came out of the club's cut — "
-        f"{seller.name if seller else 'the seller'} keeps the full payout and the lot still reads as "
+        f"{lot.lot_number_display}, “{untrusted_short(lot.lot_name)}”. It came out of the club's cut — "
+        f"{untrusted_short(seller.name) if seller else 'the seller'} keeps the full payout and the lot still reads as "
         f"sold for {auction.currency_symbol}{lot.winning_price}. It {invoice.invoice_summary_short}.",
         lot_id=lot.pk,
         paid_by="club",
@@ -5596,13 +6191,13 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     auction = lot.auction
     if not auction:
-        return _error(f"“{lot.lot_name}” isn't in an auction, so there's no invoice to refund it on.")
+        return _error(f"“{untrusted_short(lot.lot_name)}” isn't in an auction, so there's no invoice to refund it on.")
     remember_auction(request, auction)
     if not _is_auction_admin(user, auction):
         return _error(f"Only admins of {auction.title} can refund lots in {auction.title}.")
     if not lot.winning_price:
         return _error(
-            f"Lot {lot.lot_number_display}, “{lot.lot_name}”, hasn't sold, so there's nothing to "
+            f"Lot {lot.lot_number_display}, “{untrusted_short(lot.lot_name)}”, hasn't sold, so there's nothing to "
             f"refund. Removing an unsold lot is a different thing and lives on the lot's own page."
         )
 
@@ -5615,6 +6210,9 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             f"commission?"
         )
     percent = _int(params, "percent")
+    if percent is None and params.get("percent") not in (None, ""):
+        # Something was said that isn't a whole number ("half", "50%"): ask, never refund all of it.
+        return _need("What percentage of the price should go back? A whole number from 1 to 100.")
     if percent is None:
         percent = 100
     if not 0 <= percent <= 100:
@@ -5660,7 +6258,7 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         else:
             settled.append(f"the {role}'s invoice is {invoice.get_status_display().lower()}")
     summary = (
-        f"Refunded {percent}% on lot {lot.lot_number_display}, “{lot.lot_name}”. It comes off the "
+        f"Refunded {percent}% on lot {lot.lot_number_display}, “{untrusted_short(lot.lot_name)}”. It comes off the "
         f"buyer's invoice and off the seller's payout together, so the club's cut drops by the same "
         f"share."
     )
@@ -5711,7 +6309,7 @@ def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"{tos.name} doesn't have an invoice in {auction.title} yet.")
     if invoice.status == status:
         return _ok(
-            f"{tos.name}'s invoice is already {invoice.get_status_display().lower()}.",
+            f"{untrusted_short(tos.name)}'s invoice is already {invoice.get_status_display().lower()}.",
             bidder_number=tos.bidder_number,
             auction=auction.slug,
         )
@@ -5722,11 +6320,11 @@ def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
     view.post(request, pk=invoice.pk, status=status)
     invoice.refresh_from_db()
     return _ok(
-        f"{tos.name}'s invoice in {auction.title} is now marked "
+        f"{untrusted_short(tos.name)}'s invoice in {auction.title} is now marked "
         f"{invoice.get_status_display().lower()} — it {invoice.invoice_summary_short}.",
         followups=[{"label": f"{tos.name}'s invoice", "url": invoice.get_absolute_url()}],
         bidder_number=tos.bidder_number,
-        person=tos.name,
+        person=untrusted_short(tos.name),
         auction=auction.slug,
         invoice={
             "status": invoice.get_status_display(),
@@ -5854,7 +6452,7 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
         return _need("What's their name?")
     existing = ClubMember.objects.filter(club=club, is_deleted=False, name__iexact=name).first()
     if existing:
-        return _error(f"{existing.name} is already a member of {club.name}.")
+        return _error(f"{untrusted_short(existing.name)} is already a member of {club.name}.")
     data = {
         "name": name,
         "email": _str(params, "email"),
@@ -5863,7 +6461,7 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
         "bidder_number": _str(params, "bidder_number"),
         "memo": _str(params, "memo"),
         "contact_status": "contact",
-        "send_welcome_email": bool(params.get("send_welcome_email", False)),
+        "send_welcome_email": bool(_flag(params, "send_welcome_email")),
         "bidding_allowed": True,
         "selling_allowed": True,
     }
@@ -5875,13 +6473,15 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     member.added_by = user
     member.source = "manually_added"
     member.save()
-    ClubHistory.objects.create(club=club, user=user, action=f"Added member {member}", applies_to="MEMBERS")
-    summary = f"Added {member.name} to {club.name}"
+    ClubHistory.objects.create(
+        club=club, user=user, action=f"Added member {member} {via(request)}", applies_to="MEMBERS"
+    )
+    summary = f"Added {untrusted_short(member.name)} to {club.name}"
     summary += f" as member {member.bidder_number}." if member.bidder_number else "."
     if not member.email:
         summary += " No email yet — tell me it, or use the link below."
     # ``club`` echoed as a field: an agent has no page to check against.
-    return _ok(summary, followups=_member_followups(club, member), person=member.name, club=club.name)
+    return _ok(summary, followups=_member_followups(club, member), person=untrusted_short(member.name), club=club.name)
 
 
 def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -5907,7 +6507,9 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     if _str(params, "bidder_number"):
         changes["bidder_number"] = _str(params, "bidder_number")
     if not changes:
-        return _need(f"What should I change about {member.name}? I can set their email, phone or address.")
+        return _need(
+            f"What should I change about {untrusted_short(member.name)}? I can set their email, phone or address."
+        )
     data = model_to_dict(
         member, fields=[field for field in _club_member_form(club, None).fields if field != "send_welcome_email"]
     )
@@ -5923,9 +6525,9 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     told = ", ".join(sorted(changes))
     return _ok(
-        f"Updated {member.name}'s {told.replace('_', ' ')} in {club.name}.",
+        f"Updated {untrusted_short(member.name)}'s {told.replace('_', ' ')} in {club.name}.",
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
     )
 
@@ -5949,9 +6551,9 @@ def renew_member(request, params: dict[str, Any]) -> dict[str, Any]:
     expires = member.membership_expiration_date
     when = expires.strftime("%B %-d %Y") if expires else "an unknown date"
     return _ok(
-        f"Renewed {member.name}'s membership of {club.name}. It now runs to {when}.",
+        f"Renewed {untrusted_short(member.name)}'s membership of {club.name}. It now runs to {when}.",
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
     )
 
@@ -5977,10 +6579,21 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
     hap = _int(params, "hap_points")
     cap = _int(params, "cap_points")
     if points is None and hap is None and cap is None:
-        return _need(f"How many points should {member.name} get?")
+        return _need(f"How many points should {untrusted_short(member.name)} get?")
+    # BapAwardForm drops a track the club doesn't run; refuse it by name, as review_points does.
+    if hap and not club.separate_hap:
+        return _error(
+            f"{club.name} doesn't run a separate HAP, so plant points go in the ordinary BAP column. "
+            "Give them as points instead."
+        )
+    if cap and not club.separate_cap:
+        return _error(
+            f"{club.name} doesn't run a separate CAP, so culture points go in the ordinary BAP column. "
+            "Give them as points instead."
+        )
     data = {
         "club_member": member.pk,
-        "date": _str(params, "date") or timezone.now().date().isoformat(),
+        "date": _str(params, "date") or timezone.localdate().isoformat(),
         "points": points or 0,
         "hap_points": hap or 0,
         "cap_points": cap or 0,
@@ -5992,17 +6605,566 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
     award = form.save(commit=False)
     award.awarded_by = user
     award.save()
-    ClubHistory.objects.create(club=club, user=user, action=f"Added BAP award: {award}", applies_to="BAP")
-    earned = ", ".join(
-        f"{value} {label}"
-        for value, label in ((points, "BAP"), (hap, "HAP"), (cap, "CAP"))
-        if value  # # zeros aren't worth saying
+    ClubHistory.objects.create(
+        club=club, user=user, action=f"Added BAP award: {award} {via(request)}", applies_to="BAP"
+    )
+    # What was saved, not what was asked for; zeros aren't worth saying.
+    earned = ", ".join(f"{value} {label.upper()}" for label, value in _award_points_paid(award).items()) or "0"
+    return _ok(
+        f"Gave {untrusted_short(member.name)} {earned} point(s) in {club.name}.",
+        followups=_member_followups(club, member),
+        person=untrusted_short(member.name),
+        club=club.name,
+    )
+
+
+# --- donation vendors --------------------------------------------------------
+#
+#   list_donation_vendors      the work queue, most overdue first
+#   describe_donation_vendor   one vendor and the conversation so far
+#   add_donation_vendor        one row, through the vendor form
+#   update_donation_vendor     status, email, context, follow-up date
+#   contact_donation_vendor    a message the caller wrote, sent or recorded
+#
+# Adding a row sends nothing. What is rationed is contacting, and it already was:
+# ``donations.MAX_DONATION_EMAILS_PER_DAY`` a club a day, counted off the stored messages, so a call
+# here and the site's own dialog draw on one allowance. There is deliberately no bulk add and no
+# import -- a list of four hundred strangers is four hundred confirmed writes, and it buys nothing,
+# since the mailbox is what is bounded and not the address book.
+
+
+def _donation_club_or_problem(request, params: dict[str, Any], key: str = "club"):
+    """The club a donation action acts on, or a result to return.
+
+    The two questions ``donation_views.DonationPermissionMixin.check_donation_permission`` asks: the
+    feature is on, and this person holds ``permission_manage_donations`` (club admins included).
+    """
+    from .views import check_club_permission
+
+    club, problem = _club_or_problem(request, params, key)
+    if problem:
+        return None, problem
+    if not club.donation_tracking_enabled:
+        return None, _error(f"{club.name} doesn't have donation tracking turned on, so it has no vendors to work with.")
+    if not check_club_permission(request.user, club, "permission_manage_donations"):
+        return None, _error(f"You don't have permission to manage {club.name}'s donation vendors.")
+    return club, None
+
+
+def _resolve_vendor(club, hint: str):
+    """One of a club's donation vendors by business name, contact name or email: ``(vendor, problem)``."""
+    from .models import DonationVendor
+
+    hint = (hint or "").strip()
+    if not hint:
+        return None, _need("Which vendor? Give me the business name or their email address.")
+    vendors = DonationVendor.objects.filter(club=club, is_deleted=False)
+    exact = vendors.filter(Q(name__iexact=hint) | Q(email__iexact=hint)).first()
+    if exact:
+        return exact, None
+    matches = list(vendors.filter(Q(name__icontains=hint) | Q(contact_name__icontains=hint))[: AMBIGUOUS_LIMIT + 1])
+    if not matches:
+        return None, _error(f"I couldn't find a donation vendor called “{hint}” in {club.name}.")
+    if len(matches) > 1:
+        return None, _need(
+            f"There's more than one vendor matching “{hint}” in {club.name}. Which one?",
+            [{"label": vendor.name, "value": vendor.name} for vendor in matches],
+        )
+    return matches[0], None
+
+
+def _donation_followups(club) -> list[dict[str, str]]:
+    url = reverse("club_donation_vendors", kwargs={"slug": club.slug})
+    return [{"label": f"{club.name}'s donation vendors", "url": url}]
+
+
+def _vendor_row(vendor, *, latest_reply=None) -> dict[str, Any]:
+    """One vendor as a row. A business and its staff are third parties, so their names are fenced."""
+    return {
+        "vendor": untrusted_short(vendor.name),
+        "contact_name": untrusted_short(vendor.contact_name) or None,
+        "email": vendor.email or None,
+        "status": vendor.get_status_display(),
+        "contact_method": vendor.get_contact_method_display(),
+        "contact_url": vendor.contact_url or None,
+        "last_contact": vendor.last_contact.strftime("%Y-%m-%d") if vendor.last_contact else None,
+        "followup_due": timezone.localtime(vendor.followup_due).strftime("%Y-%m-%d") if vendor.followup_due else None,
+        "followup_overdue": bool(vendor.is_followup_due),
+        "latest_reply": untrusted(latest_reply) if latest_reply else None,
+        "can_be_contacted": bool(vendor.can_be_contacted),
+        "cannot_contact_reason": vendor.cannot_contact_reason or None,
+    }
+
+
+def _quota_block(club) -> dict[str, Any]:
+    """What is left of the club's daily donation-email allowance. On every donation answer, because it is
+    what decides whether the next send is refused.
+    """
+    from . import donations
+
+    quota = donations.donation_email_quota(club)
+    return {
+        "emails_sent_today": quota.used,
+        "emails_left_today": quota.remaining,
+        "daily_email_limit": quota.limit,
+        "allowance_resets": quota.resets_in_words,
+    }
+
+
+#: Each stored status and the words somebody would name it by. ``received`` and ``do_not_contact`` are
+#: reachable here on purpose: they are the two ``DonationVendor.LLM_ASSIGNABLE_STATUSES`` withholds
+#: from the reply summarizer, so a person asserting them is the point.
+_VENDOR_STATUS_WORDS = {
+    DonationVendor.STATUS_NEW: ("new", "not_contacted"),
+    DonationVendor.STATUS_EMAIL_SENT: ("sent", "emailed", "email_sent", "contacted", "waiting"),
+    DonationVendor.STATUS_INTERESTED: ("interested", "keen"),
+    DonationVendor.STATUS_PROMISED: ("promised", "committed", "promised_a_donation"),
+    DonationVendor.STATUS_RECEIVED: ("received", "donated", "gave", "arrived", "in_hand"),
+    DonationVendor.STATUS_NOT_INTERESTED: ("not_interested", "declined", "no", "refused", "said_no"),
+    DonationVendor.STATUS_DO_NOT_CONTACT: ("do_not_contact", "unsubscribed", "opted_out", "stop"),
+}
+
+#: ``status`` values on :func:`list_donation_vendors` that aren't a stored status.
+_VENDOR_DUE_WORDS = ("due", "overdue", "followup", "follow_up", "followup_due", "needs_a_nudge", "chase")
+
+#: Each way of reaching a vendor and the words for it. A big chain takes requests only through a form
+#: on its own site, which this site cannot fill in -- see :func:`record_donation_contact`.
+_CONTACT_METHOD_WORDS = {
+    DonationVendor.CONTACT_EMAIL: ("email", "e_mail", "mail"),
+    DonationVendor.CONTACT_WEBFORM: ("webform", "web_form", "form", "website", "online_form", "portal", "their_form"),
+    DonationVendor.CONTACT_PHONE: ("phone", "telephone", "call", "by_phone"),
+    DonationVendor.CONTACT_IN_PERSON: ("in_person", "in_store", "visit", "counter", "walk_in"),
+}
+
+
+def _contact_method(hint: str) -> str | None:
+    """One stored contact method from what the caller called it, or ``None``."""
+    asked = (hint or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not asked:
+        return None
+    return next((method for method, words in _CONTACT_METHOD_WORDS.items() if asked in words), None)
+
+
+def _dossier_block(club, vendor, asked_by=None) -> dict[str, Any]:
+    """The club's answers to what a vendor's request form asks, for a vendor this site can't write to.
+
+    ``Club.donation_dossier`` is the one list, shared with the dialog a person uses, so a tool and a
+    copy button can't disagree about the club's tax ID. The reply address is the vendor's own, which is
+    what turns a form submission into a tracked conversation.
+    """
+    rows = dict(club.donation_dossier(asked_by=asked_by))
+    event = club.next_donation_event
+    if event:
+        rows["Event"] = event
+    if club.sends_donation_email and vendor.reply_to_address:
+        rows["Email for their reply"] = vendor.reply_to_address
+    return rows
+
+
+def _vendor_status(hint: str) -> str | None:
+    """One stored status from what the caller called it, or ``None`` if it's nothing we store."""
+    asked = (hint or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not asked:
+        return None
+    return next((status for status, words in _VENDOR_STATUS_WORDS.items() if asked in words), None)
+
+
+def list_donation_vendors(request, params: dict[str, Any]) -> dict[str, Any]:
+    """A club's donation vendors, ordered as ``ClubDonationVendorsView.get_queryset`` orders them -- most
+    overdue first -- each with what they last said.
+    """
+    from django.db.models import F, OuterRef, Subquery
+
+    from .models import DonationEmail
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    asked = (_str(params, "status") or "all").lower().replace(" ", "_").replace("-", "_")
+    vendors = (
+        DonationVendor.objects.filter(club=club, is_deleted=False)
+        .annotate(
+            # One string per vendor, so a subquery rather than a prefetch, exactly as the page does it.
+            latest_reply_summary=Subquery(
+                DonationEmail.objects.filter(vendor=OuterRef("pk"), direction=DonationEmail.DIRECTION_INCOMING)
+                .order_by("-date")
+                .values("summary")[:1]
+            )
+        )
+        .order_by(F("followup_due").asc(nulls_last=True), "name")
+    )
+    label = "are on the list"
+    if asked in _VENDOR_DUE_WORDS:
+        vendors = vendors.filter(followup_due__lte=timezone.now())
+        label = "are due a follow-up"
+    elif asked not in {"all", ""}:
+        status = _vendor_status(asked)
+        if status is None:
+            return _error(
+                f"I don't know the vendor status “{asked}”. "
+                "Try: all, due, new, sent, interested, promised, received, not_interested, do_not_contact."
+            )
+        vendors = vendors.filter(status=status)
+        label = f"are “{dict(DonationVendor.STATUS_CHOICES)[status]}”"
+    rows = list(vendors)
+    total = len(rows)
+    limit, offset = _slice(params)
+    page = rows[offset : offset + limit]
+    return {
+        "found": bool(total),
+        "club": club.name,
+        "vendors": [_vendor_row(vendor, latest_reply=vendor.latest_reply_summary) for vendor in page],
+        "count": total,
+        "showing": len(page),
+        "offset": offset,
+        **_quota_block(club),
+        "summary": f"{total} of {club.name}'s donation vendors {label}.{_showing(total, limit, offset)}",
+        "followups": _donation_followups(club),
+        **_about(club=club),
+    }
+
+
+#: Messages returned with one vendor: enough to answer them without the whole thread.
+VENDOR_EMAIL_LIMIT = 6
+
+#: Characters of one stored message returned.
+VENDOR_BODY_LIMIT = 2000
+
+
+def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """One vendor, the conversation so far, and the club's own donation details -- what
+    ``DonationVendorPanelView`` puts in the panel, for a caller writing the next message.
+    """
+    from . import donations
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    thread = []
+    for email_row in vendor.emails.all()[:VENDOR_EMAIL_LIMIT]:
+        # Our own footer back out: it is appended on the way out and is not part of what was said.
+        body = donations.truncate_for_model(donations.strip_donation_footer(email_row.body), VENDOR_BODY_LIMIT)
+        incoming = email_row.is_incoming
+        thread.append(
+            {
+                "direction": "from them" if incoming else "from the club",
+                "date": email_row.date.strftime("%Y-%m-%d"),
+                # Their words are a stranger's; the club's own are not fenced.
+                "subject": untrusted_short(email_row.subject) if incoming else email_row.subject,
+                "summary": untrusted(email_row.summary) or None,
+                "body": untrusted(body) if incoming else body,
+                "bounced": email_row.bounced or None,
+            }
+        )
+    summary = f"{vendor.name} in {club.name}: {vendor.get_status_display().lower()}."
+    if vendor.contacted_off_site:
+        summary += f" Contacted by {vendor.get_contact_method_display().lower()}, not from this site."
+    if vendor.is_followup_due:
+        summary += " A follow-up is due."
+    elif vendor.followup_due:
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d}."
+    if not vendor.can_be_contacted:
+        summary += f" {vendor.cannot_contact_reason}."
+    return {
+        "found": True,
+        "club": club.name,
+        **_vendor_row(vendor),
+        "context": untrusted(vendor.context) or None,
+        "messages": thread,
+        "message_count": vendor.emails.count(),
+        "club_sends_the_email": bool(club.sends_donation_email),
+        "club_donation_context": club.donation_context.strip() or None,
+        "club_mailing_address": club.donation_mailing_address.strip() or None,
+        # Only where it is the thing needed: for an email vendor it is a second copy of the club's
+        # settings nobody asked for.
+        "what_their_form_asks_for": (
+            _dossier_block(club, vendor, asked_by=request.user) if vendor.contacted_off_site else None
+        ),
+        **_quota_block(club),
+        "summary": summary,
+        "followups": _donation_followups(club),
+        **_about(club=club),
+    }
+
+
+def _vendor_form(club, data, instance=None):
+    """The vendor form, as ``DonationVendorPanelView`` builds it."""
+    from .forms import DonationVendorForm
+
+    return DonationVendorForm(data, instance=instance, club=club)
+
+
+def add_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add one donation vendor through ``DonationVendorForm``, with the Add button's history line.
+
+    One row a call. Nothing goes out: a vendor is a record until somebody contacts them.
+    """
+    from .models import ClubHistory
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    name = _str(params, "name") or _str(params, "vendor")
+    if not name:
+        return _need("What's the business called?")
+    status = DonationVendor.STATUS_NEW
+    if _str(params, "status"):
+        status = _vendor_status(_str(params, "status"))
+        if status is None:
+            return _error(f"I don't know the vendor status “{_str(params, 'status')}”.")
+    method = DonationVendor.CONTACT_EMAIL
+    if _str(params, "contact_method"):
+        method = _contact_method(_str(params, "contact_method"))
+        if method is None:
+            return _error(
+                f"I don't know “{_str(params, 'contact_method')}” as a way to contact a vendor. "
+                "It's email, webform, phone or in person."
+            )
+    elif _str(params, "contact_url") and not _str(params, "email"):
+        # A form's address and no email address is a webform vendor however it was asked for; any
+        # other reading leaves them uncontactable with the answer sitting right there.
+        method = DonationVendor.CONTACT_WEBFORM
+    form = _vendor_form(
+        club,
+        {
+            "name": name,
+            "contact_name": _str(params, "contact_name"),
+            "contact_method": method,
+            "email": _str(params, "email"),
+            "contact_url": _str(params, "contact_url") or _str(params, "url"),
+            "status": status,
+            "context": _str(params, "context") or _str(params, "notes"),
+        },
+    )
+    if not form.is_valid():
+        return _form_problem(form)
+    # ``save(commit=False)`` already sets the club and starts the follow-up clock.
+    vendor = form.save(commit=False)
+    vendor.createdby = request.user
+    vendor.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Added donation vendor {vendor.name} {via(request)}",
+        applies_to="DONATIONS",
+    )
+    summary = f"Added {vendor.name} to {club.name}'s donation vendors."
+    if vendor.unsubscribed:
+        summary += " That address unsubscribed from donation requests, so they're marked do not contact."
+    elif vendor.contacted_off_site:
+        summary += (
+            f" They're contacted by {vendor.get_contact_method_display().lower()}, so asking them is "
+            "somebody's own doing — record_donation_contact is how it gets written down here."
+        )
+    elif not vendor.email:
+        summary += " No email address yet, so they can't be contacted from here."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+def update_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change one vendor's status, email, contact name, notes or follow-up date, through the form the vendor
+    panel posts. "Donation received" is a person's word, which is why it is here and not in the summarizer.
+    """
+    from .models import ClubHistory
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    changes: dict[str, Any] = {}
+    for key in ("contact_name", "email"):
+        if _str(params, key):
+            changes[key] = _str(params, key)
+    if _str(params, "contact_url") or _str(params, "url"):
+        changes["contact_url"] = _str(params, "contact_url") or _str(params, "url")
+    if _str(params, "contact_method"):
+        method = _contact_method(_str(params, "contact_method"))
+        if method is None:
+            return _error(
+                f"I don't know “{_str(params, 'contact_method')}” as a way to contact a vendor. "
+                "It's email, webform, phone or in person."
+            )
+        changes["contact_method"] = method
+    elif changes.get("contact_url") and not vendor.email and vendor.contact_method == DonationVendor.CONTACT_EMAIL:
+        # Somebody went and found their form for a vendor with no address: the method has to follow, or
+        # the answer sits on a row that still says it can't be contacted.
+        changes["contact_method"] = DonationVendor.CONTACT_WEBFORM
+    if _str(params, "context") or _str(params, "notes"):
+        changes["context"] = _str(params, "context") or _str(params, "notes")
+    if _str(params, "new_name"):
+        changes["name"] = _str(params, "new_name")
+    if _str(params, "followup_due") or _str(params, "date"):
+        changes["followup_due"] = _str(params, "followup_due") or _str(params, "date")
+    if _str(params, "status"):
+        status = _vendor_status(_str(params, "status"))
+        if status is None:
+            return _error(f"I don't know the vendor status “{_str(params, 'status')}”.")
+        changes["status"] = status
+    if not changes:
+        return _need(
+            f"What should I change about {vendor.name}? Their status, email, contact name, the notes on "
+            "them, or when to follow up."
+        )
+    if vendor.unsubscribed and ({"status", "email"} & set(changes)):
+        # The form disables both fields for an unsubscribed vendor, so it would keep the old value and
+        # this would report a change that never happened.
+        return _error(f"{vendor.name} unsubscribed, so their status and email address can't be changed.")
+    data = {
+        "name": vendor.name,
+        "contact_name": vendor.contact_name,
+        "contact_method": vendor.contact_method,
+        "email": vendor.email,
+        "contact_url": vendor.contact_url,
+        "status": vendor.status,
+        "context": vendor.context,
+        "followup_due": timezone.localtime(vendor.followup_due).date() if vendor.followup_due else "",
+    }
+    data.update(changes)
+    form = _vendor_form(club, data, instance=vendor)
+    if not form.is_valid():
+        return _form_problem(form)
+    vendor = form.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Updated donation vendor {vendor.name} {via(request)}",
+        applies_to="DONATIONS",
+    )
+    told = (
+        ", ".join(sorted(changes))
+        .replace("followup_due", "follow-up date")
+        .replace("contact_url", "request form")
+        .replace("_", " ")
     )
     return _ok(
-        f"Gave {member.name} {earned} point(s) in {club.name}.",
-        followups=_member_followups(club, member),
-        person=member.name,
+        f"Updated {vendor.name}'s {told} in {club.name}. They're “{vendor.get_status_display()}”, "
+        f"contacted by {vendor.get_contact_method_display().lower()}.",
+        vendor=vendor.name,
         club=club.name,
+        vendor_status=vendor.get_status_display(),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+def contact_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Send a donation email the caller wrote, through ``donations.send_request`` -- or file it through
+    ``donations.record_copied_request`` for a club that sends its own donation mail.
+
+    Those two add everything that isn't the message: the club's postal address, the unsubscribe link,
+    the per-vendor reply address that lands the answer back on this row, the follow-up clock, and the
+    daily allowance. Only the subject and body are the caller's, which is the part this site was
+    writing for itself before.
+    """
+    from . import donations
+    from .donations import DonationSendError
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    if vendor.contacted_off_site:
+        # Not a refusal to help: the next step is real, it is just somebody else's to take.
+        how = vendor.get_contact_method_display().lower()
+        answer = _error(
+            f"{vendor.name} takes donation requests by {how}, not email, so nothing can be sent from "
+            f"here. describe_donation_vendor has what their form asks for; record_donation_contact "
+            "writes down that it was done."
+        )
+        if vendor.contact_url:
+            answer["their_form"] = vendor.contact_url
+        return answer
+    subject = _str(params, "subject")
+    # ``message`` is an accepted spelling of the body, so read it: taking it and then asking for a
+    # body is worse than refusing the word outright.
+    body = _str(params, "body") or _str(params, "message")
+    if not subject or not body:
+        return _need(f"What should the email to {vendor.name} say? I need a subject line and a body.")
+    blocked = donations.contact_blocked_reason(vendor)
+    if blocked:
+        return _error(blocked)
+    try:
+        if club.sends_donation_email:
+            donations.send_request(vendor, subject=subject[:200], body=body, user=request.user)
+            summary = f"Sent a donation request to {vendor.name} at {vendor.email}."
+        else:
+            donations.record_copied_request(vendor, subject=subject[:200], body=body, user=request.user)
+            summary = (
+                f"Recorded a donation request for {vendor.name}. {club.name} sends its own donation mail, "
+                "so this was filed rather than sent -- it's on the vendor's page to copy out."
+            )
+    except DonationSendError as error:
+        return _error(str(error))
+    vendor.refresh_from_db()
+    if vendor.followup_due:
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d} if they don't reply."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        **_quota_block(club),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+def record_donation_contact(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Write down a donation request that was made somewhere this site can't reach, through
+    ``donations.record_offsite_contact`` -- the body of the Mark contacted button on ``DonationDossierView``.
+
+    Spends none of the daily email allowance: the person did the asking, on the vendor's own website or
+    over the phone, and no mail left here. It sets the same follow-up clock and status a send does, so a
+    vendor asked through their form still comes up for a nudge.
+    """
+    from . import donations
+    from .donations import DonationSendError
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    if not vendor.contacted_off_site:
+        return _error(
+            f"{vendor.name} is contacted by email, which this site does itself. "
+            "contact_donation_vendor sends it and records it in one go."
+        )
+    try:
+        email_row = donations.record_offsite_contact(
+            vendor,
+            note=_str(params, "note") or _str(params, "asked_for") or _str(params, "body"),
+            user=request.user,
+        )
+    except DonationSendError as error:
+        return _error(str(error))
+    vendor.refresh_from_db()
+    summary = f"Recorded a donation request to {vendor.name} via {email_row.get_channel_display().lower()}."
+    if vendor.followup_due:
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d} if they don't reply."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        **_quota_block(club),
+        followups=_donation_followups(club),
+        **_about(club=club),
     )
 
 
@@ -6367,7 +7529,7 @@ def review_points(request, params: dict[str, Any]) -> dict[str, Any]:
     if decision == "approve" and award:
         earned = ", ".join(f"{value} {label.upper()}" for label, value in _award_points_paid(award).items())
         summary = (
-            f"Gave {award.club_member.name} {earned} for lot {lot.lot_number_display}, "
+            f"Gave {untrusted_short(award.club_member.name)} {earned} for lot {lot.lot_number_display}, "
             f"{untrusted_short(lot.lot_name)}. That's {award.club_member.bap_points} BAP points all told."
         )
     elif decision == "deny":
@@ -6385,7 +7547,7 @@ def review_points(request, params: dict[str, Any]) -> dict[str, Any]:
         decision=decision,
         club=club.name,
         awarded=_award_points_paid(award) if award else {},
-        member=member.name if member else None,
+        member=untrusted_short(member.name) if member else None,
         member_total_bap=member.bap_points if member else None,
         **_lot_echo(lot),
         followups=[
@@ -6394,7 +7556,7 @@ def review_points(request, params: dict[str, Any]) -> dict[str, Any]:
         undo={
             "action": "review_points",
             "params": {"lot_id": lot.pk, "decision": "undo"},
-            "describes": f"the points decision on {lot.lot_name}",
+            "describes": f"the points decision on {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -6557,8 +7719,10 @@ def _can_manage_club_events(user, club) -> bool:
     )
 
 
-def _resolve_club_event(club, hint: str):
-    """One of a club's events by name. ``(event, problem)``."""
+def _resolve_club_event(club, hint: str, user=None):
+    """One of a club's events by name. ``(event, problem)``. ``user`` sets the timezone the options are
+    labelled in.
+    """
     from .models import ClubEvent
 
     hint = (hint or "").strip()
@@ -6580,7 +7744,7 @@ def _resolve_club_event(club, hint: str):
         return None, _need(
             f"Which event at {club.name}?",
             [
-                {"label": f"{event.title} — {user_time(None, event.date_start)}", "value": event.title}
+                {"label": f"{event.title} — {user_time(user, event.date_start)}", "value": event.title}
                 for event in matches
             ],
         )
@@ -6693,7 +7857,7 @@ def update_club_event(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if not _can_manage_club_events(user, club):
         return _error(f"You don't have permission to change events for {club.name}.")
-    event, problem = _resolve_club_event(club, _str(params, "event") or _str(params, "title"))
+    event, problem = _resolve_club_event(club, _str(params, "event") or _str(params, "title"), user)
     if problem:
         return problem
     data = {
@@ -6720,8 +7884,11 @@ def update_club_event(request, params: dict[str, Any]) -> dict[str, Any]:
         if _str(params, key):
             data[key] = _str(params, key)
             told.append(key)
-    if "cancel" in params:
-        data["cancelled"] = bool(params.get("cancel"))
+    if params.get("cancel") not in (None, ""):
+        cancelled = _flag(params, "cancel")
+        if cancelled is None:
+            return _need(f"Should {event.title} be called off, or back on?")
+        data["cancelled"] = cancelled
         told.append("cancelled" if data["cancelled"] else "back on")
     if not told:
         return _need(f"What should I change about {event.title}? I can move it, rename it, or call it off.")
@@ -6773,17 +7940,17 @@ def send_club_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
         if when_error:
             return _error(when_error)
         when = parsed
-    email = params.get("email")
+    email = bool(_flag(params, "email"))
     data = {
         "text": text,
-        "send_to_discord": bool(params.get("discord")),
-        "send_to_push": bool(params.get("push")),
+        "send_to_discord": bool(_flag(params, "discord")),
+        "send_to_push": bool(_flag(params, "push")),
         # One email flag, resolved to the connected provider.
         "send_to_mailchimp": bool(email) and announcements_module.mailchimp_ready(club),
         "send_to_brevo": bool(email)
         and not announcements_module.mailchimp_ready(club)
         and announcements_module.brevo_ready(club),
-        "show_on_website": bool(params.get("website")),
+        "show_on_website": bool(_flag(params, "website")),
         "scheduled_for": when or None,
     }
     if email and not (data["send_to_mailchimp"] or data["send_to_brevo"]):
@@ -6823,7 +7990,9 @@ def send_club_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def retract_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Retract the club's most recent announcement, and say what couldn't be taken back."""
+    """Retract one of the club's announcements (the newest, unless ``announcement`` names another), and say
+    what couldn't be taken back.
+    """
     from auctions import announcements as announcements_module
 
     from .models import ClubAnnouncement, ClubHistory
@@ -6835,14 +8004,27 @@ def retract_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if not check_club_permission(user, club, "permission_send_announcements"):
         return _error(f"You don't have permission to retract announcements for {club.name}.")
-    announcement = ClubAnnouncement.objects.filter(club=club, is_deleted=False).order_by("-created_at").first()
+    announcements = ClubAnnouncement.objects.filter(club=club, is_deleted=False).order_by("-created_at")
+    which = _str(params, "announcement")
+    if which:
+        matches = list(announcements.filter(Q(subject__icontains=which) | Q(text__icontains=which))[:6])
+        if not matches:
+            return _error(f"None of {club.name}'s announcements mention “{untrusted_short(which)}”.")
+        if len(matches) > 1:
+            return _need(
+                "Which announcement?",
+                [{"label": untrusted_short(match.short_text), "value": match.short_text} for match in matches],
+            )
+        announcement = matches[0]
+    else:
+        announcement = announcements.first()
     if not announcement:
         return _error(f"{club.name} hasn't got an announcement to retract.")
     result = announcements_module.retract(announcement)
     ClubHistory.objects.create(
         club=club,
         user=user,
-        action=f"Announcement retracted: {announcement.short_text}",
+        action=f"Announcement retracted: {announcement.short_text} {via(request)}",
         applies_to="ANNOUNCEMENTS",
     )
     if result["never_sent"]:
@@ -6874,8 +8056,8 @@ def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     if not (
         check_club_permission(user, club, "permission_admin")
         or check_club_permission(user, club, "permission_manage_auctions")
-        or check_club_permission(user, club, "permission_edit_club")
     ):
+        # As the club page's "make current": admin or auction manager, not settings access.
         return _error(f"You don't have permission to change {club.name}'s current auction.")
     auction, problem = _auction_or_problem(request, params)
     if problem:
@@ -6884,9 +8066,17 @@ def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"{auction.title} isn't one of {club.name}'s auctions.")
     if club.current_auction_id == auction.pk:
         return _ok(f"{auction.title} is already {club.name}'s current auction.", club=club.name, auction=auction.slug)
+    from .models import ClubHistory
+
     was = club.current_auction
     club.current_auction = auction
     club.save(update_fields=["current_auction"])
+    ClubHistory.objects.create(
+        club=club,
+        user=user,
+        action=f"Made {auction.title} the current auction {via(request)}",
+        applies_to="SETTINGS",
+    )
     return _ok(
         f"{auction.title} is now {club.name}'s current auction.",
         club=club.name,
@@ -7239,6 +8429,11 @@ def _set_one_lot_field_setting(request, auction, field_name: str, params: dict[s
             "The custom dropdown needs a name and at least two options, so it has been switched "
             "off again. Give it a name and add options with add_dropdown_option, then turn it on."
         )
+    elif getattr(form, "custom_random_auto_disabled", False):
+        result["note"] = (
+            "The custom random field needs a name and at least two options, so it has been switched "
+            "off again. Give it a name and add options with add_random_option, then turn it on."
+        )
     elif str(getattr(auction, field_name, "")) != str(data[field_name]):
         # clean() blanks the name of a switched-off field; say it didn't stick.
         result["note"] = (
@@ -7354,7 +8549,6 @@ _CLUB_FEATURES: tuple[dict[str, Any], ...] = (
         "name": "Google Calendar",
         "what": "Your events kept in step with a Google calendar, both ways.",
         "on": lambda club: club.google_calendar_connected,
-        "tool": "sync_club_calendar",
         "page": "connecting a calendar is a Google sign-in, on the calendar settings page",
     },
     {
@@ -7374,8 +8568,11 @@ _CLUB_FEATURES: tuple[dict[str, Any], ...] = (
     {
         "key": "donation_tracking",
         "name": "Donation tracking",
-        "what": "Donated lots recorded and the donor thanked, with a receipt.",
+        "what": (
+            "The businesses you ask to donate raffle and auction prizes, what each one said, and when to chase them."
+        ),
         "on": lambda club: club.donation_tracking_enabled,
+        "tool": "list_donation_vendors",
         "settings": ("enable_donation_tracking",),
     },
     {
@@ -7420,50 +8617,6 @@ def _how_to_turn_it_on(feature: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def sync_club_calendar(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Sync a club's Google Calendar now. ``GoogleCalendarSyncNowView``'s own body: the sync, then a forced
-    re-check of public sharing, which decides the subscribe link members get.
-    """
-    from . import club_events
-    from . import google_calendar as gcal
-    from .views import check_club_permission
-
-    user = request.user
-    club, problem = _club_or_problem(request, params)
-    if problem:
-        return problem
-    if not check_club_permission(user, club, "permission_edit_club"):
-        return _error(f"You don't have permission to change {club.name}'s calendar.")
-    if not club.google_calendar_connected:
-        return _error(
-            f"{club.name} hasn't connected a Google Calendar. Connecting one is an OAuth sign-in, "
-            "so it has to be done on the calendar settings page."
-        )
-    club_events.sync_club(club)
-    club.refresh_from_db()
-    if club.google_calendar_last_error:
-        return _error(f"The sync failed: {untrusted_short(club.google_calendar_last_error)}")
-    gcal.refresh_public_flag(club, force=True)
-    club.refresh_from_db()
-    return _ok(
-        f"Synced {club.name}'s calendar.",
-        club=club.name,
-        calendar_is_shared_publicly=club.google_calendar_is_public,
-        subscribe_url=club.calendar_subscribe_url,
-        note=(
-            None
-            if club.google_calendar_is_public
-            else (
-                "The calendar isn't shared publicly, so members get this site's own feed rather "
-                "than the club's Google one. Sharing has to be switched on in Google Calendar."
-            )
-        ),
-        followups=[
-            {"label": "Calendar settings", "url": reverse("club_google_calendar_config", kwargs={"slug": club.slug})}
-        ],
-    )
-
-
 def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
     """The code a club pastes into its website, and calendar links, whether or not each feature is on.
     ``script_tag`` is the ``website_snippet.html`` one-liner.
@@ -7489,7 +8642,7 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
     ]
     snippets = []
     for key, title, url_name, live in embeds:
-        address = reverse(url_name, kwargs={"slug": club.slug})
+        address = reverse(url_name, kwargs={"slug": club.url_key})
         snippets.append(
             {
                 "snippet": key,
@@ -7863,7 +9016,7 @@ def add_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
     when, when_error = _parse_when(user, _str(params, "pickup_time") or _str(params, "when"))
     if when_error:
         return _error(when_error)
-    by_mail = bool(params.get("by_mail"))
+    by_mail = bool(_flag(params, "by_mail"))
     marker_said = _str(params, "location_coordinates") or _str(params, "coordinates")
     marker = _coordinate_pair(marker_said) if marker_said else None
     if marker_said and not marker:
@@ -7893,7 +9046,7 @@ def add_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
         "pickup_by_mail": by_mail,
         "mail_or_not": "True" if by_mail else "False",
         "location_coordinates": marker or "",
-        "users_must_coordinate_pickup": bool(params.get("users_must_coordinate_pickup")),
+        "users_must_coordinate_pickup": bool(_flag(params, "users_must_coordinate_pickup")),
         "allow_selling_by_default": True,
         "allow_bidding_by_default": True,
     }
@@ -7993,82 +9146,192 @@ def update_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def add_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Add an option to the auction's custom dropdown (``AuctionDropdownOptionsAPI``'s rules). The dropdown
-    needs a name and two options to be on.
-    """
-    from .models import CUSTOM_DROPDOWN_MAX_LENGTH, AuctionDropdown
+def _option_list(kind):
+    """``(model, what the palette calls it, the tool prefix)`` for one of an auction's two option lists."""
+    from .models import AuctionDropdown, AuctionRandomOption
 
-    user = request.user
+    if kind == "random":
+        return AuctionRandomOption, "random option", "random_option"
+    return AuctionDropdown, "dropdown option", "dropdown_option"
+
+
+def _option_values(model, auction) -> list[str]:
+    return list(model.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True))
+
+
+def _option_list_is_off(kind, auction) -> bool:
+    if kind == "random":
+        return not auction.use_custom_random_field
+    return auction.use_custom_dropdown_field == "disable"
+
+
+def _option_value_problem(value) -> dict[str, Any] | None:
+    from .models import CUSTOM_DROPDOWN_MAX_LENGTH
+
+    if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
+        return _error(f"An option has to be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or fewer — it goes on a label.")
+    return None
+
+
+def _auction_for_options(request, params, noun):
+    """``(auction, problem)``: the auction named, and only for its admins."""
     auction, problem = _auction_or_problem(request, params)
     if problem:
+        return None, problem
+    if not _is_auction_admin(request.user, auction):
+        return None, _error(f"Only admins of {auction.title} can change its {noun}s.")
+    return auction, None
+
+
+def _find_option(model, auction, value, noun):
+    """``(option, problem)``: the option called *value* on *auction*, ignoring case."""
+    option = model.objects.filter(auction=auction, value__iexact=value).first()
+    if option:
+        return option, None
+    have = _option_values(model, auction)
+    return None, _error(
+        f"{auction.title} has no {noun} called “{value}”." + (" It has: " + ", ".join(have) + "." if have else "")
+    )
+
+
+def _add_option(request, params: dict[str, Any], kind) -> dict[str, Any]:
+    model, noun, tool = _option_list(kind)
+    user = request.user
+    auction, problem = _auction_for_options(request, params, noun)
+    if problem:
         return problem
-    if not _is_auction_admin(user, auction):
-        return _error(f"Only admins of {auction.title} can change its dropdown options.")
     value = _str(params, "option") or _str(params, "value") or _str(params, "name")
     if not value:
         return _need("What should the option be called?")
-    if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
-        return _error(f"An option has to be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or fewer — it goes on a label.")
-    if AuctionDropdown.objects.filter(auction=auction, value__iexact=value).exists():
+    problem = _option_value_problem(value)
+    if problem:
+        return problem
+    if model.objects.filter(auction=auction, value__iexact=value).exists():
         return _ok(f"{auction.title} already has an option called “{value}”.", auction=auction.slug)
-    AuctionDropdown.objects.create(auction=auction, user=user, value=value)
-    options = list(
-        AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
-    )
+    model.objects.create(auction=auction, user=user, value=value)
+    auction.create_history(applies_to="RULES", action=f"Added {noun} {value} {via(request)}", user=user)
+    options = _option_values(model, auction)
     result = _ok(
-        f"Added “{value}” to {auction.title}'s dropdown.",
+        f"Added “{value}” to {auction.title}'s {noun}s.",
         auction=auction.slug,
         options=options,
         undo={
-            "action": "remove_dropdown_option",
+            "action": f"remove_{tool}",
             "params": {"auction": auction.slug, "option": value},
             "describes": f"“{value}”",
         },
     )
-    if auction.use_custom_dropdown_field == "disable":
+    if _option_list_is_off(kind, auction):
+        field = "random field" if kind == "random" else "dropdown"
         result["note"] = (
-            "The dropdown is still switched off. It needs a name and at least two options; there "
+            f"The {field} is still switched off. It needs a name and at least two options; there "
             f"{'is' if len(options) == 1 else 'are'} now {len(options)}. "
             "update_auction_setting turns it on."
         )
     return result
 
 
-def remove_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Take one option off this auction's custom dropdown."""
-    from .models import AuctionDropdown
-
+def _rename_option(request, params: dict[str, Any], kind) -> dict[str, Any]:
+    model, noun, tool = _option_list(kind)
     user = request.user
-    auction, problem = _auction_or_problem(request, params)
+    auction, problem = _auction_for_options(request, params, noun)
     if problem:
         return problem
-    if not _is_auction_admin(user, auction):
-        return _error(f"Only admins of {auction.title} can change its dropdown options.")
+    value = _str(params, "option") or _str(params, "value")
+    if not value:
+        return _need(f"Which {noun} should I rename?")
+    new_value = _str(params, "new_name") or _str(params, "to")
+    if not new_value:
+        return _need(f"What should “{value}” be called instead?")
+    problem = _option_value_problem(new_value)
+    if problem:
+        return problem
+    option, problem = _find_option(model, auction, value, noun)
+    if problem:
+        return problem
+    old_value = option.value
+    if old_value == new_value:
+        return _ok(f"“{old_value}” is already called that.", auction=auction.slug)
+    if model.objects.filter(auction=auction, value__iexact=new_value).exclude(pk=option.pk).exists():
+        return _error(f"{auction.title} already has a {noun} called “{new_value}”.")
+    option.value = new_value
+    option.user = user
+    option.save()
+    auction.create_history(
+        applies_to="RULES", action=f"Renamed {noun} {old_value} to {new_value} {via(request)}", user=user
+    )
+    return _ok(
+        f"Renamed “{old_value}” to “{new_value}” in {auction.title}'s {noun}s."
+        + (" Lots that had it now have the new name." if kind == "random" else ""),
+        auction=auction.slug,
+        options=_option_values(model, auction),
+        undo={
+            "action": f"rename_{tool}",
+            "params": {"auction": auction.slug, "option": new_value, "new_name": old_value},
+            "describes": f"the rename of “{old_value}”",
+        },
+    )
+
+
+def _remove_option(request, params: dict[str, Any], kind) -> dict[str, Any]:
+    model, noun, tool = _option_list(kind)
+    user = request.user
+    auction, problem = _auction_for_options(request, params, noun)
+    if problem:
+        return problem
     value = _str(params, "option") or _str(params, "value") or _str(params, "name")
     if not value:
         return _need("Which option should I remove?")
-    option = AuctionDropdown.objects.filter(auction=auction, value__iexact=value).first()
-    if not option:
-        have = list(AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True))
-        return _error(
-            f"{auction.title} has no dropdown option called “{value}”."
-            + (" It has: " + ", ".join(have) + "." if have else "")
-        )
+    option, problem = _find_option(model, auction, value, noun)
+    if problem:
+        return problem
     option.delete()
-    options = list(
-        AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
-    )
+    auction.create_history(applies_to="RULES", action=f"Removed {noun} {option.value} {via(request)}", user=user)
     return _ok(
-        f"Removed “{option.value}” from {auction.title}'s dropdown.",
+        f"Removed “{option.value}” from {auction.title}'s {noun}s."
+        + (" Lots that had it were dealt another option." if kind == "random" else ""),
         auction=auction.slug,
-        options=options,
+        options=_option_values(model, auction),
         undo={
-            "action": "add_dropdown_option",
+            "action": f"add_{tool}",
             "params": {"auction": auction.slug, "option": option.value},
             "describes": f"“{option.value}”",
         },
     )
+
+
+def add_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add an option to the auction's custom dropdown (``AuctionDropdownOptionsAPI``'s rules). The dropdown
+    needs a name and two options to be on.
+    """
+    return _add_option(request, params, "dropdown")
+
+
+def rename_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Rename one of the auction's custom dropdown options. Lots keep the value they were given."""
+    return _rename_option(request, params, "dropdown")
+
+
+def remove_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one option off this auction's custom dropdown."""
+    return _remove_option(request, params, "dropdown")
+
+
+def add_random_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add an option to the auction's custom random field (``AuctionRandomOptionsAPI``'s rules). Lots
+    already dealt keep theirs; see ``Auction.assign_custom_random``.
+    """
+    return _add_option(request, params, "random")
+
+
+def rename_random_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Rename one of the auction's random options; every lot holding it follows (``AuctionRandomOption``)."""
+    return _rename_option(request, params, "random")
+
+
+def remove_random_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one of the auction's random options away; the lots that had it are dealt another."""
+    return _remove_option(request, params, "random")
 
 
 def _label_field_choices(auction):
@@ -8330,14 +9593,15 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
         lot.species = None
         lot.save()
         _teach_the_lot_name(lot, None, user, is_admin)
+        _lot_history(request, lot, f"Took the species off lot {lot.lot_number_display}")
         return _ok(
-            f"Took {was.full_scientific_name} off lot {lot.lot_number_display}, {lot.lot_name}.",
+            f"Took {was.full_scientific_name} off lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}.",
             **_lot_echo(lot),
             was=_species_echo(was),
             undo={
                 "action": "set_lot_species",
                 "params": {"lot_id": lot.pk, "species": was.full_scientific_name},
-                "describes": f"clearing the species on {lot.lot_name}",
+                "describes": f"clearing the species on {untrusted_short(lot.lot_name)}",
             },
         )
 
@@ -8380,11 +9644,15 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
     # save(): it re-derives the category.
     lot.save()
     taught = _teach_the_lot_name(lot, species, user, is_admin)
-    summary = f"Lot {lot.lot_number_display}, {lot.lot_name}, is {species.full_scientific_name}."
+    _lot_history(request, lot, f"Set the species on lot {lot.lot_number_display} to {species.full_scientific_name}")
+    summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is {species.full_scientific_name}."
     if from_the_lot_name:
         summary += " I read that off the lot's own name."
     if taught:
-        summary += f" I've also remembered that “{lot.lot_name}” means that, so the next one matches by itself."
+        summary += (
+            f" I've also remembered that “{untrusted_short(lot.lot_name)}” means that, so the next one "
+            "matches by itself."
+        )
     return _ok(
         summary,
         **_lot_echo(lot),
@@ -8396,7 +9664,7 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
             "params": (
                 {"lot_id": lot.pk, "species": was.full_scientific_name} if was else {"lot_id": lot.pk, "clear": True}
             ),
-            "describes": f"the species on {lot.lot_name}",
+            "describes": f"the species on {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -8663,11 +9931,12 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     image.save()
     if image.is_primary:
         LotImage.objects.filter(lot_number=lot).exclude(pk=image.pk).update(is_primary=False)
+    _lot_history(request, lot, f"Added a picture to lot {lot.lot_number_display}")
 
     shown = image.source_display
     kind = image.get_image_source_display()
     return _ok(
-        f"Added a picture to lot {lot.lot_number_display}, {lot.lot_name}. It's recorded as “{kind}”"
+        f"Added a picture to lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}. It's recorded as “{kind}”"
         + (", which is what bidders see next to it." if shown else ", which bidders don't see."),
         **_lot_echo(lot),
         image=_image_echo(image),
@@ -8676,7 +9945,7 @@ def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         undo={
             "action": "remove_lot_image",
             "params": {"lot_id": lot.pk, "image_id": image.pk},
-            "describes": f"the picture on {lot.lot_name}",
+            "describes": f"the picture on {untrusted_short(lot.lot_name)}",
         },
     )
 
@@ -8693,7 +9962,7 @@ def remove_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"You can't change the pictures on lot {lot.lot_number_display}.")
     images = list(LotImage.objects.filter(lot_number=lot).order_by("-is_primary", "createdon"))
     if not images:
-        return _error(f"Lot {lot.lot_number_display}, {lot.lot_name}, has no pictures on it.")
+        return _error(f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, has no pictures on it.")
 
     wanted = params.get("image_id")
     if wanted in (None, ""):
@@ -8722,7 +9991,8 @@ def remove_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         if promoted:
             promoted.is_primary = True
             promoted.save()
-    summary = f"Removed a picture from lot {lot.lot_number_display}, {lot.lot_name}."
+    _lot_history(request, lot, f"Removed a picture from lot {lot.lot_number_display}")
+    summary = f"Removed a picture from lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}."
     if promoted:
         summary += " Another one of its pictures is the thumbnail now."
     return _ok(
@@ -9006,7 +10276,8 @@ def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     process_queue_notifications(auction)
     position = _queue_position(auction, lot)
     return _ok(
-        f"Queued lot {lot.lot_number_display}, {lot.lot_name}. It's number {position} in the running order.",
+        f"Queued lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}. "
+        f"It's number {position} in the running order.",
         **_lot_echo(lot),
         position=position,
         queue_length=LotQueueEntry.objects.filter(auction=auction).count(),
@@ -9032,7 +10303,7 @@ def unqueue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     process_queue_notifications(auction)
     remaining = LotQueueEntry.objects.filter(auction=auction).count()
     return _ok(
-        f"Took lot {lot.lot_number_display}, {lot.lot_name}, out of the queue. "
+        f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, out of the queue. "
         f"{remaining} lot{'s' if remaining != 1 else ''} still queued.",
         **_lot_echo(lot),
         queue_length=remaining,
@@ -9073,7 +10344,7 @@ def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
             return problem
         if not tos.user_id:
             return _error(
-                f"{tos.name} has no account on this site, so they have never placed a bid — only a "
+                f"{untrusted_short(tos.name)} has no account on this site, so they have never placed a bid — only a "
                 "winner set by an admin."
             )
         bids = bids.filter(user=tos.user_id)
@@ -9090,8 +10361,10 @@ def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
         who = "You have" if described == "your" else f"{described} has"
         return _error(f"{who} no bid on lot {lot.lot_number_display}.")
     amount = bid.amount
-    # Soft delete, as the page.
-    bid.delete()
+    # The page's own effect: reopens a lot that had already ended, and takes all of that bidder's rows.
+    from .services import remove_bid as remove_bid_from_lot
+
+    remove_bid_from_lot(bid)
     LotHistory.objects.create(
         lot=lot,
         user=user,
@@ -9110,7 +10383,7 @@ def remove_bid(request, params: dict[str, Any]) -> dict[str, Any]:
     possessive = "your" if described == "your" else f"{described}'s"
     return _ok(
         f"Removed {possessive} bid of {lot.currency_symbol}{amount} from lot {lot.lot_number_display}, "
-        f"{lot.lot_name}. It's now at {lot.currency_symbol}{lot.high_bid}.",
+        f"{untrusted_short(lot.lot_name)}. It's now at {lot.currency_symbol}{lot.high_bid}.",
         **_lot_echo(lot),
         removed_bid=str(amount),
         price_now=str(lot.high_bid),
@@ -9193,7 +10466,12 @@ def set_member_active(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if bool(member.is_deleted) is not active:
         state = "already active" if active else "already deactivated"
-        return _ok(f"{member.name} is {state} in {club.name}.", person=member.name, club=club.name, active=active)
+        return _ok(
+            f"{untrusted_short(member.name)} is {state} in {club.name}.",
+            person=untrusted_short(member.name),
+            club=club.name,
+            active=active,
+        )
     member.is_deleted = not active
     member.save(update_fields=["is_deleted"])
     ClubHistory.objects.create(
@@ -9203,14 +10481,15 @@ def set_member_active(request, params: dict[str, Any]) -> dict[str, Any]:
         applies_to="MEMBERS",
     )
     summary = (
-        f"Brought {member.name} back as a member of {club.name}."
+        f"Brought {untrusted_short(member.name)} back as a member of {club.name}."
         if active
-        else f"Deactivated {member.name} in {club.name}. Nothing was deleted — they can be brought back."
+        else f"Deactivated {untrusted_short(member.name)} in {club.name}. Nothing was deleted — they can be "
+        "brought back."
     )
     return _ok(
         summary,
         followups=_member_followups(club, member),
-        person=member.name,
+        person=untrusted_short(member.name),
         club=club.name,
         active=active,
         **_about(club=club),
@@ -9475,7 +10754,7 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
     from .tasks import send_membership_card_email
 
     user = request.user
-    club, problem = _club_or_problem(request, params, also="person")
+    club, problem = _club_or_problem(request, params)
     if problem:
         return problem
     if not _can_edit_members(user, club):
@@ -9486,9 +10765,11 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return problem
     if not member.email:
-        return _error(f"{member.display_name} has no email address on file, so there's nowhere to send it.")
+        return _error(
+            f"{untrusted_short(member.display_name)} has no email address on file, so there's nowhere to send it."
+        )
     if member.contact_status == "do_not_contact":
-        return _error(f"{member.display_name} is marked do-not-contact, so no email was sent.")
+        return _error(f"{untrusted_short(member.display_name)} is marked do-not-contact, so no email was sent.")
     send_membership_card_email(member)
     ClubHistory.objects.create(
         club=club,
@@ -9497,8 +10778,8 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
         applies_to="MEMBERS",
     )
     return _ok(
-        f"Emailed {member.display_name}'s membership card to {member.email}.",
-        person=member.display_name,
+        f"Emailed {untrusted_short(member.display_name)}'s membership card to {untrusted_short(member.email)}.",
+        person=untrusted_short(member.display_name),
         club=club.name,
         followups=_member_followups(club, member),
         **_about(club=club),
@@ -9566,7 +10847,7 @@ def leave_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
     words = {1: "positive", 0: "neutral", -1: "negative"}
     said = f"{words[rating]} feedback" if rating is not None else "a comment"
     return _ok(
-        f"Left {said} about {about} on lot {lot.lot_number_display}, {lot.lot_name}.",
+        f"Left {said} about {about} on lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}.",
         **_lot_echo(lot),
         left_as="buyer" if as_buyer else "seller",
         rating=rating,
@@ -9805,6 +11086,7 @@ def rotate_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
         image.save(update_fields=["is_primary"])
         did.append("made it the thumbnail")
     image.refresh_from_db()
+    _lot_history(request, lot, f"On lot {lot.lot_number_display}, {' and '.join(did)}")
     return _ok(
         f"On lot {lot.lot_number_display}, {' and '.join(did)}.",
         **_lot_echo(lot),
@@ -10107,6 +11389,42 @@ register(
 
 register(
     Action(
+        name="add_a_lot_via_webform",
+        description=(
+            "Opens the page for adding a lot, or several lots — a lot is an item for sale — with "
+            "what they described already filled in, ready for them to check and save. Nothing is "
+            "saved by calling this; the person saves it. Anything "
+            "about adding, listing or selling lots is this, however many: 'add a lot', 'add lots "
+            "to my next auction', 'list my guppies'. This is how a lot gets added here: the "
+            "form matches the species, applies the auction's own rules and shows them what they are "
+            "about to create. Pass everything they said; anything you leave out is just an empty "
+            "box on the form. A lot is a thing — fish, plants, shrimp, food, equipment. If what "
+            "they want to add is a PERSON ('add mike smith'), they mean add_person. Never look a "
+            "lot up before calling this: a lot they are adding does not exist yet, and the page "
+            "finds their own previous lot of the same name by itself."
+        ),
+        params={
+            "name": "string, optional. What the item is, e.g. 'blue shrimp'. Never a person's name.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+            "quantity": "integer, optional. How many are in this one lot — one lot number, one label.",
+            "reserve_price": "number, optional. The minimum bid.",
+            "buy_now_price": "number, optional.",
+            "donation": "boolean, optional.",
+            "i_bred_this_fish": (
+                "boolean, optional. True when the seller bred or grew this themselves — 'I bred "
+                "these'. This is what earns breeder award points, so never drop it."
+            ),
+            "description": "string, optional. A few sentences about the lot. Only what they actually said.",
+        },
+        danger=DANGER_NAVIGATE,
+        resolver=add_a_lot_via_webform,
+        aliases={"lot_name", "price", "count", "bidder"},
+        examples=["add a lot of blue shrimp", "sell my guppies", "I want to list 3 java ferns"],
+    )
+)
+
+register(
+    Action(
         name="add_lots",
         description=(
             "Add SEVERAL lots to one auction at once. Use this whenever the user names more than "
@@ -10270,6 +11588,7 @@ register(
 register(
     Action(
         name="change_email",
+        open_world=True,
         description=(
             "Change this user's own email address. It does NOT take effect straight away: a "
             "confirmation link is sent to the new address and the change happens when they open "
@@ -10407,6 +11726,7 @@ register(
 register(
     Action(
         name="send_membership_card",
+        open_world=True,
         description=(
             "Email a club membership card to the address already on that membership. With no "
             "'person' it sends the user their own card — 'send me my membership card', 'I lost my "
@@ -10509,7 +11829,10 @@ register(
         description=(
             "Add a person to an auction so they can bid and sell. For auction admins and club "
             "staff only. This is what 'add mike smith' means: a person's name is a person, not a "
-            "lot. Use check_in instead when they are already in the auction and are arriving."
+            "lot. Use check_in instead when they are already in the auction and are arriving. "
+            "ONLY for a person with a name. 'add a lot', 'add lots', 'add some shrimp' are "
+            "add_a_lot_via_webform, and 'name' here is never a whole sentence — if you cannot see a person's "
+            "name in what they said, this is the wrong tool."
         ),
         params={
             "name": "string, required. The person's name.",
@@ -10554,7 +11877,8 @@ register(
         danger=DANGER_CONFIRM,
         idempotent=True,
         resolver=update_person,
-        aliases={"name", "phone"},
+        # clear_fields: undo's own, to put a blank back.
+        aliases={"name", "phone", "clear_fields"},
         confirm_template="Update someone's details",
         examples=["change bob's email to bob@example.com", "let jane bid", "note that bob paid cash"],
         needs=NEEDS_AUCTION_ADMIN,
@@ -10607,7 +11931,8 @@ register(
         danger=DANGER_CONFIRM,
         idempotent=True,
         resolver=edit_lot,
-        aliases={"name", "query", "lot_id", "price"},
+        # clear_fields: undo's own, to put a blank back.
+        aliases={"name", "query", "lot_id", "price", "clear_fields"},
         confirm_template="Change a lot",
         examples=["make lot 14 twenty dollars", "change the quantity on the blue shrimp to 3"],
     )
@@ -10637,6 +11962,26 @@ register(
         aliases={"name", "query", "lot_id", "unwatch", "action"},
         confirm_template="Update your watch list",
         examples=["watch this lot", "stop watching lot 12"],
+    )
+)
+
+register(
+    Action(
+        name="hide_category",
+        description=(
+            "Hide a category's lots from the user's own lot lists, or show them again. Any signed-in "
+            "user. 'I don't keep saltwater, hide corals', 'show me plants again'."
+        ),
+        params={
+            "category": "string, required. The category's name, e.g. Corals.",
+            "hidden": "boolean, optional, default true. False to show the category's lots again.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=hide_category,
+        aliases={"name"},
+        confirm_template="Update your hidden categories",
+        examples=["hide corals", "stop hiding plants"],
     )
 )
 
@@ -11002,6 +12347,7 @@ register(
 register(
     Action(
         name="add_club_event",
+        open_world=True,
         description=(
             "Put a meeting, swap, talk or workshop on a club's calendar. It reaches the club page, "
             "the club's iCal feed, Google Calendar and Discord in the same breath. Club admins "
@@ -11027,6 +12373,7 @@ register(
 register(
     Action(
         name="update_club_event",
+        open_world=True,
         description=(
             "Move, rename or call off something on a club's calendar. Club admins only. An event "
             "generated by an auction only takes a new title and description — its dates belong to "
@@ -11054,6 +12401,7 @@ register(
 register(
     Action(
         name="send_club_announcement",
+        open_world=True,
         description=(
             "Say one thing to everybody in a club, in as many places at once as the club has set "
             "up: Discord, push notifications, its mailing list, its own website. Needs the "
@@ -11081,13 +12429,18 @@ register(
 register(
     Action(
         name="retract_announcement",
+        open_world=True,
         description=(
-            "Take back the club's most recent announcement. If it hasn't gone out yet it never "
-            "does; if it has, this deletes the Discord post and takes it off the website, and says "
-            "honestly what is still out there. Needs the 'send announcements' permission."
+            "Take back one of the club's announcements, the most recent unless told which. If it "
+            "hasn't gone out yet it never does; if it has, this deletes the Discord post and takes "
+            "it off the website, and says honestly what is still out there. Needs the 'send "
+            "announcements' permission."
         ),
         params={
             "club": "string, optional. Club name. See my_context.",
+            "announcement": (
+                "string, optional, default the most recent. Words from the subject or text of the one to retract."
+            ),
         },
         danger=DANGER_CONFIRM,
         destructive=True,
@@ -11118,26 +12471,6 @@ register(
         aliases={"name"},
         confirm_template="Set the current auction",
         examples=["make the spring auction our current one"],
-        needs=NEEDS_CLUB_ADMIN,
-    )
-)
-
-register(
-    Action(
-        name="sync_club_calendar",
-        description=(
-            "Push a club's events to its Google Calendar right now, instead of waiting for the "
-            "hourly sync. Also re-reads whether the calendar is shared publicly, which decides "
-            "which subscribe link members are given. Connecting a calendar in the first place is a "
-            "Google sign-in and has to happen on the settings page."
-        ),
-        params={"club": "string, optional. Club name. See my_context."},
-        danger=DANGER_CONFIRM,
-        idempotent=True,
-        resolver=sync_club_calendar,
-        aliases={"name"},
-        confirm_template="Sync the club calendar",
-        examples=["sync our calendar", "I just changed something in Google Calendar"],
         needs=NEEDS_CLUB_ADMIN,
     )
 )
@@ -11194,7 +12527,6 @@ register(
         resolver=club_api,
         aliases={"api_key", "section"},
         # mcp_only: a documentation topic exceeds MAX_LOOKUP_RESULT_CHARS on its own.
-        mcp_only=True,
         examples=[
             "what API keys do we have?",
             "write me something that posts our lots to our website",
@@ -11374,6 +12706,93 @@ register(
 
 register(
     Action(
+        name="rename_dropdown_option",
+        description=(
+            "Rename one option on an auction's custom dropdown. Lots that already picked the old name "
+            "keep it. Auction admins only."
+        ),
+        params={
+            "option": "string, required. The option's current name.",
+            "new_name": "string, required. What to call it instead, short enough to print on a label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=rename_dropdown_option,
+        aliases={"value", "to"},
+        confirm_template="Rename a dropdown option",
+        examples=["rename the dropdown option 'Cichlid' to 'Cichlids'"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="add_random_option",
+        description=(
+            "Add one option to an auction's custom random field — a value each lot is given at random "
+            "when it is added (A/B test groups, or which table a lot goes on), shown on the lot and its "
+            "label. Nobody picks or edits it. Auction admins only. The field stays switched off until it "
+            "has a name and at least two options; switching it on deals every lot already there."
+        ),
+        params={
+            "option": "string, required. The option, short enough to print on a label, e.g. 'Table 3' or 'A'.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_random_option,
+        aliases={"value", "name"},
+        confirm_template="Add a random option",
+        examples=["add 'Table 3' to the random tables", "add a B group to the random field"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="rename_random_option",
+        description=(
+            "Rename one option on an auction's custom random field. Every lot that was given it gets the "
+            "new name. Auction admins only."
+        ),
+        params={
+            "option": "string, required. The option's current name.",
+            "new_name": "string, required. What to call it instead, short enough to print on a label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=rename_random_option,
+        aliases={"value", "to"},
+        confirm_template="Rename a random option",
+        examples=["rename random option 'Table 3' to 'Back table'"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="remove_random_option",
+        description=(
+            "Take one option off an auction's custom random field. Lots that were given it are dealt "
+            "one of the remaining options. Auction admins only."
+        ),
+        params={
+            "option": "string, required. Which option to remove.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_random_option,
+        aliases={"value", "name"},
+        confirm_template="Remove a random option",
+        examples=["remove 'Table 3' from the random field"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
         name="update_label_fields",
         description=(
             "Choose what gets printed on an auction's lot labels — the QR code, the lot name, the "
@@ -11400,6 +12819,7 @@ register(
 register(
     Action(
         name="request_volunteers",
+        open_world=True,
         description=(
             "Ask the people at an in-person auction for help with a job — it goes to the phones of "
             "everyone in the auction with the app. Auction admins only, in-person auctions only. "
@@ -11423,6 +12843,7 @@ register(
 register(
     Action(
         name="cancel_volunteer_request",
+        open_world=True,
         description=(
             "Cancel a request for help and withdraw the notification that went out with it. Auction admins only."
         ),
@@ -11588,6 +13009,27 @@ register(
         resolver=my_context,
         lookup=True,
         examples=["which auctions am I in", "what am I working on", "which clubs am I in"],
+    )
+)
+
+register(
+    Action(
+        name="my_bidder_number",
+        description=(
+            "The signed-in user's OWN bidder number in one auction, and whether they have checked "
+            "in yet. About themselves only -- describe_person is the tool for somebody else, and "
+            'is admin-only. "what\'s my bidder number", "what number am I bidding under", '
+            '"am I checked in yet?".'
+        ),
+        params={"auction": "string, optional. Auction slug or title. See my_context."},
+        danger=DANGER_SAFE,
+        resolver=my_bidder_number,
+        lookup=True,
+        examples=[
+            "what's my bidder number",
+            "what number am I bidding under at the fall auction",
+            "am I checked in yet?",
+        ],
     )
 )
 
@@ -12047,6 +13489,191 @@ register(
 
 register(
     Action(
+        name="list_donation_vendors",
+        description=(
+            "List the businesses a club is asking to donate something to a raffle or charity "
+            "auction, and where each conversation has got to. Most overdue first, so "
+            "status='due' is the club's work queue: who hasn't replied and is owed a nudge. "
+            "Also answers 'who promised us something?', 'who said no?', 'what did they say?'. "
+            "Club donation staff only."
+        ),
+        params={
+            "status": (
+                "string, optional, default all. One of: all, due (a follow-up date that has "
+                "passed), new, sent, interested, promised, received, not_interested, do_not_contact."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=list_donation_vendors,
+        lookup=True,
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="describe_donation_vendor",
+        description=(
+            "Read one donation vendor: their status, their contact, what the club knows about "
+            "them, and the emails to and from them with the newest first. This is what their "
+            "last message actually said, which list_donation_vendors only summarizes in a line. "
+            "It also returns the club's own donation details — its standing description, its "
+            "postal address, and whether this site sends the mail or the club copies it out. "
+            "Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_SAFE,
+        resolver=describe_donation_vendor,
+        aliases={"name"},
+        lookup=True,
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="add_donation_vendor",
+        description=(
+            "Put one business on a club's donation list: a shop to ask, or one that has already "
+            "given something. Adding a row sends nothing — contact_donation_vendor does that. "
+            "One business a call; there is no import. Club donation staff only."
+        ),
+        params={
+            "name": "string, required. The business name.",
+            "email": "string, optional. Without one they can be tracked but not contacted.",
+            "contact_name": "string, optional. The person the club deals with there.",
+            "status": (
+                "string, optional, default new. Where this one already stands: new, sent, "
+                "interested, promised, received, not_interested, do_not_contact."
+            ),
+            "contact_method": (
+                "string, optional, default email. How this business takes a donation request: email, "
+                "webform (a form on their own site), phone, or in person. Chains are usually webform."
+            ),
+            "contact_url": ("string, optional. The page their request form is on, for contact_method=webform."),
+            "context": (
+                "string, optional. What they sell, what they gave last time, who introduced them — "
+                "it goes to whoever writes the email, so it is the difference between a good "
+                "request and a generic one."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_donation_vendor,
+        aliases={"vendor", "notes", "url"},
+        confirm_template="Add a donation vendor",
+        examples=[
+            "add the corner pet shop to our donation list",
+            "add fishy business, they gave a gift card last year",
+        ],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="update_donation_vendor",
+        description=(
+            "Change one donation vendor: their status, email, contact name, the notes on them, or "
+            "when to chase them again. Recording that a donation actually arrived is this — "
+            "'received' is the one status nothing infers from an email, because somebody has to "
+            "have the thing in their hands. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "status": (
+                "string, optional. new, sent, interested, promised, received, not_interested, or do_not_contact."
+            ),
+            "email": "string, optional.",
+            "contact_name": "string, optional.",
+            "contact_method": ("string, optional. email, webform (a form on their own site), phone, or in person."),
+            "contact_url": (
+                "string, optional. The page their request form is on. Setting it for a vendor who has "
+                "no email address makes them a webform vendor."
+            ),
+            "context": "string, optional. Replaces what the club knows about them.",
+            "followup_due": "string, optional. YYYY-MM-DD, the day they should come up for a nudge.",
+            "new_name": "string, optional. A correction to the business name.",
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=update_donation_vendor,
+        aliases={"name", "notes", "date", "url"},
+        confirm_template="Update a donation vendor",
+        examples=[
+            "the corner pet shop dropped off a gift card",
+            "mark fishy business not interested",
+            "petco only takes requests through their website",
+        ],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="record_donation_contact",
+        description=(
+            "Write down that somebody asked a donation vendor whose requests don't go by email — "
+            "filled in the form on their own site, phoned them, or asked at the counter. This site "
+            "can't do any of those, so this is the record that it happened: it moves the vendor to "
+            "'initial email sent' and starts the follow-up clock, and it spends none of the club's "
+            "daily email allowance. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "note": (
+                "string, optional. What was asked for, kept with the vendor so the next person can see "
+                "it. No copy of a form submission exists otherwise."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=record_donation_contact,
+        aliases={"name", "asked_for", "body"},
+        confirm_template="Record a donation request",
+        examples=["I submitted petco's donation form", "called the corner pet shop about the raffle"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="contact_donation_vendor",
+        open_world=True,
+        description=(
+            "Email one donation vendor a message you wrote, and record it against them. The site "
+            "adds the club's postal address, the unsubscribe link and a reply address that brings "
+            "their answer back onto their row. A club set up to send its own donation mail gets "
+            "the message filed to copy out instead of sent. Counts against the club's daily "
+            "donation-email allowance, which every donation read reports. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "subject": "string, required. The subject line.",
+            "body": (
+                "string, required. The message as plain text, signed off from the club. No "
+                "unsubscribe line and no postal address: both are appended."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=contact_donation_vendor,
+        aliases={"name", "message"},
+        confirm_template="Email a donation vendor",
+        examples=["ask the corner pet shop for a raffle donation", "reply to fishy business about the gift card"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
         name="auctions_near_me",
         description=(
             "List every auction the user is in — their clubs' own auctions included, at any "
@@ -12155,7 +13782,6 @@ register(
         lookup=True,
         open_world=True,
         # The only open-world tool, and kept off the palette (see Action.mcp_only).
-        mcp_only=True,
         examples=[
             "how does the lot recommendation system work",
             "how does the site decide which lots are eligible for breeder points",
@@ -12223,7 +13849,6 @@ register(
         resolver=remove_lot,
         aliases={"name", "query", "lot_id", "deactivate"},
         confirm_template="Remove a lot",
-        mcp_only=True,
         examples=["delete lot 19", "take my shrimp lot off sale", "put lot 4 back on sale"],
     )
 )
@@ -12247,7 +13872,6 @@ register(
         idempotent=True,
         confirm_template="Queue a lot",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["queue up lot 40", "add lot 12 to the queue"],
     )
 )
@@ -12270,7 +13894,6 @@ register(
         idempotent=True,
         confirm_template="Take a lot out of the queue",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["drop lot 42 from the queue", "take 7 out of the running order"],
     )
 )
@@ -12297,7 +13920,6 @@ register(
         resolver=remove_bid,
         aliases={"name", "query", "lot_id", "bidder", "bidder_number"},
         confirm_template="Remove a bid",
-        mcp_only=True,
         examples=["remove my bid on lot 9", "take bidder 14's bid off lot 22"],
     )
 )
@@ -12322,7 +13944,6 @@ register(
         aliases={"name", "query", "lot_id"},
         confirm_template="Take back breeder points",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["undo the points on lot 14", "take back the award for lot 3"],
     )
 )
@@ -12347,7 +13968,6 @@ register(
         aliases={"name", "status", "deactivate", "reactivate"},
         confirm_template="Change a member's status",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["deactivate Jane in the club", "bring Sam back as a member"],
     )
 )
@@ -12372,7 +13992,6 @@ register(
         aliases={"name", "bidder", "bidder_number"},
         confirm_template="Remove somebody from an auction",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["remove bidder 51, I added them twice", "take Jane out of the auction"],
     )
 )
@@ -12400,7 +14019,6 @@ register(
         aliases={"name", "bidder", "bidder_number", "note", "reason"},
         confirm_template="Take a line off an invoice",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["take the raffle line off Jane's invoice", "remove the $5 discount from bidder 14"],
     )
 )
@@ -12428,7 +14046,6 @@ register(
         resolver=set_point_rule,
         confirm_template="Set a breeder points rule",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["Corydoras are worth 15 points at our club", "make cichlids 10 points"],
     )
 )
@@ -12453,7 +14070,6 @@ register(
         aliases={"name", "bidder", "bidder_number", "value"},
         confirm_template="Change a membership renewal on an invoice",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["Jane's renewing, put it on her invoice", "take the renewal off bidder 14's invoice"],
     )
 )
@@ -12461,6 +14077,7 @@ register(
 register(
     Action(
         name="resend_member_card",
+        open_world=True,
         description=(
             "Email a club member a fresh link to their membership card. Club admins only. This is "
             "the admin version of send_membership_card, which only ever sends the caller their own. "
@@ -12477,7 +14094,6 @@ register(
         aliases={"name"},
         confirm_template="Email a membership card",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["send Jane her membership card again", "resend Sam's card"],
     )
 )
@@ -12506,7 +14122,6 @@ register(
         resolver=leave_feedback,
         aliases={"name", "query", "lot_id", "comment", "feedback", "role"},
         confirm_template="Leave feedback",
-        mcp_only=True,
         examples=["leave positive feedback on lot 9", "the fish arrived dead, negative feedback on lot 12"],
     )
 )
@@ -12534,7 +14149,6 @@ register(
         aliases={"name", "query", "lot_id", "text", "restore"},
         confirm_template="Hide a chat message",
         needs=NEEDS_AUCTION_ADMIN,
-        mcp_only=True,
         examples=["hide that message on lot 14", "put the hidden message on lot 3 back"],
     )
 )
@@ -12566,7 +14180,6 @@ register(
         aliases={"note", "label"},
         confirm_template="Record a line in the club's books",
         needs=NEEDS_CLUB_ADMIN,
-        mcp_only=True,
         examples=["put $40 in the books for raffle prizes", "record -120 for hall hire"],
     )
 )
@@ -12592,7 +14205,6 @@ register(
         resolver=rotate_lot_image,
         aliases={"name", "query", "lot_id", "image"},
         confirm_template="Change a lot's picture",
-        mcp_only=True,
         examples=["turn the photo on lot 14 the right way up", "make the second picture on lot 3 the thumbnail"],
     )
 )
@@ -12629,7 +14241,9 @@ def action_context(request, action: Action, params: dict[str, Any]) -> str:
         )
         if wants_auction:
             hint = _str(params, "auction") or (_str(params, "target") if action.name == "go_to_page" else "")
-            auction, problem = resolve_auction(request.user, hint, _page(request))
+            # ``_named_or_resolved``, not ``resolve_auction``: the label has to name the auction the
+            # action will actually touch, and that one reads the sentence when no hint was passed.
+            auction, problem = _named_or_resolved(request, hint)
             return auction.title if not problem else ""
     except Exception:  # pragma: no cover - never let a label break the request
         logger.exception("Could not describe the context for %s", action.name)
@@ -12662,18 +14276,19 @@ def run_action(request, name: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _runs_a_club(user) -> bool:
-    """Whether this user administers any club (one query). Generous: a hidden skill looks like a missing one."""
-    return (
-        ClubMember.objects.filter(user=user, is_deleted=False)
-        .filter(
-            Q(permission_admin=True)
-            | Q(permission_add_edit=True)
-            | Q(permission_view=True)
-            | Q(permission_manage_bap=True)
-            | Q(permission_manage_auctions=True)
-        )
-        .exists()
-    )
+    """Whether this user administers any club (one query). Generous: a hidden skill looks like a missing one.
+
+    Every club permission counts, read off ``CLUB_PERMISSION_FIELDS`` rather than listed again here. A
+    hand-written list went stale the moment a job got a flag of its own: donation staff hold only
+    ``permission_manage_donations``, so the six donation skills their permission exists for were the
+    ones never described to them.
+    """
+    from .views import CLUB_PERMISSION_FIELDS
+
+    any_permission = Q()
+    for flag in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{flag: True})
+    return ClubMember.objects.filter(user=user, is_deleted=False).filter(any_permission).exists()
 
 
 def administers_anything(user) -> bool:
@@ -12708,6 +14323,155 @@ def actions_for(user=None) -> list[Action]:
     return allowed
 
 
+# --- which surface offers which skill ----------------------------------------
+#
+# Every action here is offered over ``/mcp/``. These are the ones the *palette* doesn't list, each
+# with the reason it isn't worth a line in a one-line box. Written down in one table rather than as a
+# flag on each registration, because it is one editorial decision about one surface -- what the
+# palette is for -- and reading it has to be possible in one sitting.
+#
+# The test a write has to pass to keep its place: it fits in one spoken sentence with nothing to read
+# back, it gets said mid-task with your hands full, and it happens more than once in a while. One
+# thing overrides all three -- if the page shows you something you need to see before deciding, it is
+# navigate-only. Permissions are never involved: ``go_to_page`` still reaches every one of these
+# pages, and an agent may do all of it.
+
+_AGENT_OUTPUT = (
+    "Pages of text, for a caller that reads pages. The palette's answer is one or two sentences "
+    "paid for out of this site's own model budget."
+)
+_PRECISE_TARGET = (
+    "A write an agent can aim exactly, from a number it just read back. The excuse was always about "
+    "mishearing speech, which is the palette's problem and not an agent's."
+)
+_READ_IT_FIRST = "The page is the question: you have to read what is on it before you can decide."
+_SPEAK_THE_FORM = (
+    "A form whose fields are the explanation, or an argument nobody can say out loud -- a link, a "
+    "set of coordinates, a scientific name."
+)
+_ONCE_A_SEASON = "Done once a season or once ever, sitting at a screen, with the page open in front of you."
+_FIND_THE_FIELD = (
+    "Already covered without a model: the palette's own search indexes every settings field, so "
+    "typing the setting's name lands on that control with its own explanation next to it."
+)
+_DONATION_DESK = (
+    "Chasing sponsors is a spreadsheet job done sitting down: the thread you are answering, the "
+    "status you are correcting and the daily allowance you are spending are all on the donations "
+    "page, and none of them fit in a one-line box. The email itself is worse -- it goes to a "
+    "stranger in the club's name and somebody reads it before it leaves."
+)
+
+#: Actions offered over ``/mcp/`` and left off the palette's tool list: name -> why.
+MCP_ONLY_SKILLS: dict[str, str] = {
+    # Output meant for an agent, too long for the palette.
+    "read_source": _AGENT_OUTPUT,
+    "club_api": _AGENT_OUTPUT,
+    # The donation desk, all of it.
+    "list_donation_vendors": _DONATION_DESK,
+    "describe_donation_vendor": _DONATION_DESK,
+    "add_donation_vendor": _DONATION_DESK,
+    "update_donation_vendor": _DONATION_DESK,
+    "record_donation_contact": _DONATION_DESK,
+    "contact_donation_vendor": _DONATION_DESK,
+    # Writes an agent can target precisely; the palette reaches these pages via go_to_page.
+    "remove_lot": _PRECISE_TARGET,
+    "queue_lot": _PRECISE_TARGET,
+    "unqueue_lot": _PRECISE_TARGET,
+    "remove_bid": _PRECISE_TARGET,
+    "remove_award": _PRECISE_TARGET,
+    "set_member_active": _PRECISE_TARGET,
+    "remove_person": _PRECISE_TARGET,
+    "remove_invoice_adjustment": _PRECISE_TARGET,
+    "set_point_rule": _PRECISE_TARGET,
+    "set_invoice_renewal": _PRECISE_TARGET,
+    "resend_member_card": _PRECISE_TARGET,
+    "leave_feedback": _PRECISE_TARGET,
+    "hide_chat_message": _PRECISE_TARGET,
+    "record_club_money": _PRECISE_TARGET,
+    "rotate_lot_image": _PRECISE_TARGET,
+    # Settings, which ordinary search already answers better than a model can.
+    "update_auction_setting": _FIND_THE_FIELD,
+    "update_club_setting": _FIND_THE_FIELD,
+    "update_preferences": _FIND_THE_FIELD,
+    "update_printing_preferences": _FIND_THE_FIELD,
+    "update_label_fields": _FIND_THE_FIELD,
+    # You have to look at something first.
+    "review_points": _READ_IT_FIRST,
+    "refund_lot": _READ_IT_FIRST,
+    "retract_announcement": _READ_IT_FIRST,
+    "send_club_announcement": (
+        "It fires at Discord, push, email and the club's website at once, and which of those it goes "
+        "to is the part you have to see before you say it."
+    ),
+    # A form, or an argument that can't be spoken.
+    "add_lot_image": _SPEAK_THE_FORM,
+    "remove_lot_image": _SPEAK_THE_FORM,
+    "add_pickup_location": _SPEAK_THE_FORM,
+    "update_pickup_location": _SPEAK_THE_FORM,
+    "add_dropdown_option": _SPEAK_THE_FORM,
+    "rename_dropdown_option": _SPEAK_THE_FORM,
+    "remove_dropdown_option": _SPEAK_THE_FORM,
+    "add_random_option": _SPEAK_THE_FORM,
+    "rename_random_option": _SPEAK_THE_FORM,
+    "remove_random_option": _SPEAK_THE_FORM,
+    "add_club_event": _SPEAK_THE_FORM,
+    "update_club_event": _SPEAK_THE_FORM,
+    "add_species": _SPEAK_THE_FORM,
+    "name_a_species": _SPEAK_THE_FORM,
+    "set_lot_species": _SPEAK_THE_FORM,
+    "add_lot": (
+        "The palette opens the lot form instead (add_a_lot_via_webform), pre-filled: the species matching, the "
+        "auction's field rules and the seller's own eyes are all on that page, and none of them fit "
+        "on a countdown card. An agent, writing structured fields it read somewhere, keeps the write."
+    ),
+    "add_lots": (
+        "One skill split in two, which the model could never pick between. add_a_lot_via_webform opens the bulk "
+        "page for an auction that has one, which is the same answer for one lot and for ten."
+    ),
+    "edit_lot": _SPEAK_THE_FORM,
+    "update_person": "Correcting somebody's details is desk work with the record in front of you; adding them at the door is not.",
+    "update_club_member": "As update_person: correcting a record is done with that record on screen in front of you.",
+    # Once a season.
+    "create_auction": _ONCE_A_SEASON,
+    "set_current_auction": _ONCE_A_SEASON,
+    "hide_category": _ONCE_A_SEASON,
+    "change_email": _ONCE_A_SEASON,
+    "update_username": _ONCE_A_SEASON,
+    "update_contact_info": _ONCE_A_SEASON,
+    "send_membership_card": _ONCE_A_SEASON,
+    "award_points": (
+        "Points are awarded off a list of lots the club is working through, on the page that shows "
+        "the list. Saying one at a time was never the way it is done."
+    ),
+    "request_volunteers": (
+        "The description, the number of people and the bounty are three fields somebody reads back "
+        "before it goes to every phone in the room."
+    ),
+    "cancel_volunteer_request": (
+        "The undo half of request_volunteers, which is itself a page: withdrawing the request means "
+        "looking at which one, on the page that lists them."
+    ),
+    "place_bid": (
+        "Money, irreversible, and the number arrives here through speech. The lot page has a bid box "
+        "on it, which is where a misheard amount is caught -- by the person, before it is a bid."
+    ),
+    "undo_sale": (
+        "'undo that' still reverses a sale the palette made: undo_last runs this by name. What this "
+        "adds is undoing a *named* lot somebody sold on a page, which is the set-winners page's own "
+        "job, with the lot on screen."
+    ),
+    "undo_check_in": "As undo_sale: 'undo that' covers the palette's own, and the check-in page undoes its own.",
+}
+
+_unknown_skills = sorted(set(MCP_ONLY_SKILLS) - set(ACTIONS))
+if _unknown_skills:
+    # Import-time, because a typo here silently leaves a skill on the palette.
+    msg = f"MCP_ONLY_SKILLS names actions that don't exist: {', '.join(_unknown_skills)}"
+    raise ValueError(msg)
+for _name in MCP_ONLY_SKILLS:
+    ACTIONS[_name].mcp_only = True
+
+
 # --- the skill audit ---------------------------------------------------------
 #
 # palette_routes guarantees every page is reachable; this guarantees every POST view is covered by a
@@ -12717,6 +14481,12 @@ def actions_for(user=None) -> list[Action]:
 SKILLS: dict[str, str] = {
     "AuctionBulkPrinting": "print_labels",
     "AuctionCheckIn": "check_in",
+    # The donation desk. One panel serves add and edit, so ``update_donation_vendor`` rides on the
+    # same page as its twin.
+    "DonationVendorPanelView": "add_donation_vendor",
+    "DonationContactView": "contact_donation_vendor",
+    "DonationDossierView": "record_donation_contact",
+    "ClubDonationSettingsView": "update_club_setting",
     # The account pages. Password, email and social sign-in stay pages (allauth, verification email).
     "UserLocationUpdate": "update_contact_info",
     "UsernameUpdate": "update_username",
@@ -12752,6 +14522,7 @@ SKILLS: dict[str, str] = {
     # One setting at a time; dates and rules text stay on the page.
     "AuctionUpdate": "update_auction_setting",
     "AuctionUnsellLot": "undo_sale",
+    "LotEndUnsold": "no_sale",
     # The refund half of the Remove/refund dialog; banning an unsold lot stays a page.
     "LotRefundDialog": "refund_lot",
     "BapAwardAdminView": "award_points",
@@ -12769,6 +14540,8 @@ SKILLS: dict[str, str] = {
     "LotUpdate": "edit_lot",
     "SaveLotAjax": "edit_lot",
     "WatchOrUnwatch": "watch_lot",
+    "CreateUserIgnoreCategory": "hide_category",
+    "DeleteUserIgnoreCategory": "hide_category",
     "AddSingleAuctionTOSToClub": "add_club_member",
     "AddTosMemo": "update_person",
     "AuctionDoorPrizes": "draw_door_prize",
@@ -12800,9 +14573,6 @@ SKILLS: dict[str, str] = {
     "ClubMoneyCreateView": "record_club_money",
     "ImagesRotate": "rotate_lot_image",
     "ImagesPrimary": "rotate_lot_image",
-    # sync_club_calendar is this view's body; it was misfiled in NOT_A_SKILL, which
-    # test_palette_skills now also catches.
-    "GoogleCalendarSyncNowView": "sync_club_calendar",
 }
 
 # Shared reasons.
@@ -12829,10 +14599,10 @@ _DESTRUCTIVE = (
     "destroyed is named on screen before they confirm it."
 )
 _BULK = (
-    "Acts on every row matching the current filter. No tool on this site changes more than one row, "
-    "with no exceptions -- it is the second of the three prompt-injection bounds, not an ergonomic "
-    "judgement -- so this stays a page whoever is asking. Nearly all of these have a per-row skill "
-    "beside them: set_invoice_status, set_lot_winner and add_club_member each do one."
+    "Acts on every row matching the current filter. No tool on this site writes over a filter -- it "
+    "is the second of the three prompt-injection bounds, not an ergonomic judgement -- so this stays "
+    "a page whoever is asking. Nearly all of these have a per-row skill beside them: "
+    "set_invoice_status, set_lot_winner and add_club_member each do one."
 )
 _NEEDS_A_FILE = "Needs a file — a CSV, a spreadsheet, a photo — that a typed or spoken command can't hand over."
 #: Retired: "acts on one row of a table you're already looking at" was an argument about speech.
@@ -12840,10 +14610,10 @@ _NEEDS_A_FILE = "Needs a file — a CSV, a spreadsheet, a photo — that a typed
 _RETIRED_NEEDS_THE_ROW = "Do not use. See the note above -- write the actual reason instead."
 
 #: Banning and unbanning are deliberately not skills: CreateUserBan also deletes the user's live bids
-#: across every auction the admin runs, breaking the one-row bound. The pair is decided together.
+#: across every auction the admin runs, a write over a filter. The pair is decided together.
 _BAN = (
     "Bans a person, or lifts a ban. Banning deletes their live bids across every auction the admin "
-    "runs, which is more than one row; the unban is held with it so the pair stays one decision."
+    "runs, which is a write over a filter; the unban is held with it so the pair stays one decision."
 )
 
 _REDIRECT = (
@@ -12868,6 +14638,25 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "AuctionPageAction": (
+        "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "
+        "shows one person and nothing else. The other two are site staff trusting an auction's "
+        "creator or making them their club's admin, a judgement about a stranger made while reading "
+        "the auction they just created."
+    ),
+    "InvoiceCreateView": (
+        "Makes an empty invoice for somebody who has bought and sold nothing yet, and checks them in "
+        "on the way. Every sale already makes the invoice it needs, so this only exists for the "
+        "checkout table's list of people, and find_invoice answers for anyone who has one."
+    ),
+    # The assistant looking at itself
+    "CommandPaletteAnalyticsView": (
+        "Accepts one shortcut the assistant mined out of its own answers, which changes what the "
+        "palette does for everybody on the site. What makes a proposal safe to accept is that a "
+        "person has just read the phrase, the page it resolved to and how many times -- three "
+        "columns that only exist on this page. An assistant accepting its own proposals is the "
+        "one reader whose agreement means nothing."
+    ),
     # The usability instruments
     "FormAbandonedBeacon": (
         "The page reporting that somebody edited a form and left without saving it. It is a "
@@ -13065,12 +14854,20 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubGoogleCalendarConfigView": _SETUP,
     "ClubMemberDiscordAdminView": _SETUP,
     "GoogleCalendarDisconnectView": _SETUP,
+    "GoogleCalendarSyncNowView": (
+        "The club calendar syncs itself hourly (``auctions.tasks.sync_club_calendars``), so there "
+        "is no capability here to give anybody -- only the chance to have it happen sooner. This "
+        "was a skill, and what it bought was a tool whose honest answer most of the time was that "
+        "nothing had changed since the last sync. The button stays for the person sitting on the "
+        "settings page who has just edited something in Google Calendar and wants to watch it land."
+    ),
     "MailchimpAudienceSelectView": _SETUP,
     "MailchimpDisconnectView": _SETUP,
     "MailchimpSyncNowView": _SETUP,
     # Machines
     "AuctionBarcodeScan": _MACHINE,
     "AuctionDropdownOptionsAPI": _MACHINE,
+    "AuctionRandomOptionsAPI": _MACHINE,
     "AuctionFinder": _MACHINE,
     "AuctionNotifications": _MACHINE,
     "CategoryFinder": _MACHINE,
@@ -13095,7 +14892,21 @@ NOT_A_SKILL: dict[str, str] = {
     "ClubMemberValidation": _MACHINE,
     "GetClubs": _MACHINE,
     "LotAutocomplete": _MACHINE,
+    # The donation desk's other three
+    "DonationVendorDeleteView": (
+        "Throws away a business's record and the whole correspondence with them, which is the one "
+        "thing on that page nothing else can put back -- and it is almost never what is wanted. "
+        "Every reason for wanting a sponsor gone is answered by marking them do not contact, which "
+        "keeps the address on the list so nobody writes to them again by accident. Deleting the row "
+        "loses exactly that protection."
+    ),
+    "DonationUnsubscribeView": (
+        "The vendor's own opt-out, performed by a stranger with no account on this site from a link "
+        "in their email. It is permanent, it applies to every club here, and it is deliberately the "
+        "one thing about a vendor that the club asking them for money cannot do on their behalf."
+    ),
     # Webhooks, callbacks and tokens
+    "InboundDonationEmailView": _WEBHOOK,
     "BrevoWebhookView": _WEBHOOK,
     "DiscordInteractionsView": _WEBHOOK,
     "MailchimpWebhookView": _WEBHOOK,
@@ -13104,6 +14915,7 @@ NOT_A_SKILL: dict[str, str] = {
     "SquarePaymentSuccessView": _WEBHOOK,
     "SquareWebhookView": _WEBHOOK,
     "ClubMemberSelfServiceView": _TOKEN,
+    "SelfServeContactLinkView": _TOKEN,
     "InvoiceNoLoginView": _TOKEN,
     # Other programs
     "ClubMemberBapAwardAPIView": _EXTERNAL_API,
@@ -13121,12 +14933,18 @@ NOT_A_SKILL: dict[str, str] = {
 }
 
 
-def postable_views() -> dict[str, list[str]]:
-    """Every view in ``auctions.views`` accepting a POST, and the URL names reaching it.
+#: Modules the write audit reads. ``auctions.views`` is a package, so it is matched as a prefix;
+#: equality alone would match nothing and silently pass. ``donation_views`` is a module of its own
+#: that sends mail in a club's name, so leaving it out left five user-facing writes in none of the
+#: three tables. ``app_links``, ``apple_notifications`` and ``passkit_views`` are still outside.
+AUDITED_VIEW_MODULES = ("auctions.views", "auctions.donation_views")
 
-    Keyed by class name, since some capabilities have no URL name. A **prefix** match on
-    ``__module__`` (``auctions.views`` is a package); equality would match nothing and silently pass.
-    ``test_palette_skills`` checks the audit still sees views.
+
+def postable_views() -> dict[str, list[str]]:
+    """Every view in :data:`AUDITED_VIEW_MODULES` accepting a POST, and the URL names reaching it.
+
+    Keyed by class name, since some capabilities have no URL name. ``test_palette_skills`` checks the
+    audit still sees views.
     """
     from django.urls import get_resolver
 
@@ -13141,8 +14959,8 @@ def postable_views() -> dict[str, list[str]]:
     for pattern in walk(get_resolver()):
         callback = pattern.callback
         view = getattr(callback, "view_class", None) or getattr(callback, "cls", None)
-        in_views = view is not None and (
-            view.__module__ == "auctions.views" or view.__module__.startswith("auctions.views.")
+        in_views = view is not None and any(
+            view.__module__ == module or view.__module__.startswith(f"{module}.") for module in AUDITED_VIEW_MODULES
         )
         if not in_views or not hasattr(view, "post"):
             continue

@@ -5,6 +5,9 @@ mounts it in a sandboxed iframe, and pipes the tool's own ``structuredContent`` 
 widgets (lot, rules, invoice, card), each attached to the tool that already answers that question.
 A host without the apps surface ignores ``_meta`` and shows the same JSON as always.
 
+Two hosts read this: Claude, and ChatGPT, whose plugin directory is the reason
+:data:`OPENAI_OUTPUT_TEMPLATE_META_KEY` rides along beside the MCP Apps field it aliases.
+
 One template (``auctions/templates/auctions/mcp/widget.html``) renders all four; ``view`` selects
 which. The ext-apps runtime is vendored and inlined (see ``vendor/README.md``); :func:`_bundle`
 rewrites its trailing ``export{...}`` into a ``globalThis`` assignment because an inline
@@ -29,6 +32,13 @@ RESOURCE_MIME_TYPE = "text/html;profile=mcp-app"
 
 #: Flat ``_meta`` key naming a tool's widget; also written into the nested ``ui`` object.
 RESOURCE_URI_META_KEY = "ui/resourceUri"
+
+#: ChatGPT's own spelling of the same thing. Its apps surface reads the MCP Apps fields above and
+#: documents this one as a compatibility alias, so it is sent alongside rather than instead: one
+#: extra key on nine tools, against a widget silently not drawing on the host we can't test from
+#: here. Nothing else in ChatGPT's dialect is duplicated -- the CSP, the border and the mime type
+#: are the shared spelling in both.
+OPENAI_OUTPUT_TEMPLATE_META_KEY = "openai/outputTemplate"
 
 #: Capability a client declares when it can render these. Published unconditionally -- no session
 #: to remember the answer in, and a host that can't render one just ignores ``_meta``.
@@ -146,8 +156,12 @@ def read_resource(uri: str) -> dict[str, Any] | None:
 
 
 def tool_meta(name: str) -> dict[str, Any] | None:
-    """``_meta`` naming which widget draws a tool's answer, in both the flat and nested spellings."""
+    """``_meta`` naming which widget draws a tool's answer, in every spelling a host might read."""
     uri = TOOL_WIDGETS.get(name)
     if not uri:
         return None
-    return {RESOURCE_URI_META_KEY: uri, "ui": {"resourceUri": uri}}
+    return {
+        RESOURCE_URI_META_KEY: uri,
+        OPENAI_OUTPUT_TEMPLATE_META_KEY: uri,
+        "ui": {"resourceUri": uri},
+    }

@@ -365,7 +365,7 @@ class UserTrustSystemTests(StandardTestCase):
         self.assertIsInstance(self.user.userdata.is_trusted, bool)
 
     def test_superuser_can_trust_user(self):
-        """Test that superuser can trust a user via URL parameter"""
+        """Test that superuser can trust a user from the auction page's button"""
         self.client.login(username="superuser", password="testpassword")
         url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
         # Join the auction first
@@ -378,8 +378,13 @@ class UserTrustSystemTests(StandardTestCase):
                 pickup_time=timezone.now() + datetime.timedelta(days=3),
             ),
         )
-        response = self.client.get(url + "?trust_user=true")
-        self.assertEqual(response.status_code, 200)
+        # A link can't do it: only the button's POST.
+        self.client.get(url + "?trust_user=true")
+        self.untrusted_user.userdata.refresh_from_db()
+        self.assertFalse(self.untrusted_user.userdata.is_trusted)
+        action_url = reverse("auction_page_action", kwargs={"slug": self.untrusted_auction.slug})
+        response = self.client.post(action_url, {"action": "trust_creator"})
+        self.assertRedirects(response, url, fetch_redirect_response=False)
         # Reload user data
         self.untrusted_user.userdata.refresh_from_db()
         self.assertTrue(self.untrusted_user.userdata.is_trusted)
@@ -390,6 +395,8 @@ class UserTrustSystemTests(StandardTestCase):
         url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
         initial_trust = self.untrusted_user.userdata.is_trusted
         self.client.get(url + "?trust_user=true")
+        action_url = reverse("auction_page_action", kwargs={"slug": self.untrusted_auction.slug})
+        self.client.post(action_url, {"action": "trust_creator"})
         # Reload user data
         self.untrusted_user.userdata.refresh_from_db()
         # Trust status should not change
@@ -449,7 +456,7 @@ class UserTrustSystemTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         # The trust link only appears for an unpromoted auction.
         if not self.untrusted_auction.promote_this_auction:
-            self.assertContains(response, "trust_user=true")
+            self.assertContains(response, 'value="trust_creator"')
 
     def test_email_invoice_skips_untrusted_users(self):
         """Test that email_invoice management command skips untrusted users"""

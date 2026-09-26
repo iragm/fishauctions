@@ -25,15 +25,150 @@
     from the provider's cache and are billed at a fraction of the normal input rate — only
     <strong>{{ llm_uncached_prompt_tokens }}</strong> were charged at full price.
   </small></p>
+  {% comment %}
+    The site's own token budget, not one person's. Past 60% of it everybody's commands are held for a
+    moment before the model is called; reaching the provider's own limit instead refuses every user at
+    once. A count here means the ceiling is set too close to theirs.
+  {% endcomment %}
   <p class="mb-1"><small>
-    <strong>{{ llm_rounds_per_query }}</strong> model calls per query on average. Each round re-sends
-    the whole system prompt, so this is the multiplier on everything above.
+    Using <strong>{{ llm_load_percent }}%</strong> of this minute's site budget ({{ llm_tokens_per_minute }} tokens).
+    {% if llm_busy %}<span class="badge bg-warning text-dark">{{ llm_busy }} held back by the provider</span>{% endif %}
+    {% if llm_provider_resting %}<span class="badge bg-danger">model resting after repeated failures</span>{% endif %}
+  </small></p>
+  {% comment %}
+    Two ways a command can quietly become something smaller than it asked for. Writes withheld means
+    the words named a skill that only /mcp/ has, so the turn was handed pages and nothing that could
+    change a row -- which looks exactly like an ordinary navigation unless it is counted here. Read
+    from the sentence means the model left the auction out and the server worked out which one was
+    meant; a guess made on somebody's behalf is worth watching even when it is usually right.
+  {% endcomment %}
+  <p class="mb-1"><small>
+    <strong>{{ llm_writes_withheld }}</strong> round{{ llm_writes_withheld|pluralize }} had the writes
+    taken away (named a skill this box gave up) ·
+    <strong>{{ llm_read_the_query }}</strong> read the auction out of the sentence.
+  </small></p>
+  <p class="mb-1"><small>
+    <strong>{{ llm_rounds_per_query }}</strong> model calls across {{ llm_requests }} request{{ llm_requests|pluralize }}.
+    Each round re-sends the whole system prompt, so this is the multiplier on everything above.
+    Slowest single round: {{ llm_slowest_ms }}ms.
   </small></p>
   {% if llm_by_action %}
   <p class="mb-0"><small>
     {% for row in llm_by_action %}<code>{{ row.action }}</code> ×{{ row.count }}{% if not forloop.last %} · {% endif %}{% endfor %}
   </small></p>
   {% endif %}
+</div>
+{% endif %}
+{% if shortcut_proposals %}
+<div class="alert alert-success">
+  <h5 class="mb-2"><i class="bi bi-lightning-charge"></i> Shortcuts worth writing down</h5>
+  {% comment %}
+    The model's own repeated answers are the ground truth here: a phrase is only offered when every
+    single time it was asked it resolved to the same page. Accepting one means that phrase never
+    reaches the model again -- it costs nothing, answers instantly, and cannot come back wrong.
+  {% endcomment %}
+  <p class="small mb-2">
+    Each of these resolved to the same page every time it was asked. Accepting one answers it
+    without a model call from then on.
+  </p>
+  <div class="table-responsive">
+    <table class="table table-sm table-borderless mb-0 align-middle">
+      <thead><tr><th>Phrase</th><th>Goes to</th><th class="text-end">Asked</th><th></th></tr></thead>
+      <tbody>
+        {% for row in shortcut_proposals %}
+        <tr>
+          <td>{{ row.phrase }}</td>
+          <td>{{ row.label }}</td>
+          <td class="text-end">{{ row.count }}</td>
+          <td class="text-end">
+            <form method="post" class="d-inline">
+              {% csrf_token %}
+              <input type="hidden" name="phrase" value="{{ row.phrase }}">
+              <input type="hidden" name="route" value="{{ row.route }}">
+              <button type="submit" class="btn btn-sm btn-success">Accept</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% if llm_variants %}
+<h5 class="mt-4">Before and after</h5>
+{% comment %}
+  One row per version of the assistant: its prompt, the skills it offered and the model, fingerprinted
+  together. A deploy that changes any of them starts a new row, so two rows next to each other are a
+  change and what it did, without anybody having had to write down the date.
+{% endcomment %}
+<p class="text-muted small mb-2">
+  A row per version of the prompt, skill list and model. Compare the newest with the one below it.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm table-striped">
+    <thead><tr>
+      <th>Version</th><th>Last used</th><th class="text-end">Requests</th><th class="text-end">Rounds</th>
+      <th class="text-end">Failed</th><th class="text-end">Cancelled</th><th class="text-end">Reported</th>
+      <th class="text-end">Tokens</th>
+    </tr></thead>
+    <tbody>
+      {% for row in llm_variants %}
+      <tr>
+        <td><code>{{ row.variant }}</code></td>
+        <td><small class="text-muted">{{ row.last_seen|date:"j M H:i" }}</small></td>
+        <td class="text-end">{{ row.requests }}</td>
+        <td class="text-end">{{ row.count }}</td>
+        <td class="text-end">{% if row.failures %}<span class="badge bg-warning text-dark">{{ row.failures }}</span>{% endif %}</td>
+        <td class="text-end">{% if row.cancelled %}<span class="badge bg-warning text-dark">{{ row.cancelled }}</span>{% endif %}</td>
+        <td class="text-end">{% if row.reported %}<span class="badge bg-danger">{{ row.reported }}</span>{% endif %}</td>
+        <td class="text-end">{{ row.tokens }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% if llm_transcript %}
+<h5 class="mt-4">Every command, most recent first</h5>
+{% comment %}
+  A handful of people use this, so a percentage says nothing and reading the actual exchanges says
+  everything. One block per thing somebody typed, with the rounds it took underneath.
+{% endcomment %}
+<p class="text-muted small mb-2">
+  What was typed, what the assistant did with it, and how long they waited.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm table-striped align-middle">
+    <thead><tr>
+      <th>When</th><th>Who</th><th>Query</th><th>What it did</th><th>About</th><th class="text-end">Waited</th><th class="text-end">Tokens</th>
+    </tr></thead>
+    <tbody>
+      {% for row in llm_transcript %}
+      <tr{% if row.failed or row.reported %} class="table-warning"{% endif %}>
+        <td class="text-nowrap"><small class="text-muted">{{ row.when|date:"j M H:i" }}</small></td>
+        <td><small>{{ row.user|default:"—" }}</small></td>
+        <td>{{ row.query|default:"—" }}</td>
+        <td>
+          {% for round in row.rounds %}<span class="text-nowrap"><code>{{ round.response_kind }}</code>{% if round.action %} <small class="text-muted">{{ round.action }}</small>{% endif %}</span>{% if not forloop.last %} <i class="bi bi-arrow-right-short"></i> {% endif %}{% endfor %}
+          {% if row.cancelled %}<span class="badge bg-warning text-dark ms-1">cancelled</span>{% endif %}
+          {% if row.reported %}<span class="badge bg-danger ms-1">reported</span>{% endif %}
+          {% if row.tools_offered and row.tools_offered != "all" %}<span class="badge bg-secondary ms-1">{{ row.tools_offered }} only</span>{% endif %}
+        </td>
+        <td>
+          {% comment %}
+            Which auction, club or lot the command landed on -- the same line its confirmation card
+            showed. "It answered about the wrong auction" could not be checked without this.
+          {% endcomment %}
+          <small class="text-muted">{{ row.subject|default:"—" }}</small>
+          {% if row.read_the_query %}<i class="bi bi-chat-quote text-muted" title="read out of the sentence, not named by the model"></i>{% endif %}
+        </td>
+        <td class="text-end text-nowrap"><small>{{ row.elapsed_ms }}ms</small></td>
+        <td class="text-end"><small>{{ row.tokens }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endif %}
 {% if llm_reported_queries %}
@@ -80,12 +215,13 @@
   </p>
   <div class="table-responsive">
     <table class="table table-sm table-borderless mb-0">
-      <thead><tr><th>Query</th><th>Was going to run</th><th class="text-end">Count</th></tr></thead>
+      <thead><tr><th>Query</th><th>Was going to run</th><th>On what</th><th class="text-end">Count</th></tr></thead>
       <tbody>
         {% for row in llm_cancelled_queries %}
         <tr>
           <td>{{ row.query }}</td>
           <td><small class="text-muted">{{ row.action }}</small></td>
+          <td><small class="text-muted">{{ row.subject|default:"—" }}</small></td>
           <td class="text-end">{{ row.count }}</td>
         </tr>
         {% endfor %}

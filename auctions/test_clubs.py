@@ -200,7 +200,7 @@ class ClubViewTests(TestCase):
         self.club.latitude = 39.5
         self.club.longitude = -96.5
         self.club.save()
-        BapAward.objects.create(club_member=self.owner_member, date=timezone.now().date(), points=4)
+        BapAward.objects.create(club_member=self.owner_member, date=timezone.localdate(), points=4)
         start = timezone.now() - datetime.timedelta(days=20)
         end = timezone.now() - datetime.timedelta(days=10)
         for i in range(11):
@@ -420,19 +420,19 @@ class ClubViewTests(TestCase):
         old_paid_member = ClubMember.objects.create(
             club=self.club,
             name="Old paid member",
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=30),
         )
         ClubMember.objects.filter(pk=old_paid_member.pk).update(createdon=now - datetime.timedelta(days=365 * 11))
         new_paid_member = ClubMember.objects.create(
             club=self.club,
             name="New paid member",
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=30),
         )
         ClubMember.objects.filter(pk=new_paid_member.pk).update(createdon=now - datetime.timedelta(days=20))
         new_unpaid_member = ClubMember.objects.create(
             club=self.club,
             name="New unpaid member",
-            membership_expiration_date=timezone.now().date() - datetime.timedelta(days=1),
+            membership_expiration_date=timezone.localdate() - datetime.timedelta(days=1),
         )
         ClubMember.objects.filter(pk=new_unpaid_member.pk).update(createdon=now - datetime.timedelta(days=10))
 
@@ -1194,7 +1194,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.member.refresh_from_db()
         from django.utils import timezone
 
-        self.assertEqual(self.member.membership_last_paid, timezone.now().date())
+        self.assertEqual(self.member.membership_last_paid, timezone.localdate())
 
     def test_delete_member_requires_permission(self):
         """Non-admin user cannot delete a club member"""
@@ -1315,7 +1315,7 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
             phone_number="5551112222",
             address="111 Source St",
             permission_export=True,
-            membership_last_paid=timezone.now().date(),
+            membership_last_paid=timezone.localdate(),
         )
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
@@ -1346,5 +1346,31 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(self.member.email, "merged@example.com")
         self.assertEqual(self.member.phone_number, "5553334444")
         self.assertEqual(self.member.address, "222 Updated Ave")
+        # Only a club admin's merge carries roles over; add/edit alone would be granting them.
+        self.assertFalse(self.member.permission_export)
+        self.assertEqual(self.member.membership_last_paid, timezone.localdate())
+
+    def test_a_club_admins_merge_carries_the_roles_over(self):
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_admin = True
+        owner_member.save()
+        source = ClubMember.objects.create(
+            club=self.club, name="Treasurer", email="t@example.com", permission_money=True, permission_export=True
+        )
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk})
+        self.client.post(url, {"step": "review", "target": self.member.pk, "name": "Jane Doe"})
+        self.member.refresh_from_db()
         self.assertTrue(self.member.permission_export)
-        self.assertEqual(self.member.membership_last_paid, timezone.now().date())
+        self.assertTrue(self.member.permission_money)
+
+    def test_a_member_cannot_be_merged_into_themselves(self):
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.member.pk})
+        response = self.client.post(url, {"step": "review", "target": self.member.pk, "name": "Jane Doe"})
+        self.assertEqual(response.status_code, 404)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_deleted)

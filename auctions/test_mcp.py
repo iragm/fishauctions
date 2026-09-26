@@ -108,10 +108,31 @@ class RegistryConformance(SimpleTestCase):
             self.assertEqual(annotations["readOnlyHint"], action.danger != palette_actions.DANGER_CONFIRM)
             self.assertEqual(annotations["openWorldHint"], action.open_world, name)
 
-    def test_only_the_source_reader_reaches_outside_this_site(self):
-        """Only ``read_source`` sets ``openWorldHint``: it fetches the published source code."""
+    def test_the_tools_that_reach_outside_this_site_are_the_ones_that_send(self):
+        """``openWorldHint`` is the tool's purpose, not its side effects.
+
+        Eleven: the ones whose whole job is to reach an address, a server or a calendar this site
+        doesn't own, plus ``read_source``, which fetches the published repository. Pinned as a set
+        rather than a count, because the failure it guards against is a *new* sender quietly
+        defaulting to false -- not the list getting shorter.
+        """
         reaching = {name for name, built in self.by_name.items() if built["annotations"]["openWorldHint"]}
-        self.assertEqual(reaching, {"read_source"})
+        self.assertEqual(
+            reaching,
+            {
+                "read_source",
+                "send_club_announcement",
+                "retract_announcement",
+                "send_membership_card",
+                "resend_member_card",
+                "contact_donation_vendor",
+                "add_club_event",
+                "update_club_event",
+                "request_volunteers",
+                "cancel_volunteer_request",
+                "change_email",
+            },
+        )
 
     def test_a_write_says_whether_it_destroys_and_whether_it_repeats(self):
         for name, descriptor in self.by_name.items():
@@ -125,13 +146,14 @@ class RegistryConformance(SimpleTestCase):
             else:
                 self.assertNotIn("idempotentHint", annotations, f"{name} says the default out loud")
 
-    def test_a_read_carries_neither_hint(self):
-        """Reads carry neither destructive nor idempotent hint; tools/list costs context every session."""
+    def test_a_read_says_it_destroys_nothing_and_leaves_the_rest_out(self):
+        """A read still spells ``destructiveHint`` out -- a plugin directory reads all three hints and
+        counts one it has to infer as missing. ``idempotentHint`` stays off: nobody audits it."""
         for name, descriptor in self.by_name.items():
             annotations = descriptor["annotations"]
             if not annotations["readOnlyHint"]:
                 continue
-            self.assertNotIn("destructiveHint", annotations, f"{name} reads; the hint means nothing")
+            self.assertIs(annotations["destructiveHint"], False, f"{name} reads; it destroys nothing")
             self.assertNotIn("idempotentHint", annotations, f"{name} reads; the hint means nothing")
 
     def test_every_parameter_declares_its_type(self):
@@ -358,6 +380,92 @@ class CallToolTests(StandardTestCase):
         parsed = json.loads(tools._text(tools._payload(long_result)))
         self.assertEqual(parsed["summary"], "fine")
         self.assertIn("limit and offset", parsed["what_to_do"])
+
+
+@isolated_cache("mcp-repeats")
+class RepeatedWriteTests(StandardTestCase):
+    """ChatGPT sent one organizer's every add_lot twice, identically: two lots per item."""
+
+    def setUp(self):
+        super().setUp()
+        UserData.objects.update(use_llm_search=True)
+
+    def _call(self, name, arguments, user=None):
+        request = RequestFactory().post("/mcp/")
+        request.user = user or self.user
+        return tools.call_tool(request, name, arguments)
+
+    def _lots(self, name):
+        from auctions.models import Lot
+
+        return Lot.objects.filter(auction=self.in_person_auction, lot_name=name).count()
+
+    def test_the_same_add_twice_makes_one_lot(self):
+        arguments = {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        first = self._call("add_lot", arguments)
+        second = self._call("add_lot", dict(arguments))
+        self.assertFalse(first["isError"], first)
+        self.assertEqual(self._lots("Echo Snail"), 1)
+        self.assertEqual(first["structuredContent"], second["structuredContent"])
+        self.assertIn("arrived twice", second["content"][-1]["text"])
+
+    def test_different_arguments_are_different_lots(self):
+        self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug})
+        self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug, "quantity": 2})
+        self.assertEqual(self._lots("Echo Snail"), 2)
+
+    def test_another_person_asking_the_same_is_not_a_repeat(self):
+        arguments = {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        self._call("add_lot", arguments)
+        self._call("add_lot", arguments, user=self.admin_user)
+        self.assertEqual(self._lots("Echo Snail"), 2)
+
+    def test_a_failed_call_can_be_retried(self):
+        with patch.object(palette_actions, "run_action", return_value={"error": "try again"}):
+            self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug})
+        self._call("add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug})
+        self.assertEqual(self._lots("Echo Snail"), 1)
+
+    def test_a_duplicate_waits_for_the_first_answer(self):
+        # Parallel duplicates arrive while the first is still running.
+        from django.core.cache import cache
+
+        arguments = {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        key = tools._repeat_key(RequestFactory().post("/mcp/"), palette_actions.get_action("add_lot"), arguments)
+        self.assertIsNone(key)  # no user on that request
+        request = RequestFactory().post("/mcp/")
+        request.user = self.user
+        key = tools._repeat_key(request, palette_actions.get_action("add_lot"), arguments)
+        cache.set(key, tools._IN_FLIGHT, 60)
+        with patch.object(tools, "REPEAT_WAIT_SECONDS", 0):
+            result = self._call("add_lot", arguments)
+        self.assertTrue(result["isError"])
+        self.assertIn("still running", result["content"][0]["text"])
+        self.assertEqual(self._lots("Echo Snail"), 0)
+
+    def test_repeats_that_mean_something_are_not_collapsed(self):
+        for name in tools.REPEATS_ARE_MEANT:
+            action = palette_actions.get_action(name)
+            self.assertIsNotNone(action, name)
+            request = RequestFactory().post("/mcp/")
+            request.user = self.user
+            self.assertIsNone(tools._repeat_key(request, action, {}))
+
+
+class MissingLotNumberTests(StandardTestCase):
+    """Asked about lot 150 after it was deleted, the agent was offered "OptiMax 1150" and "PR11509"."""
+
+    def test_a_missing_number_matches_only_names_with_that_number_as_a_word(self):
+        from auctions.models import Lot
+
+        for name in ("OptiMax 1150 Pump", "Gasket PR11509", "150 gallon tank"):
+            Lot.objects.create(
+                lot_name=name, auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos
+            )
+        lots = Lot.objects.filter(auction=self.in_person_auction)
+        self.assertFalse(lots.filter(lot_number_int=150).exists())
+        matches = palette_actions._lots_matching(lots, "150")
+        self.assertEqual([lot.lot_name for lot in matches], ["150 gallon tank"])
 
 
 @isolated_cache("mcp-endpoint")
@@ -1045,6 +1153,48 @@ class ClientMetadataDocumentTests(SimpleTestCase):
     """
 
     #: What claude.ai actually serves, fetched from the live document.
+    #: What chatgpt.com/oauth/client.json served on 2026-09-25.
+    CHATGPT_DOCUMENT = {
+        "client_id": "https://chatgpt.com/oauth/client.json",
+        "client_uri": "https://chatgpt.com/",
+        "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+        "token_endpoint_auth_method": "private_key_jwt",
+        "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "client_name": "ChatGPT",
+        "logo_uri": "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+        "token_endpoint_auth_signing_alg": "RS256",
+        "jwks_uri": "https://chatgpt.com/oauth/jwks.json",
+    }
+
+    def test_chatgpts_document_maps_to_a_public_client(self):
+        """It said ``private_key_jwt``, which the toolkit refused with "Invalid client_id parameter value"."""
+        from oauth2_provider.cimd import _build_application_kwargs
+
+        from auctions.mcp.cimd import ClientMetadataFetcher
+
+        with patch("oauth2_provider.cimd.SafeMetadataFetcher.fetch", return_value=(self.CHATGPT_DOCUMENT, 300)):
+            metadata, _ = ClientMetadataFetcher().fetch(self.CHATGPT_DOCUMENT["client_id"])
+        self.assertEqual(metadata["token_endpoint_auth_method"], "none")
+        self.assertEqual(_build_application_kwargs(metadata)["authorization_grant_type"], "authorization-code")
+
+    def test_a_confidential_only_document_is_still_refused(self):
+        from auctions.mcp.cimd import narrow_auth_method
+
+        document = {
+            "token_endpoint_auth_method": "private_key_jwt",
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+        }
+        self.assertIs(narrow_auth_method(document), document)
+        document = {"token_endpoint_auth_method": "private_key_jwt"}
+        self.assertIs(narrow_auth_method(document), document)
+
+    def test_claudes_document_is_untouched_by_the_auth_method_narrowing(self):
+        from auctions.mcp.cimd import narrow_auth_method
+
+        self.assertIs(narrow_auth_method(self.CLAUDE_DOCUMENT), self.CLAUDE_DOCUMENT)
+
     CLAUDE_DOCUMENT = {
         "client_id": "https://claude.ai/oauth/mcp-oauth-client-metadata",
         "client_name": "Claude",

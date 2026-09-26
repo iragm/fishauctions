@@ -330,8 +330,10 @@ def send_due(now=None):
     sent = 0
     for announcement in due:
         # Claimed with the same UPDATE that marks it sent, so two overlapping beat workers can't
-        # both send it.
-        claimed = ClubAnnouncement.objects.filter(pk=announcement.pk, sent_at__isnull=True).update(sent_at=now)
+        # both send it, and one retracted since the list was read isn't sent at all.
+        claimed = ClubAnnouncement.objects.filter(pk=announcement.pk, sent_at__isnull=True, is_deleted=False).update(
+            sent_at=now
+        )
         if not claimed:
             continue
         announcement.sent_at = now

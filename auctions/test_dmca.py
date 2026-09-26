@@ -361,7 +361,9 @@ class TakedownRemovesTheMaterialTests(WritableMediaRoot, StandardTestCase):
         image = self._image(self.lot)
         storage, path = image.image.storage, image.image.name
         self.assertTrue(storage.exists(path))
-        image.delete()
+        # The file goes once the delete commits.
+        with self.captureOnCommitCallbacks(execute=True):
+            image.delete()
         self.assertFalse(storage.exists(path))
 
     def test_a_file_two_rows_share_is_left_alone(self):
@@ -371,9 +373,11 @@ class TakedownRemovesTheMaterialTests(WritableMediaRoot, StandardTestCase):
         first = self._image(self.lot)
         second = LotImage.objects.create(lot_number=self.lotB, image=first.image.name)
         storage, path = first.image.storage, first.image.name
-        first.delete()
+        with self.captureOnCommitCallbacks(execute=True):
+            first.delete()
         self.assertTrue(storage.exists(path))
-        second.delete()
+        with self.captureOnCommitCallbacks(execute=True):
+            second.delete()
         self.assertFalse(storage.exists(path))
 
     def test_the_edge_cache_is_purged_so_the_cdn_stops_serving_it(self):

@@ -179,6 +179,8 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertIn("manage_users_through_club", form2.errors)
 
     def test_enabling_club_management_syncs_existing_club_members(self):
+        # Turning club management on needs a club role (it copies the roster into the auction).
+        ClubMember.objects.create(club=self.club, user=self.creator, name="Creator", permission_manage_auctions=True)
         self.joiner.userdata.preferred_bidder_number = "246"
         self.joiner.userdata.save(update_fields=["preferred_bidder_number"])
         member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", email=self.joiner.email)
@@ -357,6 +359,8 @@ class ManageUsersThroughClubTests(TestCase):
 
     def test_edit_form_warns_when_checkin_mode_and_pre_event_online_bidding(self):
         """Warn when check-in mode is combined with online bidding before the start date."""
+        # Turning club management on needs a club role (it copies the roster into the auction).
+        ClubMember.objects.create(club=self.club, user=self.creator, name="Creator", permission_manage_auctions=True)
         self.client.force_login(self.creator)
         data = {
             **self._auction_form_data(),
@@ -900,6 +904,48 @@ class ManageUsersThroughClubTests(TestCase):
         tos.refresh_from_db()
         self.assertIsNotNone(tos.checked_in)
         self.assertTrue(tos.bidding_allowed)
+
+    def test_a_copy_of_a_checkin_auction_starts_with_nobody_checked_in(self):
+        self._enable_checkin_mode()
+        # Even with copying people switched on, which a club-managed copy ignores.
+        self.auction.copy_users_when_copying_this_auction = True
+        self.auction.save()
+        member = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=member)
+        self.client.force_login(self.creator)
+        self.client.post(reverse("auction_check_in", kwargs={"pk": tos.pk}))
+        tos.refresh_from_db()
+        self.assertIsNotNone(tos.checked_in)
+
+        self.creator.first_name, self.creator.last_name = "Auction", "Creator"
+        self.creator.save()
+        userdata = self.creator.userdata
+        userdata.can_create_club_auctions = True
+        userdata.address = "1 Main St"
+        userdata.phone_number = "555-555-5555"
+        userdata.save()
+        response = self.client.post(
+            reverse("create_auction") + "?clone=true",
+            {
+                "title": "Next Year",
+                "date_start": (timezone.now() + datetime.timedelta(days=365)).strftime("%Y-%m-%d %H:%M"),
+                "cloned_from": self.auction.slug,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        copy = Auction.objects.get(title="Next Year")
+        self.assertTrue(copy.use_check_in_mode)
+        self.assertFalse(AuctionTOS.objects.filter(auction=copy, checked_in__isnull=False).exists())
+
+        from auctions.views import DynamicSetLotWinner
+
+        view = DynamicSetLotWinner()
+        view.request = type("R", (), {"user": self.creator})()
+        view.auction = copy
+        _copy_tos, error = view.validate_winner("123", "save")
+        self.assertEqual(error, "This bidder has not been checked in yet")
+        tos.refresh_from_db()
+        self.assertIsNotNone(tos.checked_in, "copying un-checked-in the original auction")
 
     def test_turn_bidding_off_for_all_users(self):
         self._enable_checkin_mode()

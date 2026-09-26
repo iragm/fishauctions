@@ -9,10 +9,14 @@ foreign parsing context browsers handle differently from HTML, which is the basi
 and new elements keep arriving. A disallowed tag is unwrapped so its text survives; one on
 ``UNSAFE_SUMMERNOTE_TAGS`` is removed with its contents, which are code or foreign content.
 
-Attributes: every ``on*`` handler goes; URI-bearing attributes are checked for script and local-file
-schemes with the whitespace attackers use to split them stripped first; ``color`` and
-``background-color`` go because the site picks its own colours; anything with ``url()`` goes so
-stored content cannot fetch from elsewhere.
+Attributes are an **allowlist** too, for the same reason: checking only ``on*`` and three URI
+attributes left every other attribute to ride through, so the rule was only ever as complete as the
+list of attributes somebody had thought of. What survives is in ``ALLOWED_SUMMERNOTE_ATTRIBUTES``;
+the URI-bearing ones are then checked for script and local-file schemes, with the whitespace
+attackers use to split a scheme name stripped first. ``style`` is narrowed again to
+``ALLOWED_STYLE_PROPERTIES`` -- ``color`` and ``background-color`` are out because the site picks its
+own, ``position`` and ``z-index`` because stored content must not cover the page showing it -- and
+anything with ``url()`` goes so stored content cannot fetch from elsewhere.
 
 Here rather than in ``models.py`` because it has no model dependencies and both ``models.py`` and
 ``forms.py`` import it.
@@ -48,13 +52,45 @@ UNSAFE_SUMMERNOTE_TAGS = frozenset(
 )  # fmt: skip
 
 
-def sanitize_summernote_html(text):
-    """Remove disallowed Summernote content while preserving supported formatting."""
+#: Attributes allowed to survive on an allowed tag. An allowlist for the same reason the tag rule is
+#: one: only ``on*`` and the three URI attributes were ever inspected, so every other attribute rode
+#: through untouched and the rule could only ever be as complete as the list of attributes we thought
+#: of. ``style`` is filtered further below.
+ALLOWED_SUMMERNOTE_ATTRIBUTES = frozenset(
+    {"href", "src", "alt", "title", "style", "class", "colspan", "rowspan", "start", "type", "datetime", "cite",
+     "target", "rel"}
+)  # fmt: skip
+
+#: ``target`` values worth keeping. Summernote's link dialog ships with ``linkTargetBlank`` on, so
+#: every link anybody has ever inserted carries ``target="_blank"`` -- dropping the attribute made
+#: those links open in the same tab the next time the page was saved. Anything else named a frame,
+#: which this site has none of.
+ALLOWED_LINK_TARGETS = frozenset({"_blank", "_self", "_parent", "_top"})
+
+#: CSS properties Summernote's toolbar produces. Everything else goes: ``position``/``z-index`` alone
+#: let stored content cover the page it is displayed on.
+ALLOWED_STYLE_PROPERTIES = frozenset(
+    {
+        "font-weight", "font-style", "font-size", "font-family", "text-decoration", "text-decoration-line",
+        "text-align", "vertical-align", "line-height", "margin", "margin-left", "margin-right", "margin-top",
+        "margin-bottom", "padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
+        "width", "height", "border", "border-collapse", "list-style-type",
+    }
+)  # fmt: skip
+
+
+def sanitize_summernote_html(text, allowed_tags=None):
+    """Remove disallowed Summernote content while preserving supported formatting.
+
+    *allowed_tags* narrows the tag allowlist for a caller that renders somewhere tighter than a page
+    -- a printed label wants ``{"br"}`` and nothing else.
+    """
     if text is None:
         return None
     if text == "":
         return ""
 
+    allowed_tags = ALLOWED_SUMMERNOTE_TAGS if allowed_tags is None else frozenset(allowed_tags)
     soup = BeautifulSoup(text, "html.parser")
 
     # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order, so decomposing a
@@ -63,7 +99,7 @@ def sanitize_summernote_html(text):
         if getattr(tag, "decomposed", False):
             continue
         name = (tag.name or "").lower()
-        if name in ALLOWED_SUMMERNOTE_TAGS:
+        if name in allowed_tags:
             continue
         if name in UNSAFE_SUMMERNOTE_TAGS:
             tag.decompose()
@@ -73,8 +109,18 @@ def sanitize_summernote_html(text):
     for tag in soup.find_all():
         for attr_name, attr_value in list(tag.attrs.items()):
             normalized_attr = attr_name.lower()
-            if normalized_attr.startswith("on"):
+            if normalized_attr not in ALLOWED_SUMMERNOTE_ATTRIBUTES:
+                # Covers every ``on*`` handler, and everything else nobody has had to think of yet.
                 del tag[attr_name]
+                continue
+            if normalized_attr == "target":
+                # A frame name would be a target this site can't have, and reverse tabnabbing is
+                # only closed by ``rel`` (below), which old browsers still need spelled out.
+                value = attr_value[0] if isinstance(attr_value, list) else attr_value
+                if str(value).lower() not in ALLOWED_LINK_TARGETS:
+                    del tag[attr_name]
+                continue
+            if normalized_attr == "rel":
                 continue
             # The URI-bearing attributes allowed in Summernote content.
             if normalized_attr in {"href", "src", "xlink:href"}:
@@ -93,6 +139,11 @@ def sanitize_summernote_html(text):
                 ):
                     del tag[attr_name]
 
+    # A link that opens a tab gets the opener closed off, whatever rel it arrived with.
+    for tag in soup.find_all("a", target=True):
+        if str(tag.get("target", "")).lower() == "_blank":
+            tag["rel"] = "noopener noreferrer"
+
     # Remove 'color' attribute from <font> tags
     for tag in soup.find_all("font"):
         if tag.has_attr("color"):
@@ -108,7 +159,8 @@ def sanitize_summernote_html(text):
             name, *value_parts = style.split(":", 1)
             prop = name.strip().lower()
             value = value_parts[0] if value_parts else ""
-            if prop in {"color", "background-color"}:
+            if prop not in ALLOWED_STYLE_PROPERTIES:
+                # color and background-color are excluded from the list: the site picks its own.
                 continue
             if "url(" in value.lower():
                 continue

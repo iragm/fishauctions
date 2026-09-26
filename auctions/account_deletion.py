@@ -122,23 +122,41 @@ def _personal_emails(user):
     return emails
 
 
-def _delete_sign_in_identities(user):
-    """Drop every way back into this account: password, email records, social logins, JWTs."""
-    from allauth.account.models import EmailAddress
-    from allauth.socialaccount.models import SocialAccount, SocialToken
+def _revoke_apple_grants(user):
+    """Apple requires the grant revoked, before the token rows are dropped since they're the only way
+    to reach Apple. Best effort: Apple being unreachable must not block the deletion.
 
+    A network call, so it runs before the transaction rather than holding it (and its row locks) open.
+    """
     from auctions.apple_signin import revoke_all_for_user
 
-    # Apple requires the grant revoked, before the token rows below are dropped since they're the
-    # only way to reach Apple. Best effort: Apple being unreachable must not block the deletion.
     try:
         revoke_all_for_user(user)
     except Exception:
         logger.exception("Failed to revoke Apple sign-in grants for user %s", user.pk)
 
+
+def _delete_sign_in_identities(user):
+    """Drop every way back into this account: password, email records, social logins, JWTs, API keys
+    and the OAuth tokens agents on /mcp/ sign in with.
+    """
+    from allauth.account.models import EmailAddress
+    from allauth.socialaccount.models import SocialAccount, SocialToken
+    from oauth2_provider.models import (
+        get_access_token_model,
+        get_grant_model,
+        get_id_token_model,
+        get_refresh_token_model,
+    )
+
+    from auctions.models import UserAPIKey
+
     SocialToken.objects.filter(account__user=user).delete()
     SocialAccount.objects.filter(user=user).delete()
     EmailAddress.objects.filter(user=user).delete()
+    UserAPIKey.objects.filter(user=user).delete()
+    for model in (get_refresh_token_model(), get_access_token_model(), get_id_token_model(), get_grant_model()):
+        model.objects.filter(user=user).delete()
     # Repeated (also done on request): a token can be issued between the two, since signing in
     # cancels the deletion.
     blacklist_refresh_tokens(user)
@@ -163,7 +181,10 @@ def _delete_personal_rows(user):
         ObservedPrinter,
         PayPalSeller,
         PushNotificationSent,
+        RemotePrintJob,
         SearchHistory,
+        SignInStitch,
+        SpeakerTag,
         SquareSeller,
         UserBan,
         UserIgnoreCategory,
@@ -184,6 +205,10 @@ def _delete_personal_rows(user):
     ObservedPrinter.objects.filter(user=user).delete()
     # Camera sightings from their phone; the buffer is pruned constantly anyway.
     LotObservation.objects.filter(user=user).delete()
+    # Print jobs to their phone.
+    RemotePrintJob.objects.filter(user=user).delete()
+    # The anonymous sessions they held when signing in: what joins their browsing to them.
+    SignInStitch.objects.filter(user=user).delete()
 
     PayPalSeller.objects.filter(user=user).delete()
     SquareSeller.objects.filter(user=user).delete()
@@ -198,6 +223,8 @@ def _delete_personal_rows(user):
     # Promo campaigns carry the address they were sent to, so they go rather than unlink.
     AuctionCampaign.objects.filter(user=user).delete()
     UserLabelPrefs.objects.filter(user=user).delete()
+    # Their own votes on a speaker. A comment, below, is the club's note.
+    SpeakerTag.objects.filter(user=user).delete()
     # Who they refused to sell to is their own list. Bans of them belong to whoever wrote them.
     UserBan.objects.filter(user=user).delete()
     # An ad response is the campaign owner's statistic: keep the row, lose the person.
@@ -206,6 +233,21 @@ def _delete_personal_rows(user):
     # delete. Strikes against them stay: this site's repeat-infringer record (17 U.S.C. 512(i)).
     ContentReport.objects.filter(reported_by=user).update(reported_by=None, reporter_email="")
     CopyrightNotice.objects.filter(submitted_by=user).update(submitted_by=None)
+
+
+def _anonymize_assistant_records(user):
+    """The command palette and agents: the site's cost and tuning records stay, the person's words go.
+
+    A skill request is their own request in their own words, so it goes. An LLM call keeps its token
+    counts for the bill and loses what they typed. A voice-command line is the auction's tuning data
+    (lot and bidder words, not theirs) and a speaker comment is the club's note: both lose the link.
+    """
+    from auctions.models import AssistantSkillRequest, LLMUsage, SpeakerComment, VoiceCommandLog
+
+    AssistantSkillRequest.objects.filter(user=user).delete()
+    LLMUsage.objects.filter(user=user).update(user=None, query="")
+    VoiceCommandLog.objects.filter(user=user).update(user=None)
+    SpeakerComment.objects.filter(user=user).update(user=None)
 
 
 def _anonymize_page_views(user):
@@ -353,9 +395,11 @@ def delete_account(user):
     member_owned_club_pks = list(
         ClubMember.objects.filter(user=user, admin_edited=False).values_list("club_id", flat=True)
     )
+    _revoke_apple_grants(user)
     with transaction.atomic():
         _delete_sign_in_identities(user)
         _delete_personal_rows(user)
+        _anonymize_assistant_records(user)
         _anonymize_page_views(user)
         _anonymize_club_memberships(user)
         _anonymize_auction_records(user)

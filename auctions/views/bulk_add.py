@@ -15,6 +15,7 @@ import requests
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -38,6 +39,7 @@ from auctions.forms import (
 from auctions.models import (
     Auction,
     AuctionTOS,
+    clean_email_address,
     normalize_email,
 )
 
@@ -165,6 +167,22 @@ class CSVContactImportMixin:
         return default_response
 
     @staticmethod
+    def bad_email_reason(email):
+        """Why *email* can't be imported, or "". Blank passes: a row without an address is ordinary.
+
+        A spreadsheet is where most bad addresses come from, and the preview is the one place a person
+        is already reading the file row by row -- so a typo is reported there rather than stored and
+        found later when the mail doesn't arrive.
+        """
+        if not (email or "").strip():
+            return ""
+        try:
+            clean_email_address(email)
+        except ValidationError:
+            return f"“{email}” is not a valid email address"
+        return ""
+
+    @staticmethod
     def csv_columns_exist(field_names, columns):
         """Returns True if any value in the list `columns` exists in the file headers."""
         # A ragged row's surplus cells are under a None key.
@@ -185,7 +203,8 @@ class CSVContactImportMixin:
             messages.error(
                 self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
             )
-            return None
+            # A response, not None: two importers returned this straight from post(), a 500.
+            return self._hx_aware_redirect(self.import_cancel_url())
 
     # ------------------------------------------------------------------
     # Preview / confirm framework
@@ -468,7 +487,7 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
             import_from_auction = self.request.GET.get("import")
             if import_from_auction:
                 other_auction = Auction.objects.exclude(is_deleted=True).filter(slug=import_from_auction).first()
-                if not other_auction.permission_check(self.request.user):
+                if not other_auction or not other_auction.permission_check(self.request.user):
                     messages.error(
                         self.request,
                         f"You don't have permission to add users from {other_auction}",
@@ -566,6 +585,9 @@ class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, 
         base = {"fields": fields, "present": present, "target_pk": None, "target_display": "", "match_type": None}
         if not name and not email:
             return {**base, "action": "skip", "reason": "Row has no name or email"}
+        bad_email = self.bad_email_reason(email)
+        if bad_email:
+            return {**base, "action": "skip", "reason": bad_email}
         if email:
             existing = self.auction.find_user(email=email)
             if existing:

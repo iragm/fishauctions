@@ -185,7 +185,7 @@ def within_write_budget(credential: Credential) -> bool:
     """Count one write against the hourly budget; False when spent.
 
     Separate from :func:`within_rate_limit`: this bounds damage from prompt injection. Writes need the
-    owner's real permissions, no tool changes more than one row, and this caps the count. Attempts are
+    owner's real permissions, no tool writes over a filter, and this caps the count. Attempts are
     counted, not successes.
     """
     key = credential.write_cache_key
@@ -219,11 +219,10 @@ DCR_WINDOW_SECONDS = 3600
 
 
 def client_ip(request) -> str:
-    """The caller's address, trusting the proxy's left-most X-Forwarded-For entry."""
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "") or "unknown"
+    """The caller's address; see :mod:`auctions.client_ip`. ``"unknown"`` keys one shared bucket."""
+    from auctions.client_ip import client_ip as _client_ip
+
+    return _client_ip(request) or "unknown"
 
 
 def throttle_registration(view):

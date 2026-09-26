@@ -43,6 +43,64 @@ view or service it goes through. This file keeps only choices that look like mis
 - `list_club_members` does not say whether a row has a site account.
 - `deny` leaves `bap_auto_reason` alone; undoing an undecided lot is a no-op, not a refusal.
 
+- `my_bidder_number` is the one read about a participant that is **not** admin-gated, because it is
+  about the caller and nobody else (`_own_tos`, matched on user or email). `describe_person` answers
+  the same fact about anybody and is auction-admin only, which left the person holding the paddle
+  with no way to ask. `uses_check_in` rides along so "not checked in" isn't reported at an auction
+  that has no check-in.
+
+## Donation vendors
+
+- **The address book is not what is rationed; the mailbox is.** There is no CSV import and no bulk
+  add, and a club with four hundred sponsors in a spreadsheet loads them one confirmed write at a
+  time. That is friction on purpose, not a security bound: the bound is
+  `donations.MAX_DONATION_EMAILS_PER_DAY` a club a day, counted off the stored `DonationEmail` rows
+  rather than off who asked, so an agent and the site's own dialog spend one allowance. Adding a row
+  sends nothing.
+- `contact_donation_vendor` takes a subject and body the **caller** wrote, which is the only part
+  this site was writing for itself before. Everything else is still the server's and cannot be
+  argued out of it: the club's postal address, the unsubscribe link, the per-vendor reply address
+  that lands the answer back on the row, the follow-up clock, the history line. It is `destructive`
+  — email to a stranger in the club's name.
+- `update_donation_vendor` reaches `received` and `do_not_contact`, which are exactly the two
+  statuses `DonationVendor.LLM_ASSIGNABLE_STATUSES` withholds from the reply summarizer. Somebody
+  has to have the thing in their hands. An unsubscribed vendor's status and email are refused rather
+  than silently kept: the form disables both fields, so saving would report a change that never
+  happened.
+- `describe_donation_vendor` returns the thread with **their** words fenced and the club's own not,
+  and strips our appended footer off both — it is added on the way out and is not part of what
+  anybody said.
+- **A vendor whose form is on their own site is reached by a person, and this site holds the answers.**
+  `DonationVendor.contact_method` is `email` / `webform` / `phone` / `in_person`, and
+  `can_be_contacted` is per method: a webform vendor needs `contact_url`, not an email address. An
+  unsubscribe still stops every method — it is the vendor saying stop, not a fact about their inbox.
+- **A form submission spends none of the daily email allowance.** `donation_email_quota` counts
+  `DonationEmail.channel == CHANNEL_EMAIL` rows only, which is the whole reason the column exists: a
+  person typed into somebody else's website, no mail left here and no tokens were bought. A club out of
+  email for the day can still work its webform vendors, and `contact_blocked_reason` doesn't quote the
+  quota at them.
+- **`Club.donation_dossier()` is the one list** behind the dialog's copy buttons and
+  `describe_donation_vendor`'s `what_their_form_asks_for`, so a tool and a copy button can't disagree
+  about the club's tax ID. Text only, no uploads: the 501(c)(3) determination letter is not held here.
+  Blank answers are dropped — a form field nobody filled in reads as answered. Editing it needs
+  `permission_edit_club`, because it lives on the donation settings page with the rest of the club's
+  own details, not on the vendor list.
+- **The address a form is given is the vendor's own alias, not a member's.** `resolve_donation_alias`
+  never looks at `vendor.email`, so a webform vendor with no address still receives — and
+  `donations.adopt_replying_address` then stores whoever answered and flips them to `email`, so the
+  next request threads and carries an unsubscribe link. Refused for a machine
+  (`is_a_no_reply_address` — a form's own "thanks for your submission" would otherwise become the
+  vendor's address), for an address another vendor of the club holds (the uniqueness rule
+  `DonationVendorForm.clean_email` applies and this path has no form to apply it), and only the first
+  address is taken. The unsubscribe floor still applies to the address just learned.
+- `record_donation_contact` is `DonationDossierView`'s Mark contacted button. `contact_donation_vendor`
+  refuses an off-site vendor and names it, with their form's address alongside; each points at the
+  other, because the model reaches for the nearest tool it has.
+- The word **donation** is in `palette_assist._TOO_GENERAL`. Every lot has a donation flag, so
+  "sell the java fern as a donation" is floor work, but this desk took the word to `/mcp/` and
+  `asks_for_something_removed` then took `set_lot_winner` away mid-auction. **vendor** is the word
+  that names the desk, and it stays (with its plural and "sponsor", through `_SYNONYMS`).
+
 ## Account, history, help, source
 
 - `change_email` changes nothing until the link is followed (`nothing_was_changed_yet`).
@@ -56,11 +114,19 @@ view or service it goes through. This file keeps only choices that look like mis
 
 ## `mcp_only` writes
 
-Fifteen writes are on `/mcp/` but not in the palette (`remove_lot`, `queue_lot`/`unqueue_lot`,
-`remove_bid`, `remove_award`, `set_member_active`, `remove_person`, `remove_invoice_adjustment`,
-`set_point_rule`, `set_invoice_renewal`, `resend_member_card`, `leave_feedback`,
-`hide_chat_message`, `record_club_money`, `rotate_lot_image`). Their old `NOT_A_SKILL` excuses were
-about speech, which says nothing about an agent holding a lot number. All are confirm-tier.
+Most writes are on `/mcp/` and not in the palette. `palette_actions.MCP_ONLY_SKILLS` is the list and
+the reason for each; `test_palette_assist.DriftTests` pins the sixteen the palette keeps, which is
+the list that gets quietly shorter.
+
+The palette keeps a write only when you can say it in one sentence, you say it with your hands full,
+and you say it more than once in a while — and not even then if the page shows you something you have
+to see before deciding. That leaves the auction floor, the checkout table and the door. Everything
+else is a page `go_to_page` reaches.
+
+`add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
+palette's `add_a_lot_via_webform` is navigate-only and opens the lot form pre-filled (`LotCreateView.get_initial`
+reads the fields off the query string), because the species matching, the auction's field rules and
+the seller's own eyes are all on that page. No caller is ever offered both.
 
 - `remove_person` refuses anyone with an invoice or lots; deleting cascades their money away.
 - Queue **reordering** is absent: it rewrites every row.

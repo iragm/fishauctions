@@ -168,7 +168,7 @@ def club_api_documentation_context(club, api_key):
 
     Every example is filled in from this club, so it shows a request its admin can paste and run.
     """
-    today = timezone.now().date()
+    today = timezone.localdate()
     now = timezone.now()
     return {
         "site_domain": Site.objects.get_current().domain,
@@ -317,7 +317,7 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from django.db.models import BooleanField, Case, Value, When
         from django.utils import timezone
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         expired_whens = [When(membership_expiration_date__lt=today, then=Value(True))]
         if self.club.membership_annual_fee:
             expired_whens.append(When(membership_expiration_date__isnull=True, then=Value(True)))
@@ -359,12 +359,32 @@ class SelfServeContactLinkView(ClubViewMixin, View):
         "contact": "all emails",
     }
 
-    def get(self, request, slug, uuid, level):
+    def _member_and_status(self, uuid, level):
         if level not in self._LEVEL_TO_STATUS:
             raise Http404
         member = get_object_or_404(ClubMember, club=self.club, uuid=uuid, is_deleted=False)
-        new_status = self._LEVEL_TO_STATUS[level]
-        ClubMember.objects.filter(pk=member.pk).update(contact_status=new_status)
+        return member, self._LEVEL_TO_STATUS[level]
+
+    def get(self, request, slug, uuid, level):
+        # Only asks: mail scanners open every link in an email, which used to change the preference.
+        member, new_status = self._member_and_status(uuid, level)
+        return render(
+            request,
+            "auctions/self_serve_contact.html",
+            {
+                "club": self.club,
+                "member": member,
+                "level": level,
+                "label": self._STATUS_LABELS[new_status],
+                "confirm": True,
+            },
+        )
+
+    def post(self, request, slug, uuid, level):
+        member, new_status = self._member_and_status(uuid, level)
+        member.contact_status = new_status
+        # A save, so Mailchimp and Brevo hear about it as they do from the unsubscribe links.
+        member.save(update_fields=["contact_status"])
         label = self._STATUS_LABELS[new_status]
         # The member acts on their own UUID link, so there is no acting user (like
         # ClubMemberSelfServiceView, which logs the same kind of change).

@@ -49,7 +49,7 @@ class Command(BaseCommand):
         award_updated = 0
         award_updates = []
         for award in awards_to_fix.iterator(chunk_size=500):
-            new_date = award.lot.date_posted.date() if award.lot.date_posted else timezone.now().date()
+            new_date = award.lot.date_posted.date() if award.lot.date_posted else timezone.localdate()
             if award.date != new_date:
                 award.date = new_date
                 award_updates.append(award)

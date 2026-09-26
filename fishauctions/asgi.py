@@ -54,9 +54,11 @@ application = ProtocolTypeRouter(
                 LogWebsocketExceptions(
                     URLRouter(
                         [
-                            re_path(r"ws/lots/(?P<lot_number>\w+)/$", LotConsumer.as_asgi()),
-                            re_path(r"ws/users/(?P<user_pk>\w+)/$", UserConsumer.as_asgi()),
-                            re_path(r"ws/auctions/(?P<auction_pk>\w+)/$", AuctionConsumer.as_asgi()),
+                            # \d+, not \w+: these are all primary keys, and a word reaching
+                            # objects.get(pk=...) is a ValueError inside the consumer.
+                            re_path(r"ws/lots/(?P<lot_number>\d+)/$", LotConsumer.as_asgi()),
+                            re_path(r"ws/users/(?P<user_pk>\d+)/$", UserConsumer.as_asgi()),
+                            re_path(r"ws/auctions/(?P<auction_pk>\d+)/$", AuctionConsumer.as_asgi()),
                         ]
                     )
                 )

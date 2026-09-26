@@ -20,11 +20,14 @@ from dataclasses import dataclass
 from email.utils import parseaddr
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 
 from .email_routing import sender_with_display_name
 from .llm import LLMError, get_provider
-from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage
+from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage, clean_email_address
+from .palette_actions import untrusted, untrusted_short  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -127,18 +130,27 @@ def _day_bounds(now=None):
     return start, start + datetime.timedelta(days=1)
 
 
+def _sent_today(club, start):
+    return DonationEmail.objects.filter(
+        vendor__club=club,
+        direction=DonationEmail.DIRECTION_OUTGOING,
+        channel=DonationEmail.CHANNEL_EMAIL,
+        date__gte=start,
+    ).count()
+
+
 def donation_email_quota(club, *, now=None):
     """How much of *club*'s daily donation-email allowance is gone.
 
     The larger of emails recorded in the database (auditable, copies included) and drafts counted in
     the cache (paid for even if cancelled). Not the sum: a normal send is one of each.
+
+    ``channel`` matters: the allowance is about mail this site sends or writes, so a vendor's own
+    request form -- filled in by a person, on somebody else's website, costing no tokens and no
+    deliverability -- does not spend it. That is the whole reason the column exists.
     """
     start, end = _day_bounds(now)
-    sent = DonationEmail.objects.filter(
-        vendor__club=club,
-        direction=DonationEmail.DIRECTION_OUTGOING,
-        date__gte=start,
-    ).count()
+    sent = _sent_today(club, start)
     drafted = calls_used_today(club, "draft")
     return DonationEmailQuota(used=max(sent, drafted), limit=MAX_DONATION_EMAILS_PER_DAY, resets_at=end)
 
@@ -313,17 +325,29 @@ def summarize_incoming(email_row, *, user=None):
     Writes the summary onto *email_row* and returns it (possibly empty). Never raises: a model
     that is down, misconfigured, or over budget must not lose the club a vendor's reply.
     """
+    if email_row.bounced:
+        # A delivery failure is a machine telling us the address is dead. Nothing in it is the
+        # vendor's word, and summarizing it would put it in their "latest reply" column.
+        return ""
     vendor = email_row.vendor
     club = vendor.club
+    provider = get_provider()
+    # Before charging, as in ``draft_request``: with no provider nothing is asked, so a site with no
+    # model configured must not spend a club's whole day of budget on calls it never makes.
+    if not provider.is_configured():
+        return ""
     if not check_rate_limit(club, "incoming", MAX_INCOMING_LLM_CALLS_PER_DAY):
         logger.info("Donation summary skipped for club %s: daily model budget used up", club.pk)
         return ""
-    provider = get_provider()
-    if not provider.is_configured():
-        return ""
 
     body = truncate_for_model(strip_quoted_reply(email_row.body), INCOMING_BODY_LIMIT)
-    prompt = f"Vendor: {vendor.name}\nSubject: {email_row.subject}\n\nTheir reply:\n{body}"
+    # Fenced like every other outsider's text on this site (auctions/mcp/CLAUDE.md): subject and
+    # body are whatever was emailed to the vendor alias, so they are data, never instructions.
+    prompt = (
+        f"Vendor: {untrusted_short(vendor.name)}\n"
+        f"Subject: {untrusted_short(email_row.subject)}\n\n"
+        f"Their reply:\n{untrusted(body)}"
+    )
     result = None
     try:
         result = provider.complete_json(_INCOMING_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
@@ -370,15 +394,76 @@ def apply_incoming_status(vendor, status, *, user=None):
     return True
 
 
+def adopt_replying_address(vendor, sender, *, user=None):
+    """A vendor who wrote back is a vendor we can email. Returns True when the row changed.
+
+    Their form asked for an address and got the vendor's own tracked alias, so their answer arrives
+    here knowing who they are. From then on the conversation is email: the alias threads it, the
+    unsubscribe link travels with it, and nobody has to find the form again. Only the *first* address
+    is adopted -- a later reply from a colleague doesn't move the vendor to their inbox.
+
+    Refused for a machine (:func:`is_a_no_reply_address`) and for an address another vendor of this
+    club already holds, which is the uniqueness rule ``DonationVendorForm.clean_email`` applies and
+    this path has no form to apply it for it.
+    """
+    from .models import DonationVendor
+
+    if not vendor.contacted_off_site:
+        return False
+    try:
+        # A ``From:`` header is whatever a stranger's mail server put there, and this path has no form
+        # to check it. An unusable address is the same as none: don't write it onto the vendor.
+        address = clean_email_address(sender)
+    except ValidationError:
+        logger.info("Not adopting %r for vendor %s: not a usable address", sender, vendor.pk)
+        address = ""
+    if vendor.email:
+        # We already know how to write to them; only the method was wrong.
+        address = vendor.email
+    elif not address or is_a_no_reply_address(address):
+        return False
+    elif (
+        DonationVendor.objects.filter(club=vendor.club, email=address, is_deleted=False).exclude(pk=vendor.pk).exists()
+    ):
+        logger.info("Not adopting %s for vendor %s: another vendor of this club has it", address, vendor.pk)
+        return False
+    was = vendor.get_contact_method_display()
+    vendor.email = address
+    vendor.contact_method = DonationVendor.CONTACT_EMAIL
+    # ``save()`` applies the unsubscribe floor to the address we just learned, which is the point of
+    # it being there: somebody who opted out and then wrote in is still opted out.
+    vendor.save(update_fields=["email", "contact_method"])
+    ClubHistory.objects.create(
+        club=vendor.club,
+        user=user,
+        action=f"{vendor.name} replied from {address}, so they're contacted by email now, not {was.lower()}",
+        applies_to="DONATIONS",
+    )
+    return True
+
+
 def record_incoming(vendor, *, sender, recipients, subject, body, message_id="", date=None):
     """Store an inbound message and reset the follow-up clock. Returns ``(email_row, created)``. A repeated
     Message-ID (SES retries) is ignored.
+
+    The check and the insert run under a lock on the vendor row: SES retries while the first delivery is
+    still being handled, and there is no unique constraint to fall back on (outgoing rows have no
+    Message-ID, and every empty one would collide).
     """
+    with transaction.atomic():
+        DonationVendor.objects.select_for_update().filter(pk=vendor.pk).first()
+        return _record_incoming(vendor, sender, recipients, subject, body, message_id, date)
+
+
+def _record_incoming(vendor, sender, recipients, subject, body, message_id, date):
     if message_id:
-        existing = DonationEmail.objects.filter(vendor=vendor, message_id=message_id).first()
+        existing = DonationEmail.objects.filter(vendor=vendor, message_id=message_id[:500]).first()
         if existing:
             return existing, False
+    # Before the row, so the history reads in the order it happened.
+    adopt_replying_address(vendor, sender)
     now = timezone.now()
+    bounced = is_a_delivery_failure(sender)
     email_row = DonationEmail.objects.create(
         vendor=vendor,
         direction=DonationEmail.DIRECTION_INCOMING,
@@ -388,15 +473,17 @@ def record_incoming(vendor, *, sender, recipients, subject, body, message_id="",
         body=strip_email_html(body),
         message_id=(message_id or "")[:500],
         date=date or now,
+        bounced=bounced,
     )
-    # They wrote back; the club owes the next move.
+    # Something came back; the club owes the next move either way -- a reply to answer, or an address
+    # to fix.
     vendor.last_contact = now
     vendor.followup_due = now
     vendor.save(update_fields=["last_contact", "followup_due"])
     ClubHistory.objects.create(
         club=vendor.club,
         user=None,
-        action=f"Received a donation reply from {vendor.name}",
+        action=(f"Email to {vendor.name} bounced" if bounced else f"Received a donation reply from {vendor.name}"),
         applies_to="DONATIONS",
     )
     return email_row, True
@@ -527,17 +614,16 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
 
 
 def _next_event_line(club):
-    """One line about the club's next event, or "", so the model has something concrete to ask for."""
+    """One line about the club's next event, or "", so the model has something concrete to ask for.
+
+    ``Club.next_donation_event``, which the dossier modal shows as well: a prompt and a copy button
+    saying different dates would be worse than either saying nothing.
+    """
     try:
-        event = club.events.filter(date_start__gte=timezone.now()).order_by("date_start").first()
+        return club.next_donation_event
     except Exception:
         logger.exception("Could not look up the next event for club %s", club.pk)
         return ""
-    if not event:
-        return ""
-    when = timezone.localtime(event.date_start).strftime("%B %-d, %Y")
-    where = f" at {event.location}" if event.location else ""
-    return f"{event.title} on {when}{where}"
 
 
 def draft_request(vendor, *, context="", last_email="", last_email_is_outgoing=False, user=None):
@@ -583,6 +669,12 @@ class DonationSendError(Exception):
 
 
 def _check_contactable(vendor):
+    if vendor.contacted_off_site:
+        msg = (
+            f"{vendor.name} is contacted by {vendor.get_contact_method_display().lower()}, not email. "
+            "Record what you did instead."
+        )
+        raise DonationSendError(msg)
     if not vendor.email:
         msg = "This vendor has no email address."
         raise DonationSendError(msg)
@@ -591,18 +683,29 @@ def _check_contactable(vendor):
 
 
 def contact_blocked_reason(vendor, quota=None):
-    """Why an admin can't write to *vendor* now, or "". Covers the vendor and the quota; pass *quota* in lists."""
+    """Why an admin can't approach *vendor* now, or "". Covers the vendor and the quota; pass *quota* in lists.
+
+    The allowance only blocks email. A vendor whose form is on their own site is reached by a person
+    typing into it, so running out of email for the day has nothing to say about them.
+    """
     reason = vendor.cannot_contact_reason
     if reason:
         return reason
+    if vendor.contacted_off_site:
+        return ""
     quota = donation_email_quota(vendor.club) if quota is None else quota
     return quota.exhausted_message if quota.exhausted else ""
 
 
 def _check_daily_quota(club):
-    """Refuse past the daily allowance, on every path, not only in the view."""
+    """Refuse past the daily allowance, on every path, not only in the view.
+
+    Counts what was sent, not what was drafted: the draft being sent was already charged, so the day's
+    last draft could otherwise never go out.
+    """
     quota = donation_email_quota(club)
-    if quota.exhausted:
+    start, _end = _day_bounds()
+    if _sent_today(club, start) >= quota.limit:
         raise DonationSendError(quota.exhausted_message)
 
 
@@ -622,8 +725,18 @@ def strip_donation_footer(text):
     return _FOOTER_SEPARATOR_RE.sub("", body[:index].rstrip()).strip()
 
 
+class MissingMailingAddress(Exception):
+    """The club has no postal address, so no donation email can be composed.
+
+    Raised rather than falling back to the club's name alone: a name is not an address, and a
+    donation request is bulk commercial email to a stranger -- the one thing here that is
+    unambiguously covered by CAN-SPAM and CASL, both of which require a physical address in the
+    message. ``DonationContactView`` turns this into a screen pointing at the settings page.
+    """
+
+
 def unsubscribe_footer(vendor):
-    """The physical address and opt-out line US bulk commercial email must carry.
+    """The physical address and opt-out line bulk commercial email must carry.
 
     The club is named once, as the first line of the address block, added only if the club left it out.
     """
@@ -633,8 +746,9 @@ def unsubscribe_footer(vendor):
     club = vendor.club
     address = club.donation_mailing_address.strip()
     if not address:
-        block = club.name
-    elif club.name.strip().lower() in address.lower():
+        msg = f"{club.name} has no mailing address set, and a donation request has to carry one."
+        raise MissingMailingAddress(msg)
+    if club.name.strip().lower() in address.lower():
         block = address
     else:
         block = f"{club.name}\n{address}"
@@ -648,12 +762,13 @@ def compose_email_text(vendor, body):
     return f"{body.rstrip()}\n{unsubscribe_footer(vendor)}"
 
 
-def _record_outgoing(vendor, *, subject, body, user, sender, recipients, message_id=""):
+def _record_outgoing(vendor, *, subject, body, user, sender, recipients, message_id="", channel=None):
     """Shared bookkeeping for a request that went out, however it went out."""
     now = timezone.now()
     email_row = DonationEmail.objects.create(
         vendor=vendor,
         direction=DonationEmail.DIRECTION_OUTGOING,
+        channel=channel or DonationEmail.CHANNEL_EMAIL,
         sender=(sender or "")[:255],
         recipients=(recipients or "")[:1000],
         subject=(subject or "")[:500],
@@ -739,6 +854,102 @@ def send_request(vendor, *, subject, body, user):
         club=club,
         user=user,
         action=f"Sent a donation request to {vendor.name} ({vendor.email})",
+        applies_to="DONATIONS",
+    )
+    return email_row
+
+
+#: Local parts that are a machine, not a person. A form's own "thanks for your submission" auto-reply
+#: arrives from one of these, and adopting it as the vendor's address would point every later email at
+#: a mailbox nobody reads.
+_NO_REPLY_LOCAL_PARTS = (
+    "noreply",
+    "no-reply",
+    "no_reply",
+    "donotreply",
+    "do-not-reply",
+    "do_not_reply",
+    "mailer-daemon",
+    "mailerdaemon",
+    "postmaster",
+    "bounce",
+    "bounces",
+)
+
+
+#: The subset of :data:`_NO_REPLY_LOCAL_PARTS` that means the message never reached anybody. A
+#: "noreply@" auto-acknowledgement is a machine answering; these are the machine saying it failed.
+_DELIVERY_FAILURE_LOCAL_PARTS = (
+    "mailer-daemon",
+    "mailerdaemon",
+    "postmaster",
+    "bounce",
+    "bounces",
+)
+
+
+def _local_part_is(email, markers):
+    """Whether *email*'s local part is one of *markers*, with the ``+tag``/``-tag`` forms relays add."""
+    local = (email or "").split("@")[0].strip().lower()
+    if not local:
+        return False
+    return any(
+        local == marker or local.startswith(f"{marker}+") or local.startswith(f"{marker}-") for marker in markers
+    )
+
+
+def is_a_no_reply_address(email):
+    """Whether *email*'s local part says a person will never read what is sent back to it."""
+    return _local_part_is(email, _NO_REPLY_LOCAL_PARTS)
+
+
+def is_a_delivery_failure(email):
+    """Whether a message from *email* is a bounce rather than the vendor answering.
+
+    The only bounce signal this site gets: SES delivers the failure notice to the vendor's own alias,
+    so without this every dead address reads on the page as a vendor who wrote back.
+    """
+    return _local_part_is(email, _DELIVERY_FAILURE_LOCAL_PARTS)
+
+
+def record_offsite_contact(vendor, *, note="", user=None, channel=None):
+    """Record a request made somewhere this site cannot reach: the vendor's own form, a phone call, the
+    counter of their shop.
+
+    Costs nothing against the daily email allowance -- ``donation_email_quota`` counts email rows only --
+    because the person did the sending and no mail left here. Everything else is the same bookkeeping
+    ``send_request`` does: the follow-up clock, the status, the history line.
+    """
+    channel = channel or vendor.contact_method
+    if channel not in dict(DonationEmail.CHANNEL_CHOICES):
+        channel = DonationEmail.CHANNEL_WEBFORM
+    if channel == DonationEmail.CHANNEL_EMAIL:
+        # Email is the one channel this site performs itself, so there is nothing here to report:
+        # filing it as one would spend the daily allowance and leave a row that reads as a sent
+        # message with no message in it.
+        msg = (
+            f"{vendor.name} is contacted by email, which this site sends itself. "
+            "Use the Contact button to write to them."
+        )
+        raise DonationSendError(msg)
+    if not vendor.can_be_contacted:
+        raise DonationSendError(vendor.cannot_contact_reason or "This vendor cannot be contacted.")
+    how = dict(DonationEmail.CHANNEL_CHOICES)[channel]
+    email_row = _record_outgoing(
+        vendor,
+        subject=f"Donation request via {how.lower()}",
+        # No body to quote: the club typed its request into somebody else's form. The note is what
+        # they chose to remember about it, and the form's address is where it went.
+        body=(note or "").strip() or f"Recorded as sent via {how.lower()}. No copy of the request was kept.",
+        user=user,
+        sender=(user.email if user else ""),
+        recipients=vendor.contact_url or vendor.email,
+        channel=channel,
+    )
+    ClubHistory.objects.create(
+        club=vendor.club,
+        user=user,
+        action=f"Recorded a donation request to {vendor.name} via {how.lower()}",
         applies_to="DONATIONS",
     )
     return email_row

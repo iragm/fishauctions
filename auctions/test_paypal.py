@@ -710,8 +710,9 @@ class SquarePaymentUpdatedRefundResurrectionTests(StandardTestCase):
         super().setUp()
 
         # The COMPLETED branch looks up a SquareSeller by merchant_id and the invoice by reference_id.
+        # The auction's own creator: a payment into anyone else's account doesn't count for its invoices.
         self.square_seller = SquareSeller.objects.create(
-            user=self.admin_user,
+            user=self.online_auction.created_by,
             square_merchant_id=self.MERCHANT_ID,
             access_token="TEST_ACCESS_TOKEN",
             refresh_token="TEST_REFRESH_TOKEN",

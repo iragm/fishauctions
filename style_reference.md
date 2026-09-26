@@ -79,7 +79,9 @@ on click. Exceptions: a feature exclusive to one auction type (in-person/online)
 other. `fishauctions://` deep links have no browser handler — a desktop-usable page keeps the button
 and toasts "this lives in the app" (e.g. `auction_lot_map.html`); an app-only or noisy-on-web page
 gates on `request.is_mobile_app` instead (e.g. Bluetooth label printing, invoice-page Tap to Pay,
-where web already has working Square/PayPal buttons so no toast is needed).
+where web already has working Square/PayPal buttons so no toast is needed). Buttons that you'd never
+possibly use on a phone can be hidden there for simplicity's sake (`d-none d-sm-inline-block`), e.g.
+the fullscreen buttons on the lot queue, set lot winners and self check-in pages.
 
 ## Confirmation dialogs
 

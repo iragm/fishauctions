@@ -1,0 +1,123 @@
+{% comment %}
+The Contact dialog for a vendor this site can't write to: their donation request form, a phone call,
+a visit. Mounted like every other htmx modal here (donation_contact_modal.html).
+
+Not a form to fill in -- a sheet to copy out of. The club's answers to what every vendor's form asks,
+one copy button each, in the order those forms tend to ask for them.
+{% endcomment %}
+<div data-htmx-modal-root>
+  <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+  <div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ modal_title }}</h5>
+          <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
+        </div>
+        <form method="post" action="{{ post_url }}" hx-post="{{ post_url }}" hx-target="#modals-here">
+          {% csrf_token %}
+          <div class="modal-body">
+
+            {% if error %}
+            <div class="alert alert-danger" role="alert">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ error }}
+            </div>
+            {% endif %}
+
+            {% if is_webform %}
+            <p>
+              <a class="btn btn-primary" href="{{ vendor.contact_url }}" target="_blank" rel="noopener noreferrer">
+                <i class="bi bi-box-arrow-up-right me-1"></i> Open their request form
+              </a>
+            </p>
+            {% else %}
+            <p class="text-muted">{{ vendor.name }} is contacted by {{ vendor.get_contact_method_display|lower }}.</p>
+            {% endif %}
+
+            {% if reply_to_address %}
+            <div class="help-note">
+              <i class="bi bi-lightbulb-fill"></i>
+              <div>
+                Give them the email address below rather than your own. Their reply lands on
+                {{ vendor.name }}'s row here, gets summarized, and this vendor switches to email
+                from then on &mdash; so you won't have to find the form again.
+              </div>
+            </div>
+            {% else %}
+            {% comment %}No tracked address to hand over, so their reply goes to somebody's own inbox and this site never sees it.  Say so here, where the address is about to be typed, rather than letting it be discovered later.{% endcomment %}
+            <div class="alert alert-warning text-dark" role="alert">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              {{ club.name }} doesn't send donation mail from this site, so there's no tracked
+              address to give them. Their reply will go to whichever inbox you type in, and you'll
+              have to add their email to this vendor by hand.
+              {% if can_edit_settings %}<a href="{{ settings_url }}">Change how donation mail is sent</a>.{% endif %}
+            </div>
+            {% endif %}
+
+            {% if rows %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <tbody>
+                  {% for label, value in rows %}
+                  <tr>
+                    <th scope="row" class="text-nowrap" style="width:12rem">{{ label }}</th>
+                    <td><span id="dossier-value-{{ forloop.counter }}" style="white-space:pre-wrap">{{ value }}</span></td>
+                    <td class="text-end text-nowrap" style="width:6rem">
+                      <button type="button" class="btn btn-sm btn-primary dossier-copy" data-copy-from="dossier-value-{{ forloop.counter }}">
+                        <i class="bi bi-clipboard"></i> Copy
+                      </button>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info" role="alert">
+              <i class="bi bi-info-circle me-1"></i>
+              There's nothing to copy yet. Their forms will ask for your tax ID, a phone number and
+              who to contact.
+              {% if can_edit_settings %}<a href="{{ settings_url }}">Fill those in once</a> and they'll be here every time.{% endif %}
+            </div>
+            {% endif %}
+
+            <div class="mt-3">
+              <label for="dossier-note" class="form-label">What did you ask for?</label>
+              <textarea class="form-control" id="dossier-note" name="note" rows="2"
+                        placeholder="A gift card for the spring raffle"></textarea>
+              <div class="form-text">Kept with this vendor, so the next person can see what was already asked.</div>
+            </div>
+
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
+            <button type="submit" class="btn btn-success text-dark">
+              <i class="bi bi-check2 me-1"></i> Mark contacted
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  (function () {
+    // Scoped to this modal and bound as it mounts: the modal arrives through an htmx swap, so a
+    // listener added at page load would never see these buttons.
+    var root = document.currentScript.previousElementSibling;
+    window.mountHtmxModal(root);
+    root.querySelectorAll('.dossier-copy').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var source = root.querySelector('#' + button.getAttribute('data-copy-from'));
+        if (!source) { return; }
+        var done = function () {
+          button.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied';
+          setTimeout(function () { button.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(source.textContent.trim()).then(done, function () {});
+        }
+      });
+    });
+  })();
+</script>

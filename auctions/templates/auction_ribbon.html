@@ -8,10 +8,10 @@
 <small><span class='text-muted'>{% if auction.club %}An official {{ auction.club }} auction{% else %}An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
 {% if request.user.is_superuser and not auction.created_by.userdata.is_trusted %}
-      <br><a href='{% url "auction_main" slug=auction.slug %}?trust_user=true' class="btn btn-info btn-sm mt-2">Trust this user</a>
+      <br><form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="trust_creator" class="btn btn-info btn-sm mt-2">Trust this user</button></form>
 {% endif %}
 {% if can_make_club_admin %}
-      <br><a href='{% url "auction_main" slug=auction.slug %}?make_club_admin=true' class="btn btn-info btn-sm mt-2">Make {{ auction.created_by.username }} admin of {{ creator_club }}</a>
+      <br><form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="make_creator_club_admin" class="btn btn-info btn-sm mt-2">Make {{ auction.created_by.username }} admin of {{ creator_club }}</button></form>
 {% endif %}
 {% if not auction.admin_checklist_completed and not auction.admin_checklist_mostly_completed or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
@@ -47,7 +47,7 @@
           Contact us and request access
         </a>
       {% endif %}
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_promo_banner=true' class="btn btn-secondary btn-sm mt-2">Don't show again for this auction</a>
+      <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_promo_banner" class="btn btn-secondary btn-sm mt-2">Don't show again for this auction</button></form>
     </div>
   </div>
   {% endif %}
@@ -63,8 +63,8 @@
     </small>
     <div>
       <a href="{% url 'paypal_connect' %}" class="btn btn-info btn-sm mt-2">Connect PayPal account and enable payments</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_paypal_banner=true' class="btn btn-secondary btn-sm mt-2">Not this auction</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?never_show_paypal_connect=true' class="btn btn-secondary btn-sm mt-2">Never show this again</a>
+      <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_paypal_banner" class="btn btn-secondary btn-sm mt-2">Not this auction</button></form>
+      <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="never_show_paypal_connect" class="btn btn-secondary btn-sm mt-2">Never show this again</button></form>
     </div>
   </div>
   {% endif %}
@@ -86,8 +86,8 @@
       {% else %}
       <a href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}" class="btn btn-info btn-sm mt-2">Contact us and request access</a>
       {% endif %}
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_square_banner=true' class="btn btn-secondary btn-sm mt-2">Not this auction</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?never_show_square_connect=true' class="btn btn-secondary btn-sm mt-2">Never show this again</a>
+      <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_square_banner" class="btn btn-secondary btn-sm mt-2">Not this auction</button></form>
+      <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="never_show_square_connect" class="btn btn-secondary btn-sm mt-2">Never show this again</button></form>
     </div>
   </div>
   {% endif %}
@@ -101,7 +101,7 @@
   </small>
   <div>
     <a href="{% url 'club_event_edit' slug=auction.club.slug pk=customizable_event.pk %}" class="btn btn-info btn-sm mt-2">Customize this event</a>
-    <a href='{% url "auction_main" slug=auction.slug %}?dismissed_customize_event_banner=true' class="btn btn-secondary btn-sm mt-2">Don't show again</a>
+    <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_customize_event_banner" class="btn btn-secondary btn-sm mt-2">Don't show again</button></form>
   </div>
 </div>
 {% endif %}

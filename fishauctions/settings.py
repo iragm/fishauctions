@@ -39,20 +39,21 @@ ALLOWED_HOSTS = [
     "web",
     "nginx",  # Allow Selenium tests to connect via nginx service name
     "127.0.0.1",
-    "0.0.0.0",
+    "0.0.0.0",  # noqa: S104 - an ALLOWED_HOSTS entry, not a bind address
     os.environ.get("SITE_DOMAIN", ""),
     os.environ.get("ALLOWED_HOST_1", ""),
     os.environ.get("ALLOWED_HOST_2", ""),
     os.environ.get("ALLOWED_HOST_3", ""),
 ]
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost",
-    "http://127.0.0.1",
     "https://" + os.environ.get("SITE_DOMAIN", ""),
     "https://" + os.environ.get("ALLOWED_HOST_1", ""),
     "https://" + os.environ.get("ALLOWED_HOST_2", ""),
     "https://" + os.environ.get("ALLOWED_HOST_3", ""),
 ]
+# Plain-http local origins are for development only.
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS += ["http://localhost", "http://127.0.0.1"]
 
 
 # Logs go to /home/logs, bind-mounted from ./logs so they survive deploys. If unwritable, fall back
@@ -255,6 +256,7 @@ ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "auctions.middleware.ContentSecurityPolicyMiddleware",  # Sets Content-Security-Policy
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -264,6 +266,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    # After AuthenticationMiddleware: it needs request.user to tell a visitor from a member.
+    "auctions.middleware.ShortAnonymousSessionMiddleware",
 ]
 
 ROOT_URLCONF = "fishauctions.urls"
@@ -396,6 +400,10 @@ ACCOUNT_USERNAME_VALIDATORS = "auctions.validators.USERNAME_VALIDATORS"
 ACCOUNT_LOGIN_METHODS = {"username", "email"}
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_SIGNUP_FIELDS = ["email*", "first_name*", "last_name*", "username*", "password1*", "password2*"]
+# Load-bearing, not a preference. On sign-in, auctions/signals.py claims every unlinked AuctionTOS
+# and ClubMember row matching user.email -- and a ClubMember carries permission_admin. That is only
+# safe because nobody can sign in until they have proved the address. Relaxing this to "optional"
+# would turn that hook into club-admin takeover by signing up as an admin's address.
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
@@ -404,7 +412,12 @@ ACCOUNT_EMAIL_SUBJECT_PREFIX = ""
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 ACCOUNT_CHANGE_EMAIL = True
 
-SESSION_COOKIE_AGE = 1209600 * 100
+# Two weeks for a visitor who never signs in, a year for one who does (see
+# auctions/signals.py: user_logged_in_callback). Was 1209600 * 100 -- 3.8 years -- for everybody,
+# which meant a row per anonymous visitor that clearsessions could not reclaim until 2029, and
+# /api/pageview/ writes one on every unauthenticated beacon.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 365
+ANONYMOUS_SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
 
 # Redis-cached sessions with the database behind them: no session query per request, and a Redis
 # restart loses nobody.
@@ -443,6 +456,10 @@ INBOUND_ROUTING_SECRET = os.environ.get("INBOUND_ROUTING_SECRET", "").strip()
 # IOS_APP_LINKS: "TEAMID.bundle.id", comma-separated.
 ANDROID_APP_LINKS = [entry for entry in os.environ.get("ANDROID_APP_LINKS", "").split(",") if entry.strip()]
 IOS_APP_LINKS = [entry for entry in os.environ.get("IOS_APP_LINKS", "").split(",") if entry.strip()]
+# The token OpenAI's plugin submission portal issues for this plugin, served from
+# /.well-known/openai-apps-challenge (auctions/mcp/verification.py). Blank 404s, which is what a
+# deployment that isn't the one being submitted wants.
+OPENAI_APPS_CHALLENGE_TOKEN = os.environ.get("OPENAI_APPS_CHALLENGE_TOKEN", "").strip()
 DEFAULT_FROM_EMAIL = (
     f"info@{EMAIL_ROUTING_DOMAIN}"
     if SES_ROUTE_EMAILS_ENABLED
@@ -519,6 +536,10 @@ CLOUDFLARE_IMAGES_ENABLED = bool(
 
 # Edge cache purge: a zone-scoped token, separate from the Images one. /media/ is cached thirty days,
 # so without it a deleted file (e.g. a DMCA takedown) stays served. Unset is safe and logged.
+# Orange-clouded, so auctions.client_ip should read CF-Connecting-IP rather than X-Real-IP (which
+# behind Cloudflare is only the edge). Off in dev and staging, which nginx serves directly.
+BEHIND_CLOUDFLARE = parse_bool_env(os.environ.get("BEHIND_CLOUDFLARE"), default=False)
+
 CLOUDFLARE_ZONE_ID = os.environ.get("CLOUDFLARE_ZONE_ID", "")
 CLOUDFLARE_CACHE_PURGE_API_TOKEN = os.environ.get("CLOUDFLARE_CACHE_PURGE_API_TOKEN", "")
 
@@ -530,7 +551,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # HSTS. Env-driven and off by default because the header is sticky: ramp max-age per environment
 # (3600, 86400, 604800, 31536000). Not tied to DEBUG, since local prod-mirror boxes run DEBUG=False
 # on 127.0.0.1. Leave INCLUDE_SUBDOMAINS and PRELOAD off unless certain.
-SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0" if DEBUG else "3600"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = parse_bool_env(os.environ.get("SECURE_HSTS_INCLUDE_SUBDOMAINS"), default=False)
 SECURE_HSTS_PRELOAD = parse_bool_env(os.environ.get("SECURE_HSTS_PRELOAD"), default=False)
 
@@ -611,6 +632,8 @@ SOCIALACCOUNT_EMAIL_VERIFICATION = "mandatory"
 SOCIALACCOUNT_AUTO_SIGNUP = True
 # Needed to revoke Apple grants on account deletion, which drops these rows.
 SOCIALACCOUNT_STORE_TOKENS = True
+# Its only job is the address allauth counts its rate limits against; see the module.
+ACCOUNT_ADAPTER = "auctions.account_adapter.FishAuctionsAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "auctions.social_adapter.FishAuctionsSocialAccountAdapter"
 
 INTERNAL_IPS = [
@@ -681,6 +704,13 @@ PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USE
 # New users get the assistant by default; per user in the admin, or `manage.py change_assistant off`.
 # Still requires a configured model.
 ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=True)
+# On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
+# The kill switch for a write that misfires during somebody's auction, and the default for new users.
+ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=False)
+# Tokens a minute the command palette will spend before it starts making everybody wait a little.
+# Deliberately under the provider's own per-minute limit: the point is never to reach theirs, because
+# past it every user is refused at once instead of each waiting a second.
+LLM_TOKENS_PER_MINUTE = int(os.environ.get("LLM_TOKENS_PER_MINUTE") or 150000)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(
@@ -840,6 +870,12 @@ SUMMERNOTE_THEME = "bs5"
 
 SUMMERNOTE_CONFIG = {
     "iframe": True,
+    # No uploads. The picture tool is off, but the upload endpoint was still open to anyone, signed in
+    # or not, and kept the client's file extension: an image/HTML polyglot named x.html was served as
+    # a page on this site. Refused here rather than with disable_attachment, which also removes the URL
+    # the editor widget reverses, so every summernote field would raise.
+    "attachment_require_authentication": True,
+    "test_func_upload_view": lambda request: False,
     "summernote": {
         # Change editor size
         "width": "100%",
@@ -872,6 +908,22 @@ SUMMERNOTE_CONFIG = {
 }
 
 X_FRAME_OPTIONS = "SAMEORIGIN"
+
+# A deliberately partial Content-Security-Policy, set in auctions/middleware.py.
+#
+# No script-src: the templates are full of inline <script> blocks and hyperscript _="on ..."
+# attributes, so 'unsafe-inline' would be the only workable value and a policy that permits inline
+# script buys nothing. What is here costs nothing and closes what it names: object-src stops plugin
+# content, base-uri stops a <base> tag rewriting every relative URL on the page, and frame-ancestors
+# is X_FRAME_OPTIONS in the modern spelling.
+# Narrowing script-src properly means nonces on every inline block: worth doing, not a one-liner.
+#
+# No form-action. Chrome and Safari apply it to the redirect a form POST answers with, not just to
+# where the form posts, so 'self' silently blocked every POST that ends somewhere else: PayPal and
+# Square checkout, connecting a club's PayPal or Square account, and the OAuth consent screen
+# sending an agent back to its callback -- which can be any host, http://localhost included, so no
+# allowlist fits it either.
+CONTENT_SECURITY_POLICY = "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 PAYPAL_API_BASE = os.environ.get("PAYPAL_API_BASE", "")
 if not PAYPAL_API_BASE:
@@ -1061,6 +1113,28 @@ SIMPLE_JWT = {
 # --- OAuth 2.1 for the MCP endpoint ------------------------------------------
 #
 # How Claude's apps get permission to act as a person through /mcp/ (auctions/mcp/auth.py).
+#
+# OIDC_RSA_KEYFILE is a PEM private key next to .env, and the only switch OIDC has: with it the
+# server also answers as an OpenID provider (auctions/mcp/oidc.py), which is what lets ChatGPT's
+# plugin directory read a verified email address. Without it OIDC stays off rather than advertising
+# an `openid` scope it could not sign a token for. Generate one with:
+#
+#     openssl genrsa -out oidc.pem 2048
+_oidc_keyfile = os.environ.get("OIDC_RSA_KEYFILE", "").strip()
+OIDC_RSA_PRIVATE_KEY = ""
+if _oidc_keyfile:
+    try:
+        OIDC_RSA_PRIVATE_KEY = (BASE_DIR / _oidc_keyfile).read_text()
+    except OSError as _oidc_err:
+        # Don't raise: a box that boots with OIDC off is diagnosable; one that won't boot isn't.
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "OIDC_RSA_KEYFILE=%s could not be read (%s: %s); OpenID Connect disabled.",
+            _oidc_keyfile,
+            type(_oidc_err).__name__,
+            _oidc_err,
+        )
 OAUTH2_PROVIDER = {
     # Scopes are a ceiling like UserAPIKey.allow_writes, never a grant. ``offline_access`` gets a
     # refresh token.
@@ -1068,6 +1142,20 @@ OAUTH2_PROVIDER = {
         "read": "Look things up: auctions, lots, people, invoices, club members",
         "write": "Add and change things you could change yourself on the website",
         "offline_access": "Stay connected without signing in again",
+        # OIDC, and only when there is a key to sign with: a scope in this table is advertised in
+        # both discovery documents *and* in the protected-resource metadata, so listing one the
+        # server can't honour is a promise made to every client, not a feature waiting to be
+        # switched on. Not in DEFAULT_SCOPES either -- a client that asks for nothing is asking to
+        # act, not to be told who it is acting as. ChatGPT asks for both by name because they are
+        # advertised.
+        **(
+            {
+                "openid": "Know which account you signed in with",
+                "email": "See the email address on your account",
+            }
+            if OIDC_RSA_PRIVATE_KEY
+            else {}
+        ),
     },
     # All three by default: a connector that names no scopes silently lost its write tools, and
     # without offline_access it dies after an hour.
@@ -1110,6 +1198,19 @@ OAUTH2_PROVIDER = {
     "COMPLIANT_BCP_RFC9700_ACCESS_TOKEN_TRANSPORT": True,
     # RFC 9207 `iss` in the authorization response (mix-up defence).
     "COMPLIANT_BCP_RFC9700_AUTHZ_RESPONSE_ISS": True,
+    # OpenID Connect, for the verified email address ChatGPT's directory uses to keep a work
+    # account out of a personal workspace. Off without a key: see auctions/mcp/oidc.py for why the
+    # two can't be separated, and for the RS256 every registered client is given.
+    "OIDC_ENABLED": bool(OIDC_RSA_PRIVATE_KEY),
+    "OIDC_RSA_PRIVATE_KEY": OIDC_RSA_PRIVATE_KEY,
+    "OAUTH2_VALIDATOR_CLASS": "auctions.mcp.oidc.Validator",
+    # The OIDC document has its own copy of this list and defaults to a shorter one, which would
+    # have the two discovery documents disagreeing about whether a public client can use the token
+    # endpoint -- the CIMD trapdoor again, one document further down.
+    "OIDC_TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED": ["none", "client_secret_post", "client_secret_basic"],
+    # Same again for response types: the OIDC document defaults to the whole OpenID menu, hybrid
+    # flows included, none of which this server grants.
+    "OIDC_RESPONSE_TYPES_SUPPORTED": ["code"],
     # check --deploy's W008 (http redirect URIs) is expected: Claude Code's loopback callback is http.
     #
     # COMPLIANT_BCP_RFC9700_TOKEN_STORAGE is left off: token hashing breaks the refresh grace period.

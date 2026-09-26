@@ -23,6 +23,11 @@ create/edit AuctionTOS dialog (generic_admin_form.html) and mounted the same way
               {% if vendor.contact_name %}
               <dt class="col-sm-3">Contact</dt><dd class="col-sm-9">{{ vendor.contact_name }}</dd>
               {% endif %}
+              <dt class="col-sm-3">Contact by</dt><dd class="col-sm-9">{{ vendor.get_contact_method_display }}</dd>
+              {% if vendor.contact_url %}
+              <dt class="col-sm-3">Their form</dt>
+              <dd class="col-sm-9"><a href="{{ vendor.contact_url }}" target="_blank" rel="noopener noreferrer">{{ vendor.contact_url }}</a></dd>
+              {% endif %}
               <dt class="col-sm-3">Email</dt>
               <dd class="col-sm-9">{% if vendor.email %}{{ vendor.email }}{% else %}<span class="text-muted">None</span>{% endif %}</dd>
               <dt class="col-sm-3">Status</dt><dd class="col-sm-9">{{ vendor.get_status_display }}</dd>
@@ -91,7 +96,7 @@ create/edit AuctionTOS dialog (generic_admin_form.html) and mounted the same way
           </button>
           {% else %}
           <button type="button" class="btn btn-primary" hx-get="{{ contact_url }}" hx-target="#modals-here" hx-trigger="click">
-            <i class="bi bi-envelope me-1"></i> Contact
+            <i class="bi {% if vendor.contacted_off_site %}bi-clipboard-check{% else %}bi-envelope{% endif %} me-1"></i> Contact
           </button>
           {% endif %}
           <button type="button" class="btn btn-primary" hx-get="{% url 'club_donation_vendor' vendor.pk %}?edit=1" hx-target="#modals-here" hx-trigger="click">
@@ -114,4 +119,28 @@ create/edit AuctionTOS dialog (generic_admin_form.html) and mounted the same way
     </div>
   </div>
 </div>
-<script>window.mountHtmxModal(document.currentScript.previousElementSibling);</script>
+<script>
+  (function () {
+    var root = document.currentScript.previousElementSibling;
+    window.mountHtmxModal(root);
+
+    // Only one of these two is the answer to "where does a request to this vendor go?", and which one
+    // depends on the dropdown above them. Bound as the modal mounts, because it arrives through an
+    // htmx swap and a listener added at page load would never see it.
+    //
+    // Hidden, not disabled: a hidden input still posts, so a vendor who moves to their webform keeps
+    // the address already on file -- which is what they get contacted on again the moment they reply
+    // (donations.adopt_replying_address).
+    var method = root.querySelector('#id_contact_method');
+    var emailField = root.querySelector('#div_id_email');
+    var formField = root.querySelector('#div_id_contact_url');
+    if (!method || !emailField || !formField) { return; }
+    function showTheOneThatApplies() {
+      var webform = method.value === 'webform';
+      emailField.classList.toggle('d-none', webform);
+      formField.classList.toggle('d-none', !webform);
+    }
+    method.addEventListener('change', showTheOneThatApplies);
+    showTheOneThatApplies();
+  })();
+</script>

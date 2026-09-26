@@ -20,14 +20,15 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from auctions.bidding import MAX_BID
 from auctions.models import (
     Auction,
     AuctionTOS,
     Invoice,
     Lot,
-    LotHistory,
     MobileOfflineOp,
     PickupLocation,
+    note_email_if_unusable,
 )
 from auctions.services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member
 
@@ -262,7 +263,9 @@ class _OpApplier:
         if not pickup:
             return self._conflict("not_found", "This auction has no pickup location to add a user to")
 
-        email = (op.get("email") or "").strip()
+        # Replayed from the app's queue, typed at a check-in desk hours ago. Failing the op now would
+        # strand it: nobody is holding the phone to correct a typo.
+        email = note_email_if_unusable(op.get("email"), "a queued offline check-in")
         phone_number = (op.get("phone_number") or "").strip()
         # Club-managed auctions keep bidder numbers on the ClubMember, so create one (its signals
         # create the participant row, which is adopted rather than duplicated).
@@ -339,10 +342,7 @@ class _OpApplier:
                     lot.lot_number_int = number
         lot.save()
 
-        invoice = Invoice.objects.filter(auctiontos_user=seller, auction=self.auction).first()
-        if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=seller, auction=self.auction)
-        invoice.recalculate()
+        Invoice.for_participant(seller, self.auction).recalculate()
         self.auction.create_history(applies_to="LOTS", action=f"Bulk added 1 lots for {seller.name}", user=self.user)
 
         echo = {"lot_number": _lot_number_display(self.auction, lot)}
@@ -396,6 +396,9 @@ class _OpApplier:
             price = Decimal(str(raw)).quantize(Decimal("0.01"))
         except (InvalidOperation, ValueError, TypeError):
             return None
+        # As DynamicSetLotWinner.validate_price: NaN quantizes, then raises on the first comparison.
+        if not price.is_finite() or price < 0 or price > MAX_BID:
+            return None
         if self.auction.only_whole_dollar_bids and price != price.to_integral_value():
             return None
         return price
@@ -410,24 +413,7 @@ class _OpApplier:
 
     def _end_unsold(self, lot):
         """Mirror DynamicSetLotWinner.end_unsold: mark unsold, history, websocket."""
-        lot.date_end = timezone.now()
-        lot.winner = None
-        lot.auctiontos_winner = None
-        lot.winning_price = None
-        lot.active = False
-        lot.save()
-        message = f"{self.user} has marked lot {lot.lot_number_display} as not sold"
-        LotHistory.objects.create(lot=lot, user=self.user, message=message, changed_price=True)
-        lot.send_websocket_message(
-            {
-                "type": "chat_message",
-                "info": "ENDED_NO_WINNER",
-                "message": message,
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-            }
-        )
+        lot.end_unsold(self.user)
         self.auction.create_history(
             applies_to="LOTS",
             action=f"Marked lot {lot.lot_number_display} as ended without being sold",

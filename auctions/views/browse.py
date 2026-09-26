@@ -47,6 +47,7 @@ from auctions.filters import (
     UserWonLotFilter,
     get_recommended_lots,
 )
+from auctions.helper_functions import cookie_coordinates
 from auctions.models import (
     AdCampaign,
     AdCampaignResponse,
@@ -54,7 +55,6 @@ from auctions.models import (
     AuctionIgnore,
     AuctionTOS,
     Category,
-    Club,
     ClubMember,
     Invoice,
     Lot,
@@ -70,7 +70,7 @@ from auctions.tables import (
     LotHTMxTableForUsers,
 )
 
-from .base import MILES_TO_KM, HTMxTableView, check_club_permission
+from .base import MILES_TO_KM, HTMxTableView, check_club_permission, club_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class RenderAd(DetailView):
         if category_pk:
             try:
                 category = Category.objects.get(pk=category_pk)
-            except Category.DoesNotExist:
+            except (Category.DoesNotExist, ValueError, TypeError):
                 pass
         if user and not category:
             # No category on this page, so use one of the user's interests.
@@ -127,8 +127,11 @@ class RenderAd(DetailView):
             .filter(Q(end_date__gte=timezone.now()) | Q(end_date__isnull=True))
             .order_by("-bid")
         )
+        # A campaign tied to an auction shows only on that auction's pages, never site-wide.
         if auction:
             adCampaigns = adCampaigns.filter(Q(auction__isnull=True) | Q(auction=auction.pk))
+        else:
+            adCampaigns = adCampaigns.filter(auction__isnull=True)
         total = adCampaigns.count()
         chanceOfGoogleAd = 50
         if uniform(0, 100) < chanceOfGoogleAd:
@@ -137,7 +140,10 @@ class RenderAd(DetailView):
             if campaign.category == category:
                 campaign.bid = campaign.bid * 2  # Better chance for matching category.  Don't save after this
             if campaign.bid > uniform(0, total - 1):
-                if campaign.number_of_clicks > campaign.max_clicks or campaign.number_of_impressions > campaign.max_ads:
+                if (
+                    campaign.number_of_clicks >= campaign.max_clicks
+                    or campaign.number_of_impressions >= campaign.max_ads
+                ):
                     logger.debug("not selected -- limit exceeded")
                 else:
                     return AdCampaignResponse.objects.create(
@@ -313,7 +319,7 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         slug = self.forwarded.get("club_slug", "")
         if not slug:
             return ClubMember.objects.none()
-        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).first()
+        club = club_from_url(slug)
         if not club or not check_club_permission(self.request.user, club, "permission_manage_bap"):
             return ClubMember.objects.none()
         qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("name")
@@ -342,7 +348,7 @@ class ClubMemberMergeAutocomplete(LoginRequiredMixin, autocomplete.Select2QueryS
         exclude_pk = self.forwarded.get("exclude_member")
         if not slug:
             return ClubMember.objects.none()
-        club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).first()
+        club = club_from_url(slug)
         if not club or not check_club_permission(self.request.user, club, "permission_add_edit"):
             return ClubMember.objects.none()
         qs = ClubMember.objects.filter(club=club).order_by("is_deleted", "name")
@@ -727,13 +733,8 @@ class NoLotAuctions(APIView):
                         lot_list = lot_list.filter(donation=False)
                     lot_list = lot_list.count()
                     result = f"You've added {lot_list} of {auction.max_lots_per_user} lots to {auction}"
-        if result:
-            result += "<br>"
-        return JsonResponse(
-            data={
-                "result": result,
-            }
-        )
+        # The page inserts this as HTML, and the auction's title is whatever its creator typed.
+        return JsonResponse(data={"result": format_html("{}<br>", result) if result else ""})
 
 
 class AuctionNotifications(APIView):
@@ -750,8 +751,7 @@ class AuctionNotifications(APIView):
         link = ""
         slug = ""
         distance = 0
-        latitude = request.COOKIES.get("latitude")
-        longitude = request.COOKIES.get("longitude")
+        latitude, longitude = cookie_coordinates(request)
         if not latitude or not longitude:
             if request.user.is_authenticated:
                 if request.user.userdata.latitude:
@@ -808,6 +808,16 @@ class SetCoordinates(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        request.user.userdata.location_coordinates = f"{request.POST['latitude']},{request.POST['longitude']}"
-        request.user.userdata.save()
+        try:
+            latitude = float(request.POST.get("latitude", ""))
+            longitude = float(request.POST.get("longitude", ""))
+        except (TypeError, ValueError):
+            return HttpResponse("latitude and longitude are required", status=400)
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return HttpResponse("latitude and longitude are out of range", status=400)
+        userdata = request.user.userdata
+        userdata.location_coordinates = f"{latitude},{longitude}"
+        userdata.latitude = latitude
+        userdata.longitude = longitude
+        userdata.save(update_fields=["location_coordinates", "latitude", "longitude"])
         return HttpResponse("Success")

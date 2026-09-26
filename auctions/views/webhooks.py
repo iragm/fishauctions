@@ -11,6 +11,7 @@ import requests
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -40,6 +41,7 @@ from auctions.models import (
     PayPalSeller,
     SquareSeller,
     UserData,
+    note_email_if_unusable,
 )
 from auctions.tasks import (
     maybe_send_membership_renewal_confirmation,
@@ -269,13 +271,18 @@ class PayPalWebhookView(PayPalAPIMixin, View):
 
 
 def _parse_paypal_datetime_date(value):
-    """PayPal ISO-8601 timestamp (e.g. next_billing_time) -> a date, or None."""
+    """PayPal ISO-8601 timestamp (e.g. next_billing_time) -> the site's local date, or None.
+
+    PayPal sends UTC, so a 9pm Eastern payment would otherwise land on tomorrow.
+    """
     from django.utils.dateparse import parse_datetime
 
     if not value:
         return None
     parsed = parse_datetime(value)
-    return parsed.date() if parsed else None
+    if not parsed:
+        return None
+    return timezone.localtime(parsed).date() if timezone.is_aware(parsed) else parsed.date()
 
 
 def _mask_subscription_id(subscription_id):
@@ -295,6 +302,9 @@ def _find_or_create_subscription_member(club, subscription_id, email):
         member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).first()
         if member:
             return member
+        # Kept even if it isn't an address: this email is the only identifier the subscription has,
+        # so refusing it would leave somebody's paid membership attached to nobody.
+        email = note_email_if_unusable(email, f"a PayPal subscription for {club.name}")
         member = ClubMember.objects.create(club=club, email=email)
         # No acting user in a webhook.
         ClubHistory.objects.create(
@@ -332,7 +342,7 @@ def _book_paypal_subscription_payment(club, member, subscription):
         return None
     if amount <= 0:
         return None
-    payment_date = _parse_paypal_datetime_date(last_payment.get("time")) or timezone.now().date()
+    payment_date = _parse_paypal_datetime_date(last_payment.get("time")) or timezone.localdate()
     if ClubMoney.objects.filter(
         club=club,
         category=ClubMoney.CATEGORY_MEMBERSHIP,
@@ -425,7 +435,7 @@ def _apply_paypal_subscription_event(club, subscription):
         return
     old_expiration = member.membership_expiration_date
     member.paypal_subscription_id = subscription_id
-    member.membership_last_paid = timezone.now().date()
+    member.membership_last_paid = timezone.localdate()
     if advanced:
         member.membership_expiration_date = next_date
     member.save()
@@ -614,11 +624,9 @@ class SquareWebhookView(SquareAPIMixin, View):
     def verify_signature(self, request, raw_body, signature):
         """Verify Square's signature: base64(HMAC-SHA256(key, notification_url + body))."""
         if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
-            logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - skipping signature verification")
-            if settings.DEBUG:
-                return True  # Allow webhook if signature key not configured
-            else:
-                return False
+            # post() has already refused this case outside DEBUG; never verify against nothing.
+            logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - cannot verify signature")
+            return bool(settings.DEBUG)
 
         try:
             from square.utils.webhooks_helper import verify_signature as square_verify_signature
@@ -657,8 +665,17 @@ class SquareWebhookView(SquareAPIMixin, View):
             logger.exception("Invalid JSON in Square webhook: %s", exc)
             return HttpResponseBadRequest("invalid json")
 
-        # Verify webhook signature if configured
-        if settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+        # An unverified body is refused, never processed. With no signature key there is nothing to
+        # verify with, so the answer is no: the refund branch below writes a negative payment from
+        # the body alone, which is not something to do on a stranger's say-so. DEBUG keeps the local
+        # webhook tester working.
+        if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            if settings.DEBUG:
+                logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - accepting unverified webhook (DEBUG)")
+            else:
+                logger.error("Square webhook refused: SQUARE_WEBHOOK_SIGNATURE_KEY is not configured")
+                return HttpResponseForbidden("webhook not configured")
+        else:
             signature = request.headers.get("X-Square-Hmacsha256-Signature", "")
             if not signature:
                 logger.error("Square webhook missing signature header")
@@ -710,33 +727,57 @@ class SquareWebhookView(SquareAPIMixin, View):
                         invoice = None
                         logger.warning("Square webhook: non-numeric reference_id: %s", reference_id)
                     if invoice:
+                        # Only money paid into this invoice's own Square account counts for it. The
+                        # reference id is whatever the paying merchant set, so without this any
+                        # connected seller could create an order naming another auction's invoice,
+                        # pay themselves, and mark that invoice paid.
+                        payee = (
+                            (invoice.club or invoice.auction).effective_square_seller
+                            if (invoice.club or invoice.auction)
+                            else None
+                        )
+                        currency = (payment.get("amount_money") or {}).get("currency", "USD")
+                        if not payee or not seller or payee.pk != seller.pk or currency != invoice.currency:
+                            logger.warning(
+                                "Square webhook: payment %s names invoice %s, which merchant %s does not collect for",
+                                payment_id,
+                                invoice.pk,
+                                merchant_id,
+                            )
+                            invoice = None
+                    if invoice:
                         amount_money = payment.get("amount_money", {})
                         amount_value = Decimal(amount_money.get("amount", 0)) / 100
                         currency = amount_money.get("currency", "USD")
                         receipt_number = payment.get("receipt_number", "")
 
-                        payment_record, created = InvoicePayment.objects.get_or_create(
-                            invoice=invoice,
-                            external_id=payment_id,
-                            defaults={
-                                "amount": amount_value,
-                                "amount_available_to_refund": amount_value,
-                                "currency": currency,
-                                "payment_method": "Square",
-                                "receipt_number": receipt_number,
-                            },
-                        )
-                        # Never restore refundability consumed by refunds: payment.updated fires often,
-                        # and a refunded payment must not become refundable again.
-                        if not created:
-                            # A changed amount moves the refundable balance by the delta.
-                            if amount_value != payment_record.amount:
-                                payment_record.amount_available_to_refund += amount_value - payment_record.amount
-                                payment_record.amount = amount_value
-                            # Update receipt_number if it wasn't set before
-                            if receipt_number and not payment_record.receipt_number:
-                                payment_record.receipt_number = receipt_number
-                            payment_record.save()
+                        # Locked as the Tap to Pay confirm locks it, which records the same payment: the
+                        # two arrive together, and the unique (invoice, external_id) makes the loser's
+                        # get_or_create find the winner's row.
+                        with transaction.atomic():
+                            invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+                            payment_record, created = InvoicePayment.objects.get_or_create(
+                                invoice=invoice,
+                                external_id=payment_id,
+                                defaults={
+                                    "amount": amount_value,
+                                    "amount_available_to_refund": amount_value,
+                                    "currency": currency,
+                                    "payment_method": "Square",
+                                    "receipt_number": receipt_number,
+                                },
+                            )
+                            # Never restore refundability consumed by refunds: payment.updated fires
+                            # often, and a refunded payment must not become refundable again.
+                            if not created:
+                                # A changed amount moves the refundable balance by the delta.
+                                if amount_value != payment_record.amount:
+                                    payment_record.amount_available_to_refund += amount_value - payment_record.amount
+                                    payment_record.amount = amount_value
+                                # Update receipt_number if it wasn't set before
+                                if receipt_number and not payment_record.receipt_number:
+                                    payment_record.receipt_number = receipt_number
+                                payment_record.save()
                         if invoice.auctiontos_user and invoice.auction:
                             try:
                                 action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
@@ -826,9 +867,11 @@ class SquareWebhookView(SquareAPIMixin, View):
                         payment_record.save()
 
                     payment_record.invoice.recalculate()
-                    if created:
-                        action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
-                        payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                    invoice = payment_record.invoice
+                    # A club renewal invoice has neither, and the refund above must still stand.
+                    if created and invoice.auction and invoice.auctiontos_user:
+                        action = f"Refund via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
         elif event_type == "oauth.authorization.revoked":

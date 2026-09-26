@@ -46,7 +46,8 @@ def available_versions(timeout=30, database="fb"):
     """Every snapshot version on the mirror, oldest first. Raises ``httpx.HTTPError`` on failure."""
     response = httpx.get(_LISTING_URL.format(database=database), timeout=timeout)
     response.raise_for_status()
-    root = ET.fromstring(response.text)
+    # S314: FishBase's own listing over https, fetched by us, not caller-supplied.
+    root = ET.fromstring(response.text)  # noqa: S314
     # Namespaced listing; match on local tag name to avoid hardcoding the namespace URI.
     versions = []
     for prefix in root.iter():

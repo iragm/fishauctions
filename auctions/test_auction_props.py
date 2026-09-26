@@ -893,7 +893,7 @@ class LotInvoicePropertyTests(StandardTestCase):
 
     def test_winner_invoice_resolves_from_winner_user_without_auctiontos(self):
         """Only the legacy winner FK set."""
-        invoice = Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        invoice = Invoice.for_participant(self.tosB)
         lot = Lot.objects.create(
             lot_name="winner-user only lot",
             auction=self.online_auction,
@@ -916,7 +916,7 @@ class LotInvoicePropertyTests(StandardTestCase):
 
     def test_sellers_invoice_resolves_from_seller_user_without_auctiontos(self):
         """Only the legacy seller FK set."""
-        invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+        invoice = Invoice.for_participant(self.online_tos)
         lot = Lot.objects.create(
             lot_name="seller-user only lot",
             auction=self.online_auction,
@@ -952,7 +952,7 @@ class LotInvoicePropertyTests(StandardTestCase):
         assert bare_lot.sellers_invoice is None
 
     def test_square_refund_possible_true_for_winner_user_lot_with_square_payment(self):
-        invoice = Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        invoice = Invoice.for_participant(self.tosB)
         InvoicePayment.objects.create(
             invoice=invoice,
             payment_method="square",
@@ -973,7 +973,7 @@ class LotInvoicePropertyTests(StandardTestCase):
 
     def test_square_refund_possible_false_without_square_payment(self):
         """The invoice resolves, but with no Square payment a refund is not possible."""
-        Invoice.objects.create(auctiontos_user=self.tosB, auction=self.online_auction)
+        Invoice.for_participant(self.tosB)
         lot = Lot.objects.create(
             lot_name="no square payment lot",
             auction=self.online_auction,

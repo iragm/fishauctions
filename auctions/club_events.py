@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import logging
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db.models import F, Q
 from django.utils import timezone
 
@@ -385,6 +386,9 @@ def sync_all():
     for club in clubs:
         try:
             sync_club(club)
+        except SoftTimeLimitExceeded:
+            # Out of time: stop here, so the caller's lock is released, rather than run on to the hard kill.
+            raise
         except Exception:
             logger.exception("Club event sync failed for club %s", club.pk)
             continue

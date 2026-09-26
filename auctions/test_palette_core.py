@@ -12,6 +12,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from auctions import command_palette
 from auctions.models import (
     PRIVACY_POLICY_SLUG,
     Auction,
@@ -1208,3 +1209,57 @@ class MobileWebSessionTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         # An open-redirect attempt falls back to the safe default.
         self.assertEqual(resp.url, self.home_url)
+
+
+class ExampleSuggestionTests(StandardTestCase):
+    """Nothing anywhere told anyone the box takes sentences, so nobody typed one."""
+
+    def setUp(self):
+        super().setUp()
+        from auctions.models import UserData
+
+        UserData.objects.update(use_llm_search=True)
+        self.user.userdata.refresh_from_db(fields=["use_llm_search"])
+
+    def _groups(self):
+        self.client.force_login(self.user)
+        return self.client.get(reverse("command_palette")).json()["groups"]
+
+    def _examples(self):
+        return [item for group in self._groups() for item in group["items"] if item["type"] == "example"]
+
+    def test_the_empty_palette_shows_a_few_things_you_could_say(self):
+        from auctions import llm
+        from auctions.test_palette_assist import FakeProvider
+
+        llm.set_provider_override(FakeProvider())
+        try:
+            examples = self._examples()
+            self.assertTrue(examples)
+            self.assertLessEqual(len(examples), command_palette.EXAMPLE_LIMIT)
+            # Each is a whole sentence somebody could say, and each is a different skill.
+            self.assertEqual(len({item["title"] for item in examples}), len(examples))
+            # No URL: clicking fills the box rather than firing a command with a made-up lot number.
+            self.assertEqual({item["url"] for item in examples}, {""})
+        finally:
+            llm.set_provider_override(None)
+
+    def test_none_are_offered_when_the_assistant_is_off(self):
+        from auctions.models import UserData
+
+        UserData.objects.update(use_llm_search=False)
+        self.user.userdata.refresh_from_db(fields=["use_llm_search"])
+        self.assertEqual(self._examples(), [])
+
+    def test_they_are_only_skills_this_user_can_actually_use(self):
+        from auctions import llm, palette_actions
+        from auctions.test_palette_assist import FakeProvider
+
+        llm.set_provider_override(FakeProvider())
+        try:
+            offered = {example["title"] for example in self._examples()}
+        finally:
+            llm.set_provider_override(None)
+        for action in palette_actions.ACTIONS.values():
+            if action.needs == palette_actions.NEEDS_CLUB_ADMIN:
+                self.assertFalse(offered & set(action.examples), f"{action.name} was offered to a plain bidder")

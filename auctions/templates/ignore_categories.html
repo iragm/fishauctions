@@ -17,7 +17,7 @@ $(document).ready(function() {
     $('#category-selection').on('select2:unselect', function (e) {
         // delete
         var data = e.params.data;
-        $.ajax({url: "/api/userignorecategory/delete/" + data.id, success: function(result){}});
+        $.ajax({type: 'POST', url: "/api/userignorecategory/delete/" + data.id, headers: {'X-CSRFToken': '{{ csrf_token }}'}});
     });
     // Fetch the preselected item, and add to the control
     var categorySelection = $('#category-selection');
@@ -39,7 +39,7 @@ $(document).ready(function() {
         $('#category-selection').on('select2:select', function (e) {
             // create
             var data = e.params.data;
-            $.ajax({url: "/api/userignorecategory/create/" + data.id, success: function(result){ }});
+            $.ajax({type: 'POST', url: "/api/userignorecategory/create/" + data.id, headers: {'X-CSRFToken': '{{ csrf_token }}'}});
         });
     });
 });

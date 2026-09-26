@@ -362,7 +362,7 @@ class LotBapEligibilityTests(TestCase):
     def test_not_active_member_when_membership_expired(self):
         self.club.only_active_members_can_participate = True
         self.club.save()
-        self.member.membership_expiration_date = timezone.now().date() - datetime.timedelta(days=1)
+        self.member.membership_expiration_date = timezone.localdate() - datetime.timedelta(days=1)
         self.member.save()
         lot = self._make_lot()
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_active_member")
@@ -370,7 +370,7 @@ class LotBapEligibilityTests(TestCase):
     def test_active_member_passes_membership_check(self):
         self.club.only_active_members_can_participate = True
         self.club.save()
-        self.member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=30)
+        self.member.membership_expiration_date = timezone.localdate() + datetime.timedelta(days=30)
         self.member.save()
         lot = self._make_lot()
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
@@ -418,7 +418,7 @@ class LotBapEligibilityTests(TestCase):
 
     def test_auto_award_skipped_when_award_already_exists(self):
         lot = self._make_lot()
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), lot=lot, points=99)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), lot=lot, points=99)
         lot.auto_award_bap_points()
         lot.refresh_from_db()
         self.assertEqual(lot.bap_points_awarded, 0)
@@ -651,25 +651,25 @@ class BapAwardRecalculateTests(TestCase):
         self.member = ClubMember.objects.create(club=self.club, user=self.user)
 
     def test_save_updates_member_bap_points(self):
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=10)
         self.member.refresh_from_db()
         self.assertEqual(self.member.bap_points, 10)
 
     def test_delete_resets_member_bap_points(self):
-        award = BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        award = BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=10)
         award.delete()
         self.member.refresh_from_db()
         self.assertEqual(self.member.bap_points, 0)
 
     def test_ytd_points_counted_for_current_year_only(self):
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=5)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=5)
         BapAward.objects.create(club_member=self.member, date=datetime.date(2019, 1, 1), points=3)
         self.member.refresh_from_db()
         self.assertEqual(self.member.bap_points, 8)
         self.assertEqual(self.member.bap_points_ytd, 5)
 
     def test_hap_points_tracked_separately_from_bap(self):
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=0, hap_points=4)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=0, hap_points=4)
         self.member.refresh_from_db()
         self.assertEqual(self.member.hap_points, 4)
         self.assertEqual(self.member.bap_points, 0)
@@ -794,7 +794,7 @@ class ClubBapLotsViewTests(TestCase):
             date_end=timezone.now() - datetime.timedelta(days=1),
         )
         BapAward.objects.create(
-            club_member=self.seller_member, date=timezone.now().date(), lot=self.approved_lot, points=5
+            club_member=self.seller_member, date=timezone.localdate(), lot=self.approved_lot, points=5
         )
         self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
 
@@ -1313,7 +1313,7 @@ class ClubAPIKeyUITests(TestCase):
         api_key.save(update_fields=["can_read_public_lots"])
         response = self.client.get(detail_url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/auctions/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/auctions/")
 
     def test_create_redirects_to_detail_with_raw_key_in_session(self):
         self.client.login(username="apiui_editor", password="testpass")
@@ -1394,10 +1394,10 @@ class ClubAPIKeyUITests(TestCase):
         member = ClubMember.objects.create(club=self.club, name="Endpoint Example")
         detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
         response = self.client.get(detail_url)
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/")
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/")
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/bap-awards/")
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/bap-lots/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/members/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/members/{member.pk}/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/members/{member.pk}/bap-awards/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/bap-lots/")
         self.assertContains(response, "lot_number_display")
         self.assertContains(response, "lot_id")
         self.assertContains(response, "bap_eligible")

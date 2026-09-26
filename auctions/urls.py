@@ -16,6 +16,7 @@ from django.views.generic.base import RedirectView, TemplateView
 from django_ses.views import SESEventWebhookView
 
 from . import app_links, apple_notifications, donation_views, passkit_views, views
+from .mcp import verification
 from .mcp.transport import MCPEndpointView
 
 urlpatterns = [
@@ -27,6 +28,14 @@ urlpatterns = [
         ".well-known/apple-app-site-association",
         app_links.apple_app_site_association,
         name="apple_app_site_association",
+    ),
+    # Domain verification for OpenAI's plugin directory (auctions/mcp/verification.py). Same three
+    # constraints as the two files above -- exact path, no redirect, no sign-in -- and the body is
+    # the token and nothing else.
+    path(
+        ".well-known/openai-apps-challenge",
+        verification.openai_apps_challenge,
+        name="openai_apps_challenge",
     ),
     # allauth mounts these under /3rdparty/, but the app's WebView allowlist is built around
     # /social/... (AllauthWebScreen). Same views, second path; the names stay allauth's so reverse()
@@ -136,6 +145,11 @@ urlpatterns = [
         "api/auctions/<slug:slug>/custom-dropdown-options/",
         views.AuctionDropdownOptionsAPI.as_view(),
         name="auction_custom_dropdown_options",
+    ),
+    path(
+        "api/auctions/<slug:slug>/custom-random-options/",
+        views.AuctionRandomOptionsAPI.as_view(),
+        name="auction_custom_random_options",
     ),
     path(
         "api/lot/chat_subscribe",
@@ -513,9 +527,14 @@ urlpatterns = [
         name="auction_lot_queue",
     ),
     path(
-        "auctions/<slug:slug>/queue/kiosk/",
-        views.LotQueueKioskView.as_view(),
-        name="auction_lot_queue_kiosk",
+        "auctions/<slug:slug>/queue/fullscreen/",
+        views.LotQueueFullscreenView.as_view(),
+        name="auction_lot_queue_fullscreen",
+    ),
+    path(
+        "auctions/<slug:slug>/queue/current-lot/",
+        views.LotQueueCurrentLotView.as_view(),
+        name="auction_lot_queue_current_lot",
     ),
     path(
         "auctions/<slug:slug>/volunteers/",
@@ -605,6 +624,7 @@ urlpatterns = [
     ),
     path("auctions/all_users/", views.MarketingList.as_view(), name="all_my_users"),
     path("auctions/<slug:slug>/", views.AuctionInfo.as_view(), name="auction_main"),
+    path("auctions/<slug:slug>/page-action/", views.AuctionPageAction.as_view(), name="auction_page_action"),
     path("users/<str:slug>/", views.UserByName.as_view(), name="userpage"),
     path("user/<str:slug>/", views.UserByName.as_view()),
     path("u/<str:slug>/", views.UserByName.as_view()),
@@ -633,6 +653,11 @@ urlpatterns = [
         "notifications/",
         login_required(views.UserNotificationsUpdate.as_view()),
         name="notification_preferences",
+    ),
+    path(
+        "account/data/",
+        login_required(views.AccountDataExportView.as_view()),
+        name="account_data_export",
     ),
     path(
         "account/delete/",
@@ -797,6 +822,7 @@ urlpatterns = [
         name="auction_enable_bidding_for_all",
     ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
+    path("api/lots/<int:pk>/end-unsold", views.LotEndUnsold.as_view(), name="lot_end_unsold"),
     path(
         "api/lots/<slug:slug>/sell-to-highest-bidder",
         views.BulkSetLotsWon.as_view(),
@@ -1255,6 +1281,11 @@ urlpatterns = [
         "donations/vendor/<int:pk>/contact/",
         donation_views.DonationContactView.as_view(),
         name="club_donation_contact",
+    ),
+    path(
+        "donations/vendor/<int:pk>/dossier/",
+        donation_views.DonationDossierView.as_view(),
+        name="club_donation_dossier",
     ),
     path(
         "donations/email/<int:pk>/",

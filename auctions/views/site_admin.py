@@ -29,7 +29,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import TemplateView
 
-from auctions.helper_functions import bin_data
 from auctions.models import (
     AuctionTOS,
     Lot,
@@ -41,6 +40,22 @@ from auctions.models import (
 from .base import AdminOnlyViewMixin
 
 logger = logging.getLogger(__name__)
+
+
+#: The longest ?days a traffic chart will read. PageView is never purged, so an unbounded one scans
+#: the whole table.
+MAX_TRAFFIC_DAYS = 365
+#: Points on the traffic heat map, newest first.
+MAX_HEAT_MAP_POINTS = 5000
+
+
+def traffic_days(request, default):
+    """``?days`` as a whole number of days from 1 to :data:`MAX_TRAFFIC_DAYS`, else ``default``."""
+    try:
+        days = int(request.GET.get("days", default))
+    except (ValueError, TypeError):
+        days = default
+    return max(1, min(days, MAX_TRAFFIC_DAYS))
 
 
 class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
@@ -59,11 +74,7 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        days_param = self.request.GET.get("days", 7)
-        try:
-            days = int(days_param)
-        except (ValueError, TypeError):
-            days = 7
+        days = traffic_days(self.request, 7)
         context["days"] = days
         timeframe = timezone.now() - timedelta(days=days)
 
@@ -108,7 +119,12 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
         )
         # heat  map stuff follows
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["pageviews"] = PageView.objects.exclude(latitude=0).filter(date_start__gte=timeframe)
+        context["pageviews"] = (
+            PageView.objects.exclude(latitude=0)
+            .filter(date_start__gte=timeframe)
+            .order_by("-date_start")
+            .values("latitude", "longitude")[:MAX_HEAT_MAP_POINTS]
+        )
         return context
 
 
@@ -116,12 +132,8 @@ class AdminTrafficJSON(AdminOnlyViewMixin, BaseLineChartView):
     """JSON userdata"""
 
     def dispatch(self, request, *args, **kwargs):
-        days_param = self.request.GET.get("days", 7)
-        try:
-            days = int(days_param)
-        except (ValueError, TypeError):
-            days = 7
-        self.bins = days
+        # One bin per day.
+        self.bins = traffic_days(request, 7)
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
@@ -131,24 +143,26 @@ class AdminTrafficJSON(AdminOnlyViewMixin, BaseLineChartView):
         return ["Views"]
 
     def get_data(self):
-        timeframe = timezone.now() - timedelta(days=self.bins)
-        views = PageView.objects.filter(date_start__gte=timeframe).order_by("-date_start")
-
-        return [
-            bin_data(views, "date_start", self.bins, timeframe, timezone.now())[::-1],
-        ]
+        """Views per local calendar day, today first, counted by the database rather than row by row."""
+        today = timezone.localdate()
+        first_day = today - timedelta(days=self.bins - 1)
+        timeframe = timezone.make_aware(datetime.combine(first_day, datetime.min.time()))
+        per_day = {
+            timezone.localtime(row["day"]).date(): row["views"]
+            for row in PageView.objects.filter(date_start__gte=timeframe)
+            .annotate(day=TruncDay("date_start"))
+            .order_by()
+            .values("day")
+            .annotate(views=Count("pk"))
+        }
+        return [[per_day.get(today - timedelta(days=days_ago), 0) for days_ago in range(self.bins)]]
 
 
 class AdminTrafficTimeOfDayJSON(AdminOnlyViewMixin, BaseLineChartView):
     """Page views binned by hour and day of week"""
 
     def dispatch(self, request, *args, **kwargs):
-        days_param = self.request.GET.get("days", 30)
-        try:
-            days = int(days_param)
-        except (ValueError, TypeError):
-            days = 30
-        self.bins = days
+        self.bins = traffic_days(request, 30)
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
@@ -197,9 +211,10 @@ class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
             days = int(days_param)
         except (ValueError, TypeError):
             days = None
-        self._end = timezone.now().date()
+        self._end = timezone.localdate()
         if days:
-            self._start = (timezone.now() - timedelta(days=days)).date()
+            # The local date, like _end: UTC's runs a day ahead through every US evening.
+            self._start = timezone.localdate() - timedelta(days=days)
         else:
             earliest = User.objects.order_by("date_joined").values_list("date_joined", flat=True).first()
             self._start = earliest.date() if earliest else self._end
@@ -281,11 +296,7 @@ class AdminReferrers(AdminOnlyViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        days_param = self.request.GET.get("days", 7)
-        try:
-            days = int(days_param)
-        except (ValueError, TypeError):
-            days = 7
+        days = traffic_days(self.request, 7)
         context["days"] = days
         timeframe = timezone.now() - timedelta(days=days)
         page_view_qs = PageView.objects.filter(date_end__gte=timeframe)

@@ -109,6 +109,11 @@ class PaymentService:
         if club:
             from auctions.views import check_club_permission
 
+            # Only for the club's own account. With none connected, an auction's seller is its creator's
+            # personal Square, and a club officer who can't run that auction must not get that token.
+            seller = PaymentService._get_seller_for_invoice(invoice)
+            if seller is None or seller != club.effective_square_seller:
+                return False
             if any(check_club_permission(user, club, perm) for perm in PaymentService._CLUB_PAYMENT_PERMISSIONS):
                 return True
         return False
@@ -430,6 +435,22 @@ class PaymentService:
         if not PaymentService._check_admin_access(invoice, user):
             msg = "You do not have permission to take payment for this invoice"
             raise PermissionError(msg)
+
+        already = (
+            InvoicePayment.objects.filter(invoice=invoice, external_id=payment_id).first()
+            if invoice.status == "PAID"
+            else None
+        )
+        if already:
+            # The webhook got here first and the invoice is paid: the charge succeeded, so say so
+            # rather than "Invalid request." Nothing is recorded or marked twice.
+            PaymentService._capture_attempts(invoice, payment_id)
+            return {
+                "payment_id": payment_id,
+                "status": "COMPLETED",
+                "receipt_number": already.receipt_number or None,
+                "receipt_url": None,
+            }
 
         if invoice.status == "PAID":
             msg = "Invoice is already paid"

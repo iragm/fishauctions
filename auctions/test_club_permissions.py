@@ -325,7 +325,7 @@ class ClubMemberManagementViewTests(TestCase):
             name="Source Member",
             email="source@example.com",
             phone_number="555-1111",
-            membership_last_paid=timezone.now().date(),
+            membership_last_paid=timezone.localdate(),
             permission_manage_bap=True,
         )
         self.target_member = ClubMember.objects.create(
@@ -410,7 +410,7 @@ class ClubMemberManagementViewTests(TestCase):
         response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
         self.assertEqual(response.status_code, 200)
         self.source_member.refresh_from_db()
-        self.assertEqual(self.source_member.membership_last_paid, timezone.now().date())
+        self.assertEqual(self.source_member.membership_last_paid, timezone.localdate())
         # For january_first system, expiration should be Jan 1 of next year
         expected_expiration = datetime.date(timezone.now().year + 1, 1, 1)
         self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
@@ -429,7 +429,7 @@ class ClubMemberManagementViewTests(TestCase):
         """Rolling: if current expiration is in future, extend from that date."""
         self.club.membership_system = "rolling"
         self.club.save(update_fields=["membership_system"])
-        future_expiration = timezone.now().date() + datetime.timedelta(days=100)
+        future_expiration = timezone.localdate() + datetime.timedelta(days=100)
         self.source_member.membership_expiration_date = future_expiration
         self.source_member.save(update_fields=["membership_expiration_date"])
         self.client.login(username="club_editor", password="testpass")
@@ -443,14 +443,14 @@ class ClubMemberManagementViewTests(TestCase):
         """Rolling: if current expiration is in past, extend from today."""
         self.club.membership_system = "rolling"
         self.club.save(update_fields=["membership_system"])
-        past_expiration = timezone.now().date() - datetime.timedelta(days=100)
+        past_expiration = timezone.localdate() - datetime.timedelta(days=100)
         self.source_member.membership_expiration_date = past_expiration
         self.source_member.save(update_fields=["membership_expiration_date"])
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
         self.assertEqual(response.status_code, 200)
         self.source_member.refresh_from_db()
-        today = timezone.now().date()
+        today = timezone.localdate()
         expected_expiration = today.replace(year=today.year + 1)
         self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
 
@@ -465,14 +465,14 @@ class ClubMemberManagementViewTests(TestCase):
         response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
         self.assertEqual(response.status_code, 200)
         self.source_member.refresh_from_db()
-        today = timezone.now().date()
+        today = timezone.localdate()
         expected_expiration = today.replace(year=today.year + 1)
         self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
 
     def test_renew_january_first_extends_from_current_if_future(self):
         """january_first: an expiration in the future extends from that date to the next Jan 1."""
         # Club defaults to january_first
-        future_expiration = timezone.now().date() + datetime.timedelta(days=100)
+        future_expiration = timezone.localdate() + datetime.timedelta(days=100)
         self.source_member.membership_expiration_date = future_expiration
         self.source_member.save(update_fields=["membership_expiration_date"])
         self.client.login(username="club_editor", password="testpass")
@@ -485,14 +485,14 @@ class ClubMemberManagementViewTests(TestCase):
     def test_renew_january_first_extends_from_today_if_expiration_past(self):
         """january_first: an expiration in the past extends from today to the next Jan 1."""
         # Club defaults to january_first
-        past_expiration = timezone.now().date() - datetime.timedelta(days=100)
+        past_expiration = timezone.localdate() - datetime.timedelta(days=100)
         self.source_member.membership_expiration_date = past_expiration
         self.source_member.save(update_fields=["membership_expiration_date"])
         self.client.login(username="club_editor", password="testpass")
         response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
         self.assertEqual(response.status_code, 200)
         self.source_member.refresh_from_db()
-        today = timezone.now().date()
+        today = timezone.localdate()
         expected_expiration = datetime.date(today.year + 1, 1, 1)
         self.assertEqual(self.source_member.membership_expiration_date, expected_expiration)
 
@@ -541,8 +541,9 @@ class ClubMemberManagementViewTests(TestCase):
         self.assertTrue(self.source_member.is_deleted)
         self.assertEqual(self.target_member.email, "source@example.com")
         self.assertEqual(self.target_member.phone_number, "555-1111")
-        self.assertTrue(self.target_member.permission_manage_bap)
-        self.assertEqual(self.target_member.membership_last_paid, timezone.now().date())
+        # An add/edit editor merging carries no roles over: that would be granting them.
+        self.assertFalse(self.target_member.permission_manage_bap)
+        self.assertEqual(self.target_member.membership_last_paid, timezone.localdate())
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Merged member").exists())
 
 
@@ -714,7 +715,7 @@ class ClubMembershipInvoiceTests(TestCase):
         _process_invoice_membership_renewal(invoice, payment_method="PayPal")
         self.club_member.refresh_from_db()
         self.assertIsNotNone(self.club_member.membership_last_paid)
-        self.assertGreaterEqual(self.club_member.membership_last_paid, timezone.now().date())
+        self.assertGreaterEqual(self.club_member.membership_last_paid, timezone.localdate())
 
     def test_process_renewal_creates_invoice_payment_record(self):
         from auctions.views.base import _process_invoice_membership_renewal
@@ -798,8 +799,8 @@ class ClubMembershipInvoiceTests(TestCase):
     def test_payment_view_redirects_member_not_due_to_card(self):
         """A member whose dues are current is bounced back to their membership card."""
         PayPalSeller.objects.create(user=self.payment_user, club=self.club, paypal_merchant_id="merchant_abc")
-        self.club_member.membership_last_paid = timezone.now().date()
-        self.club_member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=200)
+        self.club_member.membership_last_paid = timezone.localdate()
+        self.club_member.membership_expiration_date = timezone.localdate() + datetime.timedelta(days=200)
         self.club_member.save()
         self.client.login(username="club_member_u", password="testpass")
         response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))

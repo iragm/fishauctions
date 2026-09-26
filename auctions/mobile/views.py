@@ -213,6 +213,14 @@ class MobileGoogleAuthView(APIView):
             pass
 
         user = User.objects.filter(email__iexact=email).first()
+        if user is not None and not user.is_active:
+            return None
+        if user is not None and not EmailAddress.objects.filter(user=user, email__iexact=email, verified=True).exists():
+            # The address on this account was never verified, so whoever registered it may not own it.
+            # Google has just proved the caller does: as allauth does on the web, the squatter's
+            # password goes, or it would open the account the real owner is now signing into.
+            user.set_unusable_password()
+            user.save(update_fields=["password"])
         if user is None:
             base = email.split("@")[0][:30] or "user"
             username = base

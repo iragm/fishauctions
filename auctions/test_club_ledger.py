@@ -448,10 +448,9 @@ class PaidInvoiceFreezeTests(StandardTestCase):
         self.assertEqual(self._ledger_rows(self.invoiceB), frozen_ledger)
 
 
-class InvoiceDedupeLedgerTests(StandardTestCase):
-    """Invoice.save() dedupes a TOS's invoices by moving a duplicate's ledger rows onto the canonical
-    invoice and reversing its contribution: nothing orphaned or double-booked, and a PAID canonical
-    stays frozen.
+class InvoiceAbsorbLedgerTests(StandardTestCase):
+    """``Invoice.absorb`` (merging two participants) moves the other invoice's ledger rows onto this one and
+    reverses their contribution: nothing orphaned or double-booked, and a PAID invoice stays frozen.
     """
 
     def setUp(self):
@@ -483,79 +482,62 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.invoiceB.refresh_from_db()
         return self.invoiceB
 
-    def _make_duplicate(self, canonical, paid=True):
-        """A second invoice for the same TOS via bulk_create, bypassing dedupe, dated after the canonical."""
-        tos = canonical.auctiontos_user
-        Invoice.objects.bulk_create(
-            [Invoice(auctiontos_user=tos, auction=canonical.auction, status="PAID" if paid else "DRAFT")]
-        )
-        dup = Invoice.objects.filter(auctiontos_user=tos).exclude(pk=canonical.pk).get()
-        Invoice.objects.filter(pk=dup.pk).update(date=canonical.date + datetime.timedelta(days=1))
-        dup.refresh_from_db()
-        if paid:
-            # Book the duplicate's ledger exactly as marking it PAID would have.
-            dup.sync_club_money()
-        return dup
+    def _other(self, booked=True):
+        """Another participant's invoice, with booked ledger rows when ``booked``."""
+        other = Invoice.for_participant(self.tosC)
+        if booked:
+            ClubMoney.objects.create(
+                club=self.club,
+                invoice=other,
+                source_auction=self.online_auction,
+                date=timezone.localdate(),
+                amount=Decimal("12.00"),
+                description="Auction sale",
+                category=ClubMoney.CATEGORY_AUCTION_SALE,
+            )
+        return other
+
+    def _absorb(self, canonical, other):
+        canonical.absorb(other)
+        other.delete()
+        canonical.recalculate()
 
     def _assert_no_orphans(self):
         self.assertFalse(
             ClubMoney.objects.filter(invoice__isnull=True).exists(),
-            "dedupe left ClubMoney rows orphaned with invoice=NULL",
+            "absorbing left ClubMoney rows orphaned with invoice=NULL",
         )
 
-    def test_dedupe_unpaid_duplicate_leaves_canonical_untouched(self):
+    def test_absorbing_an_unbooked_invoice_leaves_a_paid_one_untouched(self):
         canonical = self._paid_canonical()
         frozen_ledger = self._ledger_rows(canonical)
         frozen_total = canonical.calculated_total
         self.assertTrue(frozen_ledger)
 
-        self._make_duplicate(canonical, paid=False)
-        # A plain re-save runs the dedupe (Path 2).
-        canonical.save()
+        self._absorb(canonical, self._other(booked=False))
 
-        self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
         self._assert_no_orphans()
         canonical.refresh_from_db()
         self.assertEqual(canonical.calculated_total, frozen_total)
         self.assertEqual(self._ledger_rows(canonical), frozen_ledger)
 
-    def test_dedupe_paid_duplicate_path2_no_double_booking(self):
-        # Path 2: saving the canonical absorbs a newer PAID duplicate.
+    def test_absorbing_a_booked_invoice_does_not_double_book(self):
         canonical = self._paid_canonical()
         canonical_total = self._ledger_total(invoice=canonical)
         canonical_by_cat = self._by_category(canonical)
+        other = self._other()
+        other_total = self._ledger_total(invoice=other)
+        # Precondition: both are booked while both exist.
+        self.assertEqual(self._ledger_total(club=self.club), canonical_total + other_total)
 
-        dup = self._make_duplicate(canonical, paid=True)
-        dup_total = self._ledger_total(invoice=dup)
-        self.assertNotEqual(dup_total, Decimal("0.00"))  # the duplicate really carries booked rows
-        # Precondition: double-booked while both exist.
-        self.assertEqual(self._ledger_total(club=self.club), canonical_total + dup_total)
+        self._absorb(canonical, other)
 
-        canonical.save()  # triggers dedupe Path 2
-
-        self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
         self._assert_no_orphans()
         self.assertEqual(self._ledger_total(club=self.club), canonical_total)
         self.assertEqual(self._by_category(canonical), canonical_by_cat)
 
-    def test_dedupe_paid_duplicate_path1_no_double_booking(self):
-        # Path 1: saving the duplicate merges it into the canonical.
-        canonical = self._paid_canonical()
-        canonical_total = self._ledger_total(invoice=canonical)
-        canonical_by_cat = self._by_category(canonical)
-
-        dup = self._make_duplicate(canonical, paid=True)
-        self.assertNotEqual(self._ledger_total(invoice=dup), Decimal("0.00"))
-
-        dup.save()  # dup is newer than canonical -> dedupe Path 1
-
-        self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
-        self._assert_no_orphans()
-        self.assertEqual(self._ledger_total(club=self.club), canonical_total)
-        self.assertEqual(self._by_category(canonical), canonical_by_cat)
-
-    def test_dedupe_paid_duplicate_keeps_canonical_frozen(self):
-        # The dedupe must not re-derive the settled canonical from current settings.
+    def test_absorbing_keeps_a_paid_invoice_frozen(self):
+        # Absorbing must not re-derive the settled invoice from current settings.
         canonical = self._paid_canonical()
         frozen_total = canonical.calculated_total
         frozen_ledger = set(self._ledger_rows(canonical))
@@ -566,8 +548,7 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.online_auction.tax = 0
         self.online_auction.save(update_fields=["tax"])
 
-        self._make_duplicate(canonical, paid=True)
-        canonical.save()  # dedupe Path 2
+        self._absorb(canonical, self._other())
 
         self._assert_no_orphans()
         canonical.refresh_from_db()
@@ -575,10 +556,9 @@ class InvoiceDedupeLedgerTests(StandardTestCase):
         self.assertTrue(frozen_ledger.issubset(set(self._ledger_rows(canonical))))
         self.assertEqual(self._by_category(canonical), canonical_by_cat)
 
-    def test_unpay_after_dedupe_reverses_ledger_cleanly(self):
+    def test_unpay_after_absorbing_reverses_ledger_cleanly(self):
         canonical = self._paid_canonical()
-        self._make_duplicate(canonical, paid=True)
-        canonical.save()  # dedupe Path 2 -> ledger reflects only the canonical's booking
+        self._absorb(canonical, self._other())
         self.assertNotEqual(self._ledger_total(invoice=canonical), Decimal("0.00"))
 
         canonical.refresh_from_db()
@@ -745,7 +725,9 @@ class MakeClubAdminAssignsAuctionsTests(TestCase):
     def _make_club_admin(self, auction):
         client = Client()
         client.force_login(self.creator)
-        return client.get(reverse("auction_main", kwargs={"slug": auction.slug}) + "?make_club_admin=true")
+        return client.post(
+            reverse("auction_page_action", kwargs={"slug": auction.slug}), {"action": "make_creator_club_admin"}
+        )
 
     def test_assigns_clubless_auction_and_books_ledger(self):
         auction = self._auction(club=None)
@@ -768,7 +750,7 @@ class MakeClubAdminAssignsAuctionsTests(TestCase):
         self.assertFalse(ClubMoney.objects.filter(invoice=buyer_invoice).exists())
 
         response = self._make_club_admin(auction)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
         auction.refresh_from_db()
         self.assertEqual(auction.club, self.club)
         # The bulk assignment bypassed Auction.save().
@@ -814,7 +796,7 @@ class BapTop10ChartTests(TestCase):
         return ClubMember.objects.create(club=self.club, user=user, name=name)
 
     def _award(self, member, points, month_offset=0, year=None, lot=None):
-        today = timezone.now().date().replace(day=1)
+        today = timezone.localdate().replace(day=1)
         month = today.month - month_offset
         year = year or self.this_year
         while month <= 0:
@@ -896,7 +878,7 @@ class BapTop10ChartTests(TestCase):
 
     def test_hap_and_cap_use_their_own_fields(self):
         BapAward.objects.create(
-            club_member=self.first, date=timezone.now().date().replace(day=1), hap_points=7, cap_points=3
+            club_member=self.first, date=timezone.localdate().replace(day=1), hap_points=7, cap_points=3
         )
         self.first.refresh_from_db()
         hap = self._chart(self.club, "hap_points", "hap_points", None, self._all_months)

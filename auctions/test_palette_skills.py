@@ -892,7 +892,7 @@ class MembershipCardTests(ClubSkillTestCase):
 
     def test_an_expired_membership_says_so_and_offers_a_way_back(self):
         self._let_the_club_take_money()
-        self.mine.membership_expiration_date = timezone.now().date() - datetime.timedelta(days=10)
+        self.mine.membership_expiration_date = timezone.localdate() - datetime.timedelta(days=10)
         self.mine.save()
         result = self._run("my_membership", {}, user=self.user)
         card = result["membership"]
@@ -1466,7 +1466,7 @@ class PointsDeskTests(ClubSkillTestCase):
     def test_my_points_says_what_they_have(self):
         from auctions.models import BapAward
 
-        BapAward.objects.create(club_member=self.seller_member, date=timezone.now().date(), points=17)
+        BapAward.objects.create(club_member=self.seller_member, date=timezone.localdate(), points=17)
         result = self._run("my_points", {"auction": "Points Spring"}, user=self.user)
         self.assertTrue(result.get("found"), result)
         self.assertEqual(result["points"]["clubs"][0]["points"]["bap"], 17)
@@ -1476,7 +1476,7 @@ class PointsDeskTests(ClubSkillTestCase):
 
         self.club.separate_hap = True
         self.club.save()
-        BapAward.objects.create(club_member=self.seller_member, date=timezone.now().date(), hap_points=9)
+        BapAward.objects.create(club_member=self.seller_member, date=timezone.localdate(), hap_points=9)
         result = self._run("my_points", {"club": "palette-aquarium-society"}, user=self.user)
         self.assertIn("9 HAP", result["summary"])
 
@@ -2266,7 +2266,6 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
         "ClubMoneyCreateView": "record_club_money",
         "ImagesRotate": "rotate_lot_image",
         "ImagesPrimary": "rotate_lot_image",
-        "GoogleCalendarSyncNowView": "sync_club_calendar",
     }
 
     def test_each_moved_view_names_its_new_skill(self):
