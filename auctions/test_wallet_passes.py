@@ -102,7 +102,7 @@ class DiscordJoinButtonTests(TestCase):
             club=self.club,
             name="Joined User",
             discord_id="42",
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=30),
+            membership_expiration_date=timezone.localdate() + datetime.timedelta(days=30),
         )
         response = self.view._handle_membership_command(self._interaction())
         payload = self._payload(response)
@@ -747,7 +747,7 @@ class PassKitWebServiceTests(TestCase):
             patch("auctions.tasks.notify_apple_wallet_devices_for_member.delay") as apple_delay,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            self.member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=365)
+            self.member.membership_expiration_date = timezone.localdate() + datetime.timedelta(days=365)
             self.member.save()
         google_delay.assert_called_once_with(self.member.pk)
         apple_delay.assert_called_once_with(self.member.pk)
@@ -847,8 +847,8 @@ class MembershipNumberModeTests(TestCase):
             club=self.club,
             name="Paid",
             user=self.user,
-            membership_last_paid=timezone.now().date(),
-            membership_expiration_date=timezone.now().date() + _dt.timedelta(days=30),
+            membership_last_paid=timezone.localdate(),
+            membership_expiration_date=timezone.localdate() + _dt.timedelta(days=30),
         )
         self.unpaid = ClubMember.objects.create(club=self.club, name="Unpaid")
 

@@ -97,7 +97,7 @@ class WalletHeaderTextTests(TestCase):
             membership_system=membership_system,
             membership_annual_fee=Decimal(fee),
         )
-        expiration = timezone.now().date() + datetime.timedelta(days=30 if paid else -30)
+        expiration = timezone.localdate() + datetime.timedelta(days=30 if paid else -30)
         return ClubMember.objects.create(club=club, name="M", membership_expiration_date=expiration)
 
     def test_paid_member_of_fee_charging_club(self):
@@ -138,19 +138,19 @@ class WalletStatusTextTests(TestCase):
             membership_annual_fee=Decimal(25),
         )
         if expiration is None and last_paid is None:
-            expiration = timezone.now().date() + datetime.timedelta(days=30 if paid else -30)
+            expiration = timezone.localdate() + datetime.timedelta(days=30 if paid else -30)
         return ClubMember.objects.create(
             club=club, name="M", membership_expiration_date=expiration, membership_last_paid=last_paid
         )
 
     def test_current_member_shows_valid_through(self):
-        expiration = timezone.now().date() + datetime.timedelta(days=30)
+        expiration = timezone.localdate() + datetime.timedelta(days=30)
         member = self._member(expiration=expiration)
         self.assertEqual(member.wallet_status_text, f"Valid through {expiration.strftime('%-d %b %Y')}")
 
     def test_lapsed_member_shows_printed_expiration_date(self):
         """A lapsed membership prints its past expiration date."""
-        expiration = timezone.now().date() - datetime.timedelta(days=5)
+        expiration = timezone.localdate() - datetime.timedelta(days=5)
         member = self._member(expiration=expiration)
         self.assertEqual(member.wallet_status_text, f"Expired {expiration.strftime('%-d %b %Y')}")
 
@@ -172,7 +172,7 @@ class WalletStatusTextTests(TestCase):
         """No validTimeInterval in the Google PATCH: it auto-archives lapsed passes."""
         from auctions.google_wallet import update_generic_object_for_member
 
-        member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
+        member = self._member(expiration=timezone.localdate() - datetime.timedelta(days=5))
         resp = MagicMock(status_code=200)
         with override_settings(
             GOOGLE_WALLET_ISSUER_ID="3388000000022XXXXXX",
@@ -195,7 +195,7 @@ class WalletStatusTextTests(TestCase):
         """No expirationDate in pass.json: it greys out and archives lapsed passes."""
         from auctions.apple_wallet import _build_pass_json
 
-        member = self._member(expiration=timezone.now().date() - datetime.timedelta(days=5))
+        member = self._member(expiration=timezone.localdate() - datetime.timedelta(days=5))
         with patch("auctions.apple_wallet.ensure_apple_pass_auth_token", return_value="tok"):
             pass_json = _build_pass_json(member)
         self.assertNotIn("expirationDate", pass_json)
@@ -583,7 +583,7 @@ class ClubMemberMembershipStatusFilterTests(TestCase):
     """
 
     def setUp(self):
-        self.today = timezone.now().date()
+        self.today = timezone.localdate()
         self.club = Club.objects.create(
             name="Membership Filter Club",
             membership_system="rolling",
@@ -864,7 +864,7 @@ class ClubMemberRenewAPITests(TestCase):
         )
         self.raw_key = raw_key
         self.url = reverse("api_club_member_renew", kwargs={"slug": self.club.slug})
-        self.today = timezone.now().date()
+        self.today = timezone.localdate()
 
     def _enable(self):
         self.api_key.can_renew_memberships = True
@@ -1018,7 +1018,7 @@ class ClubManagedMergeKeepsMembershipDatesTests(TestCase):
         self.location = PickupLocation.objects.create(
             name="merge location", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=2)
         )
-        self.today = timezone.now().date()
+        self.today = timezone.localdate()
 
     def _shadow_tos(self, member):
         """The AuctionTOS the club-managed auction auto-creates for a new member."""

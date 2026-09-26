@@ -796,7 +796,7 @@ class BapTop10ChartTests(TestCase):
         return ClubMember.objects.create(club=self.club, user=user, name=name)
 
     def _award(self, member, points, month_offset=0, year=None, lot=None):
-        today = timezone.now().date().replace(day=1)
+        today = timezone.localdate().replace(day=1)
         month = today.month - month_offset
         year = year or self.this_year
         while month <= 0:
@@ -878,7 +878,7 @@ class BapTop10ChartTests(TestCase):
 
     def test_hap_and_cap_use_their_own_fields(self):
         BapAward.objects.create(
-            club_member=self.first, date=timezone.now().date().replace(day=1), hap_points=7, cap_points=3
+            club_member=self.first, date=timezone.localdate().replace(day=1), hap_points=7, cap_points=3
         )
         self.first.refresh_from_db()
         hap = self._chart(self.club, "hap_points", "hap_points", None, self._all_months)

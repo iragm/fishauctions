@@ -57,7 +57,7 @@ class MailchimpHelperTests(TestCase):
         self.assertEqual(mc._desired_status(self.member), "archived")
 
     def test_lifecycle_tags(self):
-        today = timezone.now().date()
+        today = timezone.localdate()
         self.member.membership_expiration_date = today + datetime.timedelta(days=10)
         tags = self.member.compute_mailchimp_tags()
         self.assertTrue(tags["expiring-soon"])

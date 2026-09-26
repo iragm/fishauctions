@@ -2970,7 +2970,7 @@ class BackfillLotSpeciesCommandTests(StandardTestCase):
         Lot.objects.filter(pk=self.lot.pk).update(species_category=uncategorized)
         club = Club.objects.create(name="Award club", enable_breeder_award_program=True)
         member = ClubMember.objects.create(club=club, user=self.user, name="seller")
-        BapAward.objects.create(club_member=member, lot=self.lot, date=timezone.now().date(), points=5)
+        BapAward.objects.create(club_member=member, lot=self.lot, date=timezone.localdate(), points=5)
         self._run("--set-category")
         self.lot.refresh_from_db()
         self.assertEqual(self.lot.species, self.tropheus)

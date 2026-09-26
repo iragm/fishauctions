@@ -607,7 +607,7 @@ class PayPalSubscriptionWebhookVerificationTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         member.refresh_from_db()
         self.assertEqual(member.paypal_subscription_id, "I-SUB1")
-        self.assertEqual(member.membership_expiration_date, (timezone.now() + datetime.timedelta(days=365)).date())
+        self.assertEqual(member.membership_expiration_date, timezone.localdate() + datetime.timedelta(days=365))
         token_call, verify_call = mock_post.call_args_list
         self.assertEqual(token_call.kwargs["auth"], ("club-cid", "club-secret"))
         self.assertEqual(verify_call.kwargs["json"]["webhook_id"], "WH-CLUB-1")

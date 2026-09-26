@@ -538,7 +538,7 @@ class ExpirationReminderTaskTests(TestCase):
         self.bob = self._member("Bob", "bob@example.com")
 
     def _member(self, name, email, **fields):
-        today = timezone.now().date()
+        today = timezone.localdate()
         member = ClubMember.objects.create(club=self.club, name=name, email=email)
         values = {
             "welcome_email_sent": True,
@@ -594,7 +594,7 @@ class ExpirationReminderTaskTests(TestCase):
     def test_paypal_subscribers_and_lapsed_members_are_skipped(self, send):
         subscriber = self._member("Sub", "sub@example.com", paypal_subscription_id="I-123")
         lapsed = self._member(
-            "Lapsed", "lapsed@example.com", membership_expiration_date=timezone.now().date() - datetime.timedelta(1)
+            "Lapsed", "lapsed@example.com", membership_expiration_date=timezone.localdate() - datetime.timedelta(1)
         )
         tasks.send_membership_expiration_reminders()
         emailed = [c.args[0] for c in send.call_args_list]
@@ -623,7 +623,7 @@ class MembershipCardEmailTests(TestCase):
 
     @patch("auctions.tasks.mail.send")
     def test_card_email_says_expired_for_lapsed_member(self, send):
-        today = timezone.now().date()
+        today = timezone.localdate()
         ClubMember.objects.filter(pk=self.member.pk).update(
             membership_last_paid=today - datetime.timedelta(days=400),
             membership_expiration_date=today - datetime.timedelta(days=35),
@@ -683,7 +683,7 @@ class WalletDailyRefreshTaskTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(name="Wallet Club", membership_system="rolling")
         Club.objects.filter(pk=self.club.pk).update(google_wallet_class_created=True)
-        today = timezone.now().date()
+        today = timezone.localdate()
         self.lapsed = self._member("Lapsed", today - datetime.timedelta(days=1))
         self.long_gone = self._member("Long gone", today - datetime.timedelta(days=10))
         self.current = self._member("Current", today + datetime.timedelta(days=10))

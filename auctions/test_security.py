@@ -420,6 +420,15 @@ class CsvCellTestCase(TestCase):
         for value in (Decimal("-10.50"), -5, "-0.01", "+3", "-1e3"):
             self.assertEqual(csv_cell(value), str(value))
 
+    def test_only_a_whole_number_counts_as_one(self):
+        for text in ("-", "+.", "-1.2.3", "-1e", "-1e+", "-e5", "--1", "-1_000", "-inf", "-١"):
+            self.assertEqual(csv_cell(text), "'" + text, text)
+        for text in ("-1.", "-.5", "+1E-3"):
+            self.assertEqual(csv_cell(text), text)
+
+    def test_a_long_run_of_digits_is_quick(self):
+        self.assertEqual(csv_cell("-" + "0" * 100_000 + "x"), "'-" + "0" * 100_000 + "x")
+
     def test_nothing_else_changes(self):
         self.assertEqual(csv_cell("Neon tetra"), "Neon tetra")
         self.assertEqual(csv_cell(None), "")

@@ -271,13 +271,18 @@ class PayPalWebhookView(PayPalAPIMixin, View):
 
 
 def _parse_paypal_datetime_date(value):
-    """PayPal ISO-8601 timestamp (e.g. next_billing_time) -> a date, or None."""
+    """PayPal ISO-8601 timestamp (e.g. next_billing_time) -> the site's local date, or None.
+
+    PayPal sends UTC, so a 9pm Eastern payment would otherwise land on tomorrow.
+    """
     from django.utils.dateparse import parse_datetime
 
     if not value:
         return None
     parsed = parse_datetime(value)
-    return parsed.date() if parsed else None
+    if not parsed:
+        return None
+    return timezone.localtime(parsed).date() if timezone.is_aware(parsed) else parsed.date()
 
 
 def _mask_subscription_id(subscription_id):

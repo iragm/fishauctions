@@ -375,7 +375,7 @@ class ClubBapLotAPITests(TestCase):
         member = ClubMember.objects.create(club=self.club, name="Mike Smith", email="mike@example.com")
         award = BapAward.objects.create(
             club_member=member,
-            date=timezone.now().date(),
+            date=timezone.localdate(),
             points=5,
             lot=self.recent_lot,
             notes="Bred corydoras",
@@ -397,7 +397,7 @@ class ClubBapLotAPITests(TestCase):
         member = ClubMember.objects.create(club=self.club, name="Mike Smith", email="mike@example.com")
         BapAward.objects.create(
             club_member=member,
-            date=timezone.now().date(),
+            date=timezone.localdate(),
             points=5,
             lot=self.recent_lot,
             awarded_by=self.owner,

@@ -383,7 +383,8 @@ def note_email_if_unusable(value, where):
         try:
             validate_email(email)
         except ValidationError:
-            logger.warning("Storing %r from %s: it is not a valid email address", email, where)
+            # Not the address itself: logs are not where customer PII belongs, and the record has it.
+            logger.warning("Storing an invalid email address from %s", where)
     return email
 
 

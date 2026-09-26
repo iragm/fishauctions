@@ -32,8 +32,25 @@ def attachment_filename(value, fallback="download"):
 #: Excel skips before deciding.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
-#: A plain number, which is what a leading ``-`` or ``+`` almost always is here.
-_CSV_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+
+def _unsigned(text):
+    return text[1:] if text[:1] in ("+", "-") else text
+
+
+def _is_digits(text):
+    return text.isascii() and text.isdigit()
+
+
+def _is_plain_number(text):
+    """``-12``, ``+3.50``, ``.5``, ``1e3``: what a leading ``-`` or ``+`` almost always is here.
+
+    Not a regex, because ``\\d+`` backtracking over a long run of digits is a ReDoS finding.
+    """
+    mantissa, has_exponent, exponent = text.lower().partition("e")
+    if has_exponent and not _is_digits(_unsigned(exponent)):
+        return False
+    whole, _, fraction = _unsigned(mantissa).partition(".")
+    return bool(whole or fraction) and all(not part or _is_digits(part) for part in (whole, fraction))
 
 
 def csv_cell(value):
@@ -51,7 +68,7 @@ def csv_cell(value):
     if value is None:
         return ""
     text = str(value)
-    if text.startswith(_CSV_FORMULA_PREFIXES) and not _CSV_NUMBER.match(text):
+    if text.startswith(_CSV_FORMULA_PREFIXES) and not _is_plain_number(text):
         return "'" + text
     return text
 

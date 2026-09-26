@@ -362,7 +362,7 @@ class LotBapEligibilityTests(TestCase):
     def test_not_active_member_when_membership_expired(self):
         self.club.only_active_members_can_participate = True
         self.club.save()
-        self.member.membership_expiration_date = timezone.now().date() - datetime.timedelta(days=1)
+        self.member.membership_expiration_date = timezone.localdate() - datetime.timedelta(days=1)
         self.member.save()
         lot = self._make_lot()
         self.assertEqual(lot.unsold_lot_no_bap_reason, "not_active_member")
@@ -370,7 +370,7 @@ class LotBapEligibilityTests(TestCase):
     def test_active_member_passes_membership_check(self):
         self.club.only_active_members_can_participate = True
         self.club.save()
-        self.member.membership_expiration_date = timezone.now().date() + datetime.timedelta(days=30)
+        self.member.membership_expiration_date = timezone.localdate() + datetime.timedelta(days=30)
         self.member.save()
         lot = self._make_lot()
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
@@ -418,7 +418,7 @@ class LotBapEligibilityTests(TestCase):
 
     def test_auto_award_skipped_when_award_already_exists(self):
         lot = self._make_lot()
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), lot=lot, points=99)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), lot=lot, points=99)
         lot.auto_award_bap_points()
         lot.refresh_from_db()
         self.assertEqual(lot.bap_points_awarded, 0)
@@ -651,25 +651,25 @@ class BapAwardRecalculateTests(TestCase):
         self.member = ClubMember.objects.create(club=self.club, user=self.user)
 
     def test_save_updates_member_bap_points(self):
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=10)
         self.member.refresh_from_db()
         self.assertEqual(self.member.bap_points, 10)
 
     def test_delete_resets_member_bap_points(self):
-        award = BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=10)
+        award = BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=10)
         award.delete()
         self.member.refresh_from_db()
         self.assertEqual(self.member.bap_points, 0)
 
     def test_ytd_points_counted_for_current_year_only(self):
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=5)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=5)
         BapAward.objects.create(club_member=self.member, date=datetime.date(2019, 1, 1), points=3)
         self.member.refresh_from_db()
         self.assertEqual(self.member.bap_points, 8)
         self.assertEqual(self.member.bap_points_ytd, 5)
 
     def test_hap_points_tracked_separately_from_bap(self):
-        BapAward.objects.create(club_member=self.member, date=timezone.now().date(), points=0, hap_points=4)
+        BapAward.objects.create(club_member=self.member, date=timezone.localdate(), points=0, hap_points=4)
         self.member.refresh_from_db()
         self.assertEqual(self.member.hap_points, 4)
         self.assertEqual(self.member.bap_points, 0)
@@ -794,7 +794,7 @@ class ClubBapLotsViewTests(TestCase):
             date_end=timezone.now() - datetime.timedelta(days=1),
         )
         BapAward.objects.create(
-            club_member=self.seller_member, date=timezone.now().date(), lot=self.approved_lot, points=5
+            club_member=self.seller_member, date=timezone.localdate(), lot=self.approved_lot, points=5
         )
         self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
 
