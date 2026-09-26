@@ -573,6 +573,14 @@ def cleanup_mail(self):
     """Delete sent mail older than MAIL_RETENTION_DAYS, attachments included. Otherwise a deleted user's
     address survives in post_office.
     """
+    from django.utils import timezone
+    from post_office.models import Email
+
+    # post_office's own command deletes `id__in` a sliced queryset, which MariaDB refuses (error 1235), so the
+    # mail goes here and the command is left only the orphaned attachments.
+    cutoff = timezone.now() - datetime.timedelta(days=settings.MAIL_RETENTION_DAYS)
+    while ids := list(Email.objects.filter(created__lt=cutoff).values_list("id", flat=True)[:1000]):
+        Email.objects.filter(id__in=ids).delete()
     call_command("cleanup_mail", days=settings.MAIL_RETENTION_DAYS, delete_attachments=True)
 
 

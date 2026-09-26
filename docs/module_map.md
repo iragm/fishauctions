@@ -234,7 +234,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1445 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1766 lines)
+- **`tasks.py`** (1774 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -301,7 +301,7 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (140 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`
-- **`test_celery_tasks.py`** (1116 lines)
+- **`test_celery_tasks.py`** (1131 lines)
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
