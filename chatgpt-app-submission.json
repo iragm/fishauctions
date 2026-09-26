@@ -15,9 +15,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: opens the page for adding a lot, or several lots with what they described already filled in, ready for them to check and save.",
+        "read_only_justification": "Only returns a link to a page on this site (opens the page for adding a lot, or several lots with what they described already filled in, ready for them to check and save); nothing is saved unless the person does it on that page themselves.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
       }
     },
     "add_club_event": {
@@ -27,9 +27,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: put a meeting, swap, talk or workshop on a club's calendar.",
+        "read_only_justification": "Changes data on this site: put a meeting, swap, talk or workshop on a club's calendar.",
         "open_world_justification": "Reaches outside this site: the club's Discord server and the Google Calendar it is connected to.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing, and the event it posts can be moved, renamed or called off afterwards with update_club_event, which updates the calendar and Discord to match."
       }
     },
     "add_club_member": {
@@ -39,9 +39,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add a new member to a club.",
+        "read_only_justification": "Changes data on this site: add a new member to a club.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_donation_vendor": {
@@ -51,9 +51,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: put one business on a club's donation list.",
+        "read_only_justification": "Changes data on this site: put one business on a club's donation list.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_dropdown_option": {
@@ -63,9 +63,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add one option to an auction's custom dropdown.",
+        "read_only_justification": "Changes data on this site: add one option to an auction's custom dropdown.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_invoice_adjustment": {
@@ -75,21 +75,21 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: put one extra line on somebody's invoice in an auction.",
+        "read_only_justification": "Changes data on this site: put one extra line on somebody's invoice in an auction.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_lot": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add one lot to an auction.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "read_only_justification": "Changes data on this site: add one lot to an auction.",
+        "open_world_justification": "Reaches outside this site: the lot is listed on its auction's page, which anyone on the internet can read once the auction is public.",
+        "destructive_justification": "It only adds a new lot, deleting and overwriting nothing, and remove_lot takes it down again."
       }
     },
     "add_lot_image": {
@@ -99,21 +99,21 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: put a picture on a lot, from a link to the image.",
+        "read_only_justification": "Changes data on this site: put a picture on a lot, from a link to the image.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_lots": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add several lots to one auction at once.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "read_only_justification": "Changes data on this site: add several lots to one auction at once.",
+        "open_world_justification": "Reaches outside this site: the lots are listed on their auction's page, which anyone on the internet can read once the auction is public.",
+        "destructive_justification": "It only adds new lots, deleting and overwriting nothing, and remove_lot takes each one down again."
       }
     },
     "add_person": {
@@ -123,9 +123,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add a person to an auction so they can bid and sell.",
+        "read_only_justification": "Changes data on this site: add a person to an auction so they can bid and sell.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_pickup_location": {
@@ -135,9 +135,21 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add a place where an auction's lots are collected.",
+        "read_only_justification": "Changes data on this site: add a place where an auction's lots are collected.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+      }
+    },
+    "add_random_option": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: add one option to an auction's custom random field.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "add_species": {
@@ -147,21 +159,21 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add a species to the list that genuinely isn't on it.",
+        "read_only_justification": "Changes data on this site: add a species to the list that genuinely isn't on it.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "answer_question": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
-        "destructiveHint": false
+        "openWorldHint": true,
+        "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: reply to a question somebody has asked on one of the user's own lots.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "read_only_justification": "Changes data on this site: reply to a question somebody has asked on one of the user's own lots.",
+        "open_world_justification": "Reaches outside this site: the reply is posted publicly on the lot's page.",
+        "destructive_justification": "It posts a public reply on the lot's page, which the seller cannot take back through this server."
       }
     },
     "auction_numbers": {
@@ -171,9 +183,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get the running totals for an auction.",
+        "read_only_justification": "Only looks up and returns data (get the running totals for an auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "auctions_near_me": {
@@ -183,9 +195,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: list every auction the user is in.",
+        "read_only_justification": "Only looks up and returns data (list every auction the user is in).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "award_points": {
@@ -195,9 +207,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: give a club member breeder award points (BAP, and HAP or CAP where the club runs them separately).",
+        "read_only_justification": "Changes data on this site: give a club member breeder award points (BAP, and HAP or CAP where the club runs them separately).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "cancel_volunteer_request": {
@@ -207,22 +219,22 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: cancel a request for help and withdraw the notification that went out with it.",
+        "read_only_justification": "Changes data on this site: cancel a request for help and withdraw the notification that went out with it.",
         "open_world_justification": "Reaches outside this site: the push notification it had already sent to those phones.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It cancels a request for help and withdraws the notification sent with it."
       }
     },
     "change_email": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": true,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change this user's own email address.",
+        "read_only_justification": "Changes data on this site: change this user's own email address.",
         "open_world_justification": "Reaches outside this site: a confirmation email to the new address, which is what makes the change take effect.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It sends a confirmation email that cannot be recalled, and replaces the account's email address once that link is opened."
       }
     },
     "check_in": {
@@ -233,9 +245,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: check a participant in to an in-person auction so they can bid.",
+        "read_only_justification": "Changes data on this site: check a participant in to an in-person auction so they can bid.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "club_api": {
@@ -245,9 +257,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: this club's own REST API, for writing an integration against it.",
+        "read_only_justification": "Only looks up and returns data (this club's own REST API, for writing an integration against it).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "club_history": {
@@ -257,9 +269,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: read and search a club's change log.",
+        "read_only_justification": "Only looks up and returns data (read and search a club's change log).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "club_numbers": {
@@ -269,9 +281,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get a club's own numbers.",
+        "read_only_justification": "Only looks up and returns data (get a club's own numbers).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "club_setup": {
@@ -281,9 +293,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: what this site can do to help run a club, and which of it this club is already using.",
+        "read_only_justification": "Only looks up and returns data (what this site can do to help run a club, and which of it this club is already using).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "club_website_snippets": {
@@ -293,9 +305,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: what a club can put on its own website.",
+        "read_only_justification": "Only looks up and returns data (what a club can put on its own website).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "clubs_near_me": {
@@ -305,9 +317,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: find fish clubs near the user.",
+        "read_only_justification": "Only looks up and returns data (find fish clubs near the user).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "contact_donation_vendor": {
@@ -317,9 +329,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: email one donation vendor a message you wrote, and record it against them.",
+        "read_only_justification": "Changes data on this site: email one donation vendor a message you wrote, and record it against them.",
         "open_world_justification": "Reaches outside this site: an email to an outside business, at an address this site does not own.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It sends an email to an outside business, which cannot be recalled once sent."
       }
     },
     "create_auction": {
@@ -329,9 +341,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: create a new auction by copying one this person has already run.",
+        "read_only_justification": "Changes data on this site: create a new auction by copying one this person has already run.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "describe_auction": {
@@ -341,9 +353,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get the full details of an auction.",
+        "read_only_justification": "Only looks up and returns data (get the full details of an auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "describe_club": {
@@ -353,9 +365,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get the full details of a club.",
+        "read_only_justification": "Only looks up and returns data (get the full details of a club).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "describe_donation_vendor": {
@@ -365,9 +377,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: read one donation vendor.",
+        "read_only_justification": "Only looks up and returns data (read one donation vendor).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "describe_lot": {
@@ -377,9 +389,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get the full details of one lot.",
+        "read_only_justification": "Only looks up and returns data (get the full details of one lot); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "describe_person": {
@@ -389,9 +401,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get everything about one participant in an auction.",
+        "read_only_justification": "Only looks up and returns data (get everything about one participant in an auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "draw_door_prize": {
@@ -401,22 +413,22 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: pick a door prize winner at random from the people who have checked in and haven't already won one.",
+        "read_only_justification": "Changes data on this site: pick a door prize winner at random from the people who have checked in and haven't already won one.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "edit_lot": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change a lot that has already been added.",
+        "read_only_justification": "Changes data on this site: change a lot that has already been added.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites a lot's name, description, prices or other fields with new values."
       }
     },
     "find_invoice": {
@@ -426,9 +438,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: look at one person's invoice in an auction.",
+        "read_only_justification": "Only looks up and returns data (look at one person's invoice in an auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "find_lot": {
@@ -438,9 +450,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: look up a lot by its number or name, in auctions this user is part of.",
+        "read_only_justification": "Only looks up and returns data (look up a lot by its number or name, in auctions this user is part of); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "find_page": {
@@ -450,9 +462,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: search the list of pages when you aren't sure which destination key to use.",
+        "read_only_justification": "Only looks up and returns data (search the list of pages when you aren't sure which destination key to use).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "find_person": {
@@ -462,9 +474,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: look up a person among the club members and auction participants this user administers.",
+        "read_only_justification": "Only looks up and returns data (look up a person among the club members and auction participants this user administers).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "go_to_page": {
@@ -474,9 +486,22 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: open any page on the site, and return its URL.",
+        "read_only_justification": "Only returns a link to a page on this site (open any page on the site, and return its URL); nothing is saved unless the person does it on that page themselves.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
+      }
+    },
+    "hide_category": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: hide a category's lots from the user's own lot lists, or show them again.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "hide_chat_message": {
@@ -487,9 +512,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: hide a chat message somebody posted on a lot, or put a hidden one back.",
+        "read_only_justification": "Changes data on this site: hide a chat message somebody posted on a lot, or put a hidden one back.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "join_auction": {
@@ -500,22 +525,22 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: sign the user up for an auction, or say whether they're already in it.",
+        "read_only_justification": "Changes data on this site: sign the user up for an auction, or say whether they're already in it.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "leave_feedback": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
-        "destructiveHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: leave feedback on a lot, as the person who bought it or the person who sold it.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "read_only_justification": "Changes data on this site: leave feedback on a lot, as the person who bought it or the person who sold it.",
+        "open_world_justification": "Reaches outside this site: the rating and comment are shown on the other person's public profile.",
+        "destructive_justification": "It overwrites any rating or comment the same person left on that lot before, and the result is public."
       }
     },
     "list_club_events": {
@@ -525,9 +550,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: a club's calendar.",
+        "read_only_justification": "Only looks up and returns data (a club's calendar).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "list_club_members": {
@@ -537,9 +562,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: list a club's members by name, filtered by whether their dues are current.",
+        "read_only_justification": "Only looks up and returns data (list a club's members by name, filtered by whether their dues are current).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "list_donation_vendors": {
@@ -549,9 +574,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: list the businesses a club is asking to donate something to a raffle or charity auction, and where each conversation has got to.",
+        "read_only_justification": "Only looks up and returns data (list the businesses a club is asking to donate something to a raffle or charity auction, and where each conversation has got to).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "list_lots": {
@@ -561,9 +586,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: list the lots in an auction matching one status.",
+        "read_only_justification": "Only looks up and returns data (list the lots in an auction matching one status); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "list_people": {
@@ -573,9 +598,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: list the people in an auction matching one status.",
+        "read_only_justification": "Only looks up and returns data (list the people in an auction matching one status); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "list_pickup_locations": {
@@ -585,9 +610,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: where an auction's lots are collected, and when.",
+        "read_only_justification": "Only looks up and returns data (where an auction's lots are collected, and when); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "lot_queue": {
@@ -597,9 +622,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get the lot queue for an in-person auction.",
+        "read_only_justification": "Only looks up and returns data (get the lot queue for an in-person auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "my_activity": {
@@ -609,9 +634,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get what this user has going on in an auction.",
+        "read_only_justification": "Only looks up and returns data (get what this user has going on in an auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "my_bidder_number": {
@@ -621,9 +646,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: the signed-in user's own bidder number in one auction, and whether they have checked in yet.",
+        "read_only_justification": "Only looks up and returns data (the signed-in user's own bidder number in one auction, and whether they have checked in yet); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "my_context": {
@@ -633,9 +658,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: who the user is and what they're working on right now.",
+        "read_only_justification": "Only looks up and returns data (who the user is and what they're working on right now).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "my_membership": {
@@ -645,9 +670,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: show the user their own club membership card.",
+        "read_only_justification": "Only looks up and returns data (show the user their own club membership card).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "my_messages": {
@@ -657,9 +682,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: get the questions people have asked on the user's own lots, newest first.",
+        "read_only_justification": "Only looks up and returns data (get the questions people have asked on the user's own lots, newest first); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "my_points": {
@@ -669,9 +694,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: the user's own breeder award points.",
+        "read_only_justification": "Only looks up and returns data (the user's own breeder award points); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "name_a_species": {
@@ -681,9 +706,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: teach the site a name people actually type for a species that is already on the list.",
+        "read_only_justification": "Changes data on this site: teach the site a name people actually type for a species that is already on the list.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "no_sale": {
@@ -694,9 +719,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: record that a lot did not sell in an in-person auction, ending it with no winner.",
+        "read_only_justification": "Changes data on this site: record that a lot did not sell in an in-person auction, ending it with no winner.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "place_bid": {
@@ -706,9 +731,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: bid on a lot as the signed-in user, through the same code the bid box on the lot page uses.",
+        "read_only_justification": "Changes data on this site: bid on a lot as the signed-in user, through the same code the bid box on the lot page uses.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It places a bid that other bidders see at once and that the bidder cannot generally withdraw."
       }
     },
     "points_queue": {
@@ -718,9 +743,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: the club's breeder award review desk.",
+        "read_only_justification": "Only looks up and returns data (the club's breeder award review desk); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "price_history": {
@@ -730,9 +755,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: what one thing has sold for before, out of the auctions this user is part of.",
+        "read_only_justification": "Only looks up and returns data (what one thing has sold for before, out of the auctions this user is part of); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "print_labels": {
@@ -742,9 +767,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: open a label printing page.",
+        "read_only_justification": "Only returns a link to a page on this site (open a label printing page); nothing is saved unless the person does it on that page themselves.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
       }
     },
     "queue_lot": {
@@ -755,9 +780,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: put one lot on the end of an in-person auction's running order, so the auctioneer gets to it next.",
+        "read_only_justification": "Changes data on this site: put one lot on the end of an in-person auction's running order, so the auctioneer gets to it next.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "read_source": {
@@ -767,9 +792,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: read this website's own source code, which is published as a public repository.",
+        "read_only_justification": "Only looks up and returns data (read this website's own source code, which is published as a public repository).",
         "open_world_justification": "Reaches outside this site: this site's own source code, published as a public repository.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "recent_changes": {
@@ -779,9 +804,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: read and search an auction's change log.",
+        "read_only_justification": "Only looks up and returns data (read and search an auction's change log); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "record_club_money": {
@@ -791,9 +816,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: write one line in a club's own books.",
+        "read_only_justification": "Changes data on this site: write one line in a club's own books.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "record_donation_contact": {
@@ -803,9 +828,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: write down that somebody asked a donation vendor whose requests don't go by email.",
+        "read_only_justification": "Changes data on this site: write down that somebody asked a donation vendor whose requests don't go by email.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "refund_lot": {
@@ -815,9 +840,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: refund a lot that has sold, in an auction this user administers.",
+        "read_only_justification": "Changes data on this site: refund a lot that has sold, in an auction this user administers.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It moves money: the refund comes off the invoice and the seller's payout, and for a card sale it is sent back through Square, which cannot be reversed from this site."
       }
     },
     "remove_award": {
@@ -827,9 +852,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take back the breeder award points given for one lot, putting it back on the pending list with no decision on it.",
+        "read_only_justification": "Changes data on this site: take back the breeder award points given for one lot, putting it back on the pending list with no decision on it.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It clears the points decision on a lot and takes back the points it had awarded."
       }
     },
     "remove_bid": {
@@ -839,9 +864,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: remove a bid from a lot.",
+        "read_only_justification": "Changes data on this site: remove a bid from a lot.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes a bid, and the lot's price falls back to the next-highest bid."
       }
     },
     "remove_dropdown_option": {
@@ -851,9 +876,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take one option off an auction's custom dropdown.",
+        "read_only_justification": "Changes data on this site: take one option off an auction's custom dropdown.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes one option from an auction's custom dropdown."
       }
     },
     "remove_invoice_adjustment": {
@@ -863,9 +888,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take one extra line back off somebody's invoice.",
+        "read_only_justification": "Changes data on this site: take one extra line back off somebody's invoice.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes one charge or discount line from an invoice that is still open."
       }
     },
     "remove_lot": {
@@ -875,9 +900,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: delete a lot, or take a standalone lot off sale so it can be put back later.",
+        "read_only_justification": "Changes data on this site: delete a lot, or take a standalone lot off sale so it can be put back later.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes a lot from its auction, or deactivates a lot that is in no auction, which also removes the bids on it."
       }
     },
     "remove_lot_image": {
@@ -887,9 +912,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take a picture off a lot.",
+        "read_only_justification": "Changes data on this site: take a picture off a lot.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes the picture from the lot; putting it back means adding the image again."
       }
     },
     "remove_person": {
@@ -899,9 +924,47 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take somebody out of an auction they were added to by mistake.",
+        "read_only_justification": "Changes data on this site: take somebody out of an auction they were added to by mistake.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes a person's place in an auction, and is refused if they have an invoice, lots to sell or lots they won."
+      }
+    },
+    "remove_random_option": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: take one option off an auction's custom random field.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes one option from an auction's custom random field and overwrites that value on every lot that had it with one of the remaining options."
+      }
+    },
+    "rename_dropdown_option": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: rename one option on an auction's custom dropdown.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It overwrites the name of one option on an auction's custom dropdown."
+      }
+    },
+    "rename_random_option": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: rename one option on an auction's custom random field.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It overwrites the name of a random-field option on every lot that was given it."
       }
     },
     "renew_member": {
@@ -911,9 +974,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: renew someone ELSE's club membership, extending it by one period and recording the payment in the club's books.",
+        "read_only_justification": "Changes data on this site: renew someone ELSE's club membership, extending it by one period and recording the payment in the club's books.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "renew_membership": {
@@ -923,9 +986,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: open the membership payment page for one of the user's clubs.",
+        "read_only_justification": "Only returns a link to a page on this site (open the membership payment page for one of the user's clubs); nothing is saved unless the person does it on that page themselves.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
       }
     },
     "request_a_skill": {
@@ -936,34 +999,34 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: write down something this site should be able to do and can't.",
+        "read_only_justification": "Changes data on this site: write down something this site should be able to do and can't.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "request_volunteers": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": true,
-        "destructiveHint": false
+        "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: ask the people at an in-person auction for help with a job.",
+        "read_only_justification": "Changes data on this site: ask the people at an in-person auction for help with a job.",
         "open_world_justification": "Reaches outside this site: push notifications to the phones of everyone at that auction.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It sends a push notification to everyone at the auction that cannot be unseen, though cancel_volunteer_request withdraws the request itself."
       }
     },
     "resend_member_card": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": true,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: email a club member a fresh link to their membership card.",
+        "read_only_justification": "Changes data on this site: email a club member a fresh link to their membership card.",
         "open_world_justification": "Reaches outside this site: an email to the club member's own address.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It sends an email that cannot be recalled, though only to the member's own address on file and never to a member marked do-not-contact."
       }
     },
     "retract_announcement": {
@@ -974,9 +1037,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take back the club's most recent announcement.",
+        "read_only_justification": "Changes data on this site: take back one of the club's announcements, the most recent unless told which.",
         "open_world_justification": "Reaches outside this site: the Discord post and the club website entry it had already published.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It deletes the announcement's Discord post and website entry, or cancels it for good if it had not gone out yet."
       }
     },
     "review_points": {
@@ -987,9 +1050,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: Approve, deny, or un-decide the breeder award points on one lot.",
+        "read_only_justification": "Changes data on this site: Approve, deny, or un-decide the breeder award points on one lot.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "rotate_lot_image": {
@@ -1000,9 +1063,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: turn a lot's photo the right way up, and pick which picture is its thumbnail.",
+        "read_only_justification": "Changes data on this site: turn a lot's photo the right way up, and pick which picture is its thumbnail.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "search_help": {
@@ -1012,9 +1075,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: search this site's own FAQ and blog for how something works, or read the whole FAQ with no query at all.",
+        "read_only_justification": "Only looks up and returns data (search this site's own FAQ and blog for how something works, or read the whole FAQ with no query at all).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "search_lots": {
@@ -1024,33 +1087,33 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: show the user lots matching what they're looking for, by opening the lot list filtered to their search.",
+        "read_only_justification": "Only returns a link to a page on this site (show the user lots matching what they're looking for, by opening the lot list filtered to their search); nothing is saved unless the person does it on that page themselves.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
       }
     },
     "send_club_announcement": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": true,
-        "destructiveHint": false
+        "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: say one thing to everybody in a club, in as many places at once as the club has set up.",
+        "read_only_justification": "Changes data on this site: say one thing to everybody in a club, in as many places at once as the club has set up.",
         "open_world_justification": "Reaches outside this site: the club's Discord server, push notifications to members' phones, its mailing list and its own website, all at once.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "Once its short retract window has passed it sends emails and push notifications that cannot be recalled; retract_announcement can still take down the Discord post and website entry."
       }
     },
     "send_membership_card": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": true,
-        "destructiveHint": false
+        "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: email a club membership card to the address already on that membership.",
+        "read_only_justification": "Changes data on this site: email a club membership card to the address already on that membership.",
         "open_world_justification": "Reaches outside this site: an email to the address on that membership.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It sends an email that cannot be recalled, though only to the address already on that membership and only with that member's own card."
       }
     },
     "set_current_auction": {
@@ -1061,9 +1124,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: pin which auction a club's page, website snippets and calendar links point at.",
+        "read_only_justification": "Changes data on this site: pin which auction a club's page, website snippets and calendar links point at.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "set_invoice_renewal": {
@@ -1074,9 +1137,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: say whether somebody's invoice includes their club membership renewal.",
+        "read_only_justification": "Changes data on this site: say whether somebody's invoice includes their club membership renewal.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "set_invoice_status": {
@@ -1087,48 +1150,48 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: mark one person's invoice in an auction as paid, ready, or open again.",
+        "read_only_justification": "Changes data on this site: mark one person's invoice in an auction as paid, ready, or open again.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "set_lot_species": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: put the scientific name on a lot, matched against this site's own species list.",
+        "read_only_justification": "Changes data on this site: put the scientific name on a lot, matched against this site's own species list.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites the scientific name recorded on a lot."
       }
     },
     "set_lot_winner": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: record the winner and selling price of a lot in an in-person auction.",
+        "read_only_justification": "Changes data on this site: record the winner and selling price of a lot in an in-person auction.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It records a lot's winner and price, and when told to ignore errors it overwrites a sale that was already recorded."
       }
     },
     "set_member_active": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: deactivate a club member, or bring a deactivated one back.",
+        "read_only_justification": "Changes data on this site: deactivate a club member, or bring a deactivated one back.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "Deactivating a member takes away their membership until someone reactivates them, which revokes access even though nothing is deleted."
       }
     },
     "set_my_auction": {
@@ -1139,9 +1202,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: set which auction this user means when they don't name one, for everything after this.",
+        "read_only_justification": "Changes data on this site: set which auction this user means when they don't name one, for everything after this.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "set_my_club": {
@@ -1152,22 +1215,22 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: set which club this user means when they don't name one, for everything after this, and record it as their club affiliation on.",
+        "read_only_justification": "Changes data on this site: set which club this user means when they don't name one, for everything after this, and record it as their club affiliation on.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "set_point_rule": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: set what a genus or a category is worth in a club's breeder award program.",
+        "read_only_justification": "Changes data on this site: set what a genus or a category is worth in a club's breeder award program.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It replaces what a genus or category is worth in a club's points program, which changes what later awards give."
       }
     },
     "suggest_starting_prices": {
@@ -1177,9 +1240,9 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Reads and returns, changing nothing: suggest an opening bid for the lots in an auction that nobody has priced.",
+        "read_only_justification": "Only looks up and returns data (suggest an opening bid for the lots in an auction that nobody has priced); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Reads only, so there is nothing for it to delete, overwrite or undo."
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "undo_check_in": {
@@ -1190,9 +1253,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: Un-check-in one person who was checked in by mistake.",
+        "read_only_justification": "Changes data on this site: Un-check-in one person who was checked in by mistake.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It clears a person's checked-in status, overwriting what the check-in desk recorded."
       }
     },
     "undo_last": {
@@ -1202,9 +1265,9 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: reverse the last thing you did for this user, if it can be reversed.",
+        "read_only_justification": "Changes data on this site: reverse the last thing you did for this user, if it can be reversed.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It reverses the user's previous change, overwriting whatever that change had set."
       }
     },
     "undo_sale": {
@@ -1215,9 +1278,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: clear the winner and price on a lot that was sold by mistake in an in-person auction, putting it back up for sale.",
+        "read_only_justification": "Changes data on this site: clear the winner and price on a lot that was sold by mistake in an in-person auction, putting it back up for sale.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Cannot be taken back by calling it again: what it removes, overwrites or commits to is gone from the person's own record of the auction."
+        "destructive_justification": "It clears the recorded winner and selling price of a lot."
       }
     },
     "unqueue_lot": {
@@ -1228,86 +1291,86 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: take one lot back out of an in-person auction's running order.",
+        "read_only_justification": "Changes data on this site: take one lot back out of an in-person auction's running order.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "update_auction_setting": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change one of an auction's settings by name.",
+        "read_only_justification": "Changes data on this site: change one of an auction's settings by name.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites one of an auction's settings, such as the minimum bid, the club's cut or whether the auction is listed publicly."
       }
     },
     "update_club_event": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": true,
-        "destructiveHint": false
+        "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: Move, rename or call off something on a club's calendar.",
+        "read_only_justification": "Changes data on this site: Move, rename or call off something on a club's calendar.",
         "open_world_justification": "Reaches outside this site: the club's Discord server and the Google Calendar it is connected to.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites an event's date, title or description, or calls it off, and pushes the change to the club's calendar and Discord."
       }
     },
     "update_club_member": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change a club member's details.",
+        "read_only_justification": "Changes data on this site: change a club member's details.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites a club member's contact details, membership number, name or note."
       }
     },
     "update_club_setting": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change one of a club's settings by name.",
+        "read_only_justification": "Changes data on this site: change one of a club's settings by name.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites one of a club's settings, including the wording of the welcome and renewal emails it sends."
       }
     },
     "update_contact_info": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change this user's own name, phone number, mailing address, ship-to region or map marker.",
+        "read_only_justification": "Changes data on this site: change this user's own name, phone number, mailing address, ship-to region or map marker.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites the user's name, phone number or address on their account and on the auctions and clubs that hold a copy of it."
       }
     },
     "update_donation_vendor": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change one donation vendor.",
+        "read_only_justification": "Changes data on this site: change one donation vendor.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites a donation vendor's status, contact details, notes or follow-up date."
       }
     },
     "update_label_fields": {
@@ -1318,35 +1381,35 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: choose what gets printed on an auction's lot labels.",
+        "read_only_justification": "Changes data on this site: choose what gets printed on an auction's lot labels.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "update_person": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change something about a person in an auction.",
+        "read_only_justification": "Changes data on this site: change something about a person in an auction.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites a participant's contact details, name, bidder number or note, and can take away their permission to bid or sell."
       }
     },
     "update_pickup_location": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change one thing about a pickup location.",
+        "read_only_justification": "Changes data on this site: change one thing about a pickup location.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It overwrites a pickup location's address, time or directions, which people may already have chosen."
       }
     },
     "update_preferences": {
@@ -1357,9 +1420,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change one of this user's own preferences without sending them to the preferences page.",
+        "read_only_justification": "Changes data on this site: change one of this user's own preferences without sending them to the preferences page.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "update_printing_preferences": {
@@ -1370,22 +1433,22 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change one of this user's own label printing preferences.",
+        "read_only_justification": "Changes data on this site: change one of this user's own label printing preferences.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "update_username": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: change this user's own username.",
+        "read_only_justification": "Changes data on this site: change this user's own username.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It replaces the user's username, which is also the address of their public page."
       }
     },
     "watch_lot": {
@@ -1396,9 +1459,9 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Writes one row in this site's own database: add a lot to the user's watch list, or take it off again.",
+        "read_only_justification": "Changes data on this site: add a lot to the user's watch list, or take it off again.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "Adds or sets a value the same person can change again from the website; it deletes nothing and overwrites no earlier answer."
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     }
   },
@@ -1454,7 +1517,7 @@
       "expected_output_url": null
     },
     {
-      "description": "Do not attempt a bulk change; no tool here changes more than one row.",
+      "description": "Do not attempt a bulk change; no tool here writes over a filter.",
       "user_prompt": "Delete every lot in the spring auction.",
       "file_attachment_urls": null,
       "tools_triggered": null,

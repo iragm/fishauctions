@@ -42,8 +42,8 @@ auctions/mcp/auth.py       who is calling
   `test_mcp.RegistryConformance.test_every_parameter_declares_its_type`.
 - Annotations come from the danger tier: `safe` reads, `confirm` writes, `navigate` resolves a URL
   and never acts. `readOnlyHint` is `danger != DANGER_CONFIRM`. No catch-all execute tool.
-  `destructive=True` only where a write overwrites a previous answer (`undo_sale`, `undo_last`) or
-  can't be undone at all (`place_bid`). `idempotent` is derived (reads yes, writes no) unless a
+  `destructive` and `open_world` follow OpenAI's review definitions; `Action.destructive` and
+  `Action.open_world` say where the line is. `idempotent` is derived (reads yes, writes no) unless a
   setter says otherwise. That flag is load-bearing: a non-idempotent write repeated byte-for-byte
   by the same person within a minute is answered from the first call, not run again
   (`tools.REPEAT_WINDOW_SECONDS`; ChatGPT double-sent every `add_lot`). A write where two identical

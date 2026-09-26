@@ -106,8 +106,11 @@ class Action:
     aliases: set[str] = field(default_factory=set)
     #: Who this is worth describing to. See :func:`actions_for`.
     needs: str = NEEDS_ANYONE
-    #: Ask first, always: the write destroys a previous answer (undo_sale) or can't be taken back
-    #: (place_bid). Maps to MCP ``destructiveHint``.
+    #: MCP ``destructiveHint``, on OpenAI's definition, which its plugin review enforces: the write
+    #: deletes something (remove_lot), overwrites what somebody typed or decided (edit_lot,
+    #: set_lot_winner), revokes access (set_member_active), moves money (refund_lot), or sends a
+    #: message that can't be recalled (send_club_announcement). Adding a row is not destructive, and
+    #: nor is a toggle or a pointer the same tool flips back (check_in, watch_lot, set_my_auction).
     destructive: bool = False
     #: Whether the palette counts down first. False only for writes that are non-destructive,
     #: idempotent and undone by an existing tool (check_in). Changes nothing about MCP: still a
@@ -117,14 +120,14 @@ class Action:
     #: ``True`` on writes that set rather than append. See ``mcp.tools.idempotent``.
     idempotent: bool | None = None
     #: MCP ``openWorldHint``. True where the point of the tool is to reach somebody or something
-    #: outside this site: an email to an address we don't own, a Discord post, a push notification,
-    #: a Google Calendar, the public repository ``read_source`` reads. It is about the tool's
-    #: purpose, not its side effects -- half the writes here send a notification of some kind, and a
-    #: rule that counted those would mark the whole registry and tell a reader nothing.
+    #: outside this site -- an email, a Discord post, a push notification, a Google Calendar, the
+    #: public repository ``read_source`` reads -- or to publish something anyone on the internet can
+    #: read: a lot listing (add_lot), a public reply (answer_question), feedback. OpenAI's review
+    #: counts "publish content" as open-world, and this site is not a private workspace.
     #:
-    #: **A lot being publicly visible on this site is not open-world.** A bounded service somebody
-    #: is signed in to stays closed however public its pages are; that is the line a plugin
-    #: directory draws, and the same line ``add_lot`` and ``answer_question`` sit on the near side of.
+    #: It is about the tool's purpose, not its side effects: half the writes here send a
+    #: notification of some kind, and editing a public lot changes a public page, and a rule that
+    #: counted those would mark the whole registry and tell a reader nothing.
     open_world: bool = False
     #: Offered over ``/mcp/`` only, never in the palette's tool list. Not set here: set from
     #: :data:`MCP_ONLY_SKILLS`, which is where the reason for each one is written down.
@@ -11166,6 +11169,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_lot_species,
         aliases={"lot_id", "scientific_name", "name"},
@@ -11380,6 +11384,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         resolver=add_lot,
         aliases={"seller", "lot_name", "price", "count"},
         confirm_template="Add a lot",
@@ -11456,6 +11461,7 @@ register(
             "i_bred_this_fish": "boolean, optional. Applies to every lot in the list.",
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         resolver=add_lots,
         aliases={"seller", "items", "names"},
         confirm_template="Add several lots",
@@ -11558,6 +11564,7 @@ register(
             "value": "string, optional. What to set the field named by 'setting' to.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_contact_info,
         aliases={"field", "coordinates", "full_name", "phone", "region"},
@@ -11577,6 +11584,7 @@ register(
         ),
         params={"username": "string, required. The username they want."},
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_username,
         aliases={"name", "value", "new_username"},
@@ -11597,6 +11605,7 @@ register(
         ),
         params={"email": "string, required. The address they want to move to."},
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=change_email,
         aliases={"value", "address", "new_email"},
@@ -11741,6 +11750,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=send_membership_card,
         aliases={"name"},
         confirm_template="Send a membership card",
@@ -11768,6 +11778,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_lot_winner,
         confirm_template="Record a sale",
@@ -11875,6 +11886,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_person,
         # clear_fields: undo's own, to put a blank back.
@@ -11929,6 +11941,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=edit_lot,
         # clear_fields: undo's own, to put a blank back.
@@ -12177,6 +12190,7 @@ register(
             "memo": "string, optional. An admin-only note about them.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_club_member,
         aliases={"name", "phone", "bidder_number"},
@@ -12390,6 +12404,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=update_club_event,
         aliases={"title", "name", "where"},
         confirm_template="Change an event",
@@ -12418,6 +12433,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=send_club_announcement,
         aliases={"message", "name", "scheduled_for"},
         confirm_template="Send an announcement",
@@ -12585,6 +12601,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_club_setting,
         aliases={"name"},
@@ -12656,6 +12673,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_pickup_location,
         aliases={"name", "field"},
@@ -12717,6 +12735,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=rename_dropdown_option,
         aliases={"value", "to"},
@@ -12761,6 +12780,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=rename_random_option,
         aliases={"value", "to"},
@@ -12832,6 +12852,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=request_volunteers,
         aliases={"job", "name"},
         confirm_template="Ask for volunteers",
@@ -12877,6 +12898,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_auction_setting,
         aliases={"name"},
@@ -13441,6 +13463,8 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
+        open_world=True,
         resolver=answer_question,
         aliases={"reply", "lot_id", "query", "name"},
         confirm_template="Reply on a lot",
@@ -13602,6 +13626,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_donation_vendor,
         aliases={"name", "notes", "date", "url"},
@@ -13963,6 +13988,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_member_active,
         aliases={"name", "status", "deactivate", "reactivate"},
@@ -14042,6 +14068,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_point_rule,
         confirm_template="Set a breeder points rule",
@@ -14089,6 +14116,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=resend_member_card,
         aliases={"name"},
@@ -14118,6 +14146,8 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
+        open_world=True,
         idempotent=True,
         resolver=leave_feedback,
         aliases={"name", "query", "lot_id", "comment", "feedback", "role"},

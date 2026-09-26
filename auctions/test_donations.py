@@ -2087,9 +2087,9 @@ class DonationSkillTests(DonationTestMixin, TestCase):
     def test_writing_to_a_stranger_says_it_cannot_be_taken_back(self):
         contact = palette_actions.get_action("contact_donation_vendor")
         self.assertTrue(contact.destructive)
-        # The two that only move a row of our own don't claim to destroy anything.
+        # Adding a row of our own destroys nothing; overwriting the notes on one does.
         self.assertFalse(palette_actions.get_action("add_donation_vendor").destructive)
-        self.assertFalse(palette_actions.get_action("update_donation_vendor").destructive)
+        self.assertTrue(palette_actions.get_action("update_donation_vendor").destructive)
 
 
 @isolated_cache("donations")
