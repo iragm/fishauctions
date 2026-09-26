@@ -43,7 +43,6 @@ from auctions.models import (
     Invoice,
     InvoiceAdjustment,
     Lot,
-    LotHistory,
     LotQueueEntry,
     MobileDevice,
     VolunteerJob,
@@ -55,21 +54,15 @@ from auctions.tasks import (
     send_push_to_user,
 )
 
-from .base import AuctionViewMixin, _upsert_clubmember_shadow_tos
+from .base import (
+    AuctionViewMixin,
+    _lot_invoices,
+    _recalculate_invoices,
+    _upsert_clubmember_shadow_tos,
+    close_modal_response,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _lot_invoices(lot):
-    """The lot's winner's and seller's invoices. Take them before a change moves the lot off them: only
-    setting a winner recalculates, so whoever loses the lot would keep a stale total.
-    """
-    return [invoice for invoice in (lot.winner_invoice, lot.sellers_invoice) if invoice]
-
-
-def _recalculate_invoices(invoices):
-    for invoice in {invoice.pk: invoice for invoice in invoices}.values():
-        invoice.recalculate()
 
 
 class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
@@ -188,30 +181,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
     def end_unsold(self, lot):
         """Mark lot unsold"""
-        lot.date_end = timezone.now()
-        lot.winner = None
-        lot.auctiontos_winner = None
-        lot.winning_price = None
-        lot.active = False
-        lot.save()
-        message = f"{self.request.user} has marked lot {lot.lot_number_display} as not sold"
-        LotHistory.objects.create(
-            lot=lot,
-            user=self.request.user,
-            message=message,
-            changed_price=True,
-        )
-        lot.send_websocket_message(
-            {
-                "type": "chat_message",
-                "info": "ENDED_NO_WINNER",
-                "message": message,
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-            }
-        )
-        return message
+        return lot.end_unsold(self.request.user)
 
     def set_winner(self, lot, winning_tos, winning_price):
         # A force_save over an earlier sale takes the lot off the old winner's invoice.
@@ -313,6 +283,13 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         price = request.POST.get("price", None)
         winner = request.POST.get("winner", None)
         action = request.POST.get("action", "validate")
+        # A price of 0 and no winner is how the form says "unsold".
+        if action in ("save", "force_save") and not winner:
+            try:
+                if Decimal(str(price)) == 0:
+                    action = "end_unsold"
+            except (InvalidOperation, ValueError, TypeError):
+                pass
 
         result = {
             "price": None,
@@ -395,7 +372,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             # JS not in place; also remove from view_lot_simple.
         if lot and not lot_error:
             lot = "valid"
-        if price and not price_error:
+        if price is not None and not price_error:
             price = "valid"
         if winner and not winner_error:
             winner = "valid"
@@ -406,6 +383,38 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             result["auction_minutes_to_end"] = self.auction.estimate_end
             result["unsold_lot_count"] = self.auction.total_unsold_lots
         return JsonResponse(result)
+
+
+class LotEndUnsold(LoginRequiredMixin, AuctionViewMixin, View):
+    """The admin lot list's "End lot unsold": ``Lot.end_unsold`` by pk, with set-winners' checks."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False, auction__isnull=False)
+        self.auction = self.lot.auction
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        self.require_auction_admin()
+        lot = self.lot
+        error = None
+        if self.auction.is_online:
+            error = "Lots in an online auction end on their own"
+        elif lot.sold:
+            error = "This lot has already been sold"
+        elif lot.ended_unsold:
+            error = "This lot has already ended unsold"
+        elif lot.sellers_invoice and lot.sellers_invoice.status != "DRAFT":
+            error = "The seller's invoice is not open"
+        if error:
+            return close_modal_response(toast=f"Lot {lot.lot_number_display}: {error}", toast_type="danger")
+        lot.end_unsold(request.user)
+        self.auction.create_history(
+            applies_to="LOTS",
+            action=f"Marked lot {lot.lot_number_display} as ended without being sold",
+            user=request.user,
+        )
+        pop_lot_from_queue(self.auction, lot)
+        return close_modal_response("reload-page")
 
 
 class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
@@ -1026,7 +1035,7 @@ class VolunteerJobAccept(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     messages.info(request, "Your invoice for this auction is closed, so ask an admin to sign you up.")
                     return redirect(redirect_url)
                 if not invoice:
-                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+                    invoice = Invoice.for_participant(tos, self.auction)
                 adjustment = InvoiceAdjustment.objects.create(
                     invoice=invoice,
                     user=request.user,

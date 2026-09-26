@@ -95,7 +95,7 @@ class CurrencyCustomizationTests(StandardTestCase):
         self.user.userdata.preferred_currency = "CAD"
         self.user.userdata.save()
 
-        invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+        invoice = Invoice.for_participant(self.online_tos)
 
         self.assertEqual(invoice.currency, "CAD")
         self.assertEqual(invoice.currency_symbol, "$")

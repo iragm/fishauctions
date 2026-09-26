@@ -599,9 +599,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     )
 
             # Update invoice
-            invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
-            if not invoice:
-                invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
+            invoice = Invoice.for_participant(self.tos, self.auction)
             invoice.recalculate()
 
             return JsonResponse(

@@ -53,6 +53,7 @@ from .base import (
     _last_n_month_starts,
     _process_invoice_membership_renewal,
     _ytd_month_starts,
+    safe_next_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,7 +225,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         # Both of these subscribe, so the calendar keeps updating. There's deliberately no plain
         # link to the .ics: that only downloads a one-time import.
         absolute_ical_url = self.request.build_absolute_uri(
-            reverse("club_events_ical", kwargs={"slug": self.club.slug})
+            reverse("club_events_ical", kwargs={"slug": self.club.url_key})
         )
         context["club_ical_subscribe_url"] = re.sub(r"^https?://", "webcal://", absolute_ical_url)
         context["club_ical_google_url"] = "https://calendar.google.com/calendar/r?cid=" + quote_plus(absolute_ical_url)
@@ -267,7 +268,8 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                     self.club.current_auction = auction
                     self.club.save(update_fields=["current_auction"])
                     messages.success(request, f"{auction} is now the current auction.")
-            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+            # The auction's own page posts here too, and asks to go back to it.
+            return redirect(safe_next_url(request, reverse("club_detail", kwargs={"slug": self.club.slug})))
         if action == "update":
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
             if member:

@@ -1152,6 +1152,7 @@ EXCLUDED: dict[str, str] = {
     "check_username": _AUTOCOMPLETE,
     "guess_category": _AUTOCOMPLETE,
     "get_auction_info": _API,
+    "auction_page_action": "POST-only: the auction page's banner buttons. Nothing to look at.",
     # JSON / HTMX fragments
     "get_ad": _API,
     "click_ad": _API,
@@ -1168,6 +1169,7 @@ EXCLUDED: dict[str, str] = {
     "lot_page_view_history": _API,
     "my_lots_page_view_history": _API,
     "auction_custom_dropdown_options": _API,
+    "auction_custom_random_options": _API,
     "auctiontosadmin": _API,
     "auctiontosdelete": _API,
     "auctiontosmemo": _API,
@@ -1190,6 +1192,7 @@ EXCLUDED: dict[str, str] = {
     "api_club_species_common_names": _API,
     "auction_no_show_dialog": _API,
     "lot_refund": _API,
+    "lot_end_unsold": _ACTION_ONLY,
     "bulk_set_lots_won": _API,
     "auction_unsell_lot": _ACTION_ONLY,
     "auction_voice_vocabulary": (

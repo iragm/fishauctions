@@ -3673,7 +3673,7 @@ class ClubSpeciesLookupAPITests(StandardTestCase):
         self._log_in_as_a_club_admin()
         url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": self.api_key.pk})
         page = self.client.get(url)
-        self.assertContains(page, f"/api/v1/clubs/{self.club.slug}/species-lookup/")
+        self.assertContains(page, f"/api/v1/clubs/{self.club.url_key}/species-lookup/")
         self.assertContains(page, "X-Species-LLM-Remaining")
         self.assertContains(page, "common-names/")
         self.api_key.can_look_up_species = False

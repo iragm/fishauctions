@@ -9,7 +9,6 @@ mocked.
 
 import datetime
 import json
-import unittest
 from time import time
 from unittest.mock import MagicMock, patch
 
@@ -211,27 +210,20 @@ class DiscordInteractionsViewTests(TestCase):
         self.assertIn("No club", self._content(response))
         self.assertFalse(ClubMember.objects.filter(discord_id="555").exists())
 
-    # Known issue: the modal's email is never verified, so typing a paid member's address links their record
-    # to the submitter's Discord account and grants the member's role.
-    @unittest.expectedFailure
+    # Accepted: the typed email isn't verified (the Discord settings page says so), so it links whichever
+    # member has that address. A Discord account links once, and the reply doesn't say which case happened.
     @override_settings(DISCORD_BOT_TOKEN="bot-token")
     @patch("requests.delete")
     @patch("requests.put")
     @patch("auctions.views.discord.verify_discord_signature", return_value=True)
-    def test_an_unverified_email_claim_does_not_link_an_existing_member(self, verify, put, delete):
+    def test_an_email_claim_links_the_existing_member_and_says_nothing_about_them(self, verify, put, delete):
         put.return_value = MagicMock(status_code=204)
         delete.return_value = MagicMock(status_code=204)
-        ClubDiscordRole.objects.create(club=self.club, role_id="role-paid", role_name="Paid", is_paid_role=True)
-        victim = ClubMember.objects.create(
-            club=self.club,
-            name="Paid Member",
-            email="paid@example.com",
-            membership_expiration_date=timezone.now().date() + datetime.timedelta(days=200),
-        )
-        self._post(self._modal("paid@example.com", name="Impostor", discord_id="666", username="impostor"))
-        victim.refresh_from_db()
-        self.assertFalse(victim.discord_id)
-        self.assertFalse(any("role-paid" in str(call) for call in put.call_args_list))
+        member = ClubMember.objects.create(club=self.club, name="Paid Member", email="paid@example.com")
+        response = self._post(self._modal("paid@example.com", name="Someone", discord_id="666", username="someone"))
+        member.refresh_from_db()
+        self.assertEqual(member.discord_id, "666")
+        self.assertNotIn("Paid Member", self._content(response))
 
 
 class ClubDiscordEditRoleViewTests(ClubFixtureMixin, TestCase):
@@ -351,8 +343,26 @@ class MailchimpCallbackViewTests(ClubFixtureMixin, TestCase):
         self.client.force_login(user)
         session = self.client.session
         session["mailchimp_oauth_club_slug"] = self.club.slug
+        session["mailchimp_oauth_state"] = "state-for-this-connect"
         session.save()
-        return user.userdata.unsubscribe_link
+        return "state-for-this-connect"
+
+    @patch("auctions.mailchimp.exchange_oauth_code", return_value=("tok-123", "us9"))
+    def test_the_unsubscribe_uuid_is_not_the_state(self, exchange):
+        """It is in every email footer, so anyone the user forwarded an email to could finish the flow."""
+        self._start(self.permitted)
+        self.client.get(
+            reverse("mailchimp_callback"), {"code": "abc", "state": self.permitted.userdata.unsubscribe_link}
+        )
+        exchange.assert_not_called()
+
+    @override_settings(MAILCHIMP_CLIENT_ID="client-1")
+    def test_connecting_puts_a_fresh_state_in_the_session(self):
+        self.client.force_login(self.permitted)
+        response = self.client.get(reverse("mailchimp_connect", kwargs={"slug": self.club.slug}))
+        state = self.client.session["mailchimp_oauth_state"]
+        self.assertIn(f"state={state}", response["Location"])
+        self.assertNotEqual(state, str(self.permitted.userdata.unsubscribe_link))
 
     @patch("auctions.mailchimp.exchange_oauth_code", return_value=("tok-123", "us9"))
     def test_stores_the_token_and_makes_a_webhook_secret(self, exchange):

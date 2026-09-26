@@ -300,6 +300,15 @@ class LotHTMxTable(tables.Table):
             "Reprint label" if record.label_printed else "Print label",
             record.seller_invoice_link,
         )
+        if self.auction and not self.auction.is_online:
+            result += format_html(
+                # Confirmed: the set-winners page has an undo, and this list doesn't.
+                '<div><a href=\'#\' hx-post="{}" hx-target="#modals-here" hx-trigger="click"'
+                ' hx-confirm="End lot {} unsold?">'
+                '<i class="bi bi-slash-circle ms-1 me-1"></i>End lot unsold</a></div>',
+                reverse("lot_end_unsold", kwargs={"pk": record.pk}),
+                record.lot_number_display,
+            )
         if record.winner_invoice_link:
             result += format_html(
                 '<div><a href="{}"><i class="bi bi-bag ms-1 me-1"></i>Winner\'s invoice</a></div>',
@@ -308,6 +317,8 @@ class LotHTMxTable(tables.Table):
         result += static_html("</div>")
         if record.banned:
             result += static_html('<span class="badge bg-danger">Removed</span>')
+        if record.ended_unsold:
+            result += static_html('<span class="badge bg-secondary">Ended unsold</span>')
         # On mobile, show info below the lot name.
         result += format_html('<span class="d-block d-md-none"><b>Seller:</b> {} ', record.auctiontos_seller)
         if record.auctiontos_winner:
@@ -562,7 +573,7 @@ _PERMISSION_BADGES = [
     ("permission_manage_bap", "Award points"),
     ("permission_manage_donations", "Manage donations"),
     ("permission_send_announcements", "Send announcements"),
-    ("permission_export", "Export data"),
+    ("permission_export", "Import/export data"),
     ("permission_add_edit", "Manage membership"),
     ("permission_view", "View members"),
 ]

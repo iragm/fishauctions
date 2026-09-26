@@ -209,17 +209,14 @@ class AuctionTOSDeleteTests(InvoiceAssertions, StandardTestCase):
         self.assert_current(self.invoice, changed_from=before)
 
 
-class InvoiceCreateViewTests(StandardTestCase):
-    def test_duplicates_are_merged_not_deleted(self):
-        Invoice.objects.bulk_create([Invoice(auctiontos_user=self.tosB, auction=self.online_auction)])
-        duplicate = Invoice.objects.filter(auctiontos_user=self.tosB).exclude(pk=self.invoiceB.pk).get()
-        payment = InvoicePayment.objects.create(invoice=duplicate, amount=Decimal("5.00"), payment_method="cash")
-        adjustment = InvoiceAdjustment.objects.create(invoice=duplicate, amount=3, notes="dup")
-        attempt = TapToPayAttempt.objects.create(invoice=duplicate, attempt_id="dup-attempt")
-        self.client.force_login(self.admin_user)
-        response = self.client.get(reverse("create_invoice", kwargs={"pk": self.tosB.pk}))
-        self.assertRedirects(response, self.invoiceB.get_absolute_url(), fetch_redirect_response=False)
-        self.assertFalse(Invoice.objects.filter(pk=duplicate.pk).exists())
+class InvoiceAbsorbTests(StandardTestCase):
+    def test_absorbing_moves_payments_adjustments_and_tap_to_pay_attempts(self):
+        """What merging two participants moves; a plain delete used to cascade them away."""
+        other = Invoice.for_participant(self.tosC)
+        payment = InvoicePayment.objects.create(invoice=other, amount=Decimal("5.00"), payment_method="cash")
+        adjustment = InvoiceAdjustment.objects.create(invoice=other, amount=3, notes="dup")
+        attempt = TapToPayAttempt.objects.create(invoice=other, attempt_id="dup-attempt")
+        self.invoiceB.absorb(other)
         self.assertEqual(InvoicePayment.objects.get(pk=payment.pk).invoice_id, self.invoiceB.pk)
         self.assertEqual(InvoiceAdjustment.objects.get(pk=adjustment.pk).invoice_id, self.invoiceB.pk)
         self.assertEqual(TapToPayAttempt.objects.get(pk=attempt.pk).invoice_id, self.invoiceB.pk)

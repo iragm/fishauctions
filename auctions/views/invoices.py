@@ -16,6 +16,7 @@ from django.db.models.base import Model as Model
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
+    HttpResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -38,7 +39,6 @@ from auctions.models import (
     AuctionTOS,
     Invoice,
     InvoiceAdjustment,
-    TapToPayAttempt,
     email_q,
 )
 from auctions.tables import (
@@ -100,10 +100,19 @@ class Invoices(LoginRequiredMixin, HTMxTableView):
 
 
 class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
-    """Create a new invoice for a user in an auction"""
+    """Create a new invoice for a user in an auction. POST only: it also checks the person in."""
 
-    def get(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         """Create invoice and redirect to invoice detail page"""
+        response = self._create(request)
+        if request.htmx:
+            # The link is in an HTMx table; a plain redirect would be swapped into it.
+            hx_response = HttpResponse(status=204)
+            hx_response["HX-Redirect"] = response["Location"]
+            return hx_response
+        return response
+
+    def _create(self, request):
         # Get the auctiontos
         auctiontos_pk = self.kwargs.get("pk")
         try:
@@ -134,29 +143,12 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
                 user=request.user,
             )
 
-        # Check for existing invoices - get the oldest one (first created)
-        existing_invoice = (
-            Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).order_by("date").first()
-        )
-
+        existing_invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).first()
         if existing_invoice:
-            duplicate_invoices = Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).exclude(
-                pk=existing_invoice.pk
-            )
-            duplicate_count = duplicate_invoices.count()
-            if duplicate_count > 0:
-                # A plain delete cascaded their payments and adjustments away. save() merges newer
-                # duplicates into the oldest, but doesn't know about tap-to-pay attempts.
-                TapToPayAttempt.objects.filter(invoice__in=duplicate_invoices).update(invoice=existing_invoice)
-                existing_invoice.save(update_fields=["calculated_total"])
-                messages.info(request, f"Merged {duplicate_count} duplicate invoice(s) into this one")
-
-            # Redirect to existing invoice
             messages.info(request, "Invoice already exists for this user")
             return redirect(existing_invoice.get_absolute_url())
 
-        # Create new invoice
-        invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=auctiontos.auction)
+        invoice = Invoice.for_participant(auctiontos)
         invoice.recalculate()
 
         messages.success(request, f"Invoice created for {auctiontos.name}")

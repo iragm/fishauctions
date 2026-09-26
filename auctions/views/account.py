@@ -524,10 +524,7 @@ class CreateUserIgnoreCategory(APIView):
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, *args, **kwargs):
-        if not self.request.user.is_authenticated:
-            messages.error(request, "Sign in to ignore categories")
-            return redirect(reverse("home"))
+    def post(self, request, *args, **kwargs):
         pk = self.kwargs.get("pk", None)
         category = get_object_or_404(Category, pk=pk)
         result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=request.user)
@@ -540,10 +537,7 @@ class DeleteUserIgnoreCategory(APIView):
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, *args, **kwargs):
-        if not self.request.user.is_authenticated:
-            messages.error(request, "Sign in to show categories")
-            return redirect(reverse("home"))
+    def post(self, request, *args, **kwargs):
         pk = self.kwargs.get("pk", None)
         category = get_object_or_404(Category, pk=pk)
         try:

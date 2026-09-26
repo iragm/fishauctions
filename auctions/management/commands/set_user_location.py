@@ -22,6 +22,12 @@ REQUEST_TIMEOUT = 30
 #: ip-api caps a batch at 100.
 MAX_BATCH = 100
 
+#: The task runs every 2 hours; a day's margin covers a missed run or two.
+PAGE_VIEW_WINDOW = datetime.timedelta(days=1)
+
+#: Requests the proxy forwarded without a client address.
+DOCKER_GATEWAYS = ("172.21.0.1", "172.22.0.1")
+
 
 def _batch_body(addresses):
     """The JSON body for one ip-api batch: unique, valid addresses only.
@@ -130,7 +136,17 @@ class Command(BaseCommand):
                                         # Default to km and USD for all other countries
                                         user.distance_unit = "km"
                                         user.preferred_currency = "USD"
-                                    user.save()
+                                    # Only what this sets: the lookup took seconds, and a full save
+                                    # would put back whatever else changed on the row meanwhile.
+                                    user.save(
+                                        update_fields=[
+                                            "latitude",
+                                            "longitude",
+                                            "location",
+                                            "distance_unit",
+                                            "preferred_currency",
+                                        ]
+                                    )
                                     logger.info(
                                         "assigning %s with IP %s a location", user.user.email, user.last_ip_address
                                     )
@@ -143,42 +159,35 @@ class Command(BaseCommand):
                         except Exception as e:
                             logger.exception(e)
             else:
-                logger.warning("Query failed for this IP list:")
-                logger.warning(ip_list)
-                logger.warning(r["text"])
+                logger.warning("User location lookup failed with HTTP %s: %s", r.status_code, r.text[:500])
             # Limits: 100 lookups a query, 15 a minute -- the daily cron is well inside both. Around
             # 440 older users have no location and no automatic way to get one, and a problematic IP
             # is hard to spot, since the error checking here is minimal.
 
-        # Page views are handled separately, with some duplicate code that could be merged with the
-        # user lookup above. First check whether this IP is already known somewhere.
-        pageviews = (
-            PageView.objects.exclude(ip_address="172.21.0.1")
-            .exclude(ip_address="172.22.0.1")
-            .filter(ip_address__isnull=False, latitude=0, longitude=0)
-            .order_by("-date_start")[:100]
-        )
-        # now that we've cycled
-        if pageviews:
-            ip_list = _batch_body(view.ip_address for view in pageviews)
+        # Page views: one lookup per address, then one UPDATE for every view from it in the window.
+        # Bounded by date: views whose address never resolves keep latitude 0 forever, and without a
+        # window each run sorted all of them. PageView.save copies a location from an earlier view of
+        # the same address, so only an address's first view here needs a lookup.
+        window_start = timezone.now() - PAGE_VIEW_WINDOW
+        unlocated = PageView.objects.filter(
+            date_start__gte=window_start, ip_address__isnull=False, latitude=0, longitude=0
+        ).exclude(ip_address__in=DOCKER_GATEWAYS)
+        # Not .distinct(): with an order_by it is one row per view anyway. _batch_body de-duplicates.
+        addresses = list(unlocated.order_by("-date_start").values_list("ip_address", flat=True)[: MAX_BATCH * 10])
+        ip_list = _batch_body(addresses)
+        if ip_list != "[]":
             # See https://ip-api.com/docs/api:batch#test
             r = requests.post(BATCH_URL + "?fields=25024", data=ip_list, timeout=REQUEST_TIMEOUT)
             if r.status_code == 200:
-                ip_addresses = r.json()
-                # now, we cycle through views again and assign their location based on IP
-                for view in pageviews:
-                    for value in ip_addresses:
-                        try:
-                            if view.ip_address == value["query"]:
-                                if value["status"] == "success":
-                                    view.latitude = value["lat"]
-                                    view.longitude = value["lon"]
-                                    view.save()
-                                    break
-                                else:
-                                    logger.warning(
-                                        "IP %s may not be valid - verify it and set their location manually",
-                                        view.ip_address,
-                                    )
-                        except Exception as e:
-                            logger.exception(e)
+                for value in r.json():
+                    try:
+                        if value["status"] == "success":
+                            unlocated.filter(ip_address=value["query"]).update(
+                                latitude=value["lat"], longitude=value["lon"]
+                            )
+                        else:
+                            logger.info("IP %s could not be located", value.get("query"))
+                    except Exception as e:
+                        logger.exception(e)
+            else:
+                logger.warning("Page view location lookup failed with HTTP %s", r.status_code)

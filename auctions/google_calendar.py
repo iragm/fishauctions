@@ -283,15 +283,31 @@ def _absolute_auction_url(event):
     return f"https://{domain}{event.auction.get_absolute_url()}"
 
 
+def _mark_pushed(event, read_at, **fields):
+    """Record a push, clearing ``needs_google_sync`` only if nobody saved the event while the call was
+    out. An edit saved meanwhile re-armed the flag, and clearing it would lose that edit. ``fields`` (the
+    Google id) are stored either way, or the next push would make a second copy.
+    """
+    from auctions.models import ClubEvent
+
+    cleared = ClubEvent.objects.filter(pk=event.pk, updated_at=read_at).update(needs_google_sync=False, **fields)
+    if not cleared and fields:
+        ClubEvent.objects.filter(pk=event.pk).update(**fields)
+    for name, value in fields.items():
+        setattr(event, name, value)
+    event.needs_google_sync = not cleared
+
+
 def push_event(event):
     """Create or update one ClubEvent in the club's Google Calendar. True on success."""
     club = event.club
     if not club.google_calendar_connected:
         return False
+    # ``updated_at`` is auto_now, so any full save of the event -- every edit -- moves it.
+    read_at = event.updated_at
     if event.cancelled and not event.google_event_id:
         # A cancelled event never pushed has nothing to cancel.
-        event.needs_google_sync = False
-        event.save(update_fields=["needs_google_sync"])
+        _mark_pushed(event, read_at)
         return False
     body = _event_body(event)
     calendar_id = _quote(club.google_calendar_id)
@@ -307,13 +323,10 @@ def push_event(event):
         if result in (404, 410):
             event.google_event_id = ""
         else:
-            event.needs_google_sync = False
-            event.save(update_fields=["needs_google_sync"])
+            _mark_pushed(event, read_at)
             return True
     created = _request(club, "POST", f"/calendars/{calendar_id}/events", json=body)
-    event.google_event_id = created.get("id", "")
-    event.needs_google_sync = False
-    event.save(update_fields=["google_event_id", "needs_google_sync"])
+    _mark_pushed(event, read_at, google_event_id=created.get("id", ""))
     return True
 
 

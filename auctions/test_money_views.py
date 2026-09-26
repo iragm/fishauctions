@@ -1,7 +1,8 @@
 """The views that move money or decide who owes it: bulk invoice status changes (ready, paid), the lot
 refund dialog, bulk-selling lots to the online high bidder, viewing and adjusting an invoice, creating
-one, removing a bid, and the auctioneer's set-winners page with its undo. Each gets its permission gate,
-the database effect of its happy path, and the inputs that would corrupt an invoice if let through.
+one, removing a bid, the auctioneer's set-winners page with its undo, and ending a lot unsold. Each
+gets its permission gate, the database effect of its happy path, and the inputs that would corrupt an
+invoice if let through.
 """
 
 import datetime
@@ -19,6 +20,7 @@ from auctions.models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
+    add_price_info,
 )
 from auctions.tests import StandardTestCase
 
@@ -257,26 +259,38 @@ class InvoiceCreateViewTests(StandardTestCase):
 
     def test_non_admin_is_refused(self):
         self.client.force_login(self.userB)
-        self.assertEqual(self.client.get(self.url(self.tosC)).status_code, 403)
+        self.assertEqual(self.client.post(self.url(self.tosC)).status_code, 403)
         self.assertFalse(Invoice.objects.filter(auctiontos_user=self.tosC).exists())
 
     def test_admin_creates_an_invoice(self):
         self.client.force_login(self.admin_user)
-        response = self.client.get(self.url(self.tosC))
+        response = self.client.post(self.url(self.tosC))
         invoice = Invoice.objects.get(auctiontos_user=self.tosC)
         self.assertEqual(invoice.auction, self.online_auction)
         self.assertRedirects(response, invoice.get_absolute_url(), fetch_redirect_response=False)
 
     def test_existing_invoice_is_reused(self):
         self.client.force_login(self.admin_user)
-        response = self.client.get(self.url(self.tosB))
+        response = self.client.post(self.url(self.tosB))
         self.assertRedirects(response, self.invoiceB.get_absolute_url(), fetch_redirect_response=False)
         self.assertEqual(Invoice.objects.filter(auctiontos_user=self.tosB).count(), 1)
 
     def test_unknown_participant_goes_home(self):
         self.client.force_login(self.admin_user)
-        response = self.client.get(reverse("create_invoice", kwargs={"pk": 999999}))
+        response = self.client.post(reverse("create_invoice", kwargs={"pk": 999999}))
         self.assertRedirects(response, reverse("home"), fetch_redirect_response=False)
+
+    def test_a_get_creates_nothing(self):
+        """It checks the person in too, so a link or an <img> must not be able to fire it."""
+        self.client.force_login(self.admin_user)
+        self.assertEqual(self.client.get(self.url(self.tosC)).status_code, 405)
+        self.assertFalse(Invoice.objects.filter(auctiontos_user=self.tosC).exists())
+
+    def test_the_table_link_is_sent_to_the_invoice(self):
+        self.client.force_login(self.admin_user)
+        response = self.client.post(self.url(self.tosC), HTTP_HX_REQUEST="true")
+        invoice = Invoice.objects.get(auctiontos_user=self.tosC)
+        self.assertEqual(response["HX-Redirect"], invoice.get_absolute_url())
 
 
 class BidDeleteTests(StandardTestCase):
@@ -453,6 +467,44 @@ class DynamicSetLotWinnerTests(StandardTestCase):
         self.assertFalse(lot.active)
         self.assertIsNone(lot.auctiontos_winner)
 
+    def seller_fee(self):
+        """What the in-person lot costs its seller: -10 when the unsold lot fee applies."""
+        return add_price_info(Lot.objects.filter(pk=self.in_person_lot.pk)).get().your_cut
+
+    def test_zero_price_and_no_winner_ends_unsold(self):
+        self.assertEqual(self.post(action="validate", price="0", winner="")["price"], "valid")
+        data = self.post(price="0", winner="")
+        self.assertIsNotNone(data["success_message"])
+        lot = Lot.objects.get(pk=self.in_person_lot.pk)
+        self.assertFalse(lot.active)
+        self.assertTrue(lot.ended_unsold)
+        self.assert_unsold()
+
+    def test_ending_unsold_charges_the_unsold_lot_fee(self):
+        invoice = Invoice.for_participant(self.admin_in_person_tos, self.in_person_auction)
+        self.post(action="end_unsold", price="", winner="")
+        self.assertEqual(self.seller_fee(), -10)
+        self.assertEqual(Invoice.objects.get(pk=invoice.pk).total_sold, -10)
+
+    def test_a_lot_never_brought_in_is_not_charged(self):
+        # What wind-down does to the lots nobody sold or ended.
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(active=False)
+        self.assertEqual(self.seller_fee(), 0)
+
+    def test_undo_clears_ended_unsold(self):
+        self.post(action="end_unsold", price="", winner="")
+        undo_url = reverse("auction_unsell_lot", kwargs={"slug": self.in_person_auction.slug})
+        self.client.post(undo_url, {"lot_number": "101-1"})
+        self.assertFalse(Lot.objects.get(pk=self.in_person_lot.pk).ended_unsold)
+        self.assertEqual(self.seller_fee(), 0)
+
+    def test_selling_clears_ended_unsold(self):
+        self.post(action="end_unsold", price="", winner="")
+        self.post(action="force_save")
+        lot = Lot.objects.get(pk=self.in_person_lot.pk)
+        self.assertFalse(lot.ended_unsold)
+        self.assertEqual(lot.winning_price, 10)
+
     def test_undo_clears_the_sale(self):
         self.post()
         undo_url = reverse("auction_unsell_lot", kwargs={"slug": self.in_person_auction.slug})
@@ -468,3 +520,58 @@ class DynamicSetLotWinnerTests(StandardTestCase):
         undo_url = reverse("auction_unsell_lot", kwargs={"slug": self.in_person_auction.slug})
         self.assertEqual(self.client.post(undo_url, {"lot_number": "101-1"}).status_code, 403)
         self.assertEqual(Lot.objects.get(pk=self.in_person_lot.pk).winning_price, 10)
+
+
+class LotEndUnsoldTests(StandardTestCase):
+    """The admin lot list's "End lot unsold"."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("lot_end_unsold", kwargs={"pk": self.in_person_lot.pk})
+
+    def test_admin_ends_the_lot_unsold(self):
+        self.client.force_login(self.admin_user)
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "reload-page")
+        lot = Lot.objects.get(pk=self.in_person_lot.pk)
+        self.assertTrue(lot.ended_unsold)
+        self.assertFalse(lot.active)
+        self.assertTrue(
+            AuctionHistory.objects.filter(auction=self.in_person_auction, action__contains="101-1").exists()
+        )
+
+    def test_non_admin_is_refused(self):
+        self.client.force_login(self.user_with_no_lots)
+        self.assertEqual(self.client.post(self.url).status_code, 403)
+        self.assertFalse(Lot.objects.get(pk=self.in_person_lot.pk).ended_unsold)
+
+    def test_sold_lot_is_left_alone(self):
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(
+            auctiontos_winner=self.in_person_buyer, winning_price=10, active=False
+        )
+        self.client.force_login(self.admin_user)
+        response = self.client.post(self.url)
+        self.assertContains(response, "already been sold")
+        self.assertNotContains(response, "reload-page")
+        self.assertEqual(Lot.objects.get(pk=self.in_person_lot.pk).winning_price, 10)
+
+    def test_online_lots_are_refused(self):
+        self.client.force_login(self.admin_user)
+        response = self.client.post(reverse("lot_end_unsold", kwargs={"pk": self.unsoldLot.pk}))
+        self.assertContains(response, "end on their own")
+        self.assertFalse(Lot.objects.get(pk=self.unsoldLot.pk).ended_unsold)
+
+    def test_seller_cannot_delete_a_lot_ended_unsold(self):
+        # Deleting it would take the fee with it. A lot still waiting is deletable in person, fee or not.
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(date_posted=timezone.now() - datetime.timedelta(days=3))
+        self.assertTrue(Lot.objects.get(pk=self.in_person_lot.pk).can_be_deleted)
+        self.in_person_lot.end_unsold(self.admin_user)
+        self.assertEqual(Lot.objects.get(pk=self.in_person_lot.pk).cannot_be_deleted_reason, "This lot has ended")
+
+    def test_lot_list_offers_it_in_person_only(self):
+        self.client.force_login(self.admin_user)
+        in_person = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertContains(in_person, self.url)
+        online = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertNotContains(online, "End lot unsold")

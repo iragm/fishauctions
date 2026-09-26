@@ -498,7 +498,7 @@ class WebsiteIntegrationPageTests(TestCase):
         response = self.client.get(self.url)
         self.assertContains(response, "Breeder Award leaderboard")
         self.assertContains(response, "Breeder Award Program is turned off")
-        self.assertContains(response, reverse("bap_embed", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, reverse("bap_embed", kwargs={"slug": self.club.url_key}))
 
     def test_it_offers_the_script_tag_and_the_developer_formats(self):
         self.client.force_login(self.admin)

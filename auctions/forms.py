@@ -59,6 +59,7 @@ from .html_sanitize import sanitize_summernote_html
 from .models import (
     Auction,
     AuctionDropdown,
+    AuctionRandomOption,
     AuctionTOS,
     BapAward,
     Category,
@@ -2490,7 +2491,7 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["date_online_bidding_ends"].widget = forms.HiddenInput()
         else:
             # self.fields["only_approved_bidders"].widget = forms.HiddenInput()
-            self.fields["unsold_lot_fee"].widget = forms.HiddenInput()
+            self.fields["unsold_lot_fee"].help_text += ".  Only applies to lots you end unsold"
             self.fields["online_bidding"].help_text = "Most auctions should leave this off, it confuses people"
             self.fields[
                 "date_end"
@@ -2841,6 +2842,8 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             "custom_checkbox_name",
             "use_custom_dropdown_field",
             "custom_dropdown_name",
+            "use_custom_random_field",
+            "custom_random_name",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -2873,6 +2876,8 @@ class AuctionCustomFieldsForm(forms.ModelForm):
                 Div("custom_checkbox_name", css_class="col-md-4"),
                 Div("use_custom_dropdown_field", css_class="col-md-4"),
                 Div("custom_dropdown_name", css_class="col-md-4"),
+                Div("use_custom_random_field", css_class="col-md-4"),
+                Div("custom_random_name", css_class="col-md-4"),
                 css_class="row",
             ),
             Submit("submit", "Save", css_class="btn btn-success"),
@@ -2896,7 +2901,23 @@ class AuctionCustomFieldsForm(forms.ModelForm):
                 if options_count < 2:
                     cleaned_data["use_custom_dropdown_field"] = "disable"
                     self.custom_dropdown_auto_disabled = True
+        self.custom_random_auto_disabled = False
+        if not cleaned_data.get("use_custom_random_field"):
+            cleaned_data["custom_random_name"] = ""
+        elif (
+            not cleaned_data.get("custom_random_name")
+            or AuctionRandomOption.objects.filter(auction=self.instance).count() < 2
+        ):
+            cleaned_data["use_custom_random_field"] = False
+            self.custom_random_auto_disabled = True
         return cleaned_data
+
+    def save(self, commit=True):
+        auction = super().save(commit=commit)
+        if commit:
+            # Switching it on deals every lot already here.
+            auction.assign_custom_random()
+        return auction
 
 
 class CreateLotForm(forms.ModelForm):
@@ -4043,6 +4064,13 @@ class LabelPrintFieldsForm(forms.Form):
                 else self.auction.custom_dropdown_name,
                 "tooltip": "Custom dropdown is disabled in this auction, this will not do anything"
                 if self.auction.use_custom_dropdown_field == "disable" or not self.auction.custom_dropdown_name
+                else "",
+            },
+            {
+                "value": "custom_random_label",
+                "description": self.auction.custom_random_name or "Custom random field",
+                "tooltip": "Custom random field is disabled in this auction, this will not do anything"
+                if not self.auction.use_custom_random_field or not self.auction.custom_random_name
                 else "",
             },
             {

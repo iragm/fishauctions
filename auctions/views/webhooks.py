@@ -11,6 +11,7 @@ import requests
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -745,28 +746,33 @@ class SquareWebhookView(SquareAPIMixin, View):
                         currency = amount_money.get("currency", "USD")
                         receipt_number = payment.get("receipt_number", "")
 
-                        payment_record, created = InvoicePayment.objects.get_or_create(
-                            invoice=invoice,
-                            external_id=payment_id,
-                            defaults={
-                                "amount": amount_value,
-                                "amount_available_to_refund": amount_value,
-                                "currency": currency,
-                                "payment_method": "Square",
-                                "receipt_number": receipt_number,
-                            },
-                        )
-                        # Never restore refundability consumed by refunds: payment.updated fires often,
-                        # and a refunded payment must not become refundable again.
-                        if not created:
-                            # A changed amount moves the refundable balance by the delta.
-                            if amount_value != payment_record.amount:
-                                payment_record.amount_available_to_refund += amount_value - payment_record.amount
-                                payment_record.amount = amount_value
-                            # Update receipt_number if it wasn't set before
-                            if receipt_number and not payment_record.receipt_number:
-                                payment_record.receipt_number = receipt_number
-                            payment_record.save()
+                        # Locked as the Tap to Pay confirm locks it, which records the same payment: the
+                        # two arrive together, and the unique (invoice, external_id) makes the loser's
+                        # get_or_create find the winner's row.
+                        with transaction.atomic():
+                            invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+                            payment_record, created = InvoicePayment.objects.get_or_create(
+                                invoice=invoice,
+                                external_id=payment_id,
+                                defaults={
+                                    "amount": amount_value,
+                                    "amount_available_to_refund": amount_value,
+                                    "currency": currency,
+                                    "payment_method": "Square",
+                                    "receipt_number": receipt_number,
+                                },
+                            )
+                            # Never restore refundability consumed by refunds: payment.updated fires
+                            # often, and a refunded payment must not become refundable again.
+                            if not created:
+                                # A changed amount moves the refundable balance by the delta.
+                                if amount_value != payment_record.amount:
+                                    payment_record.amount_available_to_refund += amount_value - payment_record.amount
+                                    payment_record.amount = amount_value
+                                # Update receipt_number if it wasn't set before
+                                if receipt_number and not payment_record.receipt_number:
+                                    payment_record.receipt_number = receipt_number
+                                payment_record.save()
                         if invoice.auctiontos_user and invoice.auction:
                             try:
                                 action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"

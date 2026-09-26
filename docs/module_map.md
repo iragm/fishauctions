@@ -35,7 +35,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (200 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1567 lines)
+- **`admin.py`** (1568 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -111,10 +111,10 @@ this only quotes its opening sentence.
 - **`dmca.py`** (225 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
-- **`donation_views.py`** (614 lines)
+- **`donation_views.py`** (610 lines)
   Donation tracking views: the vendor table, the vendor panel, and the contact dialog.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
-- **`donations.py`** (1022 lines)
+- **`donations.py`** (1033 lines)
   Donation tracking: asking vendors for donations and reading their replies.
 - **`email_footer.py`** (37 lines)
   The identification block every email this site sends has to carry.
@@ -127,7 +127,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (208 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1818 lines)
+- **`filters.py`** (1840 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -135,7 +135,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6291 lines)
+- **`forms.py`** (6319 lines)
   Every form on the site.
 - **`friction_models.py`** (74 lines)
   Where people get stuck: one row per rejected form submission.
@@ -143,7 +143,7 @@ this only quotes its opening sentence.
 - **`geocoding.py`** (67 lines)
   Turning a typed address into a point on the map.
   `configured`, `geocode`
-- **`google_calendar.py`** (677 lines)
+- **`google_calendar.py`** (690 lines)
   Two-way Google Calendar sync for clubs.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13711 lines)
+- **`models.py`** (13893 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -186,11 +186,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (14675 lines)
+- **`palette_actions.py`** (14984 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1843 lines)
+- **`palette_routes.py`** (1846 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -201,7 +201,7 @@ this only quotes its opening sentence.
 - **`printer_programs.py`** (675 lines)
   Validation and seed data for :class:`ThermalPrinterProfile` command programs.
   `ProgramValidationError`, `validate_program`, `validate_match_patterns`, `validate_profile_programs`, `serialize_profile`
-- **`printing.py`** (318 lines)
+- **`printing.py`** (319 lines)
   Shared label-printing helpers.
   `text_width_pt`, `split_label_tags`, `wrapped_lines`, `plan_label`, `inches_per_unit`, `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
 - **`queryset_annotations.py`** (223 lines)
@@ -211,7 +211,7 @@ this only quotes its opening sentence.
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
 - **`routing.py`** (9 lines)
-- **`serializers.py`** (838 lines)
+- **`serializers.py`** (845 lines)
   DRF serializers for the club API.
 - **`services.py`** (1322 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
@@ -232,9 +232,9 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1034 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1434 lines)
+- **`tables.py`** (1445 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1739 lines)
+- **`tasks.py`** (1766 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -279,7 +279,7 @@ this only quotes its opening sentence.
 - **`test_auction_views.py`** (717 lines)
   Auction pages an admin edits: permissions, the edit form, custom fields and cloning.
   `AuctionViewPermissionTests`, `AuctionEditViewTests`, `AuctionCustomFieldsViewTests`, `AuctionCloneCustomFieldsTests`, `PayPalFormFieldVisibilityTests`, `LotListViewTests`, `MyLotsViewTests`, `AuctionUsersViewTests`
-- **`test_auctiontos.py`** (639 lines)
+- **`test_auctiontos.py`** (672 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
 - **`test_bap_lots.py`** (1403 lines)
@@ -310,7 +310,7 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1446 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_events.py`** (2982 lines)
+- **`test_club_events.py`** (3001 lines)
   Tests for club events, Google Calendar sync, and Discord events.
 - **`test_club_finder.py`** (216 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
@@ -320,12 +320,12 @@ this only quotes its opening sentence.
 - **`test_club_import.py`** (200 lines)
   Phase 8: importing a curated club list, and never publishing anything by accident.
   `csv_text`, `HostTests`, `ReadCsvTests`, `FindExistingTests`, `IngestTests`
-- **`test_club_integration_views.py`** (749 lines)
+- **`test_club_integration_views.py`** (759 lines)
   The views a club uses to plug in outside services, and two of its HTMx admin dialogs.
-- **`test_club_ledger.py`** (1136 lines)
+- **`test_club_ledger.py`** (1118 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
-  `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceDedupeLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (421 lines)
+  `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
+- **`test_club_linking.py`** (426 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_money.py`** (761 lines)
@@ -346,13 +346,16 @@ this only quotes its opening sentence.
 - **`test_csv_import.py`** (1110 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
   `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`, `WeeklyPromoEmailTrackingTestCase`
+- **`test_custom_random.py`** (284 lines)
+  The custom random field: an auction's option list that each lot is dealt from, and nobody edits.
+  `CustomRandomTestCase`, `DealingTests`, `NobodyEditsItTests`, `ShownPrintedAndSearchedTests`, `OptionsAPITests`, `OptionsOverMCPTests`
 - **`test_data_leak_penetration.py`** (259 lines)
   Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin.
   `DataLeakPenetrationTests`
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_donations.py`** (2591 lines)
+- **`test_donations.py`** (2611 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
 - **`test_email_compliance.py`** (158 lines)
   The parts of an outgoing email that anti-spam law requires, and the donation footer's address.
@@ -368,7 +371,7 @@ this only quotes its opening sentence.
 - **`test_helpers.py`** (1386 lines)
   Tests for helper functions, model utilities, template tags and context processors.
   `HelperFunctionsTestCase`, `ModelUtilityFunctionsTestCase`, `FormsUtilityTestCase`, `TemplateTagsTestCase`, `ContextProcessorsTestCase`, `FooterIconTests`, `SiteWebmanifestTests`, `GoogleLoginTemplateVisibilityTests`, `AdminSetupChecklistViewTests`
-- **`test_invoice_models.py`** (222 lines)
+- **`test_invoice_models.py`** (221 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
 - **`test_label_layout.py`** (331 lines)
@@ -389,7 +392,7 @@ this only quotes its opening sentence.
 - **`test_lot_models.py`** (930 lines)
   Lot and auction model behaviour, and the chat subscriptions hanging off a lot.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
-- **`test_lot_money_fixes.py`** (441 lines)
+- **`test_lot_money_fixes.py`** (438 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
 - **`test_lot_page_views.py`** (365 lines)
   The two page-view history modals: one lot's, and every lot on the selling dashboard.
@@ -397,7 +400,7 @@ this only quotes its opening sentence.
 - **`test_lot_views.py`** (1036 lines)
   The lot pages an auction is actually run from: labels, push, set-winner and the queue.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
-- **`test_marketing.py`** (848 lines)
+- **`test_marketing.py`** (853 lines)
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (748 lines)
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
@@ -415,7 +418,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1286 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
-- **`test_mobile_features.py`** (2821 lines)
+- **`test_mobile_features.py`** (2833 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -437,9 +440,9 @@ this only quotes its opening sentence.
 - **`test_module_map.py`** (151 lines)
   Guards the module map against drift and verifies module docstring rules are enforced.
   `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
-- **`test_money_views.py`** (470 lines)
+- **`test_money_views.py`** (577 lines)
   The views that move money or decide who owes it: bulk invoice status changes (ready, paid), the lot
-  `MarkInvoicesReadyTests`, `MarkInvoicesPaidTests`, `LotRefundDialogTests`, `BulkSetLotsWonTests`, `InvoiceViewTests`, `InvoiceCreateViewTests`, `BidDeleteTests`, `DynamicSetLotWinnerTests`
+  `MarkInvoicesReadyTests`, `MarkInvoicesPaidTests`, `LotRefundDialogTests`, `BulkSetLotsWonTests`, `InvoiceViewTests`, `InvoiceCreateViewTests`, `BidDeleteTests`, `DynamicSetLotWinnerTests`, `LotEndUnsoldTests`
 - **`test_openai_apps.py`** (226 lines)
   What a plugin directory asks of this server, beyond what an MCP client already asks.
   `with_oidc`, `without_oidc`, `DomainVerificationTests`, `WidgetPointerTests`, `OpenIDTests`
@@ -454,7 +457,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (865 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5062 lines)
+- **`test_palette_assist.py`** (5049 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1265 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -470,7 +473,7 @@ this only quotes its opening sentence.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
   `SweepTestCase`, `ClubSweepTestCase`, `KilometrePreferenceTests`, `AwardPointsTrackTests`, `UndoRestoresBlanksTests`, `HistoryLineTests`, `LocalTimeTests`, `FalseIsFalseTests`, `FencingSpotChecks`
-- **`test_payment_views.py`** (778 lines)
+- **`test_payment_views.py`** (819 lines)
   The PayPal and Square connect/callback views, PayPal checkout (order creation and capture), the
   `PayPalAPIMixinErrorTests`, `PayPalConnectViewTests`, `PayPalCallbackViewTests`, `SquareCallbackViewTests`, `CreatePayPalOrderViewTests`, `PayPalSuccessViewTests`, `PayPalSubscriptionWebhookVerificationTests`, `SquareWebhookRefusalTests`, `FakeChannelLayer`, `LotConsumerChatTests`
 - **`test_paypal.py`** (924 lines)
@@ -496,7 +499,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
 - **`test_species.py`** (4938 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_square.py`** (950 lines)
+- **`test_square.py`** (947 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
   `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`
 - **`test_static_files.py`** (147 lines)
@@ -507,7 +510,7 @@ this only quotes its opening sentence.
   `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
 - **`test_stats.py`** (1183 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
-- **`test_stats_and_browse_views.py`** (617 lines)
+- **`test_stats_and_browse_views.py`** (615 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
   `fake_cached_stats`, `AuctionStatsChartTests`, `RecommendedLotsTests`, `NoLotAuctionsTests`, `AuctionNotificationsTests`, `LotListViewTests`, `RenderAdTests`, `ClubMemberMergeAutocompleteTests`, `SiteAdminDashboardTests`, `UserAndLotChartTests`
 - **`test_support.py`** (40 lines)
@@ -516,12 +519,15 @@ this only quotes its opening sentence.
 - **`test_support_page.py`** (273 lines)
   /support/, and a way to reach a human that works with no account.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
+- **`test_sweep_decisions.py`** (310 lines)
+  The code sweep's product decisions (September 2026): each test pins one decision as it was made.
+  `AuctionPageActionTests`, `HideCategoryTests`, `ForcedDonationTests`, `OneInvoicePerParticipantTests`, `ClubNumberTests`, `SessionMemberAPIPointsTests`, `RetractWhichAnnouncementTests`, `UpemailReachesAuctionRowsTests`, `PurgeBotUsersTests`, `DiscordSettingsNoteTests`
 - **`test_sweep_round_three.py`** (117 lines)
   Round three of the sweep: writes that clobbered live rows, and who may grant auction admin.
   `InvoiceOpenedTests`, `MaxBidPeekTests`, `RefundDialogTests`, `GrantingAuctionAdminTests`, `SellToOnlineHighBidderTests`, `BulkInvoiceStatusTests`
 - **`test_sweep_round_two.py`** (709 lines)
   Regression tests for the second review sweep: club member merge roles, BAP award lots, the API-key member
-- **`test_tap_to_pay.py`** (1128 lines)
+- **`test_tap_to_pay.py`** (1129 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
 - **`test_template_a11y.py`** (129 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
@@ -541,7 +547,7 @@ this only quotes its opening sentence.
 - **`test_usability_report.py`** (307 lines)
   Tests for the usability dashboard's three panels, and for the URL classifier behind the first.
   `RouteNameTests`, `ReachTests`, `FrictionReportTests`, `BuyerFunnelTests`, `DashboardTests`
-- **`test_user_features.py`** (532 lines)
+- **`test_user_features.py`** (539 lines)
   Tests for preferences that change what a user sees: distance units, exports, and trust.
   `DistanceUnitTests`, `PayPalInfoViewTests`, `UserExportTests`, `UserTrustSystemTests`, `WatchOrUnwatchViewTests`, `AdFetchTests`
 - **`test_userdata.py`** (299 lines)
@@ -563,7 +569,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1306 lines)
+- **`urls.py`** (1313 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -650,18 +656,18 @@ this only quotes its opening sentence.
 - **`mine_palette_shortcuts.py`** (109 lines)
   Turn recurring assistant answers into zero-token shortcuts.
   `Command`
-- **`promo_push_notifications.py`** (123 lines)
+- **`promo_push_notifications.py`** (137 lines)
   Push notifications promoting nearby auctions to app users who opted into push.
-  `Command`
-- **`purge_bot_users.py`** (19 lines)
+  `claim`, `Command`
+- **`purge_bot_users.py`** (24 lines)
   `Command`
 - **`register_discord_commands.py`** (138 lines)
   `Command`
 - **`relink_auctiontos_users.py`** (92 lines)
   `Command`
-- **`sendnotifications.py`** (64 lines)
+- **`sendnotifications.py`** (65 lines)
   `Command`
-- **`set_user_location.py`** (184 lines)
+- **`set_user_location.py`** (193 lines)
   `Command`
 - **`setup_celery_beat.py`** (127 lines)
   Create the PeriodicTask rows django-celery-beat reads, from the beat_schedule in
@@ -745,7 +751,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 ## `auctions/mobile/services/`
 
-- **`ar.py`** (417 lines)
+- **`ar.py`** (418 lines)
   AR lot scanning: overlay and card metadata, observation ingestion, and position payloads.
   `ar_dirty_key`, `mark_auction_dirty`, `drain_dirty_auction_pks`, `locatable_auction_pks`, `build_lot_metadata`, `ingest_observations`, `record_ar_events`, `positions_payload`, `clear_positions`
 - **`auth.py`** (59 lines)
@@ -766,7 +772,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `LabelRenderer`, `PngLabelRenderer`, `get_renderer`, `supported_formats`
 - **`labels.py`** (109 lines)
   `LabelService`
-- **`offline.py`** (541 lines)
+- **`offline.py`** (520 lines)
   Offline mode for the app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
 - **`payments.py`** (592 lines)
@@ -809,25 +815,25 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (577 lines)
+- **`account.py`** (571 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
 - **`admin_checklist.py`** (1062 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (791 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
-- **`auction_admin.py`** (1248 lines)
+- **`auction_admin.py`** (1284 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (671 lines)
+- **`auction_extras.py`** (670 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1030 lines)
+- **`auction_pages.py`** (1032 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
-  `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionInfo`
+  `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `AuctionInfo`
 - **`auction_stats.py`** (1181 lines)
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (626 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1052 lines)
+- **`base.py`** (1068 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (823 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -837,24 +843,24 @@ Every view on the site, split by the part of it the view belongs to.
 - **`bulk_add.py`** (909 lines)
   Bulk-adding people: bulk add users, and a club's shared spreadsheet.
   `CSVContactImportMixin`, `BulkAddUsers`, `ImportFromGoogleDrive`
-- **`bulk_add_lots.py`** (962 lines)
+- **`bulk_add_lots.py`** (960 lines)
   Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
 - **`club_admin.py`** (1060 lines)
   Setting a club up: its details, membership settings, payment accounts, email.
-- **`club_api.py`** (1159 lines)
+- **`club_api.py`** (1175 lines)
   The club REST API: ``/api/v1/clubs/<slug>/…``.
-- **`club_api_keys.py`** (381 lines)
+- **`club_api_keys.py`** (401 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
 - **`club_finder.py`** (196 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
   `ClubFinderView`
-- **`club_integrations.py`** (1243 lines)
+- **`club_integrations.py`** (1253 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
-- **`club_members.py`** (1085 lines)
+- **`club_members.py`** (1086 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (591 lines)
+- **`club_pages.py`** (593 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
 - **`club_reports.py`** (815 lines)
@@ -865,24 +871,24 @@ Every view on the site, split by the part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`embeds.py`** (623 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (977 lines)
+- **`exports.py`** (982 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
-- **`invoices.py`** (402 lines)
+- **`invoices.py`** (394 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1316 lines)
+- **`lot_pages.py`** (1317 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (217 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
 - **`palette.py`** (591 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
-- **`payments.py`** (1057 lines)
+- **`payments.py`** (1081 lines)
   Connecting PayPal and Square accounts and taking payments through them.
 - **`printing.py`** (538 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
-- **`selling.py`** (1052 lines)
+- **`selling.py`** (1061 lines)
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
@@ -896,7 +902,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`usability.py`** (278 lines)
   The usability dashboards: measurements, the buyer funnel, and club outreach.
   `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminSessionReplay`
-- **`webhooks.py`** (953 lines)
+- **`webhooks.py`** (959 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`
 

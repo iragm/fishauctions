@@ -176,6 +176,39 @@ class LotAdminFilterTests(StandardTestCase):
         filtered_qs = filter_instance.generic(qs, "River")
         self.assertIn(self.lot_no_bids, filtered_qs)
 
+    def test_ended_and_active_unsold(self):
+        ended = Lot.objects.create(
+            lot_name="ended",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+        ended.end_unsold(self.admin_user)
+        never_brought = Lot.objects.create(
+            lot_name="stray",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+        )
+        Lot.objects.filter(pk=never_brought.pk).update(active=False)
+        qs = Lot.objects.filter(auction=self.in_person_auction)
+        self.assertEqual(set(LotAdminFilter.generic(None, qs, "ended unsold")), {ended})
+        active = set(LotAdminFilter.generic(None, qs, "active unsold"))
+        self.assertIn(self.in_person_lot, active)
+        self.assertNotIn(ended, active)
+        self.assertNotIn(never_brought, active)
+        # Combined with a search, and with an online auction's lots that ended without a winner.
+        self.assertEqual(set(LotAdminFilter.generic(None, qs, "ended unsold stray")), set())
+        self.assertEqual(set(LotAdminFilter.generic(None, qs, "Ended unsold ended")), {ended})
+        online = Lot.objects.filter(auction=self.online_auction)
+        self.assertIn(self.unsoldLot, LotAdminFilter.generic(None, online, "ended unsold"))
+
+    def test_lot_list_offers_the_unsold_filters(self):
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertContains(response, 'data-filter-key="ended_unsold"')
+        self.assertContains(response, 'data-filter-key="active_unsold"')
+
 
 class FeedbackTestCase(StandardTestCase):
     """Test feedback functionality for buyers and sellers"""

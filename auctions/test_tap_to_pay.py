@@ -26,6 +26,7 @@ from auctions.models import (
     SquareSeller,
 )
 from auctions.tests import StandardTestCase
+from auctions.views.payments import SQUARE_OAUTH_STATE_SESSION_KEY
 
 IOS_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
 ANDROID_UA = "FishAuctionsApp/1.0 (Flutter; Android)"
@@ -460,7 +461,7 @@ class SquareCallbackReturnToAppTests(StandardTestCase):
         with patch("square.Square", side_effect=[client, merchant]):
             return self.client.get(
                 reverse("square_callback"),
-                {"code": "c", "state": self.user.userdata.unsubscribe_link},
+                {"code": "c", "state": self.client.session[SQUARE_OAUTH_STATE_SESSION_KEY]},
             )
 
     def test_web_flow_still_redirects(self):

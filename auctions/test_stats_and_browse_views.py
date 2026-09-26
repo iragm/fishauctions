@@ -61,8 +61,6 @@ class AuctionStatsChartTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.client.raise_request_exception = False
-        self.online_auction.make_stats_public = True
-        self.online_auction.save()
         self.empty_auction = Auction.objects.create(
             created_by=self.user,
             title="Nothing happened here",

@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from auctions.models import (
@@ -83,7 +84,7 @@ class InvoiceCreateViewTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Create invoice
-        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+        response = self.client.post(f"/invoices/create/{new_tos.pk}/")
 
         # Check redirect to invoice page
         assert response.status_code == 302
@@ -95,8 +96,8 @@ class InvoiceCreateViewTests(StandardTestCase):
         assert new_tos.invoice.auction == self.online_auction
 
     def test_invoice_create_duplicate_handling(self):
-        """Creating a second invoice for the same AuctionTOS deduplicates on save: the oldest is kept and the
-        data merged.
+        """The database refuses a second invoice for the same AuctionTOS; ``for_participant`` hands back the
+        first.
         """
 
         new_tos = AuctionTOS.objects.create(
@@ -111,17 +112,15 @@ class InvoiceCreateViewTests(StandardTestCase):
         InvoicePayment.objects.create(invoice=first_invoice, amount=10, payment_method="Cash")
         InvoiceAdjustment.objects.create(invoice=first_invoice, amount=5, notes="test adj")
 
-        # A second invoice simulates a race-condition duplicate; save() deduplicates.
-        Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
-
-        # Exactly one invoice remains, and it's the oldest
+        # A second invoice, as a race between two creators would make, is refused.
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
+        assert Invoice.for_participant(new_tos).pk == first_invoice_pk
         assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
-        surviving = Invoice.objects.filter(auctiontos_user=new_tos).first()
-        assert surviving.pk == first_invoice_pk
 
         # The view-based create also redirects to the existing invoice
         self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+        response = self.client.post(f"/invoices/create/{new_tos.pk}/")
         assert response.status_code == 302
         assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
 
@@ -138,7 +137,7 @@ class InvoiceCreateViewTests(StandardTestCase):
         self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
 
         # Try to create invoice
-        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+        response = self.client.post(f"/invoices/create/{new_tos.pk}/")
 
         # Check for permission error (403 or redirect)
         assert response.status_code in [302, 403]

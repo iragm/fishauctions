@@ -147,6 +147,11 @@ urlpatterns = [
         name="auction_custom_dropdown_options",
     ),
     path(
+        "api/auctions/<slug:slug>/custom-random-options/",
+        views.AuctionRandomOptionsAPI.as_view(),
+        name="auction_custom_random_options",
+    ),
+    path(
         "api/lot/chat_subscribe",
         views.LotChatSubscribe.as_view(),
         name="lot_chat_subscribe",
@@ -614,6 +619,7 @@ urlpatterns = [
     ),
     path("auctions/all_users/", views.MarketingList.as_view(), name="all_my_users"),
     path("auctions/<slug:slug>/", views.AuctionInfo.as_view(), name="auction_main"),
+    path("auctions/<slug:slug>/page-action/", views.AuctionPageAction.as_view(), name="auction_page_action"),
     path("users/<str:slug>/", views.UserByName.as_view(), name="userpage"),
     path("user/<str:slug>/", views.UserByName.as_view()),
     path("u/<str:slug>/", views.UserByName.as_view()),
@@ -811,6 +817,7 @@ urlpatterns = [
         name="auction_enable_bidding_for_all",
     ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
+    path("api/lots/<int:pk>/end-unsold", views.LotEndUnsold.as_view(), name="lot_end_unsold"),
     path(
         "api/lots/<slug:slug>/sell-to-highest-bidder",
         views.BulkSetLotsWon.as_view(),

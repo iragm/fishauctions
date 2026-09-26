@@ -339,7 +339,24 @@ class LotAdminFilter(django_filters.FilterSet):
         model = Lot
         fields = []  # nothing here so no buttons show up
 
+    #: The Filters dropdown's keywords (AuctionLots.possible_filters), whole words anywhere in the query.
+    STATUS_KEYWORDS = {
+        # What the unsold lot fee is charged on; see add_price_info.
+        "ended unsold": Q(winning_price__isnull=True, active=False)
+        & (Q(ended_unsold=True) | Q(auction__is_online=True)),
+        "active unsold": Q(winning_price__isnull=True, auctiontos_winner__isnull=True, active=True),
+    }
+
     def generic(self, queryset, value):
+        # Class, not self: exports and bulk actions call this unbound with a view or None as self.
+        for keyword, q in LotAdminFilter.STATUS_KEYWORDS.items():
+            pattern = re.compile(rf"(?:^|\s){re.escape(keyword)}(?=\s|$)", re.IGNORECASE)
+            if pattern.search(value):
+                value = pattern.sub(" ", value)
+                queryset = queryset.filter(q, banned=False)
+        value = value.strip()
+        if not value:
+            return queryset
         # isdecimal, not isnumeric: "½" is numeric and the integer lookups raised on it.
         if value.isdecimal():
             queryset = queryset.filter(
@@ -351,6 +368,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(lot_number_int=value)
                 | Q(custom_field_1=value)
                 | Q(custom_dropdown=value)
+                | Q(custom_random=value)
             )
         else:
             try:
@@ -425,6 +443,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_lot_number=value)
                 | Q(custom_field_1__icontains=value)
                 | Q(custom_dropdown__icontains=value)
+                | Q(custom_random__iexact=value)
                 | Q(auction__title__icontains=value)
             )
         return queryset
@@ -982,7 +1001,7 @@ class LotFilter(django_filters.FilterSet):
         return queryset
 
     def text_filter(self, queryset, name, value):
-        # Each fragment is nine LIKEs over the whole lot table, so an endless query is an endless scan.
+        # Each fragment is ten LIKEs over the whole lot table, so an endless query is an endless scan.
         value = value[:TEXT_FILTER_MAX_LENGTH]
         # isdecimal, not isnumeric: "½" is numeric and int() raised on it.
         if value.isdecimal():
@@ -1009,6 +1028,9 @@ class LotFilter(django_filters.FilterSet):
                     | Q(user__username=fragment)
                     | Q(custom_lot_number=fragment)
                     | Q(custom_field_1__icontains=fragment)
+                    # Whole value: "Table 1" shouldn't find tables 10-19. Left out of the all-digit
+                    # branch above, where a number means a lot number.
+                    | Q(custom_random__iexact=fragment)
                     | Q(auctiontos_seller__bidder_number=fragment)
                 )
             return queryset.filter(qList)

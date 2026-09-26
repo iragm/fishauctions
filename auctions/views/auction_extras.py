@@ -60,9 +60,8 @@ from auctions.services import attachment_filename
 from auctions.services import csv_writer as safe_csv_writer
 from auctions.views.club_integrations import _ical_escape
 
-from .base import AuctionViewMixin, close_modal_response
+from .base import AuctionViewMixin, _lot_invoices, _recalculate_invoices, close_modal_response
 from .printing import LotLabelView
-from .selling import _lot_invoices, _recalculate_invoices
 
 logger = logging.getLogger(__name__)
 

@@ -31,7 +31,8 @@ class Command(BaseCommand):
                 auction.save(update_fields=["watch_warning_email_sent"])
             # else:
             #    self.stdout.write(f'{auction} still in progress')
-        # Handle lots that aren't attached to an auction
+        # Lots that aren't attached to an auction. This loads every one that ever missed its window,
+        # every run; fine only because production has no standalone lots. Filter on date_end if it does.
         lots = Lot.objects.exclude(is_deleted=True).filter(
             watch_warning_email_sent=False, auction=None, deactivated=False
         )

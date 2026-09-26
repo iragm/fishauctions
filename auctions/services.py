@@ -682,9 +682,7 @@ def recalculate_seller_invoice(auction, tos):
     """Ensure the seller has an invoice for this auction and recalculate it."""
     from .models import Invoice
 
-    invoice = Invoice.objects.filter(auctiontos_user=tos, auction=auction).first()
-    if not invoice:
-        invoice = Invoice.objects.create(auctiontos_user=tos, auction=auction)
+    invoice = Invoice.for_participant(tos, auction)
     invoice.recalculate()
     return invoice
 
@@ -787,7 +785,6 @@ AUCTION_FIELDS_TO_CLONE = [
     "sealed_bid",
     "max_lots_per_user",
     "allow_additional_lots_as_donation",
-    "make_stats_public",
     "use_categories",
     "bump_cost",
     "is_chat_allowed",
@@ -826,6 +823,8 @@ AUCTION_FIELDS_TO_CLONE = [
     "use_description",
     "use_custom_dropdown_field",
     "custom_dropdown_name",
+    "use_custom_random_field",
+    "custom_random_name",
     "allow_bulk_adding_lots",
     "copy_users_when_copying_this_auction",
     "use_donation_field",
@@ -883,11 +882,11 @@ def clone_auction(source, *, title, date_start, created_by, note=""):
     """Create a new auction from ``source``, minus its dates and bids.
 
     Shared by the create page's copy button and ``palette_actions.create_auction``. Copies
-    :data:`AUCTION_FIELDS_TO_CLONE`, pickup locations (times shifted), dropdown options, and people
+    :data:`AUCTION_FIELDS_TO_CLONE`, pickup locations (times shifted), dropdown and random options, and people
     (minus :data:`PER_RUN_TOS_STATE`) when the source says so and the copy isn't club-managed. Dates
     keep the source's offsets.
     """
-    from .models import Auction, AuctionDropdown, PickupLocation
+    from .models import Auction, AuctionDropdown, AuctionRandomOption, PickupLocation
 
     auction = Auction(title=title, created_by=created_by, date_start=date_start)
     # Never inherited: promotion is a decision made each time.
@@ -964,8 +963,9 @@ def clone_auction(source, *, title, date_start, created_by, note=""):
                 tos.bidding_allowed = original_bid_permission
                 tos.save()  # see comment above
 
-    for dropdown_option in AuctionDropdown.objects.filter(auction=source):
-        AuctionDropdown.objects.create(auction=auction, user=dropdown_option.user, value=dropdown_option.value)
+    for model in (AuctionDropdown, AuctionRandomOption):
+        for option in model.objects.filter(auction=source).order_by("createdon", "pk"):
+            model.objects.create(auction=auction, user=option.user, value=option.value)
 
     finish_new_auction(auction, created_by, copied_from=source, note=note)
     return auction

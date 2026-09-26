@@ -984,6 +984,7 @@ class LotAdmin(admin.ModelAdmin):
         "added_by",
         "buyer_invoice",
         "seller_invoice",
+        "custom_random",
     )
     inlines = [
         BidInline,

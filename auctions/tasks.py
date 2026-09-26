@@ -34,6 +34,10 @@ CALENDAR_SYNC_LOCK_SECONDS = 60 * 60
 ENDAUCTIONS_LOCK_KEY = "endauctions_running"
 ENDAUCTIONS_LOCK_SECONDS = 15 * 60
 
+# One AR solve at a time: the beat is a minute, and a big auction's solve can take longer.
+AR_POSITIONS_LOCK_KEY = "update_ar_positions_running"
+AR_POSITIONS_LOCK_SECONDS = 15 * 60
+
 # One-shot backfill of PageView.auction. SCAN bounds primary keys looked at, so a run over rows with
 # no lot views can't turn into a full scan. The beat name must match fishauctions/celery.py: the task
 # switches its own PeriodicTask row off.
@@ -103,7 +107,7 @@ def wallet_links(member, current_site=None):
     google_url = google_wallet_save_url(member) or ""
     apple_url = ""
     if apple_wallet.is_configured():
-        path = reverse("club_member_apple_wallet_by_uuid", kwargs={"slug": member.club.slug, "uuid": member.uuid})
+        path = reverse("club_member_apple_wallet_by_uuid", kwargs={"slug": member.club.url_key, "uuid": member.uuid})
         apple_url = f"https://{current_site.domain}{path}"
     return google_url, apple_url
 
@@ -1100,8 +1104,20 @@ def promo_push_notifications(self):
 
 @shared_task(bind=True, ignore_result=True)
 def update_ar_positions(self):
-    """Fuse AR lot sightings for flagged auctions; prune observations older than 24 hours. Every minute."""
-    call_command("update_ar_positions")
+    """Fuse AR lot sightings for flagged auctions; prune observations older than 24 hours. Every minute.
+
+    Locked like ``endauctions``. A skipped tick loses nothing: every auction with live observations is
+    re-solved next run whether or not its dirty flag survived.
+    """
+    from django.core.cache import cache
+
+    if not cache.add(AR_POSITIONS_LOCK_KEY, "1", timeout=AR_POSITIONS_LOCK_SECONDS):
+        logger.info("update_ar_positions is already running; skipping this tick.")
+        return
+    try:
+        call_command("update_ar_positions")
+    finally:
+        cache.delete(AR_POSITIONS_LOCK_KEY)
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -1737,3 +1753,14 @@ def geocode_speaker(self, pk):
     found = geocoding.geocode(speaker.location)
     if found:
         Speaker.objects.filter(pk=pk).update(latitude=found["latitude"], longitude=found["longitude"])
+
+
+@shared_task(ignore_result=True)
+def summarize_donation_email(email_pk):
+    """Summarize an inbound donation reply and update its vendor's status; queued by the inbound webhook."""
+    from auctions import donations
+    from auctions.models import DonationEmail
+
+    email_row = DonationEmail.objects.select_related("vendor__club").filter(pk=email_pk).first()
+    if email_row and not email_row.summary:
+        donations.summarize_incoming(email_row)

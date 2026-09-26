@@ -524,10 +524,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
         self.tosA = self.online_tos
         self.auctionA = self.online_auction
         self.userA = self.user
-        self.invoice = Invoice.objects.create(
-            auctiontos_user=self.tosA,
-            auction=self.auctionA,
-        )
+        self.invoice = Invoice.for_participant(self.tosA)
         self.invoice.save()
 
     def test_square_payment_success_view_marks_invoice_opened(self):

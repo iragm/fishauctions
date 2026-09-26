@@ -2,6 +2,7 @@
 
 import datetime
 import json
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import Client, RequestFactory, TestCase, override_settings
@@ -9,7 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import escape
 
-from auctions import donations, palette_actions
+from auctions import donations, palette_actions, tasks
 from auctions.email_routing import resolve_donation_alias, resolve_routing_info
 from auctions.llm import LLMError, LLMProvider, LLMResult, set_provider_override
 from auctions.models import (
@@ -181,13 +182,32 @@ class InboundDonationWebhookTests(DonationTestMixin, TestCase):
         )
 
     def post(self, payload, secret="test-secret"):
+        """Post as the Lambda does, running the queued summary as a worker would."""
         headers = {"HTTP_X_ROUTING_SECRET": secret} if secret is not None else {}
-        return self.client.post(
-            self.url,
-            data=json.dumps(payload),
-            content_type="application/json",
-            **headers,
-        )
+        # The patch outlives the capture, whose exit is what runs the queued callback.
+        with (
+            patch.object(tasks.summarize_donation_email, "delay", side_effect=tasks.summarize_donation_email),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            return self.client.post(
+                self.url,
+                data=json.dumps(payload),
+                content_type="application/json",
+                **headers,
+            )
+
+    def test_the_model_is_not_called_inside_the_request(self):
+        with patch.object(tasks.summarize_donation_email, "delay") as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    self.url,
+                    data=json.dumps(self.reply_payload()),
+                    content_type="application/json",
+                    HTTP_X_ROUTING_SECRET="test-secret",
+                )
+        self.assertEqual(response.json()["status"], "recorded")
+        self.assertEqual(self.provider.calls, [])
+        delay.assert_called_once_with(DonationEmail.objects.get(vendor=self.vendor).pk)
 
     def reply_payload(self, **overrides):
         payload = {

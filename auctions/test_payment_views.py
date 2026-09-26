@@ -32,6 +32,7 @@ from auctions.models import (
 from auctions.tests import StandardTestCase, patch_views
 from auctions.views.base import PAYMENT_OAUTH_CLUB_SESSION_KEY
 from auctions.views.payments import (
+    SQUARE_OAUTH_STATE_SESSION_KEY,
     CreatePayPalOrderView,
     PayPalAPIMixin,
     PayPalCallbackView,
@@ -197,9 +198,11 @@ class PayPalCallbackViewTests(StandardTestCase):
 
     def _callback(self, merchant_info=None, tracking_id=None, merchant_id="MERCH-NEW"):
         params = {"merchantId": tracking_id or self.user.userdata.unsubscribe_link, "merchantIdInPayPal": merchant_id}
-        with patch.object(
-            PayPalCallbackView, "get_from_paypal", return_value=merchant_info or self.GOOD_MERCHANT
-        ) as mock_get:
+        merchant_info = {
+            "tracking_id": str(self.user.userdata.unsubscribe_link),
+            **(merchant_info or self.GOOD_MERCHANT),
+        }
+        with patch.object(PayPalCallbackView, "get_from_paypal", return_value=merchant_info) as mock_get:
             response = self.client.get(self.url, params)
         return response, mock_get
 
@@ -221,6 +224,15 @@ class PayPalCallbackViewTests(StandardTestCase):
         self.assertFalse(PayPalSeller.objects.exists())
         self.assertTrue(any("does not match" in m for m in _messages(response)))
 
+    def test_merchant_onboarded_by_another_user_is_refused(self):
+        response, _ = self._callback({**self.GOOD_MERCHANT, "tracking_id": str(self.userB.userdata.unsubscribe_link)})
+        self.assertFalse(PayPalSeller.objects.exists())
+        self.assertTrue(any("does not match" in m for m in _messages(response)))
+
+    def test_merchant_without_a_tracking_id_is_refused(self):
+        self._callback({**self.GOOD_MERCHANT, "tracking_id": ""})
+        self.assertFalse(PayPalSeller.objects.exists())
+
     def test_merchant_that_cannot_receive_payments_is_not_linked(self):
         response, _ = self._callback({**self.GOOD_MERCHANT, "payments_receivable": False})
         self.assertFalse(PayPalSeller.objects.filter(user=self.user).exists())
@@ -237,7 +249,7 @@ class PayPalCallbackViewTests(StandardTestCase):
         self.assertEqual(seller.payer_email, "seller@paypal.example")
         self.assertEqual(seller.currency, "CAD")
         self.assertIsNone(seller.club)
-        self.assertIn("enable_online_payments=True", response["Location"])
+        self.assertNotIn("enable_online_payments", response["Location"])
 
     def test_stashed_club_is_linked_and_replaces_its_previous_seller(self):
         club = _money_club("Paying Club", self.user)
@@ -271,7 +283,10 @@ class SquareCallbackViewTests(StandardTestCase):
         super().setUp()
         self.url = reverse("square_callback")
         self.client.force_login(self.user)
-        self.state = self.user.userdata.unsubscribe_link
+        self.state = "the-state-square-connect-issued"
+        session = self.client.session
+        session[SQUARE_OAUTH_STATE_SESSION_KEY] = self.state
+        session.save()
 
     def _square_clients(self, merchant_id="MID"):
         result = SimpleNamespace(access_token="tok", refresh_token="rtok", expires_at=None, merchant_id=merchant_id)
@@ -289,12 +304,38 @@ class SquareCallbackViewTests(StandardTestCase):
         self.assertTrue(any("User said no" in m for m in _messages(response)))
         self.assertFalse(SquareSeller.objects.exists())
 
-    def test_state_of_another_user_never_exchanges_the_code(self):
+    def test_wrong_state_never_exchanges_the_code(self):
         with patch("square.Square") as mock_square:
-            response = self.client.get(self.url, {"code": "c", "state": self.userB.userdata.unsubscribe_link})
+            response = self.client.get(self.url, {"code": "c", "state": "some-other-state"})
         self.assertRedirects(response, reverse("square_seller"), fetch_redirect_response=False)
         mock_square.assert_not_called()
         self.assertFalse(SquareSeller.objects.exists())
+
+    def test_unsubscribe_uuid_is_not_a_valid_state(self):
+        # It's printed in every email footer, so anyone holding one of this user's emails has it.
+        with patch("square.Square") as mock_square:
+            self.client.get(self.url, {"code": "c", "state": self.user.userdata.unsubscribe_link})
+        mock_square.assert_not_called()
+
+    def test_state_is_single_use(self):
+        with (
+            patch("square.Square", side_effect=RuntimeError("square is down")),
+            self.assertLogs("auctions.views.payments"),
+        ):
+            self.client.get(self.url, {"code": "c", "state": self.state})
+        with patch("square.Square") as mock_square:
+            self.client.get(self.url, {"code": "c", "state": self.state})
+        mock_square.assert_not_called()
+
+    def test_connect_issues_a_fresh_random_state(self):
+        self.user.userdata.square_enabled = True
+        self.user.userdata.save()
+        response = self.client.get(reverse("square_connect"))
+        issued = self.client.session[SQUARE_OAUTH_STATE_SESSION_KEY]
+        self.assertIn(f"state={issued}", response["Location"])
+        self.assertNotEqual(issued, str(self.user.userdata.unsubscribe_link))
+        self.client.get(reverse("square_connect"))
+        self.assertNotEqual(self.client.session[SQUARE_OAUTH_STATE_SESSION_KEY], issued)
 
     def test_missing_code_links_nothing(self):
         with patch("square.Square") as mock_square:

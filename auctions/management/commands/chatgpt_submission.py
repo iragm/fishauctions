@@ -200,7 +200,7 @@ NEGATIVE_TEST_CASES = [
         "names an auction, a lot, a club or a member.",
     ),
     _case(
-        "Do not attempt a bulk change; no tool here changes more than one row.",
+        "Do not attempt a bulk change; no tool here writes over a filter.",
         "Delete every lot in the spring auction.",
         None,
         "No tool should run. The server has no bulk write by design, and the app should say so "

@@ -189,15 +189,19 @@ class AuctionViewMixin:
 
 
 def club_from_url(slug):
-    """The club a URL names: its slug, or failing that its abbreviation (the oldest, if two share one).
+    """The club a URL names: its number (``Club.url_key``, what links other systems keep use), its slug,
+    or failing that its abbreviation (the oldest, if two share one).
 
-    Slug first, always: an abbreviation that happened to equal another club's slug used to win whenever
-    its club was the older of the two, and every page and embed at that URL showed the wrong club.
+    Slug before abbreviation, always: an abbreviation that happened to equal another club's slug used to
+    win whenever its club was the older of the two, and every page and embed at that URL showed the
+    wrong club.
     """
     if not slug:
         return None
+    by_number = Club.objects.filter(number=int(slug)).first() if slug.isdigit() and len(slug) == 10 else None
     return (
-        Club.objects.filter(slug=slug).first()
+        by_number
+        or Club.objects.filter(slug=slug).first()
         or Club.objects.filter(abbreviation=slug).exclude(abbreviation="").order_by("pk").first()
     )
 
@@ -314,6 +318,18 @@ def _upsert_clubmember_shadow_tos(
 
 
 _SCRIPT_JSON_ESCAPES = {ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u0026"}
+
+
+def _lot_invoices(lot):
+    """The lot's winner's and seller's invoices. Take them before a change moves the lot off them: only
+    setting a winner recalculates, so whoever loses the lot would keep a stale total.
+    """
+    return [invoice for invoice in (lot.winner_invoice, lot.sellers_invoice) if invoice]
+
+
+def _recalculate_invoices(invoices):
+    for invoice in {invoice.pk: invoice for invoice in invoices}.values():
+        invoice.recalculate()
 
 
 def browser_timezone(request):
@@ -1011,7 +1027,7 @@ class AuctionAdminAnywhereViewMixin:
 class AuctionStatsPermissionsMixin:
     """For graph classes: ``is_auction_admin`` without raising, so dispatch can redirect a non-admin.
 
-    Charts are admin-only whatever ``make_stats_public`` says, like the stats page they draw on.
+    Charts are admin-only, like the stats page they draw on.
     """
 
     @property

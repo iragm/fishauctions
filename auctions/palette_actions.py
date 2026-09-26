@@ -1471,7 +1471,7 @@ def undo_check_in(request, params: dict[str, Any]) -> dict[str, Any]:
     """Un-check-in one person; the reversal of ``check_in``.
 
     **One person per call; no "everybody" switch.** The agent lists people and clears them one at a
-    time, which keeps the prompt-injection bound: no tool changes more than one row.
+    time, which keeps the prompt-injection bound: no tool writes over a filter.
     """
     from .views import user_can_add_edit_people
 
@@ -1972,6 +1972,11 @@ def lot_fields_in_use(auction) -> dict[str, Any]:
             "label": auction.custom_dropdown_name or "Category",
             "required": auction.use_custom_dropdown_field == "required",
             "options": options,
+        }
+    if auction.use_custom_random_field and auction.custom_random_name:
+        fields["custom_random"] = {
+            "label": auction.custom_random_name,
+            "means": "dealt to each lot at random; nobody sets it",
         }
     if auction.use_reference_link:
         # Short: this rides on every describe_auction under a 5000-character budget. Advice is in the
@@ -3594,11 +3599,10 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         # Fees before rules: truncation takes prose, not numbers.
         "settings": _settings_block(auction, _AUCTION_SETTINGS),
     }
-    if is_admin or auction.make_stats_public:
-        lots = Lot.objects.filter(auction=auction, is_deleted=False)
-        data["participants"] = AuctionTOS.objects.filter(auction=auction).count()
-        data["lots"] = lots.count()
-        data["lots_sold"] = lots.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count()
+    lots = Lot.objects.filter(auction=auction, is_deleted=False)
+    data["participants"] = AuctionTOS.objects.filter(auction=auction).count()
+    data["lots"] = lots.count()
+    data["lots_sold"] = lots.filter(Q(winner__isnull=False) | Q(auctiontos_winner__isnull=False)).count()
     if is_admin:
         # Not cached_stats: chart data that answers nothing and ate the budget.
         data["_admin"] = {
@@ -3752,6 +3756,11 @@ def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         "images": [_image_echo(image) for image in lot.images],
         "yours": bool(lot.user_id and lot.user_id == user.pk),
     }
+    if lot.custom_random_label:
+        data["assigned_at_random"] = {
+            "field": untrusted_short(lot.auction.custom_random_name),
+            "value": untrusted_short(lot.custom_random_label),
+        }
     data.update(_lot_live_state(lot, user))
     data.update(_lot_whereabouts(lot, user))
     if is_admin:
@@ -3772,6 +3781,11 @@ def describe_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         or (f"${_money(data['reserve_price'])} minimum, no bids yet." if data.get("reserve_price") else "No bids yet."),
         f"{data['quantity']} in the lot." if (data.get("quantity") or 0) > 1 else "",
         f"Bidding closes {data['bidding_closes']}." if data.get("bidding_closes") and not data.get("sold") else "",
+        (
+            f"{data['assigned_at_random']['field']}: {data['assigned_at_random']['value']}."
+            if lot.custom_random_label
+            else ""
+        ),
     )
     return {"found": True, "summary": summary, "lot": data, **_about(lot=lot)}
 
@@ -3954,7 +3968,7 @@ def _numbers_summary(auction, data: dict[str, Any]) -> str:
 
 def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     """Running totals for an auction ("how many sold?", "what's the gross?"), from the auction's own
-    properties. Counts for admins or public-stats auctions; money for admins only.
+    properties. Counts for anyone; money for admins only.
     """
     user = request.user
     auction, problem = _resolve_described_auction(request, _str(params, "auction") or _str(params, "name"))
@@ -3963,13 +3977,6 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     remember_auction(request, auction)
     is_admin = _is_auction_admin(user, auction)
     data: dict[str, Any] = {"auction": auction.title, "time": _time_left(auction)}
-    if not (is_admin or auction.make_stats_public):
-        data["note"] = (
-            f"{auction.title} doesn't publish its numbers, so I can only say how long is left. "
-            "Its admins can see the rest."
-        )
-        return {"found": True, "summary": _sentence(f"{auction.title}:", _time_phrase(data)), "numbers": data}
-
     lots = Lot.objects.filter(auction=auction, is_deleted=False)
     sold = auction.total_sold_lots
     data.update(
@@ -5662,6 +5669,50 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def hide_category(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Hide a category's lots from the user, or show them again: the ``UserIgnoreCategory`` row the
+    ignore-categories page writes.
+    """
+    from .models import Category, UserIgnoreCategory
+
+    user = request.user
+    name = _str(params, "category") or _str(params, "name")
+    if not name:
+        return _need("Which category should I hide?")
+    category = Category.objects.filter(name__iexact=name).first()
+    if not category:
+        matches = list(Category.objects.filter(name__icontains=name).order_by("name")[:6])
+        if len(matches) != 1:
+            if not matches:
+                return _error(f"There's no category called “{untrusted_short(name)}” on this site.")
+            return _need(
+                f"Which category did you mean by “{untrusted_short(name)}”?",
+                [{"label": match.name, "value": match.name} for match in matches],
+            )
+        category = matches[0]
+    hidden = _flag(params, "hidden")
+    if hidden is None:
+        hidden = True
+    followups = [{"label": "Hidden categories", "url": reverse("ignore_categories")}]
+    if hidden:
+        UserIgnoreCategory.objects.get_or_create(category=category, user=user)
+        summary = f"{category.name} is hidden: its lots won't show up in most lists."
+    else:
+        UserIgnoreCategory.objects.filter(category=category, user=user).delete()
+        summary = f"{category.name} lots will show up again."
+    return _ok(
+        summary,
+        category=category.name,
+        hidden=hidden,
+        followups=followups,
+        undo={
+            "action": "hide_category",
+            "params": {"category": category.name, "hidden": not hidden},
+            "describes": f"{'hiding' if hidden else 'showing'} {category.name}",
+        },
+    )
+
+
 def place_bid(request, params: dict[str, Any]) -> dict[str, Any]:
     """Bid on a lot as the user. The one write here nothing can take back.
 
@@ -5895,7 +5946,7 @@ def _invoice_for(tos, auction, *, create: bool):
     invoice = tos.invoice or Invoice.objects.filter(auctiontos_user=tos, auction=auction).first()
     if invoice or not create:
         return invoice
-    return Invoice.objects.create(auctiontos_user=tos, auction=auction)
+    return Invoice.for_participant(tos, auction)
 
 
 def find_invoice(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -7939,7 +7990,9 @@ def send_club_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def retract_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Retract the club's most recent announcement, and say what couldn't be taken back."""
+    """Retract one of the club's announcements (the newest, unless ``announcement`` names another), and say
+    what couldn't be taken back.
+    """
     from auctions import announcements as announcements_module
 
     from .models import ClubAnnouncement, ClubHistory
@@ -7951,7 +8004,20 @@ def retract_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if not check_club_permission(user, club, "permission_send_announcements"):
         return _error(f"You don't have permission to retract announcements for {club.name}.")
-    announcement = ClubAnnouncement.objects.filter(club=club, is_deleted=False).order_by("-created_at").first()
+    announcements = ClubAnnouncement.objects.filter(club=club, is_deleted=False).order_by("-created_at")
+    which = _str(params, "announcement")
+    if which:
+        matches = list(announcements.filter(Q(subject__icontains=which) | Q(text__icontains=which))[:6])
+        if not matches:
+            return _error(f"None of {club.name}'s announcements mention “{untrusted_short(which)}”.")
+        if len(matches) > 1:
+            return _need(
+                "Which announcement?",
+                [{"label": untrusted_short(match.short_text), "value": match.short_text} for match in matches],
+            )
+        announcement = matches[0]
+    else:
+        announcement = announcements.first()
     if not announcement:
         return _error(f"{club.name} hasn't got an announcement to retract.")
     result = announcements_module.retract(announcement)
@@ -8363,6 +8429,11 @@ def _set_one_lot_field_setting(request, auction, field_name: str, params: dict[s
             "The custom dropdown needs a name and at least two options, so it has been switched "
             "off again. Give it a name and add options with add_dropdown_option, then turn it on."
         )
+    elif getattr(form, "custom_random_auto_disabled", False):
+        result["note"] = (
+            "The custom random field needs a name and at least two options, so it has been switched "
+            "off again. Give it a name and add options with add_random_option, then turn it on."
+        )
     elif str(getattr(auction, field_name, "")) != str(data[field_name]):
         # clean() blanks the name of a switched-off field; say it didn't stick.
         result["note"] = (
@@ -8571,7 +8642,7 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
     ]
     snippets = []
     for key, title, url_name, live in embeds:
-        address = reverse(url_name, kwargs={"slug": club.slug})
+        address = reverse(url_name, kwargs={"slug": club.url_key})
         snippets.append(
             {
                 "snippet": key,
@@ -9075,86 +9146,192 @@ def update_pickup_location(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def add_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Add an option to the auction's custom dropdown (``AuctionDropdownOptionsAPI``'s rules). The dropdown
-    needs a name and two options to be on.
-    """
-    from .models import CUSTOM_DROPDOWN_MAX_LENGTH, AuctionDropdown
+def _option_list(kind):
+    """``(model, what the palette calls it, the tool prefix)`` for one of an auction's two option lists."""
+    from .models import AuctionDropdown, AuctionRandomOption
 
-    user = request.user
+    if kind == "random":
+        return AuctionRandomOption, "random option", "random_option"
+    return AuctionDropdown, "dropdown option", "dropdown_option"
+
+
+def _option_values(model, auction) -> list[str]:
+    return list(model.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True))
+
+
+def _option_list_is_off(kind, auction) -> bool:
+    if kind == "random":
+        return not auction.use_custom_random_field
+    return auction.use_custom_dropdown_field == "disable"
+
+
+def _option_value_problem(value) -> dict[str, Any] | None:
+    from .models import CUSTOM_DROPDOWN_MAX_LENGTH
+
+    if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
+        return _error(f"An option has to be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or fewer — it goes on a label.")
+    return None
+
+
+def _auction_for_options(request, params, noun):
+    """``(auction, problem)``: the auction named, and only for its admins."""
     auction, problem = _auction_or_problem(request, params)
     if problem:
+        return None, problem
+    if not _is_auction_admin(request.user, auction):
+        return None, _error(f"Only admins of {auction.title} can change its {noun}s.")
+    return auction, None
+
+
+def _find_option(model, auction, value, noun):
+    """``(option, problem)``: the option called *value* on *auction*, ignoring case."""
+    option = model.objects.filter(auction=auction, value__iexact=value).first()
+    if option:
+        return option, None
+    have = _option_values(model, auction)
+    return None, _error(
+        f"{auction.title} has no {noun} called “{value}”." + (" It has: " + ", ".join(have) + "." if have else "")
+    )
+
+
+def _add_option(request, params: dict[str, Any], kind) -> dict[str, Any]:
+    model, noun, tool = _option_list(kind)
+    user = request.user
+    auction, problem = _auction_for_options(request, params, noun)
+    if problem:
         return problem
-    if not _is_auction_admin(user, auction):
-        return _error(f"Only admins of {auction.title} can change its dropdown options.")
     value = _str(params, "option") or _str(params, "value") or _str(params, "name")
     if not value:
         return _need("What should the option be called?")
-    if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
-        return _error(f"An option has to be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or fewer — it goes on a label.")
-    if AuctionDropdown.objects.filter(auction=auction, value__iexact=value).exists():
+    problem = _option_value_problem(value)
+    if problem:
+        return problem
+    if model.objects.filter(auction=auction, value__iexact=value).exists():
         return _ok(f"{auction.title} already has an option called “{value}”.", auction=auction.slug)
-    AuctionDropdown.objects.create(auction=auction, user=user, value=value)
-    auction.create_history(applies_to="RULES", action=f"Added dropdown option {value} {via(request)}", user=user)
-    options = list(
-        AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
-    )
+    model.objects.create(auction=auction, user=user, value=value)
+    auction.create_history(applies_to="RULES", action=f"Added {noun} {value} {via(request)}", user=user)
+    options = _option_values(model, auction)
     result = _ok(
-        f"Added “{value}” to {auction.title}'s dropdown.",
+        f"Added “{value}” to {auction.title}'s {noun}s.",
         auction=auction.slug,
         options=options,
         undo={
-            "action": "remove_dropdown_option",
+            "action": f"remove_{tool}",
             "params": {"auction": auction.slug, "option": value},
             "describes": f"“{value}”",
         },
     )
-    if auction.use_custom_dropdown_field == "disable":
+    if _option_list_is_off(kind, auction):
+        field = "random field" if kind == "random" else "dropdown"
         result["note"] = (
-            "The dropdown is still switched off. It needs a name and at least two options; there "
+            f"The {field} is still switched off. It needs a name and at least two options; there "
             f"{'is' if len(options) == 1 else 'are'} now {len(options)}. "
             "update_auction_setting turns it on."
         )
     return result
 
 
-def remove_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Take one option off this auction's custom dropdown."""
-    from .models import AuctionDropdown
-
+def _rename_option(request, params: dict[str, Any], kind) -> dict[str, Any]:
+    model, noun, tool = _option_list(kind)
     user = request.user
-    auction, problem = _auction_or_problem(request, params)
+    auction, problem = _auction_for_options(request, params, noun)
     if problem:
         return problem
-    if not _is_auction_admin(user, auction):
-        return _error(f"Only admins of {auction.title} can change its dropdown options.")
+    value = _str(params, "option") or _str(params, "value")
+    if not value:
+        return _need(f"Which {noun} should I rename?")
+    new_value = _str(params, "new_name") or _str(params, "to")
+    if not new_value:
+        return _need(f"What should “{value}” be called instead?")
+    problem = _option_value_problem(new_value)
+    if problem:
+        return problem
+    option, problem = _find_option(model, auction, value, noun)
+    if problem:
+        return problem
+    old_value = option.value
+    if old_value == new_value:
+        return _ok(f"“{old_value}” is already called that.", auction=auction.slug)
+    if model.objects.filter(auction=auction, value__iexact=new_value).exclude(pk=option.pk).exists():
+        return _error(f"{auction.title} already has a {noun} called “{new_value}”.")
+    option.value = new_value
+    option.user = user
+    option.save()
+    auction.create_history(
+        applies_to="RULES", action=f"Renamed {noun} {old_value} to {new_value} {via(request)}", user=user
+    )
+    return _ok(
+        f"Renamed “{old_value}” to “{new_value}” in {auction.title}'s {noun}s."
+        + (" Lots that had it now have the new name." if kind == "random" else ""),
+        auction=auction.slug,
+        options=_option_values(model, auction),
+        undo={
+            "action": f"rename_{tool}",
+            "params": {"auction": auction.slug, "option": new_value, "new_name": old_value},
+            "describes": f"the rename of “{old_value}”",
+        },
+    )
+
+
+def _remove_option(request, params: dict[str, Any], kind) -> dict[str, Any]:
+    model, noun, tool = _option_list(kind)
+    user = request.user
+    auction, problem = _auction_for_options(request, params, noun)
+    if problem:
+        return problem
     value = _str(params, "option") or _str(params, "value") or _str(params, "name")
     if not value:
         return _need("Which option should I remove?")
-    option = AuctionDropdown.objects.filter(auction=auction, value__iexact=value).first()
-    if not option:
-        have = list(AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True))
-        return _error(
-            f"{auction.title} has no dropdown option called “{value}”."
-            + (" It has: " + ", ".join(have) + "." if have else "")
-        )
+    option, problem = _find_option(model, auction, value, noun)
+    if problem:
+        return problem
     option.delete()
-    auction.create_history(
-        applies_to="RULES", action=f"Removed dropdown option {option.value} {via(request)}", user=user
-    )
-    options = list(
-        AuctionDropdown.objects.filter(auction=auction).order_by("createdon").values_list("value", flat=True)
-    )
+    auction.create_history(applies_to="RULES", action=f"Removed {noun} {option.value} {via(request)}", user=user)
     return _ok(
-        f"Removed “{option.value}” from {auction.title}'s dropdown.",
+        f"Removed “{option.value}” from {auction.title}'s {noun}s."
+        + (" Lots that had it were dealt another option." if kind == "random" else ""),
         auction=auction.slug,
-        options=options,
+        options=_option_values(model, auction),
         undo={
-            "action": "add_dropdown_option",
+            "action": f"add_{tool}",
             "params": {"auction": auction.slug, "option": option.value},
             "describes": f"“{option.value}”",
         },
     )
+
+
+def add_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add an option to the auction's custom dropdown (``AuctionDropdownOptionsAPI``'s rules). The dropdown
+    needs a name and two options to be on.
+    """
+    return _add_option(request, params, "dropdown")
+
+
+def rename_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Rename one of the auction's custom dropdown options. Lots keep the value they were given."""
+    return _rename_option(request, params, "dropdown")
+
+
+def remove_dropdown_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one option off this auction's custom dropdown."""
+    return _remove_option(request, params, "dropdown")
+
+
+def add_random_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add an option to the auction's custom random field (``AuctionRandomOptionsAPI``'s rules). Lots
+    already dealt keep theirs; see ``Auction.assign_custom_random``.
+    """
+    return _add_option(request, params, "random")
+
+
+def rename_random_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Rename one of the auction's random options; every lot holding it follows (``AuctionRandomOption``)."""
+    return _rename_option(request, params, "random")
+
+
+def remove_random_option(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Take one of the auction's random options away; the lots that had it are dealt another."""
+    return _remove_option(request, params, "random")
 
 
 def _label_field_choices(auction):
@@ -11790,6 +11967,26 @@ register(
 
 register(
     Action(
+        name="hide_category",
+        description=(
+            "Hide a category's lots from the user's own lot lists, or show them again. Any signed-in "
+            "user. 'I don't keep saltwater, hide corals', 'show me plants again'."
+        ),
+        params={
+            "category": "string, required. The category's name, e.g. Corals.",
+            "hidden": "boolean, optional, default true. False to show the category's lots again.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=hide_category,
+        aliases={"name"},
+        confirm_template="Update your hidden categories",
+        examples=["hide corals", "stop hiding plants"],
+    )
+)
+
+register(
+    Action(
         name="find_invoice",
         description=(
             "Look at one person's invoice in an auction: what they owe or are owed, whether it has "
@@ -12234,12 +12431,16 @@ register(
         name="retract_announcement",
         open_world=True,
         description=(
-            "Take back the club's most recent announcement. If it hasn't gone out yet it never "
-            "does; if it has, this deletes the Discord post and takes it off the website, and says "
-            "honestly what is still out there. Needs the 'send announcements' permission."
+            "Take back one of the club's announcements, the most recent unless told which. If it "
+            "hasn't gone out yet it never does; if it has, this deletes the Discord post and takes "
+            "it off the website, and says honestly what is still out there. Needs the 'send "
+            "announcements' permission."
         ),
         params={
             "club": "string, optional. Club name. See my_context.",
+            "announcement": (
+                "string, optional, default the most recent. Words from the subject or text of the one to retract."
+            ),
         },
         danger=DANGER_CONFIRM,
         destructive=True,
@@ -12499,6 +12700,93 @@ register(
         aliases={"value", "name"},
         confirm_template="Remove a dropdown option",
         examples=["remove 'Cichlid' from the dropdown"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="rename_dropdown_option",
+        description=(
+            "Rename one option on an auction's custom dropdown. Lots that already picked the old name "
+            "keep it. Auction admins only."
+        ),
+        params={
+            "option": "string, required. The option's current name.",
+            "new_name": "string, required. What to call it instead, short enough to print on a label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=rename_dropdown_option,
+        aliases={"value", "to"},
+        confirm_template="Rename a dropdown option",
+        examples=["rename the dropdown option 'Cichlid' to 'Cichlids'"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="add_random_option",
+        description=(
+            "Add one option to an auction's custom random field — a value each lot is given at random "
+            "when it is added (A/B test groups, or which table a lot goes on), shown on the lot and its "
+            "label. Nobody picks or edits it. Auction admins only. The field stays switched off until it "
+            "has a name and at least two options; switching it on deals every lot already there."
+        ),
+        params={
+            "option": "string, required. The option, short enough to print on a label, e.g. 'Table 3' or 'A'.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=add_random_option,
+        aliases={"value", "name"},
+        confirm_template="Add a random option",
+        examples=["add 'Table 3' to the random tables", "add a B group to the random field"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="rename_random_option",
+        description=(
+            "Rename one option on an auction's custom random field. Every lot that was given it gets the "
+            "new name. Auction admins only."
+        ),
+        params={
+            "option": "string, required. The option's current name.",
+            "new_name": "string, required. What to call it instead, short enough to print on a label.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        resolver=rename_random_option,
+        aliases={"value", "to"},
+        confirm_template="Rename a random option",
+        examples=["rename random option 'Table 3' to 'Back table'"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="remove_random_option",
+        description=(
+            "Take one option off an auction's custom random field. Lots that were given it are dealt "
+            "one of the remaining options. Auction admins only."
+        ),
+        params={
+            "option": "string, required. Which option to remove.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        resolver=remove_random_option,
+        aliases={"value", "name"},
+        confirm_template="Remove a random option",
+        examples=["remove 'Table 3' from the random field"],
         needs=NEEDS_AUCTION_ADMIN,
     )
 )
@@ -14121,7 +14409,11 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "add_pickup_location": _SPEAK_THE_FORM,
     "update_pickup_location": _SPEAK_THE_FORM,
     "add_dropdown_option": _SPEAK_THE_FORM,
+    "rename_dropdown_option": _SPEAK_THE_FORM,
     "remove_dropdown_option": _SPEAK_THE_FORM,
+    "add_random_option": _SPEAK_THE_FORM,
+    "rename_random_option": _SPEAK_THE_FORM,
+    "remove_random_option": _SPEAK_THE_FORM,
     "add_club_event": _SPEAK_THE_FORM,
     "update_club_event": _SPEAK_THE_FORM,
     "add_species": _SPEAK_THE_FORM,
@@ -14142,6 +14434,7 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     # Once a season.
     "create_auction": _ONCE_A_SEASON,
     "set_current_auction": _ONCE_A_SEASON,
+    "hide_category": _ONCE_A_SEASON,
     "change_email": _ONCE_A_SEASON,
     "update_username": _ONCE_A_SEASON,
     "update_contact_info": _ONCE_A_SEASON,
@@ -14229,6 +14522,7 @@ SKILLS: dict[str, str] = {
     # One setting at a time; dates and rules text stay on the page.
     "AuctionUpdate": "update_auction_setting",
     "AuctionUnsellLot": "undo_sale",
+    "LotEndUnsold": "no_sale",
     # The refund half of the Remove/refund dialog; banning an unsold lot stays a page.
     "LotRefundDialog": "refund_lot",
     "BapAwardAdminView": "award_points",
@@ -14246,6 +14540,8 @@ SKILLS: dict[str, str] = {
     "LotUpdate": "edit_lot",
     "SaveLotAjax": "edit_lot",
     "WatchOrUnwatch": "watch_lot",
+    "CreateUserIgnoreCategory": "hide_category",
+    "DeleteUserIgnoreCategory": "hide_category",
     "AddSingleAuctionTOSToClub": "add_club_member",
     "AddTosMemo": "update_person",
     "AuctionDoorPrizes": "draw_door_prize",
@@ -14303,10 +14599,10 @@ _DESTRUCTIVE = (
     "destroyed is named on screen before they confirm it."
 )
 _BULK = (
-    "Acts on every row matching the current filter. No tool on this site changes more than one row, "
-    "with no exceptions -- it is the second of the three prompt-injection bounds, not an ergonomic "
-    "judgement -- so this stays a page whoever is asking. Nearly all of these have a per-row skill "
-    "beside them: set_invoice_status, set_lot_winner and add_club_member each do one."
+    "Acts on every row matching the current filter. No tool on this site writes over a filter -- it "
+    "is the second of the three prompt-injection bounds, not an ergonomic judgement -- so this stays "
+    "a page whoever is asking. Nearly all of these have a per-row skill beside them: "
+    "set_invoice_status, set_lot_winner and add_club_member each do one."
 )
 _NEEDS_A_FILE = "Needs a file — a CSV, a spreadsheet, a photo — that a typed or spoken command can't hand over."
 #: Retired: "acts on one row of a table you're already looking at" was an argument about speech.
@@ -14314,10 +14610,10 @@ _NEEDS_A_FILE = "Needs a file — a CSV, a spreadsheet, a photo — that a typed
 _RETIRED_NEEDS_THE_ROW = "Do not use. See the note above -- write the actual reason instead."
 
 #: Banning and unbanning are deliberately not skills: CreateUserBan also deletes the user's live bids
-#: across every auction the admin runs, breaking the one-row bound. The pair is decided together.
+#: across every auction the admin runs, a write over a filter. The pair is decided together.
 _BAN = (
     "Bans a person, or lifts a ban. Banning deletes their live bids across every auction the admin "
-    "runs, which is more than one row; the unban is held with it so the pair stays one decision."
+    "runs, which is a write over a filter; the unban is held with it so the pair stays one decision."
 )
 
 _REDIRECT = (
@@ -14342,6 +14638,17 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "AuctionPageAction": (
+        "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "
+        "shows one person and nothing else. The other two are site staff trusting an auction's "
+        "creator or making them their club's admin, a judgement about a stranger made while reading "
+        "the auction they just created."
+    ),
+    "InvoiceCreateView": (
+        "Makes an empty invoice for somebody who has bought and sold nothing yet, and checks them in "
+        "on the way. Every sale already makes the invoice it needs, so this only exists for the "
+        "checkout table's list of people, and find_invoice answers for anyone who has one."
+    ),
     # The assistant looking at itself
     "CommandPaletteAnalyticsView": (
         "Accepts one shortcut the assistant mined out of its own answers, which changes what the "
@@ -14560,6 +14867,7 @@ NOT_A_SKILL: dict[str, str] = {
     # Machines
     "AuctionBarcodeScan": _MACHINE,
     "AuctionDropdownOptionsAPI": _MACHINE,
+    "AuctionRandomOptionsAPI": _MACHINE,
     "AuctionFinder": _MACHINE,
     "AuctionNotifications": _MACHINE,
     "CategoryFinder": _MACHINE,
@@ -14607,6 +14915,7 @@ NOT_A_SKILL: dict[str, str] = {
     "SquarePaymentSuccessView": _WEBHOOK,
     "SquareWebhookView": _WEBHOOK,
     "ClubMemberSelfServiceView": _TOKEN,
+    "SelfServeContactLinkView": _TOKEN,
     "InvoiceNoLoginView": _TOKEN,
     # Other programs
     "ClubMemberBapAwardAPIView": _EXTERNAL_API,

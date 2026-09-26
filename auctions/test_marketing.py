@@ -443,7 +443,12 @@ class MailchimpSelfServiceTests(TestCase):
             "club_member_contact_pref",
             kwargs={"slug": self.club.slug, "uuid": self.member.uuid, "level": "essential"},
         )
+        # Opening the link only asks; a mail scanner opening it changes nothing.
         self.assertEqual(self.client_http.get(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertNotEqual(self.member.contact_status, "non_essential")
+        self.assertFalse(ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").exists())
+        self.assertEqual(self.client_http.post(url).status_code, 200)
         self.member.refresh_from_db()
         self.assertEqual(self.member.contact_status, "non_essential")
         history = ClubHistory.objects.filter(club=self.club, applies_to="MEMBERS").get()

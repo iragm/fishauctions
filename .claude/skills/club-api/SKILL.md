@@ -8,6 +8,9 @@ description: The club REST API at /api/v1/clubs/<slug>/ -- key permissions, the 
 `/api/v1/clubs/<slug>/…`, authenticated by a `ClubAPIKey` (`X-API-Key`, `ck_`) or a signed-in club
 admin. `require_club_permission` checks the key flag and the matching `ClubMember` permission.
 
+The `<slug>` the docs print is `Club.url_key`, the club's 10-digit number: the slug follows the name,
+so a rename broke every integration. `club_from_url` still reads a slug, for URLs handed out before.
+
 **The documentation is `_club_api_endpoints.html`, once.** The key page draws it and the `club_api`
 MCP tool renders it, both from `views.club_api_documentation_context`.
 

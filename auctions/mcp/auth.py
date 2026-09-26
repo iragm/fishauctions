@@ -185,7 +185,7 @@ def within_write_budget(credential: Credential) -> bool:
     """Count one write against the hourly budget; False when spent.
 
     Separate from :func:`within_rate_limit`: this bounds damage from prompt injection. Writes need the
-    owner's real permissions, no tool changes more than one row, and this caps the count. Attempts are
+    owner's real permissions, no tool writes over a filter, and this caps the count. Attempts are
     counted, not successes.
     """
     key = credential.write_cache_key

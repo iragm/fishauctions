@@ -737,6 +737,9 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             first_row_fields.append(self.auction.custom_field_1_name)
         if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
+        custom_random_enabled = self.auction.use_custom_random_field and bool(self.auction.custom_random_name)
+        if custom_random_enabled:
+            first_row_fields.append(self.auction.custom_random_name)
         writer.writerow(first_row_fields)
         # Every row names the seller and winner and where each collects, reaching the AuctionTOS,
         # its pickup location and its auction.
@@ -780,6 +783,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 row.append(lot.custom_field_1)
             if custom_dropdown_enabled:
                 row.append(lot.custom_dropdown)
+            if custom_random_enabled:
+                row.append(lot.custom_random)
             writer.writerow(row)
         self.auction.create_history(
             applies_to="LOTS",

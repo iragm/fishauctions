@@ -438,7 +438,7 @@ def _clear_error(club):
 
 
 def _webhook_url(club):
-    path = reverse("brevo_webhook", kwargs={"slug": club.slug, "secret": club.brevo_webhook_secret})
+    path = reverse("brevo_webhook", kwargs={"slug": club.url_key, "secret": club.brevo_webhook_secret})
     return f"https://{_site_domain()}{path}"
 
 

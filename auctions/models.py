@@ -194,7 +194,9 @@ def add_price_info(qs):
                     / 100,
                 ),
                 When(
-                    Q(winning_price__isnull=True, active=False),
+                    # In person, only lots an admin ended unsold: one never brought in isn't charged.
+                    Q(winning_price__isnull=True, active=False)
+                    & (Q(auctiontos_seller__auction__is_online=True) | Q(ended_unsold=True)),
                     then=Case(
                         When(donation=True, then=Value(Decimal(0))),
                         default=Value(Decimal(0)) - Cast(F("auctiontos_seller__auction__unsold_lot_fee"), money_field),
@@ -388,6 +390,19 @@ def note_email_if_unusable(value, where):
 def _default_membership_number():
     """Random 10-digit membership number; rare collisions are retried by _pick_unique_membership_number."""
     return randint(1_000_000_000, 9_999_999_999)
+
+
+def _pick_unique_club_number():
+    """A random 10-digit number no club has yet, for :attr:`Club.number`."""
+    from django.apps import apps  # Club is defined later in this module
+
+    ClubCls = apps.get_model("auctions", "Club")
+    for _ in range(20):
+        candidate = _default_membership_number()
+        if not ClubCls.objects.filter(number=candidate).exists():
+            return candidate
+    msg = "Could not generate a unique club number after 20 attempts."
+    raise RuntimeError(msg)
 
 
 def _pick_unique_membership_number():
@@ -708,6 +723,17 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
+    number = models.PositiveBigIntegerField(
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text=(
+            "A random 10-digit id for the URLs other systems keep: the API, webhooks, embeds, the "
+            "calendar feed and emailed links. The slug follows the name, so a rename used to break "
+            "them all. Old slug URLs still work."
+        ),
+    )
     icon = ThumbnailerImageField(
         upload_to="club_icons/",
         blank=True,
@@ -1157,9 +1183,16 @@ class Club(CloudflareImageMixin, models.Model):
             return ""
         return self.google_calendar_ical_url_candidate
 
+    @property
+    def url_key(self):
+        """What goes in the ``<slug>`` of a URL something outside this site keeps: the club's number,
+        which a rename doesn't change. :func:`views.base.club_from_url` reads either.
+        """
+        return str(self.number) if self.number else self.slug
+
     def _own_ical_url(self, domain):
         """This site's own iCal feed for the club."""
-        return f"https://{domain}{reverse('club_events_ical', kwargs={'slug': self.slug})}"
+        return f"https://{domain}{reverse('club_events_ical', kwargs={'slug': self.url_key})}"
 
     def calendar_subscribe_url(self, domain):
         """The link to give a member who wants these events in their calendar: the club's shared Google
@@ -1194,6 +1227,11 @@ class Club(CloudflareImageMixin, models.Model):
         return cloudflare_images.image_url(self.icon, self.cloudflare_image_id, "club_icon")
 
     def save(self, *args, **kwargs):
+        if not self.number:
+            self.number = _pick_unique_club_number()
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "number" not in update_fields:
+                kwargs["update_fields"] = list(update_fields) + ["number"]
         if not self.abbreviation and self.name:
             # club_matching owns the rule, so is_hand_written() recognises its output.
             self.abbreviation = derived_abbreviation(self.name)
@@ -1889,7 +1927,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         """Relative URL for this member's wallet/identity page (UUID-keyed)."""
         from django.urls import reverse
 
-        return reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.uuid})
+        return reverse("club_member_by_uuid", kwargs={"slug": self.club.url_key, "uuid": self.uuid})
 
     @cached_property
     def wallet_link(self):
@@ -1918,7 +1956,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             domain = "localhost"
         path = reverse(
             "club_member_by_number",
-            kwargs={"slug": self.club.slug, "number": self.membership_number},
+            kwargs={"slug": self.club.url_key, "number": self.membership_number},
         )
         return f"https://{domain}{path}"
 
@@ -1937,7 +1975,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             domain = "localhost"
         path = reverse(
             "club_barcode",
-            kwargs={"slug": self.club.slug, "value": int(self.membership_number)},
+            kwargs={"slug": self.club.url_key, "value": int(self.membership_number)},
         )
         return f"https://{domain}{path}"
 
@@ -1956,7 +1994,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             domain = "localhost"
         path = reverse(
             "club_barcode_png",
-            kwargs={"slug": self.club.slug, "value": int(self.membership_number)},
+            kwargs={"slug": self.club.url_key, "value": int(self.membership_number)},
         )
         return f"https://{domain}{path}"
 
@@ -3925,6 +3963,14 @@ class Auction(CachedPropertiesMixin, models.Model):
     )
     use_custom_dropdown_field = models.CharField(max_length=20, choices=CUSTOM_DROPDOWN_CHOICES, default="disable")
     use_custom_dropdown_field.help_text = "Dropdown shown when users add lots."
+    use_custom_random_field = models.BooleanField(default=False, blank=True, verbose_name="Use custom random field")
+    use_custom_random_field.help_text = (
+        "Each lot gets one of your options at random, for A/B tests or table assignments; nobody can pick or change it."
+    )
+    custom_random_name = models.CharField(
+        max_length=50, default="", blank=True, null=True, verbose_name="Custom random field name"
+    )
+    custom_random_name.help_text = "Shown on lot pages, e.g. Table"
     CUSTOM_CHOICES = (
         ("disable", "Off"),
         ("allow", "Optional"),
@@ -3963,7 +4009,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         max_length=1000,
         blank=True,
         null=True,
-        default="qr_code,lot_name,scientific_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label",
+        default="qr_code,lot_name,scientific_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label,custom_random_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
     use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
@@ -5981,6 +6027,40 @@ class Auction(CachedPropertiesMixin, models.Model):
             midpoint = "end"
         return before + [midpoint] + after
 
+    def deal_custom_random(self, current=""):
+        """The ``custom_random`` a lot here should hold: *current* while it is still an option, otherwise one
+        at random. Uniform and from ``secrets``, never balanced: a balanced or predictable deal lets a seller
+        add lots in the order that lands them where they want.
+        """
+        options = list(AuctionRandomOption.objects.filter(auction=self).order_by("pk").values_list("value", flat=True))
+        if not options:
+            return current
+        canonical = {option.lower(): option for option in options}
+        if current and current.lower() in canonical:
+            return canonical[current.lower()]
+        return secrets.choice(options)
+
+    def assign_custom_random(self):
+        """Deal a ``custom_random`` to every lot here without a current option, as :meth:`deal_custom_random`
+        would one at a time. A printed label that changes is flagged for reprinting.
+        """
+        if not self.use_custom_random_field:
+            return
+        options = list(AuctionRandomOption.objects.filter(auction=self).order_by("pk").values_list("value", flat=True))
+        if not options:
+            return
+        valid = {option.lower() for option in options}
+        to_deal = []
+        for lot in Lot.objects.filter(auction=self, is_deleted=False).only(
+            "pk", "custom_random", "label_printed", "label_needs_reprinting"
+        ):
+            if lot.custom_random.lower() not in valid:
+                if lot.custom_random and lot.label_printed:
+                    lot.label_needs_reprinting = True
+                lot.custom_random = secrets.choice(options)
+                to_deal.append(lot)
+        Lot.objects.bulk_update(to_deal, ["custom_random", "label_needs_reprinting"], batch_size=500)
+
     def create_history(self, applies_to, action="Edited", user=None, form=None):
         """Record auction history. ``applies_to``: RULES, USERS, INVOICES, LOTS, STATS; ``user`` is the actor
         or None; ``form`` supplies changed data.
@@ -6608,10 +6688,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 status,
             )
         else:
-            # Show create link for admins
+            # Show create link for admins. A POST: creating one also checks the person in.
             create_url = reverse("create_invoice", kwargs={"pk": self.pk})
             return html.format_html(
-                "<a href='{}' hx-noget><i class='bi bi-plus me-1'></i>Create"
+                "<a href='' hx-noget hx-post='{}' hx-trigger='click'><i class='bi bi-plus me-1'></i>Create"
                 "<span class='d-sm-inline d-md-none'> invoice</span></a>",
                 create_url,
             )
@@ -6955,17 +7035,12 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
         # Move sold lots to self
         Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
-        # Get or create an invoice for self
-        invoice = Invoice.objects.filter(auctiontos_user=self).first()
-        if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=self, auction=self.auction)
+        invoice = Invoice.for_participant(self)
         duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
         if duplicate_invoice:
-            InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
-            InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
             # Its ledger rows too, or the invoice's delete orphans them (SET_NULL) and the club books the
             # moved lots twice.
-            invoice._absorb_duplicate_ledger(duplicate_invoice)
+            invoice.absorb(duplicate_invoice)
         invoice.recalculate()
         merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
         if self.auction.is_club_managed and self.auction.club_id:
@@ -7147,58 +7222,109 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         return ""
 
 
-class AuctionDropdown(models.Model):
+class AuctionOption(models.Model):
+    """One value in an auction's list of options, unique per auction ignoring case: a second copy
+    folds into the oldest. Every add, rename and removal is written to the auction's history.
+    """
+
+    #: How the auction's history names the list.
+    history_name = ""
+
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     createdon = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     value = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH)
 
+    class Meta:
+        abstract = True
+
     def __str__(self):
         return self.value
 
     def save(self, *args, **kwargs):
+        model = type(self)
         is_new = self.pk is None
         old_value = None
         if not is_new:
-            old_value = AuctionDropdown.objects.filter(pk=self.pk).values_list("value", flat=True).first()
+            old_value = model.objects.filter(pk=self.pk).values_list("value", flat=True).first()
         super().save(*args, **kwargs)
-        duplicates = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=self.value).order_by(
-            "createdon", "pk"
-        )
+        duplicates = model.objects.filter(auction=self.auction, value__iexact=self.value).order_by("createdon", "pk")
         oldest = duplicates.first()
         if oldest and oldest.pk != self.pk:
-            AuctionDropdown.objects.filter(pk=self.pk).delete()
+            model.objects.filter(pk=self.pk).delete()
             self.pk = oldest.pk
             self.id = oldest.pk
             self.createdon = oldest.createdon
             self.user = oldest.user
             self.value = oldest.value
             self.auction = oldest.auction
+            if old_value is not None:
+                # Renamed onto an existing option: the two are one now.
+                self.after_rename(old_value)
             return
         duplicates.exclude(pk=self.pk).delete()
         if is_new:
             self.auction.create_history(
                 applies_to="RULES",
-                action=f"Added custom dropdown option '{self.value}'",
+                action=f"Added {self.history_name} option '{self.value}'",
                 user=self.user,
             )
+            self.after_add()
         elif old_value != self.value:
             self.auction.create_history(
                 applies_to="RULES",
-                action=f"Renamed custom dropdown option '{old_value}' to '{self.value}'",
+                action=f"Renamed {self.history_name} option '{old_value}' to '{self.value}'",
                 user=self.user,
             )
+            self.after_rename(old_value)
 
     def delete(self, *args, **kwargs):
         value = self.value
         auction = self.auction
         user = self.user
-        super().delete(*args, **kwargs)
+        result = super().delete(*args, **kwargs)
         auction.create_history(
             applies_to="RULES",
-            action=f"Removed custom dropdown option '{value}'",
+            action=f"Removed {self.history_name} option '{value}'",
             user=user,
         )
+        self.after_remove(value)
+        return result
+
+    def after_add(self):
+        pass
+
+    def after_rename(self, old_value):
+        pass
+
+    def after_remove(self, value):
+        pass
+
+
+class AuctionDropdown(AuctionOption):
+    """An option sellers pick from for ``Lot.custom_dropdown``."""
+
+    history_name = "custom dropdown"
+
+
+class AuctionRandomOption(AuctionOption):
+    """An option ``Lot.custom_random`` is dealt from; see :meth:`Auction.assign_custom_random`. Nobody picks
+    it, so a lot's value follows its option: renamed with it, and dealt again when it is removed.
+    """
+
+    history_name = "custom random"
+
+    def after_add(self):
+        # The first options of a list already switched on have lots waiting.
+        self.auction.assign_custom_random()
+
+    def after_rename(self, old_value):
+        lots = Lot.objects.filter(auction=self.auction, custom_random=old_value)
+        lots.filter(label_printed=True).update(label_needs_reprinting=True)
+        lots.update(custom_random=self.value)
+
+    def after_remove(self, value):
+        self.auction.assign_custom_random()
 
 
 class Lot(CachedPropertiesMixin, models.Model):
@@ -7231,6 +7357,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     custom_checkbox = models.BooleanField(default=False, verbose_name="Custom checkbox")
     custom_field_1 = models.CharField(max_length=60, default="", blank=True)
     custom_dropdown = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH, default="", blank=True)
+    # Dealt by Lot.save from AuctionRandomOption, never entered: on no form.
+    custom_random = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH, default="", blank=True, editable=False)
     i_bred_this_fish = models.BooleanField(default=False, verbose_name=settings.I_BRED_THIS_FISH_LABEL)
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
@@ -7310,6 +7438,9 @@ class Lot(CachedPropertiesMixin, models.Model):
         db_index=True,
         validators=[MaxValueValidator(MAX_MONEY)],
     )
+    # In-person auctions charge unsold_lot_fee only for these: a lot that never came in is just
+    # deactivated at wind-down, and costs its seller nothing. Cleared by _do_save on a sale or reopen.
+    ended_unsold = models.BooleanField(default=False)
     refunded = models.BooleanField(default=False)
     refunded.help_text = "Don't charge the winner or pay the seller for this lot."
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
@@ -7327,6 +7458,13 @@ class Lot(CachedPropertiesMixin, models.Model):
     number_of_bumps = models.PositiveIntegerField(blank=True, default=0, validators=[MinValueValidator(0)])
     donation = models.BooleanField(default=False)
     donation.help_text = "All proceeds from this lot will go to the club"
+    donation_forced = models.BooleanField(
+        default=False,
+        help_text=(
+            "Set when donation was only set because the price was at or under the auction's force "
+            "donation threshold, so correcting the price above it makes the lot the seller's again."
+        ),
+    )
     watch_warning_email_sent = models.BooleanField(default=False)
     coming_up_push_sent = models.BooleanField(default=False)
     coming_up_push_sent.help_text = (
@@ -7543,10 +7681,25 @@ class Lot(CachedPropertiesMixin, models.Model):
             and self.winning_price
             and self.winning_price <= self.auction.force_donation_threshold
         ):
-            self.donation = True
+            if not self.donation:
+                self.donation = True
+                self.donation_forced = True
+        elif self.donation_forced:
+            self.donation = False
+            self.donation_forced = False
+        if self.ended_unsold and (self.active or self.winning_price is not None):
+            self.ended_unsold = False
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "ended_unsold"}
         self.summernote_description = sanitize_summernote_html(self.summernote_description)
         if not self.quantity:
             self.quantity = 1
+        if self.auction and self.auction.use_custom_random_field and not self.is_deleted:
+            dealt = self.auction.deal_custom_random(self.custom_random)
+            if dealt != self.custom_random:
+                self.custom_random = dealt
+                if kwargs.get("update_fields") is not None:
+                    kwargs["update_fields"] = {*kwargs["update_fields"], "custom_random"}
         super().save(*args, **kwargs)
 
         # chat history subscription for the owner
@@ -7663,10 +7816,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         except Exception:
             logger.exception("Failed to create winner LotHistory for lot %s", self.pk)
         try:
-            invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
-            if not invoice:
-                invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-            invoice.recalculate()
+            Invoice.for_participant(tos, self.auction).recalculate()
         except Exception:
             logger.exception("Failed to recalculate invoice after winner set on lot %s", self.pk)
         self.send_websocket_message(
@@ -8211,6 +8361,36 @@ class Lot(CachedPropertiesMixin, models.Model):
         else:
             return "No high bidder"
 
+    def end_unsold(self, user):
+        """Close this lot without a sale, which charges the seller ``unsold_lot_fee``. Returns the message.
+
+        The shared body of every "end lot unsold": set-winners (and the palette's ``no_sale``), the admin
+        lot list, and the app's offline queue. Callers check the lot is unsold and the invoice is open.
+        """
+        stale_invoices = [invoice for invoice in (self.winner_invoice, self.sellers_invoice) if invoice]
+        self.date_end = timezone.now()
+        self.winner = None
+        self.auctiontos_winner = None
+        self.winning_price = None
+        self.active = False
+        self.ended_unsold = True
+        self.save()
+        message = f"{user} has marked lot {self.lot_number_display} as not sold"
+        LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
+        self.send_websocket_message(
+            {
+                "type": "chat_message",
+                "info": "ENDED_NO_WINNER",
+                "message": message,
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+            }
+        )
+        for invoice in {invoice.pk: invoice for invoice in stale_invoices}.values():
+            invoice.recalculate()
+        return message
+
     @property
     def sold(self):
         if self.winner or self.auctiontos_winner:
@@ -8512,12 +8692,16 @@ class Lot(CachedPropertiesMixin, models.Model):
     def cannot_be_deleted_reason(self):
         if self.cannot_change_reason:
             return self.cannot_change_reason
+        if self.ended_unsold:
+            # Its unsold lot fee goes with it.
+            return "This lot has ended"
+        # Deleting an unsold lot dodges the fee online. In person the fee is only for lots ended unsold, and
+        # leaving a lot at home is free, so there is nothing to dodge.
         if self.auction and self.auction.is_online and self.auction.unsold_lot_fee:
             # Deletable until 24 hours before lot submission ends.
             end = self.auction.lot_submission_end_date
             if end and timezone.now() > end - datetime.timedelta(hours=24):
                 return "It's too late to delete lots in this auction"
-        if self.auction and self.auction.unsold_lot_fee:
             # you have at most 24 hours to delete a lot
             if timezone.now() > self.date_posted + datetime.timedelta(hours=24):
                 return "You can only delete auction lots in the first 24 hours after they have been created."
@@ -9102,15 +9286,9 @@ class Lot(CachedPropertiesMixin, models.Model):
             self.auctiontos_winner = tos
             self.save()
         if self.auction and self.auctiontos_winner:
-            invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner, auction=self.auction).first()
-            if not invoice:
-                invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_winner, auction=self.auction)
-            invoice.recalculate()
+            Invoice.for_participant(self.auctiontos_winner, self.auction).recalculate()
         if self.auction and self.auctiontos_seller:
-            invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_seller, auction=self.auction).first()
-            if not invoice:
-                invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
-            invoice.recalculate()
+            Invoice.for_participant(self.auctiontos_seller, self.auction).recalculate()
             if self.auction.use_check_in_mode and not self.auctiontos_seller.checked_in:
                 seller = self.auctiontos_seller
                 seller.checked_in = timezone.now()
@@ -9222,6 +9400,12 @@ class Lot(CachedPropertiesMixin, models.Model):
     def custom_dropdown_label(self):
         if self.auction.use_custom_dropdown_field != "disable" and self.custom_dropdown:
             return self.custom_dropdown
+        return ""
+
+    @property
+    def custom_random_label(self):
+        if self.auction and self.auction.use_custom_random_field and self.auction.custom_random_name:
+            return self.custom_random
         return ""
 
     @property
@@ -9429,6 +9613,28 @@ class Invoice(CachedPropertiesMixin, models.Model):
             # "Most recent invoice" without a filesort.
             models.Index(fields=["auctiontos_user", "-date"], name="invoice_tos_recent_idx"),
         ]
+        constraints = [
+            # One invoice per participant per auction. Club-only dues invoices have neither column, and
+            # NULLs never collide, so any number of those. Make one with ``for_participant``.
+            models.UniqueConstraint(fields=["auctiontos_user", "auction"], name="invoice_one_per_participant"),
+        ]
+
+    @classmethod
+    def for_participant(cls, tos, auction=None):
+        """The participant's invoice in this auction, made if they have none yet.
+
+        The one way an auction invoice is made. Two requests racing to make the same one used to leave a
+        duplicate; the unique constraint refuses the second, and ``get_or_create`` hands it the first.
+        """
+        return cls.objects.get_or_create(auctiontos_user=tos, auction=auction or tos.auction)[0]
+
+    def absorb(self, other):
+        """Move another invoice's adjustments, payments, Tap to Pay attempts and ledger rows onto this one,
+        e.g. when two participants are merged. The caller deletes ``other`` and recalculates.
+        """
+        InvoiceAdjustment.objects.filter(invoice=other).update(invoice=self)
+        InvoicePayment.objects.filter(invoice=other).update(invoice=self)
+        self._absorb_duplicate_ledger(other)
 
     @cached_property
     def currency(self):
@@ -10133,47 +10339,15 @@ class Invoice(CachedPropertiesMixin, models.Model):
             update_fields = list(update_fields)
             kwargs["update_fields"] = update_fields + [f for f in newly_written_fields if f not in update_fields]
         super().save(*args, **kwargs)
-        # One invoice per AuctionTOS: keep the oldest, move payments and adjustments in, delete this
-        # one. Club-only invoices skip this but still reach the ledger sync below.
-        if self.auctiontos_user:
-            # Scoped to this auction. An AuctionTOS belongs to one auction, so this is the same set in
-            # normal use -- but if a bad winner ever lands on a lot, an unscoped merge would move the
-            # charge onto that person's real invoice in their own auction.
-            siblings = Invoice.objects.filter(auctiontos_user=self.auctiontos_user, auction=self.auction)
-            oldest = siblings.order_by("date").first()
-            if oldest and oldest.pk != self.pk:
-                # Newer duplicate: migrate into the older invoice.
-                duplicate_pk = self.pk
-                InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
-                InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
-                oldest._absorb_duplicate_ledger(self)
-                Invoice.objects.filter(pk=duplicate_pk).delete()
-                # Rebind to the canonical invoice.
-                self.pk = oldest.pk
-                self.id = oldest.pk
-                self._state.adding = False
-                self._state.db = oldest._state.db
-                self.refresh_from_db()
-                oldest.recalculate()
-                return
-            # self is the oldest — clean up any newer duplicates that may exist
-            newer = siblings.exclude(pk=self.pk)
-            if newer.exists():
-                for dup in newer:
-                    InvoiceAdjustment.objects.filter(invoice=dup).update(invoice=self)
-                    InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
-                    self._absorb_duplicate_ledger(dup)
-                newer.delete()
-                self.recalculate()
         # Sync the ledger only on a status transition; re-syncing a PAID invoice would rewrite booked
         # accounting from current settings.
         if previous_status != self.status or previous_status is None:
             self.sync_club_money()
 
     def _absorb_duplicate_ledger(self, duplicate):
-        """Re-point a duplicate invoice's ClubMoney rows at this invoice and append an exact reversal, so rows
-        aren't orphaned and nothing is double-booked. Mirrors the duplicate's rows rather than re-deriving,
-        so a frozen canonical ledger isn't rewritten.
+        """Re-point another invoice's ClubMoney rows at this invoice and append an exact reversal, so rows
+        aren't orphaned and nothing is double-booked. Mirrors its rows rather than re-deriving, so a frozen
+        ledger here isn't rewritten.
         """
         # Tap to Pay attempts too: they cascade with the duplicate, and an open one is what stops a
         # second charge on the card.
@@ -10402,6 +10576,14 @@ class InvoicePayment(InvalidatesRelatedCache, models.Model):
         max_length=50, blank=True, null=True, default="PayPal"
     )  # e.g. 'paypal', 'stripe', 'cash'
     createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # One record per provider charge: the Tap to Pay confirm and the Square webhook both record
+            # the same payment, and get_or_create alone let them race into two. Cash has no external_id,
+            # and NULLs never collide.
+            models.UniqueConstraint(fields=["invoice", "external_id"], name="invoicepayment_one_per_charge"),
+        ]
 
 
 class TapToPayAttempt(models.Model):

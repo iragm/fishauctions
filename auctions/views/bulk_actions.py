@@ -2,7 +2,7 @@
 
 Each one takes a set of rows and applies one change to all of them. They are the only writes on the
 site that touch many rows at once, which is exactly why none of them is exposed as an assistant
-skill -- see the "no tool changes more than one row" rule in the MCP notes.
+skill -- see the "no tool writes over a filter" bound in the MCP notes.
 """
 
 import logging

@@ -135,7 +135,7 @@
     <div class="card-body">
       <p class="text-muted">
         Your club page already offers a
-        <a href="{% url 'club_events_ical' club.slug %}">subscribe link</a> that works in Google
+        <a href="{% url 'club_events_ical' club.url_key %}">subscribe link</a> that works in Google
         Calendar, Apple Calendar and Outlook. You don't have to do anything else.
       </p>
       <p class="text-muted mb-2">
@@ -208,7 +208,7 @@
 <p class="text-muted small">
   <i class="bi bi-info-circle"></i>
   Your club page always offers an
-  <a href="{% url 'club_events_ical' club.slug %}">iCal feed</a> of your events, whether or not
+  <a href="{% url 'club_events_ical' club.url_key %}">iCal feed</a> of your events, whether or not
   Google Calendar is connected.
 </p>
 {% endblock %}

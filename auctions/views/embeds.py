@@ -529,7 +529,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "Your club calendar, live. Auctions, meetings, swaps and anything pulled in from "
                     "your Google Calendar. Only the name, date and place — never anything about your members."
                 ),
-                "url": base + reverse("club_events_embed", kwargs={"slug": club.slug}),
+                "url": base + reverse("club_events_embed", kwargs={"slug": club.url_key}),
                 "counts": True,
                 "max_count": CLUB_EVENTS_EMBED_MAX,
                 "default_count": 5,
@@ -543,7 +543,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "The same list looking backwards, newest first — what your club has actually "
                     "been doing. Somebody deciding whether to come to a meeting reads this one."
                 ),
-                "url": base + reverse("club_past_events_embed", kwargs={"slug": club.slug}),
+                "url": base + reverse("club_past_events_embed", kwargs={"slug": club.url_key}),
                 "counts": True,
                 "max_count": CLUB_EVENTS_EMBED_MAX,
                 "default_count": 5,
@@ -558,7 +558,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "haven't pinned any. It clears itself a day after that auction is over — until "
                     "the next one is promoted, the snippet says there's nothing on."
                 ),
-                "url": base + reverse("club_auction_embed", kwargs={"slug": club.slug}),
+                "url": base + reverse("club_auction_embed", kwargs={"slug": club.url_key}),
                 "counts": False,
                 "available": True,
             },
@@ -570,7 +570,7 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "Whatever you last announced with the Website box ticked. Defaults to one — the "
                     "usual use is a single line at the top of a home page."
                 ),
-                "url": base + reverse("club_announcements_embed", kwargs={"slug": club.slug}),
+                "url": base + reverse("club_announcements_embed", kwargs={"slug": club.url_key}),
                 "counts": True,
                 "max_count": CLUB_ANNOUNCEMENTS_EMBED_MAX,
                 "default_count": 1,
@@ -584,11 +584,11 @@ class ClubWebsiteIntegrationView(LoginRequiredMixin, ClubViewMixin, TemplateView
                     "Your current top ten. Names and points only — never emails or member numbers. "
                     "Add &program=hap or &program=cap to the URL for a separate program."
                 ),
-                "url": base + reverse("bap_embed", kwargs={"slug": club.slug}),
+                "url": base + reverse("bap_embed", kwargs={"slug": club.url_key}),
                 "counts": False,
                 "available": club.enable_breeder_award_program,
                 "unavailable_reason": "The Breeder Award Program is turned off for this club.",
-                "settings_url": reverse("club_bap_settings", kwargs={"slug": club.slug}),
+                "settings_url": reverse("club_bap_settings", kwargs={"slug": club.url_key}),
             },
             {
                 "key": "calendar",

@@ -122,6 +122,7 @@ def _label_fields(lot):
         "custom_field_1": (auction.custom_field_1_name, lot.custom_field_1),
         "custom_checkbox_label": (auction.custom_checkbox_name, lot.custom_checkbox_label),
         "custom_dropdown_label": (auction.custom_dropdown_name, lot.custom_dropdown_label),
+        "custom_random_label": (auction.custom_random_name, lot.custom_random_label),
     }
     fields = []
     for token in order:

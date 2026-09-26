@@ -21,6 +21,7 @@ from email.utils import parseaddr
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 
 from .email_routing import sender_with_display_name
@@ -444,9 +445,19 @@ def adopt_replying_address(vendor, sender, *, user=None):
 def record_incoming(vendor, *, sender, recipients, subject, body, message_id="", date=None):
     """Store an inbound message and reset the follow-up clock. Returns ``(email_row, created)``. A repeated
     Message-ID (SES retries) is ignored.
+
+    The check and the insert run under a lock on the vendor row: SES retries while the first delivery is
+    still being handled, and there is no unique constraint to fall back on (outgoing rows have no
+    Message-ID, and every empty one would collide).
     """
+    with transaction.atomic():
+        DonationVendor.objects.select_for_update().filter(pk=vendor.pk).first()
+        return _record_incoming(vendor, sender, recipients, subject, body, message_id, date)
+
+
+def _record_incoming(vendor, sender, recipients, subject, body, message_id, date):
     if message_id:
-        existing = DonationEmail.objects.filter(vendor=vendor, message_id=message_id).first()
+        existing = DonationEmail.objects.filter(vendor=vendor, message_id=message_id[:500]).first()
         if existing:
             return existing, False
     # Before the row, so the history reads in the order it happened.

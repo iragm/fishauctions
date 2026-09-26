@@ -669,6 +669,11 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                         <td class="text-nowrap"><b>{{ lot.auction.custom_dropdown_name }}:</b></td><td>{{ lot.custom_dropdown }}</td>
                     </tr>
                     {% endif %}
+                    {% if lot.custom_random_label %}
+                    <tr>
+                        <td class="text-nowrap"><b>{{ lot.auction.custom_random_name }}:</b></td><td>{{ lot.custom_random_label }}</td>
+                    </tr>
+                    {% endif %}
                     <tr>
                         <td class="text-nowrap"><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="{% url 'user_lots' %}?user={{lot.user}}{% if lot.auction %}&auction={{auction.slug}}{% endif %}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
                             <span class='badge text-dark bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge text-dark bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>

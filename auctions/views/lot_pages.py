@@ -77,8 +77,15 @@ from auctions.services import (
 from auctions.species_matching import record_choice as record_species_choice
 from auctions.species_matching import remember as remember_species
 
-from .base import AuctionViewMixin, check_club_permission, close_modal_response, safe_next_url
-from .selling import _lot_invoices, _recalculate_invoices, notify_watchers_lot_selling_soon
+from .base import (
+    AuctionViewMixin,
+    _lot_invoices,
+    _recalculate_invoices,
+    check_club_permission,
+    close_modal_response,
+    safe_next_url,
+)
+from .selling import notify_watchers_lot_selling_soon
 
 logger = logging.getLogger(__name__)
 #: Page-view history window. Also what keeps it cheap: PageView is the largest table.
@@ -806,10 +813,7 @@ class LotValidation(LoginRequiredMixin):
                 )
             else:
                 lot.auctiontos_seller = auctiontos
-                invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=lot.auction).first()
-                if not invoice:
-                    invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=lot.auction)
-                invoice.recalculate()
+                Invoice.for_participant(auctiontos, lot.auction).recalculate()
         else:
             # this lot is NOT part of an auction
             try:
@@ -962,10 +966,7 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
         """When a new lot is created, make sure to create an invoice for the seller"""
         lot = form.save(commit=False)
         if lot.auction and lot.auctiontos_seller:
-            invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
-            if not invoice:
-                invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
-            invoice.recalculate()
+            Invoice.for_participant(lot.auctiontos_seller, lot.auction).recalculate()
         result = super().form_valid(form, **kwargs)
         # Create history after lot is saved and has a lot_number_display
         if lot.auction and lot.auctiontos_seller:

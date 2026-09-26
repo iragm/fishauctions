@@ -801,7 +801,7 @@ class MembershipEmailWalletButtonTests(TestCase):
         self.assertLess(google_at, apple_at)
         self.assertIn(self.GOOGLE_URL, html)
         apple_path = reverse(
-            "club_member_apple_wallet_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.member.uuid}
+            "club_member_apple_wallet_by_uuid", kwargs={"slug": self.club.url_key, "uuid": self.member.uuid}
         )
         self.assertIn(apple_path, html)
 

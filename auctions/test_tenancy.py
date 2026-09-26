@@ -50,7 +50,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         # Autocompletes scope their own querysets to what the caller may see.
         "auction-autocomplete", "auctiontos-autocomplete", "category-autocomplete", "lot-autocomplete",
         "species-autocomplete", "club-member-merge-autocomplete", "auction_custom_dropdown_options",
-        "htmx_lot", "save_lot_ajax", "guess_category", "get_auction_info",
+        "auction_custom_random_options", "htmx_lot", "save_lot_ajax", "guess_category", "get_auction_info",
         "club-member-autocomplete",
         # Aliases of lot_by_pk; the lot page is public.
         "lot_in_auction", "lot_in_auction_with_slug",

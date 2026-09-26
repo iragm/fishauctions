@@ -1313,7 +1313,7 @@ class ClubAPIKeyUITests(TestCase):
         api_key.save(update_fields=["can_read_public_lots"])
         response = self.client.get(detail_url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/auctions/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/auctions/")
 
     def test_create_redirects_to_detail_with_raw_key_in_session(self):
         self.client.login(username="apiui_editor", password="testpass")
@@ -1394,10 +1394,10 @@ class ClubAPIKeyUITests(TestCase):
         member = ClubMember.objects.create(club=self.club, name="Endpoint Example")
         detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
         response = self.client.get(detail_url)
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/")
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/")
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/members/{member.pk}/bap-awards/")
-        self.assertContains(response, f"/api/v1/clubs/{self.club.slug}/bap-lots/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/members/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/members/{member.pk}/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/members/{member.pk}/bap-awards/")
+        self.assertContains(response, f"/api/v1/clubs/{self.club.url_key}/bap-lots/")
         self.assertContains(response, "lot_number_display")
         self.assertContains(response, "lot_id")
         self.assertContains(response, "bap_eligible")

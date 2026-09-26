@@ -297,7 +297,7 @@ def _site_domain():
 
 
 def _self_service_url(member, urlname):
-    path = reverse(urlname, kwargs={"slug": member.club.slug, "uuid": member.uuid})
+    path = reverse(urlname, kwargs={"slug": member.club.url_key, "uuid": member.uuid})
     return f"https://{_site_domain()}{path}"
 
 
@@ -567,7 +567,7 @@ def _clear_error(club):
 
 
 def _webhook_url(club):
-    path = reverse("mailchimp_webhook", kwargs={"slug": club.slug, "secret": club.mailchimp_webhook_secret})
+    path = reverse("mailchimp_webhook", kwargs={"slug": club.url_key, "secret": club.mailchimp_webhook_secret})
     return f"https://{_site_domain()}{path}"
 
 

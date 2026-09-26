@@ -14,6 +14,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import F, OuterRef, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404, render
@@ -560,7 +561,7 @@ class DonationUnsubscribeView(TemplateView):
 
 
 class InboundDonationEmailView(DRFAPIView):
-    """Webhook: record an inbound donation reply, then summarize it.
+    """Webhook: record an inbound donation reply, and queue its summary.
 
     Called by the SES Lambda for addresses :func:`~auctions.email_routing.resolve_routing_info` reports
     as ``kind == "donation"``. Authenticated with the same ``X-Routing-Secret`` as the resolve endpoint.
@@ -601,14 +602,9 @@ class InboundDonationEmailView(DRFAPIView):
         if not created:
             return Response({"status": "duplicate", "email_id": email_row.pk}, status=200)
 
-        # Summarizing is best-effort; the message is stored either way.
-        summary = donations.summarize_incoming(email_row)
-        return Response(
-            {
-                "status": "recorded",
-                "email_id": email_row.pk,
-                "vendor": vendor.name,
-                "summarized": bool(summary),
-            },
-            status=200,
-        )
+        # In a task: a model call can take longer than the Lambda waits, and a timed-out POST is
+        # retried by SES. Summarizing is best-effort; the message is stored either way.
+        from .tasks import summarize_donation_email
+
+        transaction.on_commit(lambda: summarize_donation_email.delay(email_row.pk))
+        return Response({"status": "recorded", "email_id": email_row.pk, "vendor": vendor.name}, status=200)

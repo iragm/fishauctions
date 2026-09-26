@@ -43,7 +43,7 @@
     {% endif %}
     {% if apple_wallet_enabled and member.club.show_member_barcode %}
       {% if request.mobile_app_platform != 'android' %}
-      <a class="btn btn-dark btn-sm" href="{% url 'club_member_apple_wallet_by_uuid' slug=club.slug uuid=member.uuid %}">
+      <a class="btn btn-dark btn-sm" href="{% url 'club_member_apple_wallet_by_uuid' slug=club.url_key uuid=member.uuid %}">
         <i class="bi bi-apple"></i> Add to Apple Wallet
       </a>
       {% endif %}

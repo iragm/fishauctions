@@ -15,6 +15,7 @@ from rest_framework import serializers
 from .models import (
     Auction,
     AuctionDropdown,
+    AuctionRandomOption,
     AuctionTOS,
     BapAward,
     ClubMember,
@@ -667,6 +668,7 @@ class ClubApiLotSerializer(SparseFieldsMixin, PrivateBlockMixin, serializers.Mod
             "custom_checkbox",
             "custom_field_1",
             "custom_dropdown",
+            "custom_random",
             "i_bred_this_fish",
             "donation",
             "reference_link",
@@ -762,6 +764,11 @@ class ClubApiAuctionSerializer(PrivateBlockMixin, serializers.ModelSerializer):
             "custom_dropdown_name": obj.custom_dropdown_name or "",
             "custom_dropdown_options": list(
                 AuctionDropdown.objects.filter(auction=obj).order_by("createdon").values_list("value", flat=True)
+            ),
+            "use_custom_random_field": obj.use_custom_random_field,
+            "custom_random_name": obj.custom_random_name or "",
+            "custom_random_options": list(
+                AuctionRandomOption.objects.filter(auction=obj).order_by("createdon").values_list("value", flat=True)
             ),
         }
 

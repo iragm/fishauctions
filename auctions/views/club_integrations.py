@@ -46,11 +46,14 @@ from auctions.models import (
 )
 from auctions.services import attachment_filename
 
-from .base import ClubViewMixin, browser_timezone, check_club_permission
+from .base import ClubViewMixin, browser_timezone, check_club_permission, club_from_url
 from .payments import SquareAPIMixin
 
 #: The club being connected, carried in the session across the Mailchimp round trip.
 MAILCHIMP_OAUTH_CLUB_SESSION_KEY = "mailchimp_oauth_club_slug"
+#: A fresh random OAuth state per connect, kept in the session. It used to be the user's unsubscribe
+#: UUID, which is printed in the footer of every email they get.
+MAILCHIMP_OAUTH_STATE_SESSION_KEY = "mailchimp_oauth_state"
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +71,13 @@ class MailchimpConnectView(LoginRequiredMixin, View):
             return redirect(config_url)
         # The callback has no slug.
         request.session[MAILCHIMP_OAUTH_CLUB_SESSION_KEY] = club.slug
+        state = secrets.token_urlsafe(32)
+        request.session[MAILCHIMP_OAUTH_STATE_SESSION_KEY] = state
         params = {
             "response_type": "code",
             "client_id": settings.MAILCHIMP_CLIENT_ID,
             "redirect_uri": request.build_absolute_uri(reverse("mailchimp_callback")),
-            # The per-user unsubscribe UUID as OAuth state, same as Square.
-            "state": request.user.userdata.unsubscribe_link,
+            "state": state,
         }
         return redirect("https://login.mailchimp.com/oauth2/authorize?" + urlencode(params))
 
@@ -97,8 +101,9 @@ class MailchimpCallbackView(LoginRequiredMixin, View):
             return redirect(config_url)
 
         code = request.GET.get("code")
-        state = request.GET.get("state")
-        if not code or state != request.user.userdata.unsubscribe_link:
+        state = request.GET.get("state") or ""
+        expected_state = request.session.pop(MAILCHIMP_OAUTH_STATE_SESSION_KEY, "")
+        if not code or not expected_state or not secrets.compare_digest(state, expected_state):
             messages.error(request, "Invalid Mailchimp authorization response. Please try again.")
             return redirect(config_url)
 
@@ -655,7 +660,9 @@ class ClubEventsICalView(View):
     """Public iCal feed of a club's events at /clubs/<slug>/events.ics, Google connected or not."""
 
     def get(self, request, slug):
-        club = get_object_or_404(Club, slug=slug)
+        club = club_from_url(slug)
+        if club is None:
+            raise Http404
         upcoming, past = club_events.upcoming_events(club, include_past=True, past_limit=25)
         domain = Site.objects.get_current().domain
         lines = [
@@ -747,7 +754,7 @@ class MailchimpWebhookView(View):
         return super().dispatch(*args, **kwargs)
 
     def _get_club(self, slug, secret):
-        club = Club.objects.filter(slug=slug).first()
+        club = club_from_url(slug)
         if not club or not club.mailchimp_webhook_secret:
             return None
         # Constant-time: the path secret is the only authentication.
@@ -776,9 +783,12 @@ class MailchimpWebhookView(View):
             old_email = request.POST.get("data[old_email]") or request.POST.get("data[email]")
             new_email = request.POST.get("data[new_email]")
             if old_email and new_email:
-                # Local only, not a site account change.
+                # Local only, not a site account change. Saved one by one, not update(): the member's
+                # save is what carries the address onto their auction rows and to Brevo.
                 renamed = list(members.filter(email__iexact=old_email))
-                members.filter(email__iexact=old_email).update(email=new_email)
+                for member in renamed:
+                    member.email = new_email
+                    member.save(update_fields=["email"])
                 _log_esp_member_events(
                     club, renamed, lambda member: f"{member} changed their email to {new_email} via Mailchimp"
                 )
@@ -811,7 +821,7 @@ class ClubMemberSelfServiceView(View):
     def _get_member(self, slug, uuid):
         from auctions.models import ClubMember
 
-        return get_object_or_404(ClubMember, uuid=uuid, club__slug=slug, is_deleted=False)
+        return get_object_or_404(ClubMember, uuid=uuid, club=club_from_url(slug), is_deleted=False)
 
     def get(self, request, slug, uuid):
         # GET only renders a confirmation; link scanners GET links, so the write is in post().
@@ -1128,7 +1138,7 @@ class BrevoWebhookView(View):
         return super().dispatch(*args, **kwargs)
 
     def _get_club(self, slug, secret):
-        club = Club.objects.filter(slug=slug).first()
+        club = club_from_url(slug)
         if not club or not club.brevo_webhook_secret:
             return None
         # Constant-time: the path secret is the only authentication.

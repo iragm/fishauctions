@@ -151,9 +151,12 @@ function initMap() {
             to deliver one link.{% endcomment %}
             <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
               <span class="d-none d-md-inline"><i class="bi bi-star"></i> Pin this auction to {{ auction.club.name }}'s sidebar.</span>
-              <a href="{% url 'auction_main' slug=auction.slug %}?make_current_auction=true" class="btn btn-sm btn-info">
-                <i class="bi bi-pin-angle"></i> Make this the current club auction
-              </a>
+              <form method="post" action="{% url 'club_detail' slug=auction.club.slug %}?next={{ auction.get_absolute_url|urlencode }}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="make_current">
+                <input type="hidden" name="auction" value="{{ auction.pk }}">
+                <button type="submit" class="btn btn-sm btn-info"><i class="bi bi-pin-angle"></i> Make this the current club auction</button>
+              </form>
             </div>
             {% endif %}
 

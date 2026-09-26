@@ -217,8 +217,9 @@ Rules:
 ## Prompt injection: three bounds
 
 1. A write still needs a permission its owner genuinely holds.
-2. **No tool changes more than one row, ever.** No bulk writes — "unmark everyone" is `list_people`
-   then one `undo_check_in` per person.
+2. **No tool writes over a filter.** "Unmark everyone" is `list_people` then one `undo_check_in` per
+   person. One row per call is a guideline, not this bound: `add_lots` takes up to 40 lots, named one
+   by one.
 3. `mcp.auth.within_write_budget` — 2000 writes/credential/hour, counting attempted writes.
    `DEFAULT_RATE_LIMIT` (3000 requests) must stay above it.
 
@@ -313,11 +314,11 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   argument is "hard to say out loud" isn't one.
   `test_palette_skills.PageOnlyWriteRegistryTests` fails the build on all three.
 - Two gaps in that guarantee. `palette_actions.postable_views()` requires `hasattr(view, "post")`, so
-  `CreateUserIgnoreCategory`/`DeleteUserIgnoreCategory` (which write in `get()`, no URL name) are in
-  none of `postable_views()`, `NOT_A_SKILL` or `palette_routes.EXCLUDED`. And it reads only
-  `palette_actions.AUDITED_VIEW_MODULES` — `auctions.views` and `auctions.donation_views`; the latter
-  was added when the donation skills arrived, having held five user-facing writes in none of the three
-  tables. `app_links`, `apple_notifications` and `passkit_views` are still outside it.
+  a view that writes in `get()` is invisible to it (none should: a link or an `<img>` can fire a GET).
+  And it reads only `palette_actions.AUDITED_VIEW_MODULES` — `auctions.views` and
+  `auctions.donation_views`; the latter was added when the donation skills arrived, having held five
+  user-facing writes in none of the three tables. `app_links`, `apple_notifications` and
+  `passkit_views` are still outside it.
 - `request_a_skill` records what an agent couldn't do; `/admin-dashboard/assistant-requests/` is the
   queue, ordered by distinct askers. Row content is model-written: displayed, escaped, never executed.
 - `docs/mcp_next.md` is the standing list of unused spec features, including what's already rejected.

@@ -1181,7 +1181,7 @@ class ClubBarcodeViewTests(TestCase):
         # membership_number is auto-generated as a 10-digit string
         self.assertTrue(member.membership_number)
         link = member.barcode_image_link
-        self.assertIn(f"/clubs/{self.club.slug}/barcode/{int(member.membership_number)}/", link)
+        self.assertIn(f"/clubs/{self.club.url_key}/barcode/{int(member.membership_number)}/", link)
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):

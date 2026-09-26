@@ -739,7 +739,7 @@ class ClubAPIToolTests(AccountTestCase):
     def test_a_topic_hands_over_the_documentation_the_page_shows(self):
         result = self._run("club_api", {"club": self.club.name, "topic": "auctions"})
         documentation = result["documentation"]
-        self.assertIn(f"/api/v1/clubs/{self.club.slug}/auctions/", documentation)
+        self.assertIn(f"/api/v1/clubs/{self.club.url_key}/auctions/", documentation)
         self.assertIn("X-API-Key", documentation)
         # One topic, not the whole page: the species endpoints are a different call.
         self.assertNotIn("species-lookup", documentation)

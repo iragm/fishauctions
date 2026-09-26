@@ -27,6 +27,7 @@ LABEL_TAG_FIELDS = (
     "buy_now_label",
     "custom_checkbox_label",
     "custom_dropdown_label",
+    "custom_random_label",
     "i_bred_this_fish_label",
     "auction_date",
 )

@@ -26,7 +26,6 @@ from auctions.models import (
     AuctionTOS,
     Invoice,
     Lot,
-    LotHistory,
     MobileOfflineOp,
     PickupLocation,
     note_email_if_unusable,
@@ -343,10 +342,7 @@ class _OpApplier:
                     lot.lot_number_int = number
         lot.save()
 
-        invoice = Invoice.objects.filter(auctiontos_user=seller, auction=self.auction).first()
-        if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=seller, auction=self.auction)
-        invoice.recalculate()
+        Invoice.for_participant(seller, self.auction).recalculate()
         self.auction.create_history(applies_to="LOTS", action=f"Bulk added 1 lots for {seller.name}", user=self.user)
 
         echo = {"lot_number": _lot_number_display(self.auction, lot)}
@@ -417,24 +413,7 @@ class _OpApplier:
 
     def _end_unsold(self, lot):
         """Mirror DynamicSetLotWinner.end_unsold: mark unsold, history, websocket."""
-        lot.date_end = timezone.now()
-        lot.winner = None
-        lot.auctiontos_winner = None
-        lot.winning_price = None
-        lot.active = False
-        lot.save()
-        message = f"{self.user} has marked lot {lot.lot_number_display} as not sold"
-        LotHistory.objects.create(lot=lot, user=self.user, message=message, changed_price=True)
-        lot.send_websocket_message(
-            {
-                "type": "chat_message",
-                "info": "ENDED_NO_WINNER",
-                "message": message,
-                "high_bidder_pk": None,
-                "high_bidder_name": None,
-                "current_high_bid": None,
-            }
-        )
+        lot.end_unsold(self.user)
         self.auction.create_history(
             applies_to="LOTS",
             action=f"Marked lot {lot.lot_number_display} as ended without being sold",

@@ -68,6 +68,7 @@ from .base import (
     auctions_available_for_contact_autofill,
     check_club_permission,
     close_modal_response,
+    club_from_url,
     club_ids_available_for_contact_autofill,
 )
 
@@ -973,10 +974,10 @@ class ClubMemberResendCardView(APIView):
 
 
 class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
-    """Serve a signed .pkpass for a member.
+    """Serve a signed .pkpass to the member's own signed-in account.
 
-    Only the member's own account may download it: UUID renewal links must not reach somebody else's
-    card. Same check as the Google Wallet save URL.
+    Emailed links use :class:`ClubMemberAppleWalletByUUIDView` instead, where the member UUID is the
+    capability. The 10-digit membership number is weaker and only ever reaches renewal.
     """
 
     def get(self, request, pk):
@@ -1007,7 +1008,7 @@ class ClubMemberAppleWalletByUUIDView(View):
 
         if not is_configured():
             raise Http404
-        member = get_object_or_404(ClubMember, club__slug=slug, uuid=uuid, is_deleted=False)
+        member = get_object_or_404(ClubMember, club=club_from_url(slug), uuid=uuid, is_deleted=False)
         if not member.club.show_member_barcode:
             raise Http404
         member.update_last_club_activity()

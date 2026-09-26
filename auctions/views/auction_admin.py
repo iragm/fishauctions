@@ -59,6 +59,7 @@ from auctions.models import (
     Auction,
     AuctionDropdown,
     AuctionHistory,
+    AuctionRandomOption,
     AuctionTOS,
     ClubMember,
     Invoice,
@@ -404,7 +405,20 @@ class AuctionCustomFieldsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionVi
         context = super().get_context_data(**kwargs)
         context["title"] = f"{self.auction} - Custom fields"
         context["auction"] = self.auction
-        context["dropdown_options"] = AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon")
+        context["option_lists"] = [
+            {
+                "id": "custom-dropdown-options",
+                "title": "Custom dropdown options",
+                "url": reverse("auction_custom_dropdown_options", kwargs={"slug": self.auction.slug}),
+                "options": AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon"),
+            },
+            {
+                "id": "custom-random-options",
+                "title": "Custom random options",
+                "url": reverse("auction_custom_random_options", kwargs={"slug": self.auction.slug}),
+                "options": AuctionRandomOption.objects.filter(auction=self.auction).order_by("createdon"),
+            },
+        ]
         context["custom_dropdown_max_length"] = CUSTOM_DROPDOWN_MAX_LENGTH
         return context
 
@@ -415,12 +429,19 @@ class AuctionCustomFieldsUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionVi
             messages.error(
                 self.request, "Custom dropdown requires a name and at least two options. It has been disabled."
             )
+        if getattr(form, "custom_random_auto_disabled", False):
+            messages.error(
+                self.request, "Custom random field requires a name and at least two options. It has been disabled."
+            )
         return super().form_valid(form)
 
 
 class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
+    """List, add, rename and remove one of an auction's option lists; admins only for writes."""
+
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
+    option_model = AuctionDropdown
 
     def dispatch(self, request, *args, **kwargs):
         # APIView.dispatch skips AuctionViewMixin.dispatch, so set self.auction here.
@@ -429,7 +450,7 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
 
     def get(self, request, *args, **kwargs):
         options = list(
-            AuctionDropdown.objects.filter(auction=self.auction)
+            self.option_model.objects.filter(auction=self.auction)
             .order_by("createdon")
             .values("id", "value", "user_id", "createdon")
         )
@@ -449,14 +470,14 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
                 return JsonResponse(
                     {"success": False, "error": f"Option value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"}
                 )
-            if AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exists():
+            if self.option_model.objects.filter(auction=self.auction, value__iexact=value).exists():
                 return JsonResponse({"success": False, "error": "That option already exists"})
-            option = AuctionDropdown.objects.create(auction=self.auction, user=request.user, value=value)
+            option = self.option_model.objects.create(auction=self.auction, user=request.user, value=value)
             return JsonResponse({"success": True, "option": {"id": option.pk, "value": option.value}})
 
         if not str(option_id or "").isdigit():
             return JsonResponse({"success": False, "error": "Option id is required"})
-        option = AuctionDropdown.objects.filter(pk=option_id, auction=self.auction).first()
+        option = self.option_model.objects.filter(pk=option_id, auction=self.auction).first()
         if not option:
             return JsonResponse({"success": False, "error": "Option not found"})
         option.user = request.user
@@ -468,7 +489,9 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
                 return JsonResponse(
                     {"success": False, "error": f"Option value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"}
                 )
-            duplicate = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exclude(pk=option.pk)
+            duplicate = self.option_model.objects.filter(auction=self.auction, value__iexact=value).exclude(
+                pk=option.pk
+            )
             if duplicate.exists():
                 return JsonResponse({"success": False, "error": "That option already exists"})
             option.value = value
@@ -478,6 +501,12 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
             option.delete()
             return JsonResponse({"success": True})
         return JsonResponse({"success": False, "error": "Invalid action"})
+
+
+class AuctionRandomOptionsAPI(AuctionDropdownOptionsAPI):
+    """The options ``Lot.custom_random`` is dealt from."""
+
+    option_model = AuctionRandomOption
 
 
 class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
@@ -580,6 +609,13 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["auction"] = self.auction
         return kwargs
+
+    def get_possible_filters(self):
+        # LotAdminFilter.STATUS_KEYWORDS
+        return [
+            ("<i class='bi bi-hourglass-split'></i> Active unsold", "active_unsold"),
+            ("<i class='bi bi-slash-circle'></i> Ended unsold", "ended_unsold"),
+        ]
 
 
 class AuctionHelp(LoginRequiredMixin, AuctionViewMixin, TemplateView):
@@ -980,7 +1016,7 @@ class AuctionBarcodeScan(LoginRequiredMixin, AuctionViewMixin, View):
                 status=400,
             )
         if not invoice:
-            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+            invoice = Invoice.for_participant(tos, self.auction)
         InvoiceAdjustment.objects.create(
             invoice=invoice,
             user=acting_user,
