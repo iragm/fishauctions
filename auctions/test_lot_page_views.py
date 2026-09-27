@@ -16,7 +16,6 @@ Four things are worth stating, because getting any wrong is silent:
 
 import json
 from datetime import timedelta
-from unittest import mock
 
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
@@ -323,24 +322,6 @@ class SellingDashboardPageViewHistoryTests(StandardTestCase):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(self.url).context["history"]["total_views"], 1)
         _view_on(self.lot, 0, user=self.user_with_no_lots)
-        self.assertEqual(self.client.get(self.url).context["history"]["total_views"], 1)
-
-    def test_loading_the_dashboard_queues_it_once(self):
-        self.client.force_login(self.user)
-        with mock.patch("auctions.tasks.warm_selling_page_view_history.delay") as delay:
-            with self.captureOnCommitCallbacks(execute=True):
-                self.client.get(reverse("selling"))
-            with self.captureOnCommitCallbacks(execute=True):
-                self.client.get(reverse("selling"))
-        delay.assert_called_once_with(self.user.pk)
-
-    def test_the_queued_task_is_what_the_button_serves(self):
-        from auctions.tasks import warm_selling_page_view_history
-
-        _view_on(self.lot, 0, user=self.user_with_no_lots)
-        warm_selling_page_view_history(self.user.pk)
-        _view_on(self.lot, 0, user=self.user_with_no_lots)
-        self.client.force_login(self.user)
         self.assertEqual(self.client.get(self.url).context["history"]["total_views"], 1)
 
     def test_the_button_is_on_the_selling_dashboard(self):

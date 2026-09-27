@@ -18,7 +18,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import transaction
 from django.db.models import (
     Count,
     Q,
@@ -104,7 +103,7 @@ PAGE_VIEW_HISTORY_CHART_SOURCES = 6
 PAGE_VIEW_HISTORY_MIN_Y = 4
 PAGE_VIEW_HISTORY_Y_TICKS = 4
 
-#: How long the selling dashboard's history is reused, as auction stats are (AuctionStatsView).
+#: How long the selling dashboard's history is reused before a click counts it again.
 SELLING_PAGE_VIEW_HISTORY_SECONDS = 20 * 60
 
 
@@ -251,48 +250,24 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
         )
 
 
-def _selling_history_cache_key(user_pk):
-    return f"selling_page_view_history:{user_pk}"
-
-
-def selling_page_view_history(user_pk):
-    """The 15 days totalled over every lot this user sells (matched as ``UserLotFilter`` does), stored for
-    :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`.
-
-    The lot ids go in as a list, not a subquery: MariaDB has planned a subquery over PageView as a full
-    scan before (``Auction.unique_views``).
-    """
-    lot_ids = list(
-        Lot.objects.exclude(is_deleted=True)
-        .filter(Q(user_id=user_pk) | Q(auctiontos_seller__user_id=user_pk))
-        .order_by()
-        .values_list("pk", flat=True)
-    )
-    history = page_view_history(PageView.objects.filter(lot_number_id__in=lot_ids))
-    cache.set(_selling_history_cache_key(user_pk), history, SELLING_PAGE_VIEW_HISTORY_SECONDS)
-    return history
-
-
-def warm_selling_page_view_history(user_pk):
-    """Compute the selling history in Celery when the dashboard loads, so the button finds it ready."""
-    key = _selling_history_cache_key(user_pk)
-    if cache.get(key) is not None:
-        return
-    # One queued task per seller at a time.
-    if not cache.add(f"{key}:queued", True, SELLING_PAGE_VIEW_HISTORY_SECONDS):
-        return
-    from auctions.tasks import warm_selling_page_view_history as task
-
-    transaction.on_commit(lambda: task.delay(user_pk))
-
-
 class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
-    """The selling dashboard's history modal. Usually served from what the dashboard warmed."""
+    """The same 15 days totalled over the requesting user's lots (matched as ``UserLotFilter`` does), as a
+    subquery so the PageView query stays owner-bounded. Kept per user for
+    :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`, so only the first click waits for it.
+    """
 
     def get(self, request):
-        history = cache.get(_selling_history_cache_key(request.user.pk))
+        key = f"selling_page_view_history:{request.user.pk}"
+        history = cache.get(key)
         if history is None:
-            history = selling_page_view_history(request.user.pk)
+            lots = (
+                Lot.objects.exclude(is_deleted=True)
+                .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
+                .order_by()
+                .values("pk")
+            )
+            history = page_view_history(PageView.objects.filter(lot_number__in=lots))
+            cache.set(key, history, SELLING_PAGE_VIEW_HISTORY_SECONDS)
         return render(
             request,
             "auctions/page_view_history_modal.html",

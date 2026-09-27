@@ -720,7 +720,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                         sets this flag and what the modal's own view checks again.
                         {% endcomment %}
                         {% if show_page_view_history %}
-                            <button class="btn btn-sm btn-primary ms-1" type="button" hx-get="{% url 'lot_page_view_history' pk=lot.pk %}" hx-target="#modals-here" hx-trigger="click" aria-label="Show the last 15 days of views on this lot">15 day history <i class="bi bi-graph-up"></i></button>
+                            <button class="btn btn-sm btn-primary ms-1" type="button" hx-get="{% url 'lot_page_view_history' pk=lot.pk %}" hx-target="#modals-here" hx-trigger="click" aria-label="Show the last 15 days of views on this lot">15 day history <i class="bi bi-graph-up htmx-busy-hide"></i><span class="spinner-border spinner-border-sm htmx-busy-show" aria-hidden="true"></span></button>
                         {% endif %}
                         {% comment %}
                         The seller of a lot in an in-person auction gets the full per-source
