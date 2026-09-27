@@ -1054,6 +1054,7 @@ class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):
                 user=self.request.user,
                 form=form,
             )
+            self.object.reroll_custom_random_on_edit(self.request.user)
         return result
 
 

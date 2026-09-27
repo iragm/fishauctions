@@ -123,6 +123,52 @@ class DealingTests(CustomRandomTestCase):
         )
 
 
+class RerollOnEditTests(CustomRandomTestCase):
+    def setUp(self):
+        super().setUp()
+        self.switch_on("A", "B")
+        self.lot = self.new_lot()
+        Lot.objects.filter(auction=self.auction).update(custom_random="A", label_printed=True)
+        self.lot.refresh_from_db()
+
+    def reroll(self, user=None, chance=1.0):
+        with patch("auctions.models.CUSTOM_RANDOM_REROLL_CHANCE", chance):
+            self.lot.reroll_custom_random_on_edit(user or self.user)
+        self.lot.refresh_from_db()
+
+    def test_a_reroll_deals_again_flags_the_label_and_is_in_the_history(self):
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "B")
+        self.assertTrue(self.lot.label_needs_reprinting)
+        self.assertTrue(
+            AuctionHistory.objects.filter(
+                auction=self.auction,
+                action=f"Lot {self.lot.lot_number_display}'s Table re-dealt from A to B after an edit",
+            ).exists()
+        )
+
+    def test_most_edits_leave_it_alone(self):
+        self.reroll(chance=0)
+        self.assertEqual(self.lot.custom_random, "A")
+        self.assertFalse(self.lot.label_needs_reprinting)
+
+    def test_only_the_sellers_edits_reroll(self):
+        self.reroll(user=self.user_with_no_lots)
+        self.assertEqual(self.lot.custom_random, "A")
+
+    def test_editing_over_mcp_rolls(self):
+        request = RequestFactory().post("/")
+        request.user = self.user
+        request.palette_page = {}
+        with patch("auctions.models.CUSTOM_RANDOM_REROLL_CHANCE", 1.0):
+            result = palette_actions.run_action(
+                request, "edit_lot", {"auction": self.auction.slug, "lot": self.lot.lot_number_display, "quantity": 2}
+            )
+        self.assertTrue(result.get("ok"), result)
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.custom_random, "B")
+
+
 class NobodyEditsItTests(CustomRandomTestCase):
     def test_no_lot_form_has_it(self):
         self.assertNotIn("custom_random", CreateLotForm.base_fields)

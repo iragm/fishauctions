@@ -89,6 +89,8 @@ from .moderation_models import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
+# A seller's edit re-deals the lot's custom random option this often; see Lot.reroll_custom_random_on_edit.
+CUSTOM_RANDOM_REROLL_CHANCE = 0.25
 
 # The privacy policy is a BlogPost so it can be edited without a deploy; /privacy/, /blog/privacy/
 # and the app's sign-up link all use this slug.
@@ -6051,15 +6053,15 @@ class Auction(CachedPropertiesMixin, models.Model):
             midpoint = "end"
         return before + [midpoint] + after
 
-    def custom_random_counts(self, options):
-        """How many live lots here hold each of *options*, keyed by the option lowercased."""
+    def custom_random_counts(self, options, exclude=None):
+        """How many live lots here, other than *exclude*, hold each of *options*, keyed by the option
+        lowercased.
+        """
         counts = {option.lower(): 0 for option in options}
-        held = (
-            Lot.objects.filter(auction=self, is_deleted=False)
-            .values_list("custom_random")
-            .annotate(n=Count("pk"))
-            .order_by()
-        )
+        lots = Lot.objects.filter(auction=self, is_deleted=False)
+        if exclude is not None:
+            lots = lots.exclude(pk=exclude.pk)
+        held = lots.values_list("custom_random").annotate(n=Count("pk")).order_by()
         for value, n in held:
             if value.lower() in counts:
                 counts[value.lower()] += n
@@ -8197,6 +8199,39 @@ class Lot(CachedPropertiesMixin, models.Model):
         if tos.user_id and tos.user_id == user.pk:
             return True
         return bool(tos.email) and normalize_email(tos.email) == normalize_email(user.email)
+
+    def reroll_custom_random_on_edit(self, user):
+        """After *user* edits this lot, re-deal its ``custom_random`` with :data:`CUSTOM_RANDOM_REROLL_CHANCE`
+        when *user* is the seller. Moving what's on a lot onto the option a seller wanted then only
+        sometimes sticks, and every change lands in the auction history, so editing until an option comes
+        up is easy to spot.
+        """
+        auction = self.auction
+        if not (auction and auction.use_custom_random_field and self.custom_random and self.is_owned_by(user)):
+            return
+        if secrets.SystemRandom().random() >= CUSTOM_RANDOM_REROLL_CHANCE:
+            return
+        options = list(
+            AuctionRandomOption.objects.filter(auction=auction).order_by("pk").values_list("value", flat=True)
+        )
+        if not options:
+            return
+        old = self.custom_random
+        new = auction.pick_custom_random(options, auction.custom_random_counts(options, exclude=self))
+        if new == old:
+            return
+        self.custom_random = new
+        if self.label_printed:
+            self.label_needs_reprinting = True
+        Lot.objects.filter(pk=self.pk).update(
+            custom_random=self.custom_random, label_needs_reprinting=self.label_needs_reprinting
+        )
+        auction.create_history(
+            applies_to="LOTS",
+            action=f"Lot {self.lot_number_display}'s {auction.custom_random_name or 'custom random field'} "
+            f"re-dealt from {old} to {new} after an edit",
+            user=user,
+        )
 
     def image_permission_check(self, user):
         """See if `user` can add/edit images to this lot"""

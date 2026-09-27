@@ -5901,6 +5901,7 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         action=f"Edited {told} on lot {lot.lot_number_display} {via(request)}",
         user=user,
     )
+    lot.reroll_custom_random_on_edit(user)
     undo_params: dict[str, Any] = {"lot_id": lot.pk}
     for key, value in previous.items():
         if value in (None, ""):

@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13954 lines)
+- **`models.py`** (13989 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -186,7 +186,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15030 lines)
+- **`palette_actions.py`** (15031 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
@@ -349,9 +349,9 @@ this only quotes its opening sentence.
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
   `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`
-- **`test_custom_random.py`** (300 lines)
+- **`test_custom_random.py`** (346 lines)
   The custom random field: an auction's option list that each lot is dealt from, and nobody edits.
-  `CustomRandomTestCase`, `DealingTests`, `NobodyEditsItTests`, `ShownPrintedAndSearchedTests`, `OptionsAPITests`, `OptionsOverMCPTests`
+  `CustomRandomTestCase`, `DealingTests`, `RerollOnEditTests`, `NobodyEditsItTests`, `ShownPrintedAndSearchedTests`, `OptionsAPITests`, `OptionsOverMCPTests`
 - **`test_data_leak_penetration.py`** (259 lines)
   Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin.
   `DataLeakPenetrationTests`
@@ -853,7 +853,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`bulk_add.py`** (909 lines)
   Bulk-adding people: bulk add users, and a club's shared spreadsheet.
   `CSVContactImportMixin`, `BulkAddUsers`, `ImportFromGoogleDrive`
-- **`bulk_add_lots.py`** (960 lines)
+- **`bulk_add_lots.py`** (963 lines)
   Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
 - **`club_admin.py`** (1063 lines)
@@ -886,7 +886,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (394 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1317 lines)
+- **`lot_pages.py`** (1318 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (217 lines)
   The copyright policy page, the notice form, and the report button on a lot.

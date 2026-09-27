@@ -597,6 +597,9 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                         action=f"edited lot #{lot.lot_number_display}: {lot.lot_name}",
                         applies_to="LOTS",
                     )
+                    # Autosave saves every field of a row as it is typed, so a lot is only an edit once
+                    # it has been left alone as long as the history above waits.
+                    lot.reroll_custom_random_on_edit(request.user)
 
             # Update invoice
             invoice = Invoice.for_participant(self.tos, self.auction)
