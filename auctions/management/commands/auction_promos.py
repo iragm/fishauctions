@@ -3,14 +3,15 @@
 This replaced the weekly promo email. An auction is promoted inside a window:
 
 - in person: from a week before it starts until it starts;
-- online: from a day after bidding opens (so there are lots to look at) until bidding ends. An
-  online auction with no end date is never promoted: its window would never close;
+- online: from a day after bidding opens (so there are lots to look at) until bidding ends, and
+  never once bidding has been open 30 days. An online auction with no end date is never promoted;
 
 and never sooner than a day after it was created, which gives its organizer time to fix it. Clubs'
 other events (meetings, swaps) are never promoted.
 
 A user hears about it when they ticked the preference for that kind of auction, one of its pickup
-locations is inside their distance, and they aren't already in it, running it or banned from it.
+locations is inside their distance, and they didn't join it themselves, aren't running it and
+aren't banned from it. Somebody an admin added by hand is still told.
 Emails only go to people who haven't been on the site in six days (anybody who has already knows
 what's on near them) but have been in the last 400 (anybody older is gone).
 
@@ -64,6 +65,9 @@ SETTLE = datetime.timedelta(hours=24)
 IN_PERSON_LEAD = datetime.timedelta(days=7)
 #: How long an online auction's bidding runs before people are told, so there is something to bid on.
 ONLINE_DELAY = datetime.timedelta(hours=24)
+#: An online auction whose bidding opened longer ago than this is never promoted, whatever its end
+#: date says: a mistyped end year would otherwise keep an old auction's window open for years.
+ONLINE_MAX_AGE = datetime.timedelta(days=30)
 #: Email only: somebody on the site this recently already knows what's running.
 ACTIVE_WITHIN = datetime.timedelta(days=6)
 #: Email only: somebody not seen for this long has left.
@@ -99,7 +103,12 @@ def promotion_window(auction):
 def auctions_to_promote(now):
     """Promoted auctions whose window is open now, the soonest to close first."""
     in_person = Q(is_online=False, date_start__gt=now, date_start__lte=now + IN_PERSON_LEAD)
-    online = Q(is_online=True, date_start__lte=now - ONLINE_DELAY, date_end__gt=now)
+    online = Q(
+        is_online=True,
+        date_start__lte=now - ONLINE_DELAY,
+        date_start__gte=now - ONLINE_MAX_AGE,
+        date_end__gt=now,
+    )
     auctions = Auction.objects.filter(
         in_person | online,
         is_deleted=False,
@@ -135,7 +144,8 @@ def is_send_time(userdata, now, closes):
 
 def recipients(auction):
     """``(userdata, distance, nearest pickup location)`` for everybody near enough who wants this kind of
-    auction and hasn't been told about it, and isn't in it, running it or banned from it."""
+    auction and hasn't been told about it, and didn't join it themselves, isn't running it and isn't
+    banned from it."""
     if auction.is_online:
         wants, radius = "email_me_about_new_auctions", "email_me_about_new_auctions_distance"
     else:
@@ -143,10 +153,9 @@ def recipients(auction):
     told = AuctionCampaign.objects.filter(auction=auction, kind=AuctionCampaign.KIND_PROMO, user__isnull=False)
     # Pushed by promo_push_notifications before this job replaced it.
     pushed = PushNotificationSent.objects.filter(category=CATEGORY_PROMO, auction=auction)
-    joined = AuctionTOS.objects.filter(auction=auction)
-    # A participant added by email is linked to the account only when they next sign in, and the
-    # people this emails are the ones who haven't.
-    joined_emails = joined.exclude(email__isnull=True).exclude(email="").values("email")
+    # Only people who joined themselves. Somebody an admin added by hand hasn't read the rules or
+    # seen the auction, so they are told like anybody else.
+    joined = AuctionTOS.objects.filter(auction=auction, user__isnull=False).exclude(manually_added=True)
     admins = auction.auction_admins_user_pks
     banned = UserBan.objects.filter(user__pk__in=admins).values("banned_user")
     candidates = (
@@ -161,8 +170,7 @@ def recipients(auction):
         .exclude(latitude=0, longitude=0)
         .exclude(user__in=told.values("user"))
         .exclude(user__in=pushed.values("user"))
-        .exclude(user__in=joined.filter(user__isnull=False).values("user"))
-        .exclude(user__email__in=joined_emails)
+        .exclude(user__in=joined.values("user"))
         .exclude(user__in=banned)
         .exclude(user__in=admins)
         .select_related("user")

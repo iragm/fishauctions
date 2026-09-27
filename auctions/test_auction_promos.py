@@ -266,13 +266,36 @@ class AudienceTests(AuctionPromosTestCase):
         self.assertEqual(len(send.call_args_list), 1)
         self.assertNotEqual(send.call_args.kwargs["context"]["auction"], far)
 
-    def test_somebody_added_to_the_auction_by_email_is_not_told(self):
+    def test_somebody_an_admin_added_by_hand_is_still_told(self):
         auction = self.make_auction(starts=NOW + 5 * DAY)
         AuctionTOS.objects.create(
-            auction=auction, email="FAN@example.com", pickup_location=auction.pickuplocation_set.first(), name="Fan"
+            auction=auction,
+            user=self.fan,
+            email=self.fan.email,
+            manually_added=True,
+            pickup_location=auction.pickuplocation_set.first(),
+            name="Fan",
         )
         send, _ = self.run_job()
+        self.assertEqual(self.emailed(send), [self.fan.email])
+
+    def test_an_online_auction_open_for_over_a_month_is_not_announced(self):
+        self.make_auction(is_online=True, starts=NOW - 40 * DAY, ends=NOW + 400 * DAY)
+        send, _ = self.run_job()
         send.assert_not_called()
+
+    def test_only_accounts_are_told(self):
+        """An AuctionTOS with no account behind it is never a recipient: the job reads UserData only."""
+        auction = self.make_auction(starts=NOW + 5 * DAY)
+        AuctionTOS.objects.create(
+            auction=auction,
+            email="no-account@example.com",
+            manually_added=True,
+            pickup_location=auction.pickuplocation_set.first(),
+            name="Walk-in",
+        )
+        send, _ = self.run_job()
+        self.assertEqual(self.emailed(send), [self.fan.email])
 
     def test_somebody_the_organizer_banned_is_not_told(self):
         UserBan.objects.create(user=self.seller, banned_user=self.fan)
