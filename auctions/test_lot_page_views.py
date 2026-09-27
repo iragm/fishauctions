@@ -97,7 +97,7 @@ class PageViewHistoryHelperTests(StandardTestCase):
         self.assertEqual(rows[0]["views"], 2)
 
     def test_an_unknown_source_is_shown_as_it_was_written(self):
-        """A campaign uuid from the weekly promo email, or a club API key's name."""
+        """A campaign uuid from a promo or reminder email, or a club API key's name."""
         _view_on(self.lot, 0, source="my-club-website", user=self.user)
         self.assertEqual(self._history()["sources"][0]["label"], "my-club-website")
 

@@ -34,9 +34,9 @@ Django Admin → Periodic Tasks → Periodic tasks: enable/disable, change sched
 | Tasks not running | `docker ps \| grep celery`, `docker logs celery_worker`, `docker logs redis`, `docker logs celery_beat` |
 | Emails not sent immediately | `POST_OFFICE['CELERY_ENABLED'] = True` in settings; `docker logs celery_worker` |
 
-### weekly_promo
+### auction_promos
 
 ```bash
-docker logs --timestamps celery_worker 2>&1 | egrep 'auctions.tasks.weekly_promo|Weekly promo'
-docker logs --timestamps --tail 100 celery_worker 2>&1 | egrep 'auctions.tasks.weekly_promo|Weekly promo'
+docker logs --timestamps celery_worker 2>&1 | egrep 'auctions.tasks.auction_promos|auction_promos:'
+docker logs --timestamps --tail 100 celery_worker 2>&1 | egrep 'auctions.tasks.auction_promos|auction_promos:'
 ```

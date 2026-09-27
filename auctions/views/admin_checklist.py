@@ -389,7 +389,6 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "<li><code>MAILING_ADDRESS</code> &mdash; your physical address, on the bottom of every email this site sends. Required by US and Canadian anti-spam law, and the one value here that isn't optional: while it is unset the footer leaves it out rather than printing a placeholder, and this item says &ldquo;Needs setup&rdquo;. Put the club's legal name on the first line.</li>"
                     "<li><code>WEBSITE_FOCUS</code> &mdash; the plural, lowercase noun your site is about, e.g. <code>fish</code>, <code>birds</code>, <code>items</code>.</li>"
                     "<li><code>I_BRED_THIS_FISH_LABEL</code> &mdash; the label shown next to the &ldquo;breeder points&rdquo; checkbox.</li>"
-                    "<li><code>WEEKLY_PROMO_MESSAGE</code> &mdash; extra text included in the weekly promotional email (plain text only; usually left blank).</li>"
                     "</ul>"
                 ),
                 "snippets": [
@@ -399,8 +398,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             'COPYRIGHT_MESSAGE="Website copyright your club"\n'
                             'MAILING_ADDRESS="123 Your Street, Anytown, USA"\n'
                             f'WEBSITE_FOCUS="{settings.WEBSITE_FOCUS}"\n'
-                            f'I_BRED_THIS_FISH_LABEL="{settings.I_BRED_THIS_FISH_LABEL}"\n'
-                            'WEEKLY_PROMO_MESSAGE=""'
+                            f'I_BRED_THIS_FISH_LABEL="{settings.I_BRED_THIS_FISH_LABEL}"'
                         )
                     }
                 ],
@@ -454,8 +452,9 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "<ul class='mb-0'>"
                     "<li><code>ALLOW_USERS_TO_CREATE_AUCTIONS</code> &mdash; let users create club auctions. "
                     "False = Django admins only.</li>"
-                    "<li><code>ALLOW_USERS_TO_CREATE_LOTS</code> &mdash; let newly created users create standalone lots "
-                    "(not attached to an auction). Everyone can still add lots to club auctions.</li>"
+                    "<li><code>ALLOW_USERS_TO_CREATE_LOTS</code> &mdash; let users sell standalone lots (not attached to "
+                    "an auction). False hides it from everybody; True gives it to new accounts. Everyone can still "
+                    "add lots to club auctions.</li>"
                     "<li><code>USERS_ARE_TRUSTED_BY_DEFAULT</code> &mdash; trusted users can promote auctions, manage "
                     "payments, and send invoice notifications. Keep this False so an admin vets accounts first. A common "
                     "setup is <code>ALLOW_USERS_TO_CREATE_AUCTIONS=True</code> with <code>USERS_ARE_TRUSTED_BY_DEFAULT=False</code>.</li>"
@@ -480,7 +479,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     },
                     {
                         "label": (
-                            "ALLOW_USERS_TO_CREATE_LOTS only affects new accounts. To toggle standalone-lot creation "
+                            "With ALLOW_USERS_TO_CREATE_LOTS on, only new accounts get standalone lots. To toggle it "
                             "for existing users, run (use off to disable):"
                         ),
                         "code": "docker exec -it django python3 manage.py change_standalone_lots on",

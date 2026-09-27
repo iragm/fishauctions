@@ -392,6 +392,7 @@ class MobileOfflineOpAdmin(admin.ModelAdmin):
 
     list_display = ("op_id", "op_type", "auction", "user", "result_pk", "created_at")
     list_select_related = ("auction", "user")
+    raw_id_fields = ("auction", "user")
     list_filter = ("op_type",)
     search_fields = ("op_id", "auction__title", "user__username")
     readonly_fields = ("op_id", "op_type", "auction", "user", "result_pk", "result_data", "created_at")
@@ -1326,8 +1327,9 @@ class PageViewAdmin(admin.ModelAdmin):
 
 class AuctionCampaignAdmin(admin.ModelAdmin):
     model = AuctionCampaign
-    list_display = ("auction", "source", "result")
-    list_select_related = ("auction",)
+    list_display = ("auction", "user", "kind", "source", "result", "timestamp")
+    list_filter = ("kind", "result")
+    list_select_related = ("auction", "user")
 
 
 class AuctionHistoryAdmin(admin.ModelAdmin):

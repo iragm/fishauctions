@@ -907,7 +907,7 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
 
         # Check if user needs to see the modal about joining an auction
         userData = self.request.user.userdata
-        can_sell_independently = userData.can_submit_standalone_lots
+        can_sell_independently = userData.can_sell_standalone_lots
 
         # Get available auctions for this user
         available_auctions = userData.available_auctions_to_submit_lots
