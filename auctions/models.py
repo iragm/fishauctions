@@ -5005,6 +5005,24 @@ class Auction(CachedPropertiesMixin, models.Model):
         )
 
     @cached_property
+    def lots_added_by(self):
+        """Lots added by their seller and by an admin, the rule the pre-registration discount uses: an
+        admin adding their own lot is a seller, and a lot with no ``added_by`` (API import) is an admin's.
+        """
+        counts = self.lots_qs.aggregate(total=Count("pk"), sellers=Count("pk", filter=Q(added_by=F("user"))))
+        return {"sellers": counts["sellers"], "admins": counts["total"] - counts["sellers"]}
+
+    @cached_property
+    def labels_first_printed_by(self):
+        """Lots whose label was first printed by their seller and by an admin, same rule as
+        ``lots_added_by``. Lots never printed, or printed before this was recorded, aren't counted.
+        """
+        counts = self.lots_qs.filter(label_first_printed_by__isnull=False).aggregate(
+            total=Count("pk"), sellers=Count("pk", filter=Q(label_first_printed_by=F("user")))
+        )
+        return {"sellers": counts["sellers"], "admins": counts["total"] - counts["sellers"]}
+
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # Lots ever queued (sticky Lot.added_to_queue).
         return self.lots_qs.filter(added_to_queue=True).count()
@@ -7594,6 +7612,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     category_checked = models.BooleanField(default=False)
     label_printed = models.BooleanField(default=False)
     label_needs_reprinting = models.BooleanField(default=False)
+    # Kept through reprints; the stats page compares it to ``user`` to split seller from admin printing.
+    label_first_printed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     partial_refund_percent = models.IntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True
     )
@@ -8667,6 +8687,16 @@ class Lot(CachedPropertiesMixin, models.Model):
         )
         self.bap_points_awarded = points
         self.save(update_fields=["bap_points_awarded"])
+
+    @staticmethod
+    def mark_labels_printed(lots, user):
+        """Mark *lots* printed by *user*. Only the first printer is recorded."""
+        for lot in lots:
+            lot.label_printed = True
+            lot.label_needs_reprinting = False
+            if lot.label_first_printed_by_id is None:
+                lot.label_first_printed_by_id = getattr(user, "pk", None)
+        Lot.objects.bulk_update(lots, ["label_printed", "label_needs_reprinting", "label_first_printed_by"])
 
     @property
     def pre_registered(self):
@@ -13187,10 +13217,7 @@ class RemotePrintJob(models.Model):
         if count <= 0:
             return 0
         lots = [lot for lot in self.lots_qs()[:count] if not lot.is_deleted]
-        for lot in lots:
-            lot.label_printed = True
-            lot.label_needs_reprinting = False
-        Lot.objects.bulk_update(lots, ["label_printed", "label_needs_reprinting"])
+        Lot.mark_labels_printed(lots, self.user)
         return len(lots)
 
 

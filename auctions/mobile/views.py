@@ -899,14 +899,8 @@ class MobileLabelsPrintedView(APIView):
         )
         # Skipped, not refused: same per-lot rule as GET labels/<pk>/.
         allowed = {lot.pk: lot for lot in lots if MobileLotLabelView._can_access(request.user, lot)}
-        marked = []
-        for pk in printed_pks:
-            lot = allowed.get(pk)
-            if lot is None:
-                continue
-            lot.label_printed = True
-            lot.label_needs_reprinting = False
-            marked.append(lot)
+        marked = [allowed[pk] for pk in printed_pks if pk in allowed]
+        Lot.mark_labels_printed(marked, request.user)
         failed = []
         for pk in failed_pks:
             lot = allowed.get(pk)
@@ -915,7 +909,7 @@ class MobileLabelsPrintedView(APIView):
             lot.label_printed = False
             lot.label_needs_reprinting = True
             failed.append(lot)
-        Lot.objects.bulk_update(marked + failed, ["label_printed", "label_needs_reprinting"])
+        Lot.objects.bulk_update(failed, ["label_printed", "label_needs_reprinting"])
         if failed:
             logger.warning(
                 "User %s reported %s label(s) that did not print (conditions=%s): %s",

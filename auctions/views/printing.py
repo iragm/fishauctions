@@ -415,15 +415,8 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         response = super().render_to_response(context, **response_kwargs)
         labels = getattr(self, "labels_to_mark_printed", None)
         if labels:
-            response.add_post_render_callback(lambda _response: self.mark_printed(labels))
+            response.add_post_render_callback(lambda _response: Lot.mark_labels_printed(labels, self.request.user))
         return response
-
-    @staticmethod
-    def mark_printed(labels):
-        for label in labels:
-            label.label_printed = True
-            label.label_needs_reprinting = False
-        Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
 
     def generate_qr_code(self, label, qr_code_width, qr_code_height):
         label_qr_code = qr_code.qrcode.maker.make_qr_code_image(

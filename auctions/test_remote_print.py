@@ -478,6 +478,7 @@ class JobReportingTests(RemotePrintBase):
         for lot in self.lots:
             lot.refresh_from_db()
             self.assertTrue(lot.label_printed)
+            self.assertEqual(lot.label_first_printed_by, self.job.user)
 
     def test_a_partial_batch_marks_only_what_came_out(self):
         self._result(status="failed", printed=2, total=3, message="Lost the connection.")

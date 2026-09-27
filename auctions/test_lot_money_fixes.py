@@ -244,6 +244,8 @@ class LabelPrintingTests(StandardTestCase):
         response = self.client.get(self.url)
         self.assertEqual(response["Content-Type"], "application/pdf")
         self.assertGreater(self.printed(), 0)
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.label_first_printed_by, self.user)
 
     def test_sheet_labels_are_capped_per_pdf(self):
         from auctions.views import LotLabelView
