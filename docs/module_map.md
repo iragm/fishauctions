@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13927 lines)
+- **`models.py`** (13954 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -349,7 +349,7 @@ this only quotes its opening sentence.
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
   `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`
-- **`test_custom_random.py`** (284 lines)
+- **`test_custom_random.py`** (300 lines)
   The custom random field: an auction's option list that each lot is dealt from, and nobody edits.
   `CustomRandomTestCase`, `DealingTests`, `NobodyEditsItTests`, `ShownPrintedAndSearchedTests`, `OptionsAPITests`, `OptionsOverMCPTests`
 - **`test_data_leak_penetration.py`** (259 lines)

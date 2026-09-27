@@ -43,13 +43,29 @@ class DealingTests(CustomRandomTestCase):
         self.switch_on("A", "B")
         self.assertIn(self.new_lot().custom_random, {"A", "B"})
 
-    def test_the_deal_ignores_what_other_lots_have(self):
-        """Balancing would make the next lot's option predictable, so a seller could order their lots."""
-        self.switch_on("A", "B")
+    def test_a_new_lot_gets_whichever_of_two_picks_fewer_lots_hold(self):
+        self.switch_on("A", "B", "C")
         Lot.objects.filter(auction=self.auction).update(custom_random="A")
-        with patch("auctions.models.secrets.choice", return_value="A") as choice:
-            self.assertEqual(self.new_lot().custom_random, "A")
-        choice.assert_called_once_with(["A", "B"])
+        with patch("auctions.models.secrets.SystemRandom.sample", return_value=["A", "B"]) as sample:
+            self.assertEqual(self.new_lot().custom_random, "B")
+        sample.assert_called_once_with(["A", "B", "C"], 2)
+
+    def test_a_tie_between_the_two_picks_is_a_coin_flip(self):
+        self.switch_on("A", "B", "C")
+        Lot.objects.filter(auction=self.auction).update(custom_random="A")
+        with (
+            patch("auctions.models.secrets.SystemRandom.sample", return_value=["B", "C"]),
+            patch("auctions.models.secrets.choice", return_value="C") as choice,
+        ):
+            self.assertEqual(self.new_lot().custom_random, "C")
+        choice.assert_called_once_with(["B", "C"])
+
+    def test_dealing_keeps_the_options_even(self):
+        self.switch_on("A", "B")
+        for number in range(7):
+            self.new_lot(f"Lot {number}")
+        values = self.values()
+        self.assertLessEqual(abs(values.count("A") - values.count("B")), 1, values)
 
     def test_nothing_is_dealt_while_it_is_off(self):
         AuctionRandomOption.objects.create(auction=self.auction, value="A")

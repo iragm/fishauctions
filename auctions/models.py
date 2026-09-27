@@ -6051,10 +6051,36 @@ class Auction(CachedPropertiesMixin, models.Model):
             midpoint = "end"
         return before + [midpoint] + after
 
+    def custom_random_counts(self, options):
+        """How many live lots here hold each of *options*, keyed by the option lowercased."""
+        counts = {option.lower(): 0 for option in options}
+        held = (
+            Lot.objects.filter(auction=self, is_deleted=False)
+            .values_list("custom_random")
+            .annotate(n=Count("pk"))
+            .order_by()
+        )
+        for value, n in held:
+            if value.lower() in counts:
+                counts[value.lower()] += n
+        return counts
+
+    @staticmethod
+    def pick_custom_random(options, counts):
+        """Power of two choices: two different options at random, whichever fewer lots hold, a coin flip
+        on a tie. Keeps the options near even without making the next deal predictable -- except with
+        exactly two options, where it just alternates.
+        """
+        if len(options) < 2:
+            return options[0]
+        first, second = secrets.SystemRandom().sample(options, 2)
+        if counts[first.lower()] == counts[second.lower()]:
+            return secrets.choice([first, second])
+        return min(first, second, key=lambda option: counts[option.lower()])
+
     def deal_custom_random(self, current=""):
         """The ``custom_random`` a lot here should hold: *current* while it is still an option, otherwise one
-        at random. Uniform and from ``secrets``, never balanced: a balanced or predictable deal lets a seller
-        add lots in the order that lands them where they want.
+        dealt by :meth:`pick_custom_random`.
         """
         options = list(AuctionRandomOption.objects.filter(auction=self).order_by("pk").values_list("value", flat=True))
         if not options:
@@ -6062,7 +6088,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         canonical = {option.lower(): option for option in options}
         if current and current.lower() in canonical:
             return canonical[current.lower()]
-        return secrets.choice(options)
+        return self.pick_custom_random(options, self.custom_random_counts(options))
 
     def assign_custom_random(self):
         """Deal a ``custom_random`` to every lot here without a current option, as :meth:`deal_custom_random`
@@ -6073,15 +6099,16 @@ class Auction(CachedPropertiesMixin, models.Model):
         options = list(AuctionRandomOption.objects.filter(auction=self).order_by("pk").values_list("value", flat=True))
         if not options:
             return
-        valid = {option.lower() for option in options}
+        counts = self.custom_random_counts(options)
         to_deal = []
         for lot in Lot.objects.filter(auction=self, is_deleted=False).only(
             "pk", "custom_random", "label_printed", "label_needs_reprinting"
         ):
-            if lot.custom_random.lower() not in valid:
+            if lot.custom_random.lower() not in counts:
                 if lot.custom_random and lot.label_printed:
                     lot.label_needs_reprinting = True
-                lot.custom_random = secrets.choice(options)
+                lot.custom_random = self.pick_custom_random(options, counts)
+                counts[lot.custom_random.lower()] += 1
                 to_deal.append(lot)
         Lot.objects.bulk_update(to_deal, ["custom_random", "label_needs_reprinting"], batch_size=500)
 
