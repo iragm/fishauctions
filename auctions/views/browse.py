@@ -71,6 +71,7 @@ from auctions.tables import (
 )
 
 from .base import MILES_TO_KM, HTMxTableView, check_club_permission, club_from_url
+from .lot_pages import warm_selling_page_view_history
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +556,7 @@ class MyLots(HTMxTableView):
                     f""" with new messages.  <a href="{reverse("messages")}">Go to your messages page to see them</a>"""
                 )
                 messages.info(self.request, msg, extra_tags="safe")
+            warm_selling_page_view_history(self.request.user.pk)
         return super().get(*args, **kwargs)
 
 

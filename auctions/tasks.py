@@ -1831,3 +1831,11 @@ def summarize_donation_email(email_pk):
     email_row = DonationEmail.objects.select_related("vendor__club").filter(pk=email_pk).first()
     if email_row and not email_row.summary:
         donations.summarize_incoming(email_row)
+
+
+@shared_task(ignore_result=True)
+def warm_selling_page_view_history(user_pk):
+    """Fill the selling dashboard's view-history cache; queued when the dashboard loads."""
+    from auctions.views.lot_pages import selling_page_view_history
+
+    selling_page_view_history(user_pk)

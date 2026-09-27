@@ -5,7 +5,7 @@ biggest drop-off surface on the site: the two-field create form hands straight o
 checklist's "Edit the rules", so the first thing a new organizer sees is four dozen settings.
 
 So the page is split. :data:`ESSENTIAL_FIELDS` is what a first auction has to decide -- when it
-runs, what it costs, who takes the cut, whether there is online bidding, which club it belongs to.
+runs, what it costs, who takes the cut, which club it belongs to.
 Everything else is inside one ``<details>``.
 
 Three rules keep the split from hiding something, each with a test:
@@ -39,10 +39,6 @@ ESSENTIAL_FIELDS = frozenset(
         "lot_submission_end_date",
         "date_start",
         "date_end",
-        # Bidding
-        "online_bidding",
-        "date_online_bidding_starts",
-        "date_online_bidding_ends",
         # What it costs
         "unsold_lot_fee",
         "lot_entry_fee",
@@ -100,13 +96,6 @@ def build_layout(form, currency_symbol):
             col("date_end"),
             css_class="row",
         ),
-        HTML("<h4>Online bidding</h4>"),
-        Div(
-            col("online_bidding"),
-            col("date_online_bidding_starts"),
-            col("date_online_bidding_ends"),
-            css_class="row",
-        ),
         HTML("<h4>Lot fees</h4>"),
         Div(
             money("unsold_lot_fee"),
@@ -137,6 +126,14 @@ def build_layout(form, currency_symbol):
         HTML(
             '<details class="auction-advanced mb-3" {% if form.advanced_open %}open{% endif %}>'
             f'<summary class="h4 mb-3" style="cursor: pointer;">{ADVANCED_SUMMARY}</summary>'
+        ),
+        # Online auctions hide all three fields, so the heading goes too.
+        HTML("" if isinstance(form.fields["online_bidding"].widget, forms.HiddenInput) else "<h4>Online bidding</h4>"),
+        Div(
+            col("online_bidding"),
+            col("date_online_bidding_starts"),
+            col("date_online_bidding_ends"),
+            css_class="row",
         ),
         HTML("<h4>Lot fee discounts</h4>"),
         Div(
@@ -195,11 +192,14 @@ def advanced_fields_in_use(instance, advanced_names):
     The risk of an *Advanced* section is hiding something somebody relies on: a field on its default is
     one nobody has decided about, and a field off it is a decision, so it stays on screen.
 
-    Blank and NULL are both "untouched": the form writes ``""`` where several migrations wrote NULL.
+    Blank and NULL are both "untouched": the form writes ``""`` where several migrations wrote NULL. What the
+    create view starts an auction with (``Auction.starting_values``) is untouched too, so an in-person
+    auction's "No online bidding" is not a decision.
     """
     if instance is None or not getattr(instance, "pk", None):
         return False
     meta = instance._meta
+    starting = instance.starting_values(instance.is_online)
     for name in advanced_names:
         try:
             field = meta.get_field(name)
@@ -212,7 +212,7 @@ def advanced_fields_in_use(instance, advanced_names):
         if value in (None, "") and default in (None, ""):
             continue
         try:
-            if value != default:
+            if value != default and value != starting.get(name, default):
                 return True
         except TypeError:
             # A type that will not compare. Showing the field is the safe answer.

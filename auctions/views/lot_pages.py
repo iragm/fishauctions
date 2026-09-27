@@ -16,7 +16,9 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import (
     Count,
     Q,
@@ -101,6 +103,9 @@ PAGE_VIEW_HISTORY_CHART_SOURCES = 6
 #: on a quiet lot doesn't draw as a full-height bar.
 PAGE_VIEW_HISTORY_MIN_Y = 4
 PAGE_VIEW_HISTORY_Y_TICKS = 4
+
+#: How long the selling dashboard's history is reused, as auction stats are (AuctionStatsView).
+SELLING_PAGE_VIEW_HISTORY_SECONDS = 20 * 60
 
 
 def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
@@ -197,12 +202,12 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     }
 
 
-def page_view_history_context(request, page_views, *, title, subtitle):
+def page_view_history_context(request, history, *, title, subtitle):
     """The context both history modals render. The "How they got here" table is superuser-only; the chart
     and referrers are for everyone. Decided here so a new surface can't gate it differently.
     """
     return {
-        "history": page_view_history(page_views),
+        "history": history,
         "modal_title": title,
         "modal_subtitle": subtitle,
         "show_source_table": request.user.is_superuser,
@@ -239,31 +244,61 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
             "auctions/page_view_history_modal.html",
             page_view_history_context(
                 request,
-                PageView.objects.filter(lot_number=lot),
+                page_view_history(PageView.objects.filter(lot_number=lot)),
                 title="How people found this lot",
                 subtitle=lot.lot_name,
             ),
         )
 
 
-class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
-    """The same 15 days totalled over the requesting user's lots (matched as ``UserLotFilter`` does), as a
-    subquery so the PageView query stays owner-bounded.
+def _selling_history_cache_key(user_pk):
+    return f"selling_page_view_history:{user_pk}"
+
+
+def selling_page_view_history(user_pk):
+    """The 15 days totalled over every lot this user sells (matched as ``UserLotFilter`` does), stored for
+    :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`.
+
+    The lot ids go in as a list, not a subquery: MariaDB has planned a subquery over PageView as a full
+    scan before (``Auction.unique_views``).
     """
+    lot_ids = list(
+        Lot.objects.exclude(is_deleted=True)
+        .filter(Q(user_id=user_pk) | Q(auctiontos_seller__user_id=user_pk))
+        .order_by()
+        .values_list("pk", flat=True)
+    )
+    history = page_view_history(PageView.objects.filter(lot_number_id__in=lot_ids))
+    cache.set(_selling_history_cache_key(user_pk), history, SELLING_PAGE_VIEW_HISTORY_SECONDS)
+    return history
+
+
+def warm_selling_page_view_history(user_pk):
+    """Compute the selling history in Celery when the dashboard loads, so the button finds it ready."""
+    key = _selling_history_cache_key(user_pk)
+    if cache.get(key) is not None:
+        return
+    # One queued task per seller at a time.
+    if not cache.add(f"{key}:queued", True, SELLING_PAGE_VIEW_HISTORY_SECONDS):
+        return
+    from auctions.tasks import warm_selling_page_view_history as task
+
+    transaction.on_commit(lambda: task.delay(user_pk))
+
+
+class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
+    """The selling dashboard's history modal. Usually served from what the dashboard warmed."""
 
     def get(self, request):
-        lots = (
-            Lot.objects.exclude(is_deleted=True)
-            .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
-            .order_by()
-            .values("pk")
-        )
+        history = cache.get(_selling_history_cache_key(request.user.pk))
+        if history is None:
+            history = selling_page_view_history(request.user.pk)
         return render(
             request,
             "auctions/page_view_history_modal.html",
             page_view_history_context(
                 request,
-                PageView.objects.filter(lot_number__in=lots),
+                history,
                 title="How people found your lots",
                 subtitle="Every lot you are selling",
             ),

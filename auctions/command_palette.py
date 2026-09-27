@@ -280,7 +280,8 @@ def _t_set_winners(user):
 
 def _t_quick_checkout(user):
     auction = _last_auction_admin(user)
-    if not auction:
+    # Online auctions have no checkout table.
+    if not auction or auction.is_online:
         return []
     return [
         {
@@ -1155,15 +1156,16 @@ def _auction_admin_items(request, auction, ended):
                 "Scan members in as they arrive",
             )
         )
-    items.append(
-        _item(
-            "auction",
-            f"Quick checkout — {auction.title}",
-            reverse("auction_quick_checkout", kwargs={"slug": auction.slug}),
-            "bi-bag-heart",
-            "Handle payments and mark invoices paid",
+    if not auction.is_online:
+        items.append(
+            _item(
+                "auction",
+                f"Quick checkout — {auction.title}",
+                reverse("auction_quick_checkout", kwargs={"slug": auction.slug}),
+                "bi-bag-heart",
+                "Handle payments and mark invoices paid",
+            )
         )
-    )
     return items
 
 

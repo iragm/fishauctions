@@ -723,16 +723,8 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
         auction.promote_this_auction = False  # all auctions start not promoted
         auction.date_start = form.cleaned_data["date_start"]
         auction.is_online = "online" in str(self.request.GET)
-        # New auctions start with the alternate split off; the model default is "custom".
-        auction.alternate_split_mode = "off"
-        if not auction.is_online:
-            # override default settings for new in-person auctions
-            auction.online_bidding = "disable"
-            auction.buy_now = "disable"
-            auction.reserve_price = "disable"
-        else:
-            # override default settings for new online auctions
-            auction.use_quantity_field = True
+        for name, value in Auction.starting_values(auction.is_online).items():
+            setattr(auction, name, value)
         if not auction.summernote_description:
             auction.summernote_description = DEFAULT_AUCTION_DESCRIPTION
         run_duration = timezone.timedelta(days=7)

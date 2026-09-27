@@ -4182,6 +4182,17 @@ class Auction(CachedPropertiesMixin, models.Model):
             return False
         return True
 
+    @staticmethod
+    def starting_values(is_online):
+        """What a new auction starts with where it differs from the model default."""
+        # The model default for alternate_split_mode is "custom".
+        values = {"alternate_split_mode": "off"}
+        if is_online:
+            values["use_quantity_field"] = True
+        else:
+            values.update(online_bidding="disable", buy_now="disable", reserve_price="disable")
+        return values
+
     def __str__(self):
         result = self.title
         if "auction" not in self.title.lower():

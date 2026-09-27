@@ -97,7 +97,7 @@ this only quotes its opening sentence.
 - **`club_matching.py`** (228 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
-- **`command_palette.py`** (1508 lines)
+- **`command_palette.py`** (1510 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
 - **`consumers.py`** (448 lines)
@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14025 lines)
+- **`models.py`** (14036 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -234,7 +234,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1445 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1833 lines)
+- **`tasks.py`** (1841 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -406,7 +406,7 @@ this only quotes its opening sentence.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
 - **`test_lot_money_fixes.py`** (440 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
-- **`test_lot_page_views.py`** (365 lines)
+- **`test_lot_page_views.py`** (396 lines)
   The two page-view history modals: one lot's, and every lot on the selling dashboard.
   `PageViewHistoryHelperTests`, `LotPageViewHistoryViewTests`, `SellingDashboardPageViewHistoryTests`
 - **`test_lot_views.py`** (1301 lines)
@@ -471,7 +471,7 @@ this only quotes its opening sentence.
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (5049 lines)
   Tests for the command palette's natural-language assist.
-- **`test_palette_core.py`** (1265 lines)
+- **`test_palette_core.py`** (1285 lines)
   The command palette itself, and the mobile surfaces that call into it.
   `CommandPaletteTests`, `MobileCommandPaletteTests`, `MobileMyClubsTests`, `MobileLabelTests`, `MobileConfigTests`, `FirebaseClientConfigParsingTests`, `SingleLotLabelPngTests`, `MobileEmailLoginTests`, `MobileWebSessionTests`, `ExampleSuggestionTests`
 - **`test_palette_mic.py`** (101 lines)
@@ -553,7 +553,7 @@ this only quotes its opening sentence.
 - **`test_untrusted_text.py`** (114 lines)
   Text somebody typed reaches the page as text, and ``?next=`` never leaves the site.
   `LiteralHTMLTests`, `BulkSellQueryTests`, `InvoiceRenewalToggleTests`, `SafeNextUrlTests`, `ChatTests`, `MissingObjectTests`
-- **`test_usability_instruments.py`** (401 lines)
+- **`test_usability_instruments.py`** (423 lines)
   Tests for the measurement half of the usability campaign: what an edit changed, and who has ever
   `JsonableTests`, `SecretFieldTests`, `ChangedFieldSummaryTests`, `AuctionHistoryChangedFieldsTests`, `ClubHistoryChangedFieldsTests`, `FieldAdoptionTests`, `AuctionEditFormLayoutTests`
 - **`test_usability_report.py`** (307 lines)
@@ -836,7 +836,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (670 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1032 lines)
+- **`auction_pages.py`** (1024 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `AuctionInfo`
 - **`auction_stats.py`** (1181 lines)
@@ -845,7 +845,7 @@ Every view on the site, split by the part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1068 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (823 lines)
+- **`browse.py`** (825 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (508 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
@@ -886,7 +886,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (394 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1321 lines)
+- **`lot_pages.py`** (1356 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (217 lines)
   The copyright policy page, the notice form, and the report button on a lot.
