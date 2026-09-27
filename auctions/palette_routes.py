@@ -354,6 +354,14 @@ ROUTE_LIST: list[Route] = [
         keywords=["bulk printing", "all labels"],
     ),
     _r(
+        "auction_printable_lot_list",
+        "Printable list of every lot",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["lot list", "print lots", "paper list", "table numbers", "preview lots"],
+    ),
+    _r(
         "auction_printing_pdf",
         "Download everyone's labels as a PDF",
         "Running an auction",

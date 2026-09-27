@@ -612,6 +612,11 @@ urlpatterns = [
         views.AuctionBulkPrintingPDF.as_view(),
         name="auction_printing_pdf",
     ),
+    path(
+        "auctions/<slug:slug>/print/lot-list/",
+        views.PrintableLotList.as_view(),
+        name="auction_printable_lot_list",
+    ),
     path("selling/csv/", views.MyLotReportView.as_view(), name="my_lot_report"),
     path("buying/csv/", views.MyWonLotCSV.as_view(), name="my_won_lot_csv"),
     path("auctions/<slug:slug>/lotlist/", views.AuctionLotsCSV.as_view(), name="lot_list"),

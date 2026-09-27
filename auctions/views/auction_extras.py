@@ -1,7 +1,7 @@
 """The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 
 The smaller pages that didn't belong with check-in or stats: the label field picker, the bulk print
-sheets, pickup-location manifests, the add-to-calendar link and the no-show actions.
+sheets, the printable lot list, pickup-location manifests, the add-to-calendar link and the no-show actions.
 """
 
 import ast
@@ -35,6 +35,7 @@ from django.views.generic.edit import (
     FormMixin,
     FormView,
 )
+from django_tables2 import SingleTableMixin
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -58,6 +59,7 @@ from auctions.models import (
 )
 from auctions.services import attachment_filename
 from auctions.services import csv_writer as safe_csv_writer
+from auctions.tables import PrintableLotListTable
 from auctions.views.club_integrations import _ical_escape
 
 from .base import AuctionViewMixin, _lot_invoices, _recalculate_invoices, close_modal_response
@@ -189,6 +191,51 @@ class AuctionBulkPrintingPDF(LotLabelView):
         else:
             handler = self.http_method_not_allowed
         return handler(request, *args, **kwargs)
+
+
+class PrintableLotList(LoginRequiredMixin, AuctionViewMixin, SingleTableMixin, TemplateView):
+    """Every lot in the auction on one page to print, with the columns its labels have.
+
+    Not paginated, so printing the page prints every lot; a header click re-sorts it over htmx.
+    """
+
+    table_class = PrintableLotListTable
+    table_pagination = False
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return ["tables/table_generic.html"]
+        return ["auctions/printable_lot_list.html"]
+
+    def get_table_data(self):
+        lots = list(
+            self.auction.lots_qs.exclude(banned=True)
+            .select_related(
+                "auctiontos_seller",
+                "auctiontos_winner__pickup_location",
+                "species_category",
+                "species__parent",
+                "user",
+                "winner",
+            )
+            .order_by("lot_number_int", "lot_number")
+        )
+        for lot in lots:
+            # One auction for every row, so its cached properties are worked out once.
+            lot.auction = self.auction
+        return lots
+
+    def get_table_kwargs(self):
+        return {"auction": self.auction}
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        # print.html's @page margins.
+        context.update(
+            unit="in", page_margin_top=0.5, page_margin_bottom=0.5, page_margin_left=0.5, page_margin_right=0.5
+        )
+        return context
 
 
 def _lots_with_people(lots):
