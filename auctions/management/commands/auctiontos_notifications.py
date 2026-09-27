@@ -150,6 +150,7 @@ class Command(BaseCommand):
 
         # this is a quick reminder to join auctions that you've viewed but haven't joined.  Fixes #134
         join_auction_reminder = AuctionCampaign.objects.filter(
+            kind=AuctionCampaign.KIND_VIEW,
             timestamp__lte=timezone.now() - datetime.timedelta(hours=24),
             user__isnull=False,
             email_sent=False,

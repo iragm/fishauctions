@@ -10,7 +10,7 @@ aiohttp==3.14.3
     # via pywebpush
 aiosignal==1.4.0
     # via aiohttp
-amqp==5.3.1
+amqp==5.4.0
     # via kombu
 annotated-types==0.8.0
     # via pydantic
@@ -32,15 +32,15 @@ attrs==26.1.0
     #   aiohttp
 beautifulsoup4==4.15.0
     # via -r requirements.in
-billiard==4.2.4
+billiard==4.3.0
     # via celery
 bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.93
+boto3==1.43.98
     # via django-ses
-botocore==1.43.93
+botocore==1.43.98
     # via
     #   boto3
     #   s3transfer
@@ -88,7 +88,7 @@ click-didyoumean==0.3.1
     # via celery
 click-plugins==1.1.1.2
     # via celery
-click-repl==0.3.0
+click-repl==0.4.0
     # via celery
 crispy-bootstrap5==2026.9
     # via -r requirements.in
@@ -139,7 +139,7 @@ django==5.2.17
     #   djangorestframework
     #   djangorestframework-simplejwt
     #   easy-thumbnails
-django-allauth==65.19.3
+django-allauth==65.19.4
     # via -r requirements.in
 django-autocomplete-light==5.0.0
     # via -r requirements.in
@@ -199,7 +199,7 @@ djangorestframework-simplejwt==5.5.1
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
-firebase-admin==7.5.0
+firebase-admin==7.6.0
     # via -r requirements.in
 fonttools[woff]==4.65.0
     # via weasyprint
@@ -207,7 +207,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-api-core[grpc]==2.36.0
+google-api-core[grpc]==2.38.0
     # via
     #   firebase-admin
     #   google-cloud-core
@@ -224,7 +224,7 @@ google-cloud-core==2.7.0
     # via
     #   google-cloud-firestore
     #   google-cloud-storage
-google-cloud-firestore==2.30.0
+google-cloud-firestore==2.31.0
     # via firebase-admin
 google-cloud-storage==3.14.1
     # via firebase-admin
@@ -270,7 +270,7 @@ httpx[http2]==0.28.1
     #   squareup
 hyperframe==6.1.0
     # via h2
-idna==3.19
+idna==3.20
     # via
     #   -r requirements.in
     #   anyio
@@ -281,7 +281,7 @@ jmespath==1.1.0
     # via
     #   boto3
     #   botocore
-jwcrypto==1.6.0
+jwcrypto==1.6.1
     # via django-oauth-toolkit
 kombu==5.6.2
     # via celery
@@ -303,11 +303,11 @@ msgpack==1.2.2
     # via
     #   cachecontrol
     #   channels-redis
-multidict==6.8.0
+multidict==6.9.0
     # via
     #   aiohttp
     #   yarl
-mysqlclient==2.2.8
+mysqlclient==2.3.0
     # via -r requirements.in
 nh3==0.3.7
     # via
@@ -338,7 +338,7 @@ pillow==12.3.0
     #   weasyprint
 prompt-toolkit==3.0.53
     # via click-repl
-propcache==0.5.2
+propcache==0.5.4
     # via
     #   aiohttp
     #   yarl
@@ -346,7 +346,7 @@ proto-plus==1.28.4
     # via
     #   google-api-core
     #   google-cloud-firestore
-protobuf==7.36.1
+protobuf==7.36.2
     # via
     #   google-api-core
     #   google-cloud-firestore
@@ -394,7 +394,7 @@ pyjwt[crypto]==2.14.0
     #   firebase-admin
 pyopenssl==26.4.0
     # via -r requirements.in
-pyparsing==3.3.2
+pyparsing==3.3.3
     # via -r requirements.in
 pypdfium2==5.13.0
     # via -r requirements.in
@@ -463,7 +463,7 @@ sqlparse==0.6.0
     #   -r requirements.in
     #   django
     #   django-debug-toolbar
-squareup==45.1.0.20260819
+squareup==46.0.0.20260916
     # via -r requirements.in
 tblib==3.2.2
     # via -r requirements.in
@@ -479,6 +479,7 @@ typing-extensions==4.16.0
     #   aiosignal
     #   anyio
     #   beautifulsoup4
+    #   click-repl
     #   django-bootstrap-datepicker-plus
     #   grpcio
     #   jwcrypto
@@ -504,7 +505,7 @@ ua-parser==1.0.2
     #   user-agents
 ua-parser-builtins==202606
     # via ua-parser
-urllib3==2.7.0
+urllib3==2.8.0
     # via
     #   -r requirements.in
     #   botocore
@@ -522,9 +523,9 @@ vine==5.1.0
     #   amqp
     #   celery
     #   kombu
-watchfiles==1.2.0
+watchfiles==1.3.0
     # via uvicorn
-wcwidth==0.8.3
+wcwidth==0.8.4
     # via prompt-toolkit
 weasyprint==70.0
     # via django-weasyprint
@@ -537,7 +538,7 @@ webencodings==0.6.1
     #   tinyhtml5
 websockets==17.1
     # via uvicorn
-yarl==1.24.5
+yarl==1.25.1
     # via aiohttp
 zopfli==0.4.3
     # via fonttools

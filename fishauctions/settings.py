@@ -720,7 +720,6 @@ ENABLE_PROMO_PAGE = parse_bool_env(os.environ.get("ENABLE_PROMO_PAGE") or None, 
 ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None, default=True)
 ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=False)
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
-WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
 
 # --- DMCA designated agent ---------------------------------------------------------------------
 # Published at /dmca/ only if all five resolve, and must match the Copyright Office filing (which

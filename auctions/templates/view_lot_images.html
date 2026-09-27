@@ -348,7 +348,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     </div>
                     {% endif %}
                     {% if not lot.auction and is_lot_creator or not lot.auction and request.user.is_superuser %}
-                    <button class="btn btn-sm btn-danger" name="action_deactivate" onclick="deactivate_lot()">{% if lot.deactivated %}Reactivate{% else %}Deactivate this lot{% endif %}</button>
+                    {% if not lot.deactivated or request.user.is_superuser or request.user.userdata.can_sell_standalone_lots %}<button class="btn btn-sm btn-danger" name="action_deactivate" onclick="deactivate_lot()">{% if lot.deactivated %}Reactivate{% else %}Deactivate this lot{% endif %}</button>{% endif %}
                     {% endif %}
                 </div>
                 {% endif %}

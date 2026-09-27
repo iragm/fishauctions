@@ -11,6 +11,7 @@ import shlex
 
 import django_filters
 from crispy_forms.helper import FormHelper
+from django.conf import settings
 from django.contrib import messages
 from django.db.models import (
     Case,
@@ -632,10 +633,17 @@ class LotFilter(django_filters.FilterSet):
             self.possibleAuctions = self.possibleAuctions.filter(specialAuctions)
         auction_choices = [(o.slug, o.title) for o in self.possibleAuctions]
         super().__init__(*args, **kwargs)  # this must go above filters
-        self.filters["auction"].extra["choices"] = [
-            {"no_auction": "noAuction", "No auction": "title"}
-        ] + auction_choices
-        self.filters["ships"].extra["choices"] = self.ships_choices()
+        if settings.ALLOW_USERS_TO_CREATE_LOTS:
+            self.filters["auction"].extra["choices"] = [
+                {"no_auction": "noAuction", "No auction": "title"}
+            ] + auction_choices
+            self.filters["ships"].extra["choices"] = self.ships_choices()
+        else:
+            # Distance and shipping only ever applied to lots sold outside an auction. The lots
+            # themselves still show in the seller's and buyer's own lists.
+            self.filters["auction"].extra["choices"] = auction_choices
+            del self.filters["distance"]
+            del self.filters["ships"]
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
