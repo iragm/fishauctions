@@ -1,11 +1,12 @@
 """Auction night: setting winners, the lot queue, and volunteers.
 
-``DynamicSetLotWinner`` is the auctioneer's page, driven by :mod:`auctions.voice`. The queue views
-decide which lot is next and notify its watchers.
+``DynamicSetLotWinner`` is the auctioneer's page, driven by :mod:`auctions.voice`. The queue decides
+which lot is on the block, and its watchers are notified as the queue moves, not as winners are set.
 """
 
 import logging
 import re
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 import channels.layers
@@ -17,6 +18,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import (
     Exists,
     OuterRef,
+    Q,
 )
 from django.db.models.base import Model as Model
 from django.http import (
@@ -74,21 +76,21 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
-        # Prefill the lot from the head of the in-person queue.
-        head_lot = queue_head_lot(self.auction)
-        context["queue_head_lot_number"] = head_lot.lot_number_display if head_lot else ""
+        # Prefill the lot from the in-person queue.
+        next_lot = queue_next_to_record(self.auction)
+        context["queue_head_lot_number"] = next_lot.lot_number_display if next_lot else ""
         # Voice (app only): score cutoffs, grammar and vocabulary, so the page can match a transcript
         # itself (voice.page_config). Skipped outside the app: this page is hot during an auction.
         if getattr(self.request, "is_mobile_app", False):
             context["voice_config"] = voice.page_config(self.auction)
         return context
 
-    def pop_queue_and_set_next(self, lot, result):
-        """Remove the sold lot from the queue and set ``result["next_queued_lot_number"]`` (None when empty)
-        so the page auto-advances.
+    def advance_queue_and_set_next(self, lot, result, double_check=False):
+        """Tell the queue ``lot`` was recorded and set ``result["next_queued_lot_number"]`` (None when there
+        isn't one) so the page auto-advances.
         """
-        pop_lot_from_queue(self.auction, lot)
-        next_lot = queue_head_lot(self.auction)
+        queue_lot_recorded(self.auction, lot)
+        next_lot = queue_next_to_record(self.auction, after_lot=lot, include_recorded=double_check)
         result["next_queued_lot_number"] = next_lot.lot_number_display if next_lot else None
 
     def validate_lot(self, lot, action):
@@ -274,7 +276,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             )
         except Exception:
             logger.exception("create_history failed for lot %s", lot.pk)
-        self.pop_queue_and_set_next(lot, result)
+        self.advance_queue_and_set_next(lot, result)
         return result
 
     def post(self, request, *args, **kwargs):
@@ -317,7 +319,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
             except Exception:
                 logger.exception("create_history failed for lot %s", lot.pk)
-            self.pop_queue_and_set_next(lot, result)
+            self.advance_queue_and_set_next(lot, result)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
@@ -332,7 +334,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 )
             except Exception:
                 logger.exception("create_history failed for lot %s", lot.pk)
-            self.pop_queue_and_set_next(lot, result)
+            self.advance_queue_and_set_next(lot, result)
             return JsonResponse(result)
         price_error, winner_error = self.cross_check_price_and_winner(
             lot, price, winner, action, lot_error, price_error, winner_error
@@ -358,13 +360,17 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 lot.save()
                 result["success_message"] = "This lot has been double checked"
                 result["last_sold_lot_number"] = lot.lot_number_display
-                self.pop_queue_and_set_next(lot, result)
+                self.advance_queue_and_set_next(lot, result, double_check=True)
             else:
                 result = {
                     "banner": "error",
                     "last_sold_lot_number": lot.lot_number_display,
                     "success_message": f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
                 }
+                # A double check that didn't match: the banner and its undo carry the problem, and the
+                # form moves on as a matching check would, so this person keeps their place in the queue.
+                next_lot = queue_next_to_record(self.auction, after_lot=lot, include_recorded=True)
+                result["next_queued_lot_number"] = next_lot.lot_number_display if next_lot else None
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
             result["online_high_bidder_message"] = (
                 f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
@@ -413,7 +419,7 @@ class LotEndUnsold(LoginRequiredMixin, AuctionViewMixin, View):
             action=f"Marked lot {lot.lot_number_display} as ended without being sold",
             user=request.user,
         )
-        pop_lot_from_queue(self.auction, lot)
+        queue_lot_recorded(self.auction, lot)
         return close_modal_response("reload-page")
 
 
@@ -534,38 +540,66 @@ class VoiceVocabularyView(LoginRequiredMixin, AuctionViewMixin, View):
         return JsonResponse(voice_service.build_vocabulary(self.auction))
 
 
+#: A lot already announced "about to be sold" is announced again only when it comes up again at least
+#: this long afterwards: the first was a mistyped lot number, or the room passed it and came back.
+#: Shorter than that is Next pressed once too often, or the same lot pulled up twice.
+SELLING_PUSH_COOLDOWN = timedelta(minutes=2)
+
+#: Queue positions, counting the lot on the block as 1, whose watchers hear "coming up soon".
+COMING_UP_POSITIONS = 10
+
+
+def queue_entry_done(entry):
+    """Sold, or ended unsold since it was queued: nothing left for set winners to do. A lot that didn't
+    sell and was queued again is getting another go.
+    """
+    lot = entry.lot
+    if lot.sold:
+        return True
+    return bool(lot.ended_unsold and lot.date_end and lot.date_end >= entry.createdon)
+
+
 def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
     """Send a "coming up soon" or "about to be sold" web push to a lot's watchers.
 
-    Coming up (``position`` 2-10) dedupes on ``Lot.coming_up_push_sent``; about to be sold
-    (``position`` 1 or None) on ``Lot.selling_push_notification_sent``. Both share a tag, so the second
+    Coming up (``position`` 2-10) is once per lot, and never after "about to be sold"; about to be sold
+    (``position`` 1 or None) is once per ``SELLING_PUSH_COOLDOWN``. Both share a tag, so the second
     replaces the first. ``request_user`` is excluded. Returns True when a pass ran. App users get only
     the app push, since a phone's browser and its app can't be told apart.
     """
     if not lot or lot.sold or not lot.auction:
         return False
+    now = timezone.now()
     coming_up = position is not None and position > 1
+    # A conditional UPDATE, so two screens pulling up one lot at once can't both send.
     if coming_up:
-        # Never downgrade after "about to be sold".
-        if lot.coming_up_push_sent or lot.selling_push_notification_sent:
+        if lot.coming_up_push_sent or lot.selling_push_sent_at:
             return False
+        claimed = Lot.objects.filter(pk=lot.pk, coming_up_push_sent=False, selling_push_sent_at__isnull=True).update(
+            coming_up_push_sent=True
+        )
         lot.coming_up_push_sent = True
-        lot.save(update_fields=["coming_up_push_sent"])
         head = f"{lot.lot_name} is coming up soon"
         body = (
             f"Lot {lot.lot_number_display} is coming up soon -- {position} lots away. Don't miss out!  "
             "You're getting this notification because you watched this lot."
         )
     else:
-        if lot.selling_push_notification_sent:
+        if lot.selling_push_sent_at and now - lot.selling_push_sent_at < SELLING_PUSH_COOLDOWN:
             return False
-        lot.selling_push_notification_sent = True
-        lot.save(update_fields=["selling_push_notification_sent"])
+        claimed = (
+            Lot.objects.filter(pk=lot.pk)
+            .filter(Q(selling_push_sent_at__isnull=True) | Q(selling_push_sent_at__lte=now - SELLING_PUSH_COOLDOWN))
+            .update(selling_push_sent_at=now)
+        )
+        lot.selling_push_sent_at = now
         head = f"{lot.lot_name} is about to be sold"
         body = (
             f"Lot {lot.lot_number_display}  Don't miss out, bid now!  "
             "You're getting this notification because you watched this lot."
         )
+    if not claimed:
+        return False
     watchers = Watch.objects.filter(
         lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
     ).select_related("user__userdata")
@@ -614,6 +648,20 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
     return True
 
 
+def announce_lot_on_the_block(lot, request_user=None):
+    """Tell the lot's own page, and its watchers, that it's being sold now."""
+    lot.send_websocket_message(
+        {
+            "type": "chat_message",
+            "info": "CHAT",
+            "message": "This lot is about to be sold!",
+            "pk": -1,
+            "username": "System",
+        }
+    )
+    notify_watchers_lot_selling_soon(lot, request_user=request_user)
+
+
 def broadcast_queue_update(auction):
     """Tell open queue and projector screens to re-fetch after a queue change. Best-effort."""
     try:
@@ -626,54 +674,180 @@ def broadcast_queue_update(auction):
         logger.exception("Failed to send queue_updated websocket for auction %s", auction.pk)
 
 
-def process_queue_notifications(auction):
-    """Push to watchers of lots now in the queue's top 10, and refresh open queue screens.
+# ── The lot queue ──────────────────────────────────────────────────────────────────────────────
+#
+# Entries stay after their lot sells. The passed ones are a prefix of the running order, and the first
+# entry not passed is the lot on the block. Two things move that line, and the watchers' pushes follow
+# it rather than set winners: Next and Back on the queue screens, and recording the lot on the block.
+# Recording a lot behind the line (winners written down and entered later) or ahead of it (sold out
+# of turn) leaves it where the room is.
 
-    Deduped per lot, so it's safe after every mutation. Pushes honour
-    ``message_users_when_lots_sell``; the websocket refresh always fires.
+
+def queue_entries(auction):
+    return list(LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order"))
+
+
+def queue_split(entries):
+    """``(passed, on_the_block or None, still_to_come)`` of an ordered entry list."""
+    index = next((i for i, entry in enumerate(entries) if entry.passed_at is None), None)
+    if index is None:
+        return entries, None, []
+    return entries[:index], entries[index], entries[index + 1 :]
+
+
+def queue_has_reached(lot):
+    """True when the queue has got to this lot: it's on the block, announced from there, or behind it,
+    where set winners is catching up on lots the room has already sold.
+    """
+    entry = LotQueueEntry.objects.filter(lot=lot).first()
+    if entry is None:
+        return False
+    if entry.passed_at:
+        return True
+    return not LotQueueEntry.objects.filter(
+        auction_id=entry.auction_id, passed_at__isnull=True, order__lt=entry.order
+    ).exists()
+
+
+def process_queue_notifications(auction):
+    """Announce the lot on the block if this turn of it hasn't been, tell the next lots' watchers they're
+    coming up, and refresh open queue screens.
+
+    Safe after every change: a lot is announced once per turn on the block (and the push has its own
+    cooldown), and coming up is once per lot. Pushes honour ``message_users_when_lots_sell``; the
+    websocket refresh always fires.
     """
     if auction.message_users_when_lots_sell:
-        entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order")
-        for index, entry in enumerate(entries, start=1):
-            if index > 10:
-                break
-            if entry.lot.sold:
-                continue
-            notify_watchers_lot_selling_soon(entry.lot, position=index)
+        _passed, on_the_block, to_come = queue_split(queue_entries(auction))
+        # A lot's turn on the block ends when anything else is on it, so coming back is a new turn.
+        LotQueueEntry.objects.filter(auction=auction, announced=True).exclude(
+            pk=getattr(on_the_block, "pk", None)
+        ).update(announced=False)
+        if on_the_block:
+            claimed = LotQueueEntry.objects.filter(pk=on_the_block.pk, announced=False).update(announced=True)
+            if claimed and not queue_entry_done(on_the_block):
+                announce_lot_on_the_block(on_the_block.lot)
+            upcoming = [entry.lot for entry in to_come if not queue_entry_done(entry)]
+            for position, lot in enumerate(upcoming[: COMING_UP_POSITIONS - 1], start=2):
+                notify_watchers_lot_selling_soon(lot, position=position)
     broadcast_queue_update(auction)
 
 
-def queue_head_lot(auction):
-    """The lot at the top of the queue (sold next), or None if the queue is empty.
+def _locked_queue(auction):
+    return list(
+        LotQueueEntry.objects.select_for_update().filter(auction=auction).select_related("lot").order_by("order")
+    )
 
-    A lot sold some other way (its own page, the palette) is still queued, so it's popped here.
+
+def advance_queue(auction, from_entry_id=None):
+    """Pass the lot on the block, and any already recorded lots right after it. Returns True if it moved.
+
+    ``from_entry_id`` is the entry the caller saw on the block. If the queue has moved since, nothing
+    happens: Next pressed just as a sale moved the queue on doesn't skip a lot too.
     """
-    head = None
-    popped = False
-    for entry in LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order"):
-        if not entry.lot.sold:
-            head = entry.lot
-            break
-        entry.delete()
-        popped = True
-    if popped:
-        process_queue_notifications(auction)
-    return head
+    with transaction.atomic():
+        _passed, on_the_block, to_come = queue_split(_locked_queue(auction))
+        if on_the_block is None or (from_entry_id is not None and on_the_block.pk != from_entry_id):
+            return False
+        passing = [on_the_block.pk]
+        for entry in to_come:
+            if not queue_entry_done(entry):
+                break
+            passing.append(entry.pk)
+        LotQueueEntry.objects.filter(pk__in=passing).update(passed_at=timezone.now())
+    process_queue_notifications(auction)
+    return True
 
 
-def pop_lot_from_queue(auction, lot):
-    """Remove a lot's queue entry and re-run notifications. Used when a lot sells."""
-    if lot is None:
-        return
-    deleted, _ = LotQueueEntry.objects.filter(auction=auction, lot=lot).delete()
-    if deleted:
+def rewind_queue(auction, from_entry_id=None):
+    """Put the last passed lot back on the block. Returns True if it moved.
+
+    ``from_entry_id`` as ``advance_queue``, with 0 for a screen that showed the queue finished.
+    """
+    with transaction.atomic():
+        passed, on_the_block, _to_come = queue_split(_locked_queue(auction))
+        showing = on_the_block.pk if on_the_block else 0
+        if not passed or (from_entry_id is not None and showing != from_entry_id):
+            return False
+        LotQueueEntry.objects.filter(pk=passed[-1].pk).update(passed_at=None)
+    process_queue_notifications(auction)
+    return True
+
+
+def queue_lot_recorded(auction, lot):
+    """A lot's winner, or no sale, was just recorded. On the block, the queue moves on; anywhere else it
+    stays put, but screens still refresh to show the sale.
+    """
+    entry = LotQueueEntry.objects.filter(auction=auction, lot=lot).first()
+    if entry and not advance_queue(auction, from_entry_id=entry.pk):
         process_queue_notifications(auction)
+
+
+def queue_next_to_record(auction, after_lot=None, include_recorded=False):
+    """The lot set winners should pull up next, or None.
+
+    After a queued lot, the next one after it still to be recorded, so each person recording works down
+    the queue at their own pace, behind the room or with it. ``include_recorded`` is for a double check:
+    the next lot whatever its state, since the first person has probably recorded it already. Otherwise
+    the lot on the block, or the first still to be recorded.
+    """
+    entries = queue_entries(auction)
+    after_pk = getattr(after_lot, "pk", None)
+    index = next((i for i, entry in enumerate(entries) if entry.lot_id == after_pk), None)
+    if index is not None:
+        for entry in entries[index + 1 :]:
+            if include_recorded or not queue_entry_done(entry):
+                return entry.lot
+        return None
+    passed, on_the_block, to_come = queue_split(entries)
+    for entry in ([on_the_block] if on_the_block else []) + to_come + passed:
+        if not queue_entry_done(entry):
+            return entry.lot
+    return None
+
+
+def add_lot_to_queue(auction, lot, user):
+    """Add a lot to the end of the queue. A lot the room passed unsold goes back on the end. Returns an
+    error string or None.
+    """
+    if not lot:
+        return "No lot found"
+    if lot.sold:
+        return f"Lot {lot.lot_number_display} has already been sold"
+    # Two scanners on one lot at once: the loser's insert hits the one-to-one on lot.
+    try:
+        with transaction.atomic():
+            last_order = (
+                LotQueueEntry.objects.select_for_update()
+                .filter(auction=auction)
+                .order_by("-order")
+                .values_list("order", flat=True)
+                .first()
+            ) or 0
+            entry, created = LotQueueEntry.objects.get_or_create(
+                lot=lot,
+                defaults={"auction": auction, "order": last_order + 1, "added_by": user},
+            )
+            if not created and entry.passed_at:
+                entry.order = last_order + 1
+                entry.passed_at = None
+                entry.createdon = timezone.now()
+                entry.save(update_fields=["order", "passed_at", "createdon"])
+                created = True
+    except IntegrityError:
+        created = False
+    if not created:
+        return f"Lot {lot.lot_number_display} is already in the queue"
+    # Sticky, for the queue-usage stat.
+    if not lot.added_to_queue:
+        lot.added_to_queue = True
+        lot.save(update_fields=["added_to_queue"])
+    process_queue_notifications(auction)
+    return None
 
 
 class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
-    """Helpers for the in-person lot queue (LotQueueEntry), built by scanning or typing lots; set winners
-    pulls its head.
-    """
+    """Helpers for the in-person lot queue (LotQueueEntry), built by scanning or typing lots."""
 
     club_sidebar_can_view = False  # full-screen tool; sidebar would waste space
 
@@ -688,8 +862,9 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
             raise Http404(msg)
         return super().dispatch(request, *args, **kwargs)
 
-    def queue_entries(self):
-        return list(LotQueueEntry.objects.filter(auction=self.auction).select_related("lot").order_by("order"))
+    def queue_context(self):
+        passed, on_the_block, to_come = queue_split(queue_entries(self.auction))
+        return {"auction": self.auction, "passed": passed, "on_the_block": on_the_block, "to_come": to_come}
 
     def resolve_lot_from_value(self, value):
         """A scanned lot QR URL or typed lot number to ``(Lot or None, error or None)``."""
@@ -719,66 +894,38 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
         return lot, None
 
     def add_lot(self, lot):
-        """Add a lot to the end of the queue. Returns an error string or None."""
-        if not lot:
-            return "No lot found"
-        if lot.sold:
-            return f"Lot {lot.lot_number_display} has already been sold"
-        # Two scanners on one lot at once: the loser's insert hits the one-to-one on lot.
-        try:
-            with transaction.atomic():
-                last_order = (
-                    LotQueueEntry.objects.select_for_update()
-                    .filter(auction=self.auction)
-                    .order_by("-order")
-                    .values_list("order", flat=True)
-                    .first()
-                ) or 0
-                _entry, created = LotQueueEntry.objects.get_or_create(
-                    lot=lot,
-                    defaults={"auction": self.auction, "order": last_order + 1, "added_by": self.request.user},
-                )
-        except IntegrityError:
-            created = False
-        if not created:
-            return f"Lot {lot.lot_number_display} is already in the queue"
-        # Sticky, for the queue-usage stat.
-        if not lot.added_to_queue:
-            lot.added_to_queue = True
-            lot.save(update_fields=["added_to_queue"])
-        process_queue_notifications(self.auction)
-        return None
+        return add_lot_to_queue(self.auction, lot, self.request.user)
 
     def apply_reorder(self, ordered_ids):
-        """Persist a new order given a list of entry ids (top first)."""
-        entries = {e.pk: e for e in LotQueueEntry.objects.filter(auction=self.auction)}
-        order = 1
+        """Persist a new order given a list of entry ids (top first). Passed entries stay in front."""
+        entries = LotQueueEntry.objects.filter(auction=self.auction).order_by("order")
+        passed = [entry for entry in entries if entry.passed_at]
+        to_come = {entry.pk: entry for entry in entries if not entry.passed_at}
+        moved = []
         for raw in ordered_ids:
             try:
                 pk = int(raw)
             except (ValueError, TypeError):
                 continue
-            entry = entries.pop(pk, None)
+            entry = to_come.pop(pk, None)
             if entry:
-                if entry.order != order:
-                    entry.order = order
-                    entry.save(update_fields=["order"])
-                order += 1
+                moved.append(entry)
         # Unmentioned entries keep their relative order after.
-        for entry in sorted(entries.values(), key=lambda e: e.order):
-            entry.order = order
-            entry.save(update_fields=["order"])
-            order += 1
+        rest = sorted(to_come.values(), key=lambda e: e.order)
+        for order, entry in enumerate(passed + moved + rest, start=1):
+            if entry.order != order:
+                entry.order = order
+                entry.save(update_fields=["order"])
         process_queue_notifications(self.auction)
 
     def render_list(self, error=None):
-        context = {"auction": self.auction, "entries": self.queue_entries(), "error": error}
-        return render(self.request, "auctions/lot_queue_list.html", context)
+        return render(self.request, "auctions/lot_queue_list.html", {**self.queue_context(), "error": error})
 
 
 class LotQueueView(LotQueueMixin, TemplateView):
     """The lot queue page. GET renders it (``?partial=list`` for the list); POST adds, removes, reorders,
-    or takes a scanner ``lot_pk`` (JSON).
+    moves the queue on (``next``/``back``, with ``from``: the entry id the screen showed, 0 for none), or
+    takes a scanner ``lot_pk`` (JSON).
     """
 
     template_name = "auctions/lot_queue.html"
@@ -790,8 +937,7 @@ class LotQueueView(LotQueueMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["auction"] = self.auction
-        context["entries"] = self.queue_entries()
+        context.update(self.queue_context())
         context["show_camera_scanner"] = True
         # For lot QR scans through the ribbon's barcode scanner.
         context["barcode_lot_scan_url"] = self.request.path
@@ -823,28 +969,41 @@ class LotQueueView(LotQueueMixin, TemplateView):
             ordered_ids = request.POST.getlist("order[]") or request.POST.get("order", "").split(",")
             self.apply_reorder(ordered_ids)
             return self.render_list()
+        if action in ("next", "back"):
+            raw = (request.POST.get("from") or "").strip()
+            from_entry_id = int(raw) if raw.isdigit() else None
+            move = advance_queue if action == "next" else rewind_queue
+            if move(self.auction, from_entry_id=from_entry_id):
+                return self.render_list()
+            on_the_block = self.queue_context()["on_the_block"]
+            if from_entry_id not in (None, on_the_block.pk if on_the_block else 0):
+                # Someone else moved it first; the fresh list is the answer.
+                return self.render_list()
+            if action == "next":
+                return self.render_list(error="That was the last lot in the queue")
+            return self.render_list(error="This is the first lot in the queue")
         return self.render_list(error="Unknown action")
 
 
 class LotQueueFullscreenView(LotQueueMixin, TemplateView):
-    """Fullscreen queue partial: the head lot large, plus the next few. Refreshed over websocket, with a
-    slow poll fallback. No ViewLotSimple notification side effect.
+    """Fullscreen queue partial: the lot on the block large, plus the next few. Refreshed over websocket,
+    with a slow poll fallback. No ViewLotSimple notification side effect.
     """
 
     template_name = "auctions/lot_queue_fullscreen.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        entries = self.queue_entries()
+        queue = self.queue_context()
         context["auction"] = self.auction
-        context["lot"] = entries[0].lot if entries else None
-        context["upcoming"] = [entry.lot for entry in entries[1:6]]
+        context["on_the_block"] = queue["on_the_block"]
+        context["upcoming"] = [entry.lot for entry in queue["to_come"] if not queue_entry_done(entry)][:5]
         return context
 
 
 class LotQueueCurrentLotView(LotQueueMixin, TemplateView):
-    """Fullscreen current lot: its own page for a projector, the lot set winners will sell next and only
-    its details (no bids, no queue). ``?partial=lot`` is the lot alone, re-fetched as the queue moves.
+    """Fullscreen current lot: its own page for a projector, the lot on the block and only its details (no
+    bids, no queue). ``?partial=lot`` is the lot alone, re-fetched as the queue moves.
     """
 
     template_name = "auctions/lot_queue_current_lot.html"
@@ -857,8 +1016,7 @@ class LotQueueCurrentLotView(LotQueueMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
-        # Skip a lot sold elsewhere without popping it: a GET here stays side-effect free.
-        context["lot"] = next((entry.lot for entry in self.queue_entries() if not entry.lot.sold), None)
+        context["on_the_block"] = self.queue_context()["on_the_block"]
         return context
 
 

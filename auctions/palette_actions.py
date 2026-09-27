@@ -1360,7 +1360,7 @@ def no_sale(request, params: dict[str, Any]) -> dict[str, Any]:
         user=user,
     )
     result: dict[str, Any] = {}
-    view.pop_queue_and_set_next(lot, result)
+    view.advance_queue_and_set_next(lot, result)
     next_lot = result.get("next_queued_lot_number")
     summary = str(message or f"Lot {lot.lot_number_display} didn't sell.")
     if next_lot:
@@ -4178,18 +4178,21 @@ def _watched_ending_soon(user, auction, limit: int = 5):
             }
             for lot in live[:limit]
         ]
-    entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot")
-    if not entries.exists():
+    entries = list(
+        LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).select_related("lot").order_by("order")
+    )
+    if not entries:
         return None
     return [
         {
             "lot_number": entry.lot.lot_number_display,
             "name": untrusted_short(entry.lot.lot_name),
             "url": entry.lot.lot_link,
-            "place_in_queue": entry.order,
+            "place_in_queue": place,
         }
-        for entry in entries.filter(lot__in=watched_ids)[:limit]
-    ]
+        for place, entry in enumerate(entries, start=1)
+        if entry.lot_id in watched_ids
+    ][:limit]
 
 
 #: Default rows per list lookup.
@@ -4806,7 +4809,10 @@ def lot_queue(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if auction.is_online:
         return _error(f"{auction.title} is an online auction, so there's no lot queue — lots end on their own clock.")
-    entries = list(LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order"))
+    # From the lot on the block; the lots the room has passed aren't the queue any more.
+    entries = list(
+        LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).select_related("lot").order_by("order")
+    )
     if not entries:
         return {
             "found": False,
@@ -10261,10 +10267,10 @@ def _queued_lot_or_problem(request, auction, params: dict[str, Any]):
 def _queue_position(auction, lot) -> int | None:
     from .models import LotQueueEntry
 
-    entry = LotQueueEntry.objects.filter(auction=auction, lot=lot).first()
+    entry = LotQueueEntry.objects.filter(auction=auction, lot=lot, passed_at__isnull=True).first()
     if not entry:
         return None
-    return LotQueueEntry.objects.filter(auction=auction, order__lte=entry.order).count()
+    return LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True, order__lte=entry.order).count()
 
 
 def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -10272,7 +10278,7 @@ def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     refusals and side effects included.
     """
     from .models import LotQueueEntry
-    from .views import process_queue_notifications
+    from .views import add_lot_to_queue
 
     auction, problem = _queue_auction_or_problem(request, params)
     if problem:
@@ -10282,23 +10288,19 @@ def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if lot.sold:
         return _error(f"Lot {lot.lot_number_display} has already been sold, so it can't be queued.")
-    if LotQueueEntry.objects.filter(auction=auction, lot=lot).exists():
-        return _error(
-            f"Lot {lot.lot_number_display} is already in the queue, at number {_queue_position(auction, lot)}."
-        )
-    highest = LotQueueEntry.objects.filter(auction=auction).aggregate(top=models.Max("order"))["top"] or 0
-    LotQueueEntry.objects.create(auction=auction, lot=lot, order=highest + 1, added_by=request.user)
-    if not lot.added_to_queue:
-        lot.added_to_queue = True
-        lot.save(update_fields=["added_to_queue"])
-    process_queue_notifications(auction)
+    already = _queue_position(auction, lot)
+    if already:
+        return _error(f"Lot {lot.lot_number_display} is already in the queue, at number {already}.")
+    error = add_lot_to_queue(auction, lot, request.user)
+    if error:
+        return _error(error)
     position = _queue_position(auction, lot)
     return _ok(
         f"Queued lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}. "
         f"It's number {position} in the running order.",
         **_lot_echo(lot),
         position=position,
-        queue_length=LotQueueEntry.objects.filter(auction=auction).count(),
+        queue_length=LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).count(),
         followups=[{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}],
     )
 
@@ -10319,7 +10321,7 @@ def unqueue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"Lot {lot.lot_number_display} isn't in {auction.title}'s queue.")
     entries.delete()
     process_queue_notifications(auction)
-    remaining = LotQueueEntry.objects.filter(auction=auction).count()
+    remaining = LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).count()
     return _ok(
         f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, out of the queue. "
         f"{remaining} lot{'s' if remaining != 1 else ''} still queued.",

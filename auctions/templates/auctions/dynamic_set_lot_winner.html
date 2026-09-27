@@ -157,8 +157,9 @@
       });
   }
 
-  function getLotPicture() {
-    htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()), {target: '#result'});
+  // preview: a lot number still being typed, so its watchers aren't told it's about to be sold.
+  function getLotPicture(preview) {
+    htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()) + (preview ? '/?preview=1' : '/'), {target: '#result'});
   }
 
 {% if request.is_mobile_app %}
@@ -1127,7 +1128,7 @@ $(document).ready(function() {
         var input = document.getElementById('lot');
         input.addEventListener('keyup', function () {
           clearTimeout(lotSearch);
-          lotSearch = setTimeout(getLotPicture, 1000);
+          lotSearch = setTimeout(function () { getLotPicture(true); }, 1000);
         });
 
       // Full screen mode

@@ -1,0 +1,23 @@
+{% comment %}One lot still to come in lot_queue_list.html. Context: auction, entry, position, current (the lot on the block).{% endcomment %}
+<li class="list-group-item d-flex align-items-center gap-2{% if current %} active{% endif %}" data-entry-id="{{ entry.pk }}">
+  <span class="queue-drag-handle" style="cursor:grab;" title="Drag to reorder" aria-label="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+  <span class="badge {% if current %}bg-light text-dark{% else %}bg-secondary{% endif %}">{{ position }}</span>
+  {% if entry.lot.thumbnail %}
+  <img src="{{ entry.lot.thumbnail.thumbnail_url }}" alt="" style="width:56px;height:42px;object-fit:cover;" class="rounded">
+  {% else %}
+  <span class="d-inline-flex align-items-center justify-content-center rounded" style="width:56px;height:42px;background:#303030;"><i class="bi bi-image"></i></span>
+  {% endif %}
+  <span class="flex-grow-1 text-truncate">
+    <strong>Lot {{ entry.lot.lot_number_display }}</strong>
+    <span class="d-none d-sm-inline">&mdash; {{ entry.lot.lot_name }}</span>
+  </span>
+  {% if current %}<span class="badge bg-light text-dark"><i class="bi bi-megaphone"></i> Selling now</span>{% endif %}
+  {% if entry.lot.sold %}<span class="badge bg-success text-dark">Sold</span>{% endif %}
+  <button type="button" class="btn btn-sm btn-danger"
+          hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
+          hx-vals='{"action": "remove", "entry_id": "{{ entry.pk }}"}'
+          hx-target="#queue-list" hx-swap="innerHTML"
+          title="Remove from queue" aria-label="Remove lot {{ entry.lot.lot_number_display }} from the queue">
+    <i class="bi bi-x-lg"></i>
+  </button>
+</li>

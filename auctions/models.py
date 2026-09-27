@@ -7539,13 +7539,14 @@ class Lot(CachedPropertiesMixin, models.Model):
     coming_up_push_sent.help_text = (
         "Set once this lot's watchers got the 'coming up soon -- N lots away' push while it sat in the "
         "top 10 of the in-person queue. Deduped so that push fires at most once per lot; the later "
-        "'about to be sold' push (selling_push_notification_sent) overwrites it on the device."
+        "'about to be sold' push (selling_push_sent_at) overwrites it on the device."
     )
-    selling_push_notification_sent = models.BooleanField(default=False)
-    selling_push_notification_sent.help_text = (
-        "Set once this lot's watchers got the final 'about to be sold' push (it reached the head of "
-        "the queue or was pulled up on the set-winners screen). Deduped so that push fires at most "
-        "once per lot; shares a notification tag with the 'coming up soon' push so it overwrites it."
+    selling_push_sent_at = models.DateTimeField(null=True, blank=True)
+    selling_push_sent_at.help_text = (
+        "When this lot's watchers last got the 'about to be sold' push (it came up in the in-person "
+        "queue or was pulled up on the set-winners screen). Another is sent only if the lot comes up "
+        "again after SELLING_PUSH_COOLDOWN, which is what a mistyped lot number looks like; shares a "
+        "notification tag with the 'coming up soon' push so it overwrites it."
     )
     added_to_queue = models.BooleanField(default=False)
     added_to_queue.help_text = (
@@ -13542,8 +13543,9 @@ class VolunteerSignup(InvalidatesRelatedCache, models.Model):
 
 
 class LotQueueEntry(models.Model):
-    """An in-person auction's ordered queue of lots about to be sold, built by scanning. Set winners pulls
-    the head; watchers get "coming up" and "about to be sold" pushes (deduped per lot).
+    """An in-person auction's running order, built by scanning. Entries are kept after their lot sells:
+    the passed ones are a prefix, and the first entry not passed is the lot on the block. Next, Back
+    and recording the lot on the block move that line (:mod:`auctions.views.selling`).
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="lot_queue_entries")
@@ -13551,6 +13553,13 @@ class LotQueueEntry(models.Model):
     order = models.PositiveIntegerField()
     added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     createdon = models.DateTimeField(auto_now_add=True)
+    passed_at = models.DateTimeField(null=True, blank=True)
+    passed_at.help_text = "When the room moved past this lot. Unset while it's still to come or on the block."
+    announced = models.BooleanField(default=False)
+    announced.help_text = (
+        "The 'about to be sold' pass has run for this lot's turn on the block. Cleared whenever another "
+        "lot is on the block, so coming back to it announces it again (subject to the lot's cooldown)."
+    )
 
     class Meta:
         ordering = ["auction", "order"]

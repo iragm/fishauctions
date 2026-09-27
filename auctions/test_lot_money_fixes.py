@@ -430,11 +430,11 @@ class LotQueueTests(StandardTestCase):
         self.client.post(self.url, {"action": "add", "value": "101-1"})
         self.assertEqual(LotQueueEntry.objects.get(lot=self.in_person_lot).order, 8)
 
-    def test_the_head_skips_and_pops_lots_sold_elsewhere(self):
-        from auctions.views.selling import queue_head_lot
+    def test_set_winners_skips_lots_sold_elsewhere_and_keeps_them_queued(self):
+        from auctions.views.selling import queue_next_to_record
 
         sold = self.queued_lot("sold on its own page", 1)
         waiting = self.queued_lot("still waiting", 2)
         Lot.objects.filter(pk=sold.pk).update(auctiontos_winner=self.in_person_buyer, winning_price=5)
-        self.assertEqual(queue_head_lot(self.in_person_auction), waiting)
-        self.assertFalse(LotQueueEntry.objects.filter(lot=sold).exists())
+        self.assertEqual(queue_next_to_record(self.in_person_auction), waiting)
+        self.assertTrue(LotQueueEntry.objects.filter(lot=sold).exists())

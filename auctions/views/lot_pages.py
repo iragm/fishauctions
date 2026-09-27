@@ -85,7 +85,7 @@ from .base import (
     close_modal_response,
     safe_next_url,
 )
-from .selling import notify_watchers_lot_selling_soon
+from .selling import announce_lot_on_the_block, queue_has_reached, queue_lot_recorded
 
 logger = logging.getLogger(__name__)
 #: Page-view history window. Also what keeps it cheap: PageView is the largest table.
@@ -602,7 +602,12 @@ class ViewLot(DetailView):
 
 
 class ViewLotSimple(ViewLot, AuctionViewMixin):
-    """Minimalist view of a lot, just image and description.  For htmx calls"""
+    """Minimalist view of a lot, just image and description.  For htmx calls.
+
+    An admin pulling a lot up on set winners announces it, unless it's ``?preview=1`` (a lot number still
+    being typed) or the queue has already got to it: the queue announces its own lots, and a lot behind
+    it is being recorded after the room sold it.
+    """
 
     template_name = "view_lot_simple.html"
     enable_404 = False
@@ -613,18 +618,14 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
         context["lot"] = lot
         if lot and lot.auction:
             self.auction = lot.auction
-            if self.is_auction_admin and self.auction.message_users_when_lots_sell and not lot.sold:
-                # The websocket chat message is transient and keeps firing on every view.
-                result = {
-                    "type": "chat_message",
-                    "info": "CHAT",
-                    "message": "This lot is about to be sold!",
-                    "pk": -1,
-                    "username": "System",
-                }
-                lot.send_websocket_message(result)
-                # Deduped helper, so queue and pull-up don't both notify.
-                notify_watchers_lot_selling_soon(lot, request_user=self.request.user)
+            if (
+                self.is_auction_admin
+                and self.auction.message_users_when_lots_sell
+                and not lot.sold
+                and self.request.GET.get("preview") != "1"
+                and not queue_has_reached(lot)
+            ):
+                announce_lot_on_the_block(lot, request_user=self.request.user)
         return context
 
 
@@ -1289,6 +1290,8 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                     obj.winner = obj.auctiontos_winner.user
                 # winner isn't set when auctiontos_winner is first set; winner is rarely used in auctions.
             obj.save()
+            if obj.sold and {"auctiontos_winner", "winning_price"} & set(form.changed_data):
+                queue_lot_recorded(self.auction, obj)
             # Teach the cache only here, on a real change: auction admins correcting a lot, revertible
             # on the gaps page. Seller forms don't.
             if self.auction.use_scientific_name and species_changed and obj.lot_name:

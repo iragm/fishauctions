@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13989 lines)
+- **`models.py`** (14025 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -186,7 +186,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15031 lines)
+- **`palette_actions.py`** (15033 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
@@ -404,12 +404,12 @@ this only quotes its opening sentence.
 - **`test_lot_models.py`** (930 lines)
   Lot and auction model behaviour, and the chat subscriptions hanging off a lot.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
-- **`test_lot_money_fixes.py`** (438 lines)
+- **`test_lot_money_fixes.py`** (440 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
 - **`test_lot_page_views.py`** (365 lines)
   The two page-view history modals: one lot's, and every lot on the selling dashboard.
   `PageViewHistoryHelperTests`, `LotPageViewHistoryViewTests`, `SellingDashboardPageViewHistoryTests`
-- **`test_lot_views.py`** (1068 lines)
+- **`test_lot_views.py`** (1301 lines)
   The lot pages an auction is actually run from: labels, push, set-winner and the queue.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
 - **`test_marketing.py`** (853 lines)
@@ -430,7 +430,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1287 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
-- **`test_mobile_features.py`** (2717 lines)
+- **`test_mobile_features.py`** (2718 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -494,7 +494,7 @@ this only quotes its opening sentence.
 - **`test_query_counts.py`** (559 lines)
   Query-count guards for the N+1s that were fixed.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
-- **`test_remote_print.py`** (539 lines)
+- **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (596 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
@@ -520,7 +520,7 @@ this only quotes its opening sentence.
 - **`test_static_html.py`** (85 lines)
   ``format_html`` is never called with nothing to format, and ``static_html`` only ever takes a literal.
   `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
-- **`test_stats.py`** (1183 lines)
+- **`test_stats.py`** (1239 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
 - **`test_stats_and_browse_views.py`** (615 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
@@ -756,7 +756,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (545 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
 - **`urls.py`** (138 lines)
-- **`views.py`** (1565 lines)
+- **`views.py`** (1559 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -782,7 +782,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `LabelRenderer`, `PngLabelRenderer`, `get_renderer`, `supported_formats`
 - **`labels.py`** (109 lines)
   `LabelService`
-- **`offline.py`** (520 lines)
+- **`offline.py`** (530 lines)
   Offline mode for the app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
 - **`payments.py`** (592 lines)
@@ -886,7 +886,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (394 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1318 lines)
+- **`lot_pages.py`** (1321 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (217 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -895,10 +895,10 @@ Every view on the site, split by the part of it the view belongs to.
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1081 lines)
   Connecting PayPal and Square accounts and taking payments through them.
-- **`printing.py`** (538 lines)
+- **`printing.py`** (531 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
-- **`selling.py`** (1081 lines)
+- **`selling.py`** (1239 lines)
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
