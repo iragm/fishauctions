@@ -21,9 +21,9 @@ style_reference.md.{% endcomment %}
 {% if needs_mailing_address %}
 <div class="alert alert-warning text-dark py-2" role="alert">
   <i class="bi bi-exclamation-triangle me-1"></i>
-  <strong>Add a donation mailing address before sending.</strong>
+  <strong>Add a mailing address before sending.</strong>
   Donation emails sent from this site have to carry a postal address for the club.
-  <a href="{% url 'club_donation_settings' club.slug %}">Add one in donation settings</a>.
+  <a href="{% url 'club_edit' club.slug %}">Add one in club settings</a>.
 </div>
 {% endif %}
 

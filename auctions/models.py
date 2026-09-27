@@ -1039,11 +1039,14 @@ class Club(CloudflareImageMixin, models.Model):
             "to be retyped for each vendor."
         ),
     )
-    donation_mailing_address = models.TextField(
+    mailing_address = models.TextField(
         blank=True,
         default="",
-        verbose_name="Donation mailing address",
-        help_text="Where vendors should send physical donations. Included in donation emails.",
+        verbose_name="Mailing address",
+        help_text=(
+            "Required before the club can send email from this site: the law wants a postal address on "
+            "it. Also where vendors send physical donations."
+        ),
     )
     # The dossier: the answers every vendor's donation-request form asks for, kept once instead of
     # being hunted down per form. Text only -- no uploads, so no determination letter lives here.
@@ -1350,7 +1353,7 @@ class Club(CloudflareImageMixin, models.Model):
             ("Phone", self.donation_phone),
             ("Website", self.donation_website),
             ("Expected attendance", self.donation_expected_attendance),
-            ("Mailing address", self.donation_mailing_address.strip()),
+            ("Mailing address", self.mailing_address.strip()),
             ("About the club", self.donation_context.strip()),
         ]
         return [(label, value) for label, value in rows if value]
@@ -1364,6 +1367,16 @@ class Club(CloudflareImageMixin, models.Model):
         when = timezone.localtime(event.date_start).strftime("%B %-d, %Y")
         where = f" at {event.location}" if event.location else ""
         return f"{event.title} on {when}{where}"
+
+    @property
+    def mailing_address_one_line(self):
+        """The mailing address as "PO Box 1, City ST": for a footer line. ``splitlines`` also drops the \\r a textarea sends."""
+        return ", ".join(line.strip() for line in self.mailing_address.splitlines() if line.strip())
+
+    @property
+    def can_send_email(self):
+        """False until the club has a mailing address: every email the club sends from this site carries it."""
+        return bool(self.mailing_address.strip())
 
     @property
     def sends_donation_email(self):

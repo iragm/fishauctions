@@ -1896,7 +1896,7 @@ class NextEventInMemberEmailTests(TestCase):
     """Member emails advertise the club's next calendar event, not just its next auction."""
 
     def setUp(self):
-        self.club = Club.objects.create(name="Email Club")
+        self.club = Club.objects.create(mailing_address="PO Box 1, Springfield IL 62701", name="Email Club")
         self.site = Site.objects.get_current()
         self.start = timezone.now() + datetime.timedelta(days=5)
 

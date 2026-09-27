@@ -1,0 +1,9 @@
+{% extends "account/email/base_message.html" %}
+{% block message %}<p>This change was just made to your account:</p>
+<p><b>{% block notification_message %}{% endblock notification_message %}</b></p>
+<p>If this wasn't you, change your password now. The change came from:</p>
+<ul>
+<li>IP address: {{ ip }}</li>
+<li>Browser: {{ user_agent }}</li>
+<li>Date: {{ timestamp }}</li>
+</ul>{% endblock message %}

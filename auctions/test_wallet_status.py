@@ -680,7 +680,10 @@ class ClubMemberResendCardTests(TestCase):
 
     def setUp(self):
         self.club = Club.objects.create(
-            name="Resend Card Club", show_member_barcode=True, membership_annual_fee=Decimal(20)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Resend Card Club",
+            show_member_barcode=True,
+            membership_annual_fee=Decimal(20),
         )
         self.admin = User.objects.create_user(username="resend_admin", password="testpass", email="ra@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, name="Resend Admin", permission_add_edit=True)
@@ -722,6 +725,14 @@ class ClubMemberResendCardTests(TestCase):
                 club=self.club, action__contains="Emailed membership card to John Smith"
             ).exists()
         )
+
+    def test_a_club_without_a_mailing_address_is_told_why(self):
+        Club.objects.filter(pk=self.club.pk).update(mailing_address="")
+        self.client.login(username="resend_admin", password="testpass")
+        with patch("auctions.tasks.mail.send") as send:
+            response = self.client.post(self.action_url)
+        self.assertFalse(send.called)
+        self.assertIn("mailing address", response.headers.get("HX-Trigger", "") + response.content.decode())
 
     def test_sending_always_emails_even_for_a_push_subscriber(self):
         """Resending a card always emails, even for a push subscriber."""
@@ -779,7 +790,10 @@ class MembershipEmailWalletButtonTests(TestCase):
 
     def setUp(self):
         self.club = Club.objects.create(
-            name="Wallet Email Club", show_member_barcode=True, membership_annual_fee=Decimal(20)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Wallet Email Club",
+            show_member_barcode=True,
+            membership_annual_fee=Decimal(20),
         )
         self.member = ClubMember.objects.create(club=self.club, name="Wallet Member", email="wallet@example.com")
 
@@ -851,7 +865,10 @@ class ClubMemberRenewAPITests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user(username="renew_api_owner", password="testpass", email="ra@example.com")
         self.club = Club.objects.create(
-            name="Renew API Club", membership_system="rolling", membership_annual_fee=Decimal(25)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Renew API Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal(25),
         )
         raw_key, prefix, key_hash = ClubAPIKey.generate()
         self.api_key = ClubAPIKey.objects.create(

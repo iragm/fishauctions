@@ -3185,6 +3185,10 @@ def _card_recipient_for_admin(request, params: dict[str, Any]):
     return _resolve_member(club, _str(params, "person") or _str(params, "name"))
 
 
+#: Club.can_send_email is False: every email a club sends from here carries its postal address.
+NO_MAILING_ADDRESS = "{club} can't send email until it adds a mailing address in its club settings."
+
+
 def _send_card(request, member, *, for_self: bool) -> dict[str, Any]:
     """Email one member their card, with the page's refusals and history line."""
     from .models import ClubHistory
@@ -3200,6 +3204,8 @@ def _send_card(request, member, *, for_self: bool) -> dict[str, Any]:
         )
     if member.contact_status == "do_not_contact":
         return _error(f"{named} is marked do-not-contact at {member.club.name}, so nothing was sent.")
+    if not member.club.can_send_email:
+        return _error(NO_MAILING_ADDRESS.format(club=member.club.name))
     try:
         sent = send_membership_card_email(member)
     except Exception:
@@ -6886,7 +6892,7 @@ def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
         "message_count": vendor.emails.count(),
         "club_sends_the_email": bool(club.sends_donation_email),
         "club_donation_context": club.donation_context.strip() or None,
-        "club_mailing_address": club.donation_mailing_address.strip() or None,
+        "club_mailing_address": club.mailing_address.strip() or None,
         # Only where it is the thing needed: for an email vendor it is a second copy of the club's
         # settings nobody asked for.
         "what_their_form_asks_for": (
@@ -10781,6 +10787,8 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
         )
     if member.contact_status == "do_not_contact":
         return _error(f"{untrusted_short(member.display_name)} is marked do-not-contact, so no email was sent.")
+    if not club.can_send_email:
+        return _error(NO_MAILING_ADDRESS.format(club=club.name))
     send_membership_card_email(member)
     ClubHistory.objects.create(
         club=club,

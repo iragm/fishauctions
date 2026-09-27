@@ -116,9 +116,7 @@ class ClubDonationVendorsView(LoginRequiredMixin, DonationPermissionMixin, HTMxT
         ).count()
         # Sending is blocked without a postal address (donations.send_request); say so here rather
         # than at the end of the dialog.
-        context["needs_mailing_address"] = self.club.sends_donation_email and not (
-            self.club.donation_mailing_address.strip()
-        )
+        context["needs_mailing_address"] = self.club.sends_donation_email and not self.club.can_send_email
         # The status menu is written by the header template, not crispy.
         selected_status = (self.request.GET.get("status") or "").strip()
         context["status_choices"] = DonationVendor.STATUS_FILTER_CHOICES
@@ -322,7 +320,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
             "step": "no_address",
             "modal_title": f"Contact {self.vendor.name}",
             "error": "Your club needs a mailing address before it can send donation email.",
-            "settings_url": reverse("club_donation_settings", kwargs={"slug": self.club.slug}),
+            "settings_url": reverse("club_edit", kwargs={"slug": self.club.slug}),
         }
 
     def _blocked_context(self):
@@ -362,7 +360,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
 
     def get(self, request, pk):
         self._load(request, pk)
-        if not self.club.donation_mailing_address.strip():
+        if not self.club.can_send_email:
             return render(request, "auctions/donation_contact_modal.html", self._missing_address_context())
         if self.quota.exhausted:
             return render(request, "auctions/donation_contact_modal.html", self._blocked_context())
@@ -377,7 +375,7 @@ class DonationContactView(LoginRequiredMixin, DonationPermissionMixin, View):
     def post(self, request, pk):
         self._load(request, pk)
         step = request.POST.get("step")
-        if not self.club.donation_mailing_address.strip():
+        if not self.club.can_send_email:
             return render(request, "auctions/donation_contact_modal.html", self._missing_address_context())
         if self.quota.exhausted and step != "send":
             # Nothing may be written past the limit, so don't offer a screen that ends in a refusal.

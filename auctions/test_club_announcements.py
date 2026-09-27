@@ -830,20 +830,20 @@ class ProviderAddressPrefillTests(TestCase):
         self.assertEqual(formatted, "2 Reef Rd\nLeeds LS1\nUK")
 
     def test_an_address_the_club_typed_itself_is_never_overwritten(self):
-        from auctions.views.club_integrations import _prefill_donation_address
+        from auctions.views.club_integrations import _prefill_mailing_address
 
-        self.club.donation_mailing_address = "PO Box 9"
+        self.club.mailing_address = "PO Box 9"
         self.club.save()
-        self.assertFalse(_prefill_donation_address(self.club, "1 Fish St\nBoston MA", "Mailchimp"))
+        self.assertFalse(_prefill_mailing_address(self.club, "1 Fish St\nBoston MA", "Mailchimp"))
         self.club.refresh_from_db()
-        self.assertEqual(self.club.donation_mailing_address, "PO Box 9")
+        self.assertEqual(self.club.mailing_address, "PO Box 9")
 
     def test_a_blank_address_is_filled_in_and_recorded(self):
-        from auctions.views.club_integrations import _prefill_donation_address
+        from auctions.views.club_integrations import _prefill_mailing_address
 
-        self.assertTrue(_prefill_donation_address(self.club, "1 Fish St\nBoston MA", "Mailchimp"))
+        self.assertTrue(_prefill_mailing_address(self.club, "1 Fish St\nBoston MA", "Mailchimp"))
         self.club.refresh_from_db()
-        self.assertEqual(self.club.donation_mailing_address, "1 Fish St\nBoston MA")
+        self.assertEqual(self.club.mailing_address, "1 Fish St\nBoston MA")
         self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Mailchimp").exists())
 
 

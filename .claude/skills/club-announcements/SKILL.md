@@ -18,7 +18,7 @@ description: Club announcements and the website integration: delivery channels, 
 - Email is always a **campaign** to the provider's list, from a Celery task. Never through our mail
   server and never a transactional send: both bypass the provider's unsubscribe list.
 - Nobody types a from address (provider's own sender; the same read fills a blank
-  `Club.donation_mailing_address`) or a subject (`"<Club> announcement"`). No unsubscribe link of
+  `Club.mailing_address`) or a subject (`"<Club> announcement"`). No unsubscribe link of
   ours. No template editor.
 - Mailchimp and Brevo: only one may be ticked (members are synced to both). Only a connected provider
   is offered. The form opens with nothing ticked.

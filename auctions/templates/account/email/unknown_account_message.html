@@ -1,0 +1,5 @@
+{% extends "account/email/base_message.html" %}
+{% load email_tags %}
+{% block message %}<p>You're receiving this email because you or someone else tried to sign in to an account with the email {{ email }}, but there's no account with that address. If it wasn't you, you can ignore it.</p>
+<p>If it was you, you can sign up:</p>
+{% email_button %}<a href="{{ signup_url }}">Sign up</a>{% endemail_button %}{% endblock message %}

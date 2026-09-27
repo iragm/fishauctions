@@ -1,0 +1,6 @@
+{% extends "account/email/base_message.html" %}
+{% load account email_tags %}
+{% block message %}{% user_display user as user_display %}<p>You're receiving this email because user {{ user_display }} has given yours as an email address to connect their account.</p>
+{% if code %}<p>Your verification code is below. Enter it in your open browser window.</p>
+<p style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:28px;font-weight:600;letter-spacing:4px;">{{ code }}</p>{% else %}<p>Just to make sure you're not up to anything fishy, we need to confirm that this is your address.</p>
+{% email_button %}<a href="{{ activate_url }}">Confirm your email address</a>{% endemail_button %}{% endif %}{% endblock message %}

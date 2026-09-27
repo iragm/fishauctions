@@ -59,7 +59,7 @@ class Command(BaseCommand):
                 send_email=lambda user=user: mail.send(
                     user.email,
                     template="watched_items_ending",
-                    context={"domain": current_site.domain},
+                    context={"domain": current_site.domain, "name": user.first_name},
                 ),
             )
             self.stdout.write(f"Notified {user.email} about their watched items")

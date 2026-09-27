@@ -514,12 +514,12 @@ class BrevoListSelectViewTests(ClubFixtureMixin, TestCase):
         self.client.force_login(self.permitted)
         self.client.post(self._url(), {"list_id": "7"})
         self.club.refresh_from_db()
-        self.assertEqual(self.club.donation_mailing_address, "1 Reef Rd\nTampa 33601")
+        self.assertEqual(self.club.mailing_address, "1 Reef Rd\nTampa 33601")
 
-        Club.objects.filter(pk=self.club.pk).update(donation_mailing_address="Typed by the club", brevo_list_id="")
+        Club.objects.filter(pk=self.club.pk).update(mailing_address="Typed by the club", brevo_list_id="")
         self.client.post(self._url(), {"list_id": "7"})
         self.club.refresh_from_db()
-        self.assertEqual(self.club.donation_mailing_address, "Typed by the club")
+        self.assertEqual(self.club.mailing_address, "Typed by the club")
 
 
 class WebhookEdgeCaseTests(TestCase):

@@ -1041,6 +1041,7 @@ class ClubMoneyRenewalConsistencyTests(StandardTestCase):
 class ClubMembershipEmailTaskTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
+            mailing_address="PO Box 1, Springfield IL 62701",
             name="Club Email Task Club",
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
@@ -1150,7 +1151,7 @@ class ClubMembershipEmailTaskTests(TestCase):
         self.assertFalse(ClubHistory.objects.filter(club=self.club).exists())
 
     @patch("auctions.tasks.mail.send")
-    def test_membership_email_falls_back_to_member_when_name_blank(self, mock_send):
+    def test_membership_email_greets_there_when_name_blank(self, mock_send):
         from auctions.tasks import send_club_member_email
 
         nameless = ClubMember.objects.create(
@@ -1161,8 +1162,8 @@ class ClubMembershipEmailTaskTests(TestCase):
         send_club_member_email(nameless, "Subject", "Body")
         self.assertTrue(mock_send.called)
         kwargs = mock_send.call_args.kwargs
-        self.assertIn("Dear Member,", kwargs["message"])
-        self.assertIn("Dear Member,", kwargs["html_message"])
+        self.assertIn("Hey there,", kwargs["message"])
+        self.assertIn("Hey there,", kwargs["html_message"])
 
 
 class ClubBarcodeViewTests(TestCase):

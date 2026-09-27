@@ -1,0 +1,4 @@
+{% extends "account/email/base_message.html" %}
+{% load email_tags %}
+{% block message %}<p>You're receiving this email because you or someone else tried to sign up with the email {{ email }}, but there's already an account with that address. If you've forgotten your password, you can reset it:</p>
+{% email_button %}<a href="{{ password_reset_url }}">Reset your password</a>{% endemail_button %}{% endblock message %}
