@@ -35,7 +35,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (200 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1568 lines)
+- **`admin.py`** (1570 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -127,7 +127,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (208 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1840 lines)
+- **`filters.py`** (1848 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -135,7 +135,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6319 lines)
+- **`forms.py`** (6290 lines)
   Every form on the site.
 - **`friction_models.py`** (74 lines)
   Where people get stuck: one row per rejected form submission.
@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (13894 lines)
+- **`models.py`** (13899 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -186,7 +186,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (14984 lines)
+- **`palette_actions.py`** (14990 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
@@ -234,7 +234,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1445 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1774 lines)
+- **`tasks.py`** (1768 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -273,6 +273,9 @@ this only quotes its opening sentence.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `RelinkAuctiontosUsersCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (624 lines)
   Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images.
+- **`test_auction_promos.py`** (361 lines)
+  ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.
+  `AuctionPromosTestCase`, `WindowTests`, `SendHourTests`, `AudienceTests`, `PushTests`, `SentLogTests`
 - **`test_auction_props.py`** (1262 lines)
   Tests for ``Auction`` computed properties.
   `AuctionPropertyTests`, `LotPropertyTests`, `LotInvoicePropertyTests`, `SellerInvoiceRemovedLotTests`, `BuyNowSellerCreditTests`
@@ -343,15 +346,18 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1376 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_csv_import.py`** (1110 lines)
+- **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
-  `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`, `WeeklyPromoEmailTrackingTestCase`
+  `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`
 - **`test_custom_random.py`** (284 lines)
   The custom random field: an auction's option list that each lot is dealt from, and nobody edits.
   `CustomRandomTestCase`, `DealingTests`, `NobodyEditsItTests`, `ShownPrintedAndSearchedTests`, `OptionsAPITests`, `OptionsOverMCPTests`
 - **`test_data_leak_penetration.py`** (259 lines)
   Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin.
   `DataLeakPenetrationTests`
+- **`test_direct_sales_off.py`** (57 lines)
+  Selling outside an auction, switched off by ``ALLOW_USERS_TO_CREATE_LOTS``: nothing user facing offers it,
+  `DirectSalesOffTests`
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
@@ -418,7 +424,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1286 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`
-- **`test_mobile_features.py`** (2833 lines)
+- **`test_mobile_features.py`** (2717 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -434,9 +440,9 @@ this only quotes its opening sentence.
   `MobilePaymentConfirmTests`, `MobilePaymentEndpointTests`, `SquareSellerRoutingTests`, `SquareTokenHandoutAuditTests`
 - **`test_mobile_social_auth.py`** (869 lines)
   Tests for native social sign-in (Apple, Google, Facebook).
-- **`test_models_misc.py`** (1210 lines)
+- **`test_models_misc.py`** (905 lines)
   Model methods, signal behaviour, and the management commands that email people.
-  `EmailAddressCheckingTests`, `ModelMethodsTestCase`, `SignalLogicTestCase`, `DuplicateAuctionTOSTests`, `AuctionNoShowURLEncodingTest`, `WeeklyPromoManagementCommandTests`, `AuctionTOSNotificationsCommandTests`
+  `EmailAddressCheckingTests`, `ModelMethodsTestCase`, `SignalLogicTestCase`, `DuplicateAuctionTOSTests`, `AuctionNoShowURLEncodingTest`, `AuctionTOSNotificationsCommandTests`
 - **`test_module_map.py`** (151 lines)
   Guards the module map against drift and verifies module docstring rules are enforced.
   `ModuleMapIsCurrentTests`, `ModuleRulesTests`, `RuleCheckerTests`, `SummaryTests`, `ViewsPackageStaysAcyclicTests`
@@ -590,7 +596,10 @@ this only quotes its opening sentence.
 - **`auction_emails.py`** (358 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
-- **`auctiontos_notifications.py`** (226 lines)
+- **`auction_promos.py`** (261 lines)
+  Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
+  `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_send_time`, `recipients`, `is_quiet`, `when_text`, `Command`
+- **`auctiontos_notifications.py`** (227 lines)
   `send_tos_notification`, `Command`
 - **`backfill_bap_reasons.py`** (120 lines)
   `Command`
@@ -656,9 +665,6 @@ this only quotes its opening sentence.
 - **`mine_palette_shortcuts.py`** (109 lines)
   Turn recurring assistant answers into zero-token shortcuts.
   `Command`
-- **`promo_push_notifications.py`** (137 lines)
-  Push notifications promoting nearby auctions to app users who opted into push.
-  `claim`, `Command`
 - **`purge_bot_users.py`** (24 lines)
   `Command`
 - **`register_discord_commands.py`** (138 lines)
@@ -669,7 +675,7 @@ this only quotes its opening sentence.
   `Command`
 - **`set_user_location.py`** (193 lines)
   `Command`
-- **`setup_celery_beat.py`** (127 lines)
+- **`setup_celery_beat.py`** (128 lines)
   Create the PeriodicTask rows django-celery-beat reads, from the beat_schedule in
   `Command`
 - **`split_speaker_talks.py`** (174 lines)
@@ -690,8 +696,6 @@ this only quotes its opening sentence.
 - **`update_user_interest.py`** (32 lines)
   `updateInterest`, `Command`
 - **`webpush_notifications_deduplicate.py`** (19 lines)
-  `Command`
-- **`weekly_promo.py`** (253 lines)
   `Command`
 
 ## `auctions/mcp/`
@@ -817,7 +821,7 @@ Every view on the site, split by the part of it the view belongs to.
 
 - **`account.py`** (571 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
-- **`admin_checklist.py`** (1062 lines)
+- **`admin_checklist.py`** (1061 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (791 lines)
@@ -917,7 +921,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (222 lines)
+- **`celery.py`** (218 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `start_auction_stats_task`, `start_bap_recalculation_tasks`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
@@ -926,7 +930,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1217 lines)
+- **`settings.py`** (1216 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

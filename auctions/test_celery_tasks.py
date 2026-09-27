@@ -52,9 +52,9 @@ class CeleryTasksTestCase(TestCase):
         mock_call_command.assert_called_once_with("email_unseen_chats")
 
     @patch("auctions.tasks.call_command")
-    def test_weekly_promo_task(self, mock_call_command):
-        tasks.weekly_promo()
-        mock_call_command.assert_called_once_with("weekly_promo")
+    def test_auction_promos_task(self, mock_call_command):
+        tasks.auction_promos()
+        mock_call_command.assert_called_once_with("auction_promos")
 
     @patch("auctions.tasks.call_command")
     def test_set_user_location_task(self, mock_call_command):

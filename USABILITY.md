@@ -87,8 +87,9 @@ without rejections means they cannot see how to fill it in at all.
 - **A uuid "add your lots" link for sellers with no account.** A forwarded link writes data as
   somebody else. Selling needs an account.
 - **Keeping unmatched `club_affiliation` text.** Ten entries, nine typos.
-- **Any new email to people with no account.** `weekly_promo` needs a `User`, an opt-in and a
-  location. Its 6-day active exclusion is deliberate: the audience is people who have not been here.
+- **Any new email to people with no account.** `auction_promos` needs a `User`, an opt-in and a
+  location. Its 6-day active exclusion on email is deliberate: the audience is people who have not
+  been here.
 - **The four inert `PageView` columns** (`duplicate_check_completed`, `counter`,
   `notification_sent`, `total_time`) stay for ever. An `ALTER` on the biggest table buys nothing.
 - **`PageView` rows are never purged.** They are the only record of what people did before they did

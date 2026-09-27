@@ -591,7 +591,7 @@ This graph shows overall engagement of people with your auction.  You can gauge 
             {% endif %}
 <br><h4>Promotions and join reminder emails</h4>
 When users with an account view your auction but don't join it, they'll be sent a reminder email 24 hours later.  Users can turn off <b>send reminder emails about joining auctions</b> under preferences.<br><br>
-Promoted auctions are included in a weekly promotional email sent every Wednesday to nearby users.
+Nearby users who asked to hear about auctions are told about a promoted auction once, by email or in the app: a week before an in-person auction starts, or a day after bidding opens on an online one.  The email goes only to people who haven't been on the site in the last 6 days.
 {% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}
 <br><br> Join reminder emails are not sent for auctions without an in-person pickup location.
 {% endif %}
@@ -628,34 +628,36 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
             <td>{{compare_auction.reminder_email_joins|floatformat:2}}% ({{compare_auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
             {% endif %}
         </tr>
+        {% if auction.promo_stats or compare_auction.promo_stats %}
         <tr>
-            <td>Clicks from weekly promo email</td>
-            <td>{{auction.weekly_promo_email_clicks}}</td>
+            <td>Users told about this auction by email</td>
+            <td>{{ auction.promo_stats.emails|default:0 }}</td>
             {% if compare_auction %}
-            <td>{{compare_auction.weekly_promo_email_clicks}}</td>
+            <td>{{ compare_auction.promo_stats.emails|default:0 }}</td>
             {% endif %}
         </tr>
         <tr>
-            <td>Users who received this auction in weekly promo email</td>
-            <td>{{auction.weekly_promo_emails_sent}}</td>
+            <td>Users told about this auction in the app</td>
+            <td>{{ auction.promo_stats.pushes|default:0 }}</td>
             {% if compare_auction %}
-            <td>{{compare_auction.weekly_promo_emails_sent}}</td>
+            <td>{{ compare_auction.promo_stats.pushes|default:0 }}</td>
             {% endif %}
         </tr>
         <tr>
-            <td>Users who received this auction as a promo push notification</td>
-            <td>{{auction.promo_push_notifications_sent}}</td>
+            <td>Click rate for promotion</td>
+            <td>{{ auction.promo_stats.click_rate|default:0|floatformat:2 }}%</td>
             {% if compare_auction %}
-            <td>{{compare_auction.promo_push_notifications_sent}}</td>
+            <td>{{ compare_auction.promo_stats.click_rate|default:0|floatformat:2 }}%</td>
             {% endif %}
         </tr>
         <tr>
-            <td>Click rate for weekly promo email</td>
-            <td>{{auction.weekly_promo_email_click_rate|floatformat:2}}%</td>
+            <td>Join rate for promotion</td>
+            <td>{{ auction.promo_stats.join_rate|default:0|floatformat:2 }}%</td>
             {% if compare_auction %}
-            <td>{{compare_auction.weekly_promo_email_click_rate|floatformat:2}}%</td>
+            <td>{{ compare_auction.promo_stats.join_rate|default:0|floatformat:2 }}%</td>
             {% endif %}
         </tr>
+        {% endif %}
   </tbody>
 </table>
 </div>

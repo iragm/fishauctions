@@ -36,7 +36,7 @@
     {% if not auction.created_by.userdata.is_trusted %}
     <small>{{ auction.untrusted_message|safe }}</small>
     {% else %}
-    <small>It will appear in <a href="{% url 'auctions' %}">the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small>
+    <small>It will appear in <a href="{% url 'auctions' %}">the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Nearby users who asked to hear about auctions are also told about a promoted auction once, by email or in the app: a week before an in-person auction starts, or a day after bidding opens on an online one.</small>
     {% endif %}
     <div>
       {% if auction.created_by.userdata.is_trusted %}

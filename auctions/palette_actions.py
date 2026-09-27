@@ -2515,6 +2515,13 @@ _CONTACT_ALIASES = {
 _CONTACT_FIELDS = ("first_name", "last_name", "phone_number", "address", "location", "location_coordinates")
 
 
+def _contact_fields_said() -> str:
+    """The contact fields this action changes, in words. The ship-to region only exists for selling
+    outside an auction."""
+    region = " ship-to region," if settings.ALLOW_USERS_TO_CREATE_LOTS else ""
+    return f"first name, last name, phone number, mailing address,{region} or map marker"
+
+
 def _resolve_contact_field(hint: str) -> str | None:
     wanted = (hint or "").strip().lower().replace("-", " ").replace("_", " ")
     if not wanted:
@@ -2599,9 +2606,7 @@ def update_contact_info(request, params: dict[str, Any]) -> dict[str, Any]:
         field_name = _resolve_contact_field(hint)
         if not field_name:
             return _need(
-                f"I'm not sure which part of your contact info “{hint}” is. "
-                "I can change your first name, last name, phone number, mailing address, "
-                "ship-to region or map marker."
+                f"I'm not sure which part of your contact info “{hint}” is. I can change your {_contact_fields_said()}."
             )
         raw = params.get("value")
         if raw in (None, ""):
@@ -2621,6 +2626,8 @@ def update_contact_info(request, params: dict[str, Any]) -> dict[str, Any]:
             changes[key] = _str(params, key)
 
     region_said = _str(params, "location")
+    if region_said and not settings.ALLOW_USERS_TO_CREATE_LOTS:
+        return _need("There are no ship-to regions here: nothing is sold outside an auction on this site.")
     if region_said:
         region = _shipping_region(region_said)
         if not region:
@@ -2644,10 +2651,7 @@ def update_contact_info(request, params: dict[str, Any]) -> dict[str, Any]:
         said.append("map marker")
 
     if not changes:
-        return _need(
-            "What should I change? I can set your first name, last name, phone number, "
-            "mailing address, ship-to region or map marker."
-        )
+        return _need(f"What should I change? I can set your {_contact_fields_said()}.")
 
     data = model_to_dict(userdata, fields=[field.name for field in userdata._meta.fields])
     data = {key: ("" if value is None else value) for key, value in data.items()}
@@ -2686,7 +2690,9 @@ def update_contact_info(request, params: dict[str, Any]) -> dict[str, Any]:
         last_name=user.last_name,
         phone_number=userdata.phone_number,
         address=userdata.address,
-        ship_to_region=str(userdata.location) if userdata.location_id else None,
+        ship_to_region=(
+            str(userdata.location) if userdata.location_id and settings.ALLOW_USERS_TO_CREATE_LOTS else None
+        ),
         followups=[{"label": "All my contact info", "url": reverse("contact_info")}],
     )
     if also_updated:

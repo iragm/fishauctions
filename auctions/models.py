@@ -20,7 +20,6 @@ from random import randint
 from urllib.parse import quote_plus
 
 import channels.layers
-import pytz
 from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
 from django.conf import settings
@@ -3822,10 +3821,6 @@ class Auction(CachedPropertiesMixin, models.Model):
     followup_email_sent = models.BooleanField(default=False)
     followup_email_due = models.DateTimeField(blank=True, null=True)
     reprint_reminder_sent = models.BooleanField(default=False)
-    weekly_promo_emails_sent = models.PositiveIntegerField(default=0)
-    weekly_promo_emails_sent.help_text = "Number of times this auction was included in weekly promotional emails"
-    promo_push_notifications_sent = models.PositiveIntegerField(default=0)
-    promo_push_notifications_sent.help_text = "Number of push notifications sent promoting this auction"
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
@@ -5140,7 +5135,8 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def campaigns_qs(self):
-        return AuctionCampaign.objects.filter(auction=self.pk).order_by("-timestamp")
+        """Join reminders: one row per signed-in user who looked at this auction."""
+        return AuctionCampaign.objects.filter(auction=self.pk, kind=AuctionCampaign.KIND_VIEW).order_by("-timestamp")
 
     @cached_property
     def number_of_reminder_emails(self):
@@ -5164,27 +5160,41 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def all_auctions_reminder_email_clicks(self):
-        campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
-        if campaigns == 0:
+        campaigns = AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW).exclude(result="ERR")
+        if not campaigns.exists():
             return 0
-        return AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count() / campaigns * 100
+        return campaigns.exclude(result="NONE").count() / campaigns.count() * 100
 
     @cached_property
     def all_auctions_reminder_email_joins(self):
-        campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
-        if campaigns == 0:
+        campaigns = AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW).exclude(result="ERR")
+        if not campaigns.exists():
             return 0
-        return AuctionCampaign.objects.filter(result="JOINED").count() / campaigns * 100
+        return campaigns.filter(result="JOINED").count() / campaigns.count() * 100
 
     @cached_property
-    def weekly_promo_email_clicks(self):
-        return PageView.objects.filter(source="weekly_email", auction=self.pk).count()
-
-    @property
-    def weekly_promo_email_click_rate(self):
-        if self.weekly_promo_emails_sent == 0:
-            return 0
-        return (self.weekly_promo_email_clicks / self.weekly_promo_emails_sent) * 100
+    def promo_stats(self):
+        """Who was told about this auction by ``auction_promos``, and what they did. Empty for an auction
+        that was never promoted that way (everything before the weekly email was replaced)."""
+        counts = dict(
+            AuctionCampaign.objects.filter(auction=self.pk, kind=AuctionCampaign.KIND_PROMO)
+            .values_list("source")
+            .annotate(n=Count("pk"))
+        )
+        emails = counts.get(AuctionCampaign.SOURCE_PROMO_EMAIL, 0)
+        pushes = counts.get(AuctionCampaign.SOURCE_PROMO_PUSH, 0)
+        if not emails and not pushes:
+            return {}
+        promoted = AuctionCampaign.objects.filter(auction=self.pk, kind=AuctionCampaign.KIND_PROMO)
+        clicks = promoted.filter(result__in=("VIEWED", "JOINED")).count()
+        joins = promoted.filter(result="JOINED").count()
+        total = emails + pushes
+        return {
+            "emails": emails,
+            "pushes": pushes,
+            "click_rate": clicks / total * 100,
+            "join_rate": joins / total * 100,
+        }
 
     @cached_property
     def multi_location(self):
@@ -6908,12 +6918,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 return
 
         if self.user:
-            related_campaign = (
-                AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").first()
+            # The join reminder's row and the promo's row, when there are both.
+            AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").update(
+                result="JOINED"
             )
-            if related_campaign:
-                related_campaign.result = "JOINED"
-                related_campaign.save()
 
     @cached_property
     def display_name_for_admins(self):
@@ -7664,7 +7672,6 @@ class Lot(CachedPropertiesMixin, models.Model):
             self.category_checked = True
             if self.auction:
                 if not self.auction.use_categories:
-                    # force uncategorized for non-fish auctions
                     self.species_category = Category.objects.filter(name="Uncategorized").first()
                 else:
                     result = guess_category(self.lot_name)
@@ -10992,10 +10999,10 @@ class UserData(CachedPropertiesMixin, models.Model):
     email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
     email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen.  If you'd like to get a notification right away, <a href='https://github.com/iragm/fishauctions/issues/224'>leave a comment here</a>"
     email_me_about_new_auctions = models.BooleanField(
-        default=True, blank=True, verbose_name="Email me about new online auctions"
+        default=True, blank=True, verbose_name="Tell me about online auctions near me"
     )
     email_me_about_new_auctions.help_text = (
-        "When new online auctions are created with pickup locations near my location, notify me"
+        "Once per auction, a day after bidding opens, when one of its pickup locations is near you"
     )
     email_me_about_new_auctions_distance = models.PositiveIntegerField(
         null=True, blank=True, default=100, verbose_name="Nearby online auction distance"
@@ -11003,10 +11010,10 @@ class UserData(CachedPropertiesMixin, models.Model):
     email_me_about_new_auctions_distance.help_text = (
         "miles, from your address. Also used to filter the auction list when your location is set."
     )
-    email_me_about_new_in_person_auctions = models.BooleanField(default=True, blank=True)
-    email_me_about_new_in_person_auctions.help_text = (
-        "When new in-person auctions are created near my location, notify me"
+    email_me_about_new_in_person_auctions = models.BooleanField(
+        default=True, blank=True, verbose_name="Tell me about in-person auctions near me"
     )
+    email_me_about_new_in_person_auctions.help_text = "Once per auction, about a week before it starts"
     email_me_about_new_in_person_auctions_distance = models.PositiveIntegerField(
         null=True,
         blank=True,
@@ -11039,8 +11046,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     push_notifications_instead_of_email.help_text = (
         "Get notifications in the app instead of emails, for everything "
         "except account emails like password resets. Requires the app to be installed "
-        "and signed in. The weekly promo email is replaced by a notification for "
-        "promoted auctions near you."
+        "and signed in. Auctions near you arrive as notifications too."
     )
     paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
     paypal_email_address.help_text = "If different from your email address"
@@ -11163,8 +11169,6 @@ class UserData(CachedPropertiesMixin, models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
-    next_promo_email_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    last_promo_email_sent_at = models.DateTimeField(null=True, blank=True)
 
     @property
     def account_deletion_due(self):
@@ -11485,29 +11489,11 @@ class UserData(CachedPropertiesMixin, models.Model):
 
         return target_userdata
 
-    def set_next_promo(self):
-        """Next Wednesday 10 AM in the user's time, or the existing value plus 7 days, in the future."""
-        try:
-            tz = pytz_timezone(self.timezone)
-        except pytz.exceptions.UnknownTimeZoneError:
-            tz = pytz_timezone(settings.TIME_ZONE)
-
-        if self.next_promo_email_at is None:
-            now_local = timezone.now().astimezone(tz)
-            days_ahead = 2 - now_local.weekday()  # Wednesday is weekday 2
-            if days_ahead <= 0:
-                days_ahead += 7
-            next_wednesday = now_local.date() + datetime.timedelta(days=days_ahead)
-            naive_next_promo = datetime.datetime(  # noqa: DTZ001
-                next_wednesday.year, next_wednesday.month, next_wednesday.day, 10, 0
-            )
-            self.next_promo_email_at = tz.localize(naive_next_promo, is_dst=False)
-        else:
-            self.next_promo_email_at = self.next_promo_email_at + datetime.timedelta(days=7)
-            now = timezone.now()
-            while self.next_promo_email_at <= now:
-                self.next_promo_email_at += datetime.timedelta(days=7)
-        self.save(update_fields=["next_promo_email_at"])
+    @property
+    def can_sell_standalone_lots(self):
+        """Selling outside an auction: off for everybody while ALLOW_USERS_TO_CREATE_LOTS is off,
+        whatever the account's own flag says. The flag is kept for the day the feature comes back."""
+        return settings.ALLOW_USERS_TO_CREATE_LOTS and self.can_submit_standalone_lots
 
     def send_websocket_message(self, message):
         channel_layer = channels.layers.get_channel_layer()
@@ -12582,7 +12568,26 @@ class AdCampaignResponse(models.Model):
 
 
 class AuctionCampaign(CachedPropertiesMixin, models.Model):
+    """One attempt to get one person into one auction, and whether it worked (``result``).
+
+    Two kinds, at most one row of each per user and auction. ``view``: a signed-in user looked at the
+    auction, and ``auctiontos_notifications`` emails a join reminder a day later. ``promo``: the
+    ``auction_promos`` job told a nearby user about it, by email or push (``source``), which makes this
+    the promo's sent log. Links carry ``?src=<uuid>``, which marks the row VIEWED; joining marks it
+    JOINED.
+    """
+
+    KIND_VIEW = "view"
+    KIND_PROMO = "promo"
+    KIND_CHOICES = (
+        (KIND_VIEW, "Viewed; join reminder"),
+        (KIND_PROMO, "Promoted to them"),
+    )
+    SOURCE_PROMO_EMAIL = "promo_email"
+    SOURCE_PROMO_PUSH = "promo_push"
+
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES, default=KIND_VIEW)
     uuid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     email = models.CharField(max_length=255, default="", blank=True)
@@ -12624,7 +12629,7 @@ class AuctionCampaign(CachedPropertiesMixin, models.Model):
     def save(self, *args, **kwargs):
         # duplicate check on initial creation
         if not self.pk:
-            duplicate = AuctionCampaign.objects.filter(auction=self.auction)
+            duplicate = AuctionCampaign.objects.filter(auction=self.auction, kind=self.kind)
             if self.user:
                 duplicate = duplicate.filter(user=self.user)
             if self.email:

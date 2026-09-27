@@ -659,8 +659,6 @@ class QuickAddLot(forms.ModelForm):
             self.fields["buy_now_price"].widget = HiddenInput()
         if self.auction.buy_now == "required":
             self.fields["buy_now_price"].required = True
-        if not self.auction.use_categories:
-            self.fields["i_bred_this_fish"].widget = HiddenInput()
         if not self.auction.use_custom_checkbox_field or not self.auction.custom_checkbox_name:
             self.fields["custom_checkbox"].widget = HiddenInput()
         if self.auction.custom_field_1 == "disable" or not self.auction.custom_field_1_name:
@@ -3249,7 +3247,7 @@ class CreateLotForm(forms.ModelForm):
             # set auction to empty
             cleaned_data["auction"] = None
             auction = None
-            if not self.user.userdata.can_submit_standalone_lots:
+            if not self.user.userdata.can_sell_standalone_lots:
                 self.add_error("part_of_auction", "This feature is not enabled for your account")
             if not cleaned_data.get("shipping_locations") and not cleaned_data.get("local_pickup"):
                 self.add_error(
@@ -3480,9 +3478,12 @@ class UserLocation(forms.ModelForm):
         self.fields["address"].widget = forms.Textarea()
         self.fields["address"].widget.attrs = {"rows": 3}
         self.fields["address"].required = True
-        self.fields[
-            "location"
-        ].help_text = "Optional. You'll be notified about new lots that can ship to this location."
+        # The ship-to region only ever mattered for lots sold outside an auction.
+        show_region = settings.ALLOW_USERS_TO_CREATE_LOTS
+        if show_region:
+            self.fields["location"].help_text = "Optional. Where lots sold outside an auction can ship to you."
+        else:
+            del self.fields["location"]
         self.fields["phone_number"].help_text = "Optional"
         if self.require_phone:
             self.fields["phone_number"].required = True
@@ -3511,15 +3512,12 @@ class UserLocation(forms.ModelForm):
             Div(
                 Div(
                     "phone_number",
-                    css_class="col-md-4",
+                    css_class="col-md-4" if show_region else "col-md-6",
                 ),
-                Div(
-                    "location",
-                    css_class="col-md-3",
-                ),
+                *([Div("location", css_class="col-md-3")] if show_region else []),
                 Div(
                     "club_affiliation",
-                    css_class="col-md-5",
+                    css_class="col-md-5" if show_region else "col-md-6",
                 ),
                 css_class="row",
             ),
@@ -3825,16 +3823,12 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             "email_me_about_new_auctions_distance",
             "email_me_about_new_in_person_auctions",
             "email_me_about_new_in_person_auctions_distance",
-            "email_me_about_new_local_lots",
-            "local_distance",
-            "email_me_about_new_lots_ship_to_location",
         )
 
     #: Radii and fields whose help text names the unit.
     DISTANCE_FIELDS = (
         "email_me_about_new_auctions_distance",
         "email_me_about_new_in_person_auctions_distance",
-        "local_distance",
     )
 
     def __init__(self, user, *args, is_mobile_app=False, **kwargs):
@@ -3893,28 +3887,6 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                 "For in-person auctions, get a notification when bidding starts on a lot that you've "
                 "watched.  Allow notifications for this app to receive them."
             )
-        local_lots_fields = []
-        if settings.ALLOW_USERS_TO_CREATE_LOTS:
-            local_lots_fields = [
-                Div(
-                    Div(
-                        "email_me_about_new_local_lots",
-                        css_class="col-md-8",
-                    ),
-                    Div(
-                        "local_distance",
-                        css_class="col-md-4",
-                    ),
-                    css_class="row",
-                ),
-                Div(
-                    Div(
-                        "email_me_about_new_lots_ship_to_location",
-                        css_class="col-md-12",
-                    ),
-                    css_class="row",
-                ),
-            ]
         self.helper.layout = Layout(
             Div(
                 Div(
@@ -3947,8 +3919,8 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                 css_class="row",
             ),
             HTML(
-                '<p class="text-muted small mt-3">You\'ll get one email per week that contains an update on'
-                " everything you've checked below, and only if you haven't visited the site in the last 6 days.</p>"
+                '<p class="text-muted small mt-3">One message per promoted auction near you. Emails only go'
+                " out if you haven't visited the site in the last 6 days.</p>"
             ),
             Div(
                 Div(
@@ -3972,7 +3944,6 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
-            *local_lots_fields,
             Submit("submit", "Save", css_class="btn-success"),
         )
 

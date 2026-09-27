@@ -1099,15 +1099,9 @@ def email_unseen_chats(self):
 
 
 @shared_task(bind=True, ignore_result=True)
-def weekly_promo(self):
-    """Send the weekly promotional email for nearby auctions and lots."""
-    call_command("weekly_promo")
-
-
-@shared_task(bind=True, ignore_result=True)
-def promo_push_notifications(self):
-    """Push nearby auction promotions to opted-in app users; each auction to each user at most once. Hourly."""
-    call_command("promo_push_notifications")
+def auction_promos(self):
+    """Tell nearby users about promoted auctions, once each, by email or push. Hourly."""
+    call_command("auction_promos")
 
 
 @shared_task(bind=True, ignore_result=True)
