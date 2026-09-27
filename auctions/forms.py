@@ -3247,7 +3247,9 @@ class CreateLotForm(forms.ModelForm):
             # set auction to empty
             cleaned_data["auction"] = None
             auction = None
-            if not self.user.userdata.can_sell_standalone_lots:
+            # Editing a lot that was already sold outside an auction stays allowed.
+            already_standalone = self.instance.pk and self.instance.auction_id is None
+            if not self.user.userdata.can_sell_standalone_lots and not already_standalone:
                 self.add_error("part_of_auction", "This feature is not enabled for your account")
             if not cleaned_data.get("shipping_locations") and not cleaned_data.get("local_pickup"):
                 self.add_error(
@@ -3946,6 +3948,16 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="btn-success"),
         )
+
+    #: The two auction_promos opt-ins.
+    PROMO_FIELDS = ("email_me_about_new_auctions", "email_me_about_new_in_person_auctions")
+
+    def save(self, commit=True):
+        # Ticking one of these asks for promotional messages again, which undoes an earlier "stop
+        # promotional emails" (or auction_promos would ignore the tick for good).
+        if any(name in self.changed_data and self.cleaned_data.get(name) for name in self.PROMO_FIELDS):
+            self.instance.has_unsubscribed = False
+        return super().save(commit)
 
     def clean(self):
         cleaned_data = super().clean()

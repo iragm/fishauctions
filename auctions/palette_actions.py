@@ -10161,6 +10161,8 @@ def remove_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             )
         if not lot.deactivated:
             return _error(f"Lot {lot.lot_number_display} is already on sale.")
+        if not user.is_superuser and not user.userdata.can_sell_standalone_lots:
+            return _error("Selling outside an auction isn't available here, so the lot can't go back on sale.")
         lot.deactivated = False
         lot.save(update_fields=["deactivated"])
         return _ok(f"Put lot {lot.lot_number_display}, {lot.lot_name}, back on sale.", **echo)

@@ -11169,6 +11169,11 @@ class UserData(CachedPropertiesMixin, models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
+    last_weekly_promo_sent_at = models.DateTimeField(null=True, blank=True)
+    last_weekly_promo_sent_at.help_text = (
+        "When the retired weekly promo email last went to this user. auction_promos won't email about an "
+        "auction it already listed. Nothing writes it; drop it once no window open at the switch is still open."
+    )
 
     @property
     def account_deletion_due(self):
@@ -12588,10 +12593,16 @@ class AuctionCampaign(CachedPropertiesMixin, models.Model):
 
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
     kind = models.CharField(max_length=10, choices=KIND_CHOICES, default=KIND_VIEW)
-    uuid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
+    # Indexed: every tracked page view looks its campaign up by this.
+    uuid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True, db_index=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     email = models.CharField(max_length=255, default="", blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
+    promo_key = models.CharField(max_length=50, null=True, blank=True, unique=True, editable=False)
+    promo_key.help_text = (
+        "auction:user on promo rows, empty on the rest: the database, not a read-then-write, is what stops "
+        "two runs of auction_promos telling the same person twice."
+    )
     source = models.CharField(max_length=200, blank=True, null=True, default="")
     result = models.CharField(
         max_length=20,
@@ -12605,6 +12616,10 @@ class AuctionCampaign(CachedPropertiesMixin, models.Model):
         db_index=True,
     )
     email_sent = models.BooleanField(default=False)
+
+    @staticmethod
+    def promo_key_for(auction, user):
+        return f"{auction.pk}:{user.pk}"
 
     @cached_property
     def link(self):

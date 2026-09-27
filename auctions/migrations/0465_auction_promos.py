@@ -1,9 +1,13 @@
 """The weekly promo email becomes one message per promoted auction (``auction_promos``).
 
-``AuctionCampaign.kind`` separates the promo's sent log from the join reminder's rows. The weekly
-email's counters and per-user schedule go. Its ``EmailTemplate`` row stays: ``post_office.Email``
+``AuctionCampaign.kind`` separates the promo's sent log from the join reminder's rows, and
+``promo_key`` makes a promo row unique per auction and user in the database. ``uuid`` gets the index
+every tracked page view's lookup needed. The weekly email's counters and schedule go; its last send
+time stays, renamed, for the switchover. Its ``EmailTemplate`` row stays: ``post_office.Email``
 cascades from its template, so deleting it would take every weekly email ever sent out of the log.
 """
+
+import uuid
 
 from django.db import migrations, models
 
@@ -72,9 +76,12 @@ class Migration(migrations.Migration):
             model_name="auction",
             name="weekly_promo_emails_sent",
         ),
-        migrations.RemoveField(
+        # Kept, renamed: the first weeks of auction_promos read it so nobody is emailed about an auction
+        # the weekly email just listed.
+        migrations.RenameField(
             model_name="userdata",
-            name="last_promo_email_sent_at",
+            old_name="last_promo_email_sent_at",
+            new_name="last_weekly_promo_sent_at",
         ),
         migrations.RemoveField(
             model_name="userdata",
@@ -119,6 +126,32 @@ class Migration(migrations.Migration):
                 blank=True,
                 default=False,
                 help_text="Get notifications in the app instead of emails, for everything except account emails like password resets. Requires the app to be installed and signed in. Auctions near you arrive as notifications too.",
+            ),
+        ),
+        migrations.AddField(
+            model_name="auctioncampaign",
+            name="promo_key",
+            field=models.CharField(
+                blank=True,
+                editable=False,
+                help_text="auction:user on promo rows, empty on the rest: the database, not a read-then-write, is what stops two runs of auction_promos telling the same person twice.",
+                max_length=50,
+                null=True,
+                unique=True,
+            ),
+        ),
+        migrations.AlterField(
+            model_name="auctioncampaign",
+            name="uuid",
+            field=models.CharField(blank=True, db_index=True, default=uuid.uuid4, max_length=255),
+        ),
+        migrations.AlterField(
+            model_name="userdata",
+            name="last_weekly_promo_sent_at",
+            field=models.DateTimeField(
+                blank=True,
+                help_text="When the retired weekly promo email last went to this user. auction_promos won't email about an auction it already listed. Nothing writes it; drop it once no window open at the switch is still open.",
+                null=True,
             ),
         ),
         migrations.RunPython(create_template, delete_template),

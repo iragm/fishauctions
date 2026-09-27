@@ -20,6 +20,7 @@ from auctions.models import (
     MobileDevice,
     PickupLocation,
     PushNotificationSent,
+    UserBan,
     UserData,
 )
 from auctions.test_support import isolated_cache
@@ -69,8 +70,11 @@ class AuctionPromosTestCase(TestCase):
         return auction
 
     def run_job(self, now=NOW):
-        with patch(SEND) as send, patch(PUSH) as push:
+        started = timezone.now()
+        with patch(SEND) as send, patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
             Command().promote_all(now)
+        # Stamped by the real clock; move them to the pretend one, which the one-a-day rule reads.
+        AuctionCampaign.objects.filter(timestamp__gte=started).update(timestamp=now)
         return send, push
 
     def emailed(self, send):
@@ -159,11 +163,30 @@ class SendHourTests(AuctionPromosTestCase):
         send, _ = self.run_job(ten_thirty_there)
         self.assertEqual(self.emailed(send), [self.fan.email])
 
-    def test_last_chance_goes_out_at_any_hour(self):
+    def test_last_chance_goes_out_at_any_waking_hour(self):
         auction = self.make_auction(starts=NOW + datetime.timedelta(hours=10))
         send, _ = self.run_job(NOW + datetime.timedelta(hours=5))
         self.assertEqual(self.emailed(send), [self.fan.email])
         self.assertTrue(is_send_time(self.fan.userdata, NOW + datetime.timedelta(hours=5), auction.date_start))
+
+    def test_last_chance_never_goes_out_overnight(self):
+        # Created late, starting at 9 AM: its window opens at 2 AM.
+        starts = NOW + DAY - datetime.timedelta(hours=1, minutes=30)
+        self.make_auction(starts=starts, posted=NOW - datetime.timedelta(hours=9))
+        send, _ = self.run_job(NOW + datetime.timedelta(hours=16))  # 2:30 AM
+        send.assert_not_called()
+        send, _ = self.run_job(NOW + datetime.timedelta(hours=22))  # 8:30 AM, before it starts
+        self.assertEqual(self.emailed(send), [self.fan.email])
+
+    def test_one_a_day_the_soonest_first(self):
+        later = self.make_auction(starts=NOW + 6 * DAY)
+        sooner = self.make_auction(starts=NOW + 3 * DAY)
+        send, _ = self.run_job()
+        self.assertEqual(len(send.call_args_list), 1)
+        self.assertEqual(send.call_args.kwargs["context"]["auction"], sooner)
+        send, _ = self.run_job(NOW + DAY)
+        self.assertEqual(len(send.call_args_list), 1)
+        self.assertEqual(send.call_args.kwargs["context"]["auction"], later)
 
     def test_an_unknown_time_zone_falls_back_to_the_sites(self):
         UserData.objects.filter(user=self.fan).update(timezone="Not/AZone")
@@ -234,6 +257,55 @@ class AudienceTests(AuctionPromosTestCase):
         send, _ = self.run_job()
         self.assertEqual(self.emailed(send), [self.fan.email])
 
+    def test_a_blank_distance_means_the_default_not_everywhere(self):
+        UserData.objects.filter(user=self.fan).update(email_me_about_new_in_person_auctions_distance=None)
+        self.make_auction(starts=NOW + 5 * DAY)
+        far = self.make_auction(starts=NOW + 5 * DAY)
+        PickupLocation.objects.filter(auction=far).update(latitude=30.0, longitude=-100.0)
+        send, _ = self.run_job()
+        self.assertEqual(len(send.call_args_list), 1)
+        self.assertNotEqual(send.call_args.kwargs["context"]["auction"], far)
+
+    def test_somebody_added_to_the_auction_by_email_is_not_told(self):
+        auction = self.make_auction(starts=NOW + 5 * DAY)
+        AuctionTOS.objects.create(
+            auction=auction, email="FAN@example.com", pickup_location=auction.pickuplocation_set.first(), name="Fan"
+        )
+        send, _ = self.run_job()
+        send.assert_not_called()
+
+    def test_somebody_the_organizer_banned_is_not_told(self):
+        UserBan.objects.create(user=self.seller, banned_user=self.fan)
+        self.make_auction(starts=NOW + 5 * DAY)
+        send, _ = self.run_job()
+        send.assert_not_called()
+
+    def test_somebody_deleting_their_account_is_not_told(self):
+        UserData.objects.filter(user=self.fan).update(account_deletion_requested=NOW - 8 * DAY)
+        self.make_auction(starts=NOW + 5 * DAY)
+        send, _ = self.run_job()
+        send.assert_not_called()
+
+    def test_an_online_auction_with_no_end_is_never_announced(self):
+        auction = self.make_auction(is_online=True, starts=NOW - 2 * DAY, ends=None)
+        # pre_save fills one in; only a direct write leaves it empty.
+        Auction.objects.filter(pk=auction.pk).update(date_end=None)
+        send, _ = self.run_job()
+        send.assert_not_called()
+
+    def test_an_auction_the_weekly_email_already_listed_is_not_emailed_again(self):
+        auction = self.make_auction(starts=NOW + 5 * DAY)
+        # The weekly email went after this auction's window opened.
+        UserData.objects.filter(user=self.fan).update(last_weekly_promo_sent_at=promotion_window(auction)[0] + DAY)
+        send, _ = self.run_job()
+        send.assert_not_called()
+
+    def test_one_the_weekly_email_went_out_before_is_emailed(self):
+        auction = self.make_auction(starts=NOW + 5 * DAY)
+        UserData.objects.filter(user=self.fan).update(last_weekly_promo_sent_at=promotion_window(auction)[0] - DAY)
+        send, _ = self.run_job()
+        self.assertEqual(self.emailed(send), [self.fan.email])
+
     def test_an_auction_already_pushed_by_the_old_job_is_not_sent_again(self):
         auction = self.make_auction(starts=NOW + 5 * DAY)
         PushNotificationSent.objects.create(user=self.fan, category="promo", auction=auction)
@@ -277,7 +349,7 @@ class PushTests(AuctionPromosTestCase):
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_a_push_still_in_the_queue_is_not_sent_again(self):
         self.make_auction(starts=NOW + 5 * DAY)
-        with patch(PUSH) as push:
+        with patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
             Command().promote_all(NOW)
             Command().promote_all(NOW)
         push.assert_called_once()
@@ -335,6 +407,43 @@ class SentLogTests(AuctionPromosTestCase):
         rows = dict(AuctionCampaign.objects.filter(auction=auction).values_list("kind", "email_sent"))
         # The reminder job picked up the view row and left the promo row alone.
         self.assertEqual(rows, {AuctionCampaign.KIND_VIEW: True, AuctionCampaign.KIND_PROMO: False})
+
+    def test_the_database_stops_a_second_claim(self):
+        """Two runs racing: the other one's claim is already in (as far as this run can tell, it isn't)."""
+        auction = self.make_auction(starts=NOW + 5 * DAY)
+        AuctionCampaign.objects.create(
+            auction=auction, user=self.fan, promo_key=AuctionCampaign.promo_key_for(auction, self.fan)
+        )
+        send, _ = self.run_job()
+        send.assert_not_called()
+
+    def test_opting_in_again_undoes_stop_promotional_emails(self):
+        from auctions.forms import ChangeUserNotificationsForm
+
+        userdata = self.fan.userdata
+        userdata.unsubscribe_from_all()
+        userdata.refresh_from_db()
+        self.assertTrue(userdata.has_unsubscribed)
+        data = {"email_me_about_new_in_person_auctions": True, "email_me_about_new_in_person_auctions_distance": 100}
+        form = ChangeUserNotificationsForm(self.fan, data, instance=userdata)
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        userdata.refresh_from_db()
+        self.assertFalse(userdata.has_unsubscribed)
+
+    def test_saving_preferences_without_opting_in_keeps_it(self):
+        from auctions.forms import ChangeUserNotificationsForm
+
+        userdata = self.fan.userdata
+        userdata.unsubscribe_from_all()
+        userdata.refresh_from_db()
+        form = ChangeUserNotificationsForm(
+            self.fan, {"email_me_when_people_comment_on_my_lots": True}, instance=userdata
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        userdata.refresh_from_db()
+        self.assertTrue(userdata.has_unsubscribed)
 
     def test_stats_count_the_promotion(self):
         auction = self.make_auction(starts=NOW + 5 * DAY)

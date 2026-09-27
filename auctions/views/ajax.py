@@ -161,6 +161,9 @@ class LotDeactivate(APIView):
             return redirect(reverse("home"))
 
         if lot.deactivated:
+            # Putting it back on sale is selling outside an auction.
+            if not request.user.is_superuser and not request.user.userdata.can_sell_standalone_lots:
+                return HttpResponse("Selling outside an auction isn't available", status=403)
             lot.deactivated = False
         else:
             bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.lot_number)

@@ -3,33 +3,42 @@
 This replaced the weekly promo email. An auction is promoted inside a window:
 
 - in person: from a week before it starts until it starts;
-- online: from a day after bidding opens (so there are lots to look at) until bidding ends;
+- online: from a day after bidding opens (so there are lots to look at) until bidding ends. An
+  online auction with no end date is never promoted: its window would never close;
 
 and never sooner than a day after it was created, which gives its organizer time to fix it. Clubs'
 other events (meetings, swaps) are never promoted.
 
-A user hears about it when they ticked the preference for that kind of auction and one of its pickup
-locations is inside their distance. Emails only go to people who haven't been on the site in six
-days (anybody who has already knows what's on near them) but have been in the last 400 (anybody
-older is gone). Everything goes out in the 10 o'clock hour of the user's own time zone, unless the
-window closes before their next 10 AM.
+A user hears about it when they ticked the preference for that kind of auction, one of its pickup
+locations is inside their distance, and they aren't already in it, running it or banned from it.
+Emails only go to people who haven't been on the site in six days (anybody who has already knows
+what's on near them) but have been in the last 400 (anybody older is gone).
+
+Everything goes out in the 10 o'clock hour of the user's own time zone, and a user gets at most one
+a day: the auction whose window closes first goes first, and the rest wait for tomorrow. The one
+exception is an auction whose window closes before the user's next 10 AM, which goes out at once,
+but never overnight.
 
 Hourly, and every open window is looked at again each time, so somebody who moves into range, signs
 up or goes quiet halfway through still hears about it. The ``AuctionCampaign`` row (kind ``promo``) is
-the sent log: it is written before anything is sent, so a failure never sends twice, and its link
-records the click and the join the way the join reminder's does.
+the sent log: it is claimed through a unique key before anything is sent, so nothing is ever sent
+twice, and its link records the click and the join the way the join reminder's does.
 """
 
 import datetime
 import logging
+import uuid
 import zoneinfo
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand
-from django.db.models import F, Q
+from django.db import IntegrityError, transaction
+from django.db.models import F, Q, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from post_office import mail
 
@@ -40,9 +49,11 @@ from auctions.models import (
     AuctionTOS,
     PickupLocation,
     PushNotificationSent,
+    UserBan,
     UserData,
     distance_to,
 )
+from auctions.notifications import CATEGORY_PROMO
 from auctions.templatetags.distance_filters import distance_display
 
 logger = logging.getLogger(__name__)
@@ -59,6 +70,12 @@ ACTIVE_WITHIN = datetime.timedelta(days=6)
 GONE_AFTER = datetime.timedelta(days=400)
 #: The local hour messages go out in.
 SEND_HOUR = 10
+#: A last-chance message still waits for this window, local time: never overnight.
+AWAKE_HOURS = range(8, 21)
+#: At most one message per user in this long, except a last chance.
+ONE_PER = datetime.timedelta(hours=20)
+#: The distance a blank preference means, as on the auction list.
+DEFAULT_RADIUS = 100
 #: Recommended lots in the email.
 LOTS_IN_EMAIL = 6
 
@@ -68,26 +85,28 @@ LOCK_SECONDS = 15 * 60
 
 
 def promotion_window(auction):
-    """``(opens, closes)`` for telling people about this auction; ``closes`` is None for an online
-    auction with no end date. None when it has no start date."""
+    """``(opens, closes)`` for telling people about this auction, or None when it is never promoted."""
     if not auction.date_start or not auction.date_posted:
         return None
     settled = auction.date_posted + SETTLE
     if auction.is_online:
+        if not auction.date_end:
+            return None
         return max(settled, auction.date_start + ONLINE_DELAY), auction.date_end
     return max(settled, auction.date_start - IN_PERSON_LEAD), auction.date_start
 
 
 def auctions_to_promote(now):
-    """Promoted auctions whose window is open now."""
+    """Promoted auctions whose window is open now, the soonest to close first."""
     in_person = Q(is_online=False, date_start__gt=now, date_start__lte=now + IN_PERSON_LEAD)
-    online = Q(is_online=True, date_start__lte=now - ONLINE_DELAY) & (Q(date_end__isnull=True) | Q(date_end__gt=now))
-    return Auction.objects.filter(
+    online = Q(is_online=True, date_start__lte=now - ONLINE_DELAY, date_end__gt=now)
+    auctions = Auction.objects.filter(
         in_person | online,
         is_deleted=False,
         promote_this_auction=True,
         date_posted__lte=now - SETTLE,
     )
+    return sorted(auctions, key=lambda auction: promotion_window(auction)[1])
 
 
 def user_timezone(userdata):
@@ -97,40 +116,57 @@ def user_timezone(userdata):
         return zoneinfo.ZoneInfo(settings.TIME_ZONE)
 
 
-def is_send_time(userdata, now, closes):
-    """True in the user's 10 o'clock hour, or at any hour when the window closes before their next 10 AM."""
+def is_last_chance(userdata, now, closes):
+    """The window closes before the user's next 10 AM."""
     local = now.astimezone(user_timezone(userdata))
-    if local.hour == SEND_HOUR:
-        return True
     next_send = local.replace(hour=SEND_HOUR, minute=0, second=0, microsecond=0)
     if next_send <= local:
         next_send += datetime.timedelta(days=1)
-    return closes is not None and closes <= next_send
+    return closes <= next_send
+
+
+def is_send_time(userdata, now, closes):
+    """The user's 10 o'clock hour, or, when the window closes before their next 10 AM, any waking hour."""
+    local_hour = now.astimezone(user_timezone(userdata)).hour
+    if local_hour == SEND_HOUR:
+        return True
+    return local_hour in AWAKE_HOURS and is_last_chance(userdata, now, closes)
 
 
 def recipients(auction):
     """``(userdata, distance, nearest pickup location)`` for everybody near enough who wants this kind of
-    auction and hasn't already been told about it or joined it."""
+    auction and hasn't been told about it, and isn't in it, running it or banned from it."""
     if auction.is_online:
         wants, radius = "email_me_about_new_auctions", "email_me_about_new_auctions_distance"
     else:
         wants, radius = "email_me_about_new_in_person_auctions", "email_me_about_new_in_person_auctions_distance"
     told = AuctionCampaign.objects.filter(auction=auction, kind=AuctionCampaign.KIND_PROMO, user__isnull=False)
     # Pushed by promo_push_notifications before this job replaced it.
-    pushed = PushNotificationSent.objects.filter(category="promo", auction=auction)
-    joined = AuctionTOS.objects.filter(auction=auction, user__isnull=False)
+    pushed = PushNotificationSent.objects.filter(category=CATEGORY_PROMO, auction=auction)
+    joined = AuctionTOS.objects.filter(auction=auction)
+    # A participant added by email is linked to the account only when they next sign in, and the
+    # people this emails are the ones who haven't.
+    joined_emails = joined.exclude(email__isnull=True).exclude(email="").values("email")
+    admins = auction.auction_admins_user_pks
+    banned = UserBan.objects.filter(user__pk__in=admins).values("banned_user")
     candidates = (
-        UserData.objects.filter(**{wants: True}, has_unsubscribed=False, user__is_active=True)
+        UserData.objects.filter(
+            **{wants: True},
+            has_unsubscribed=False,
+            account_deletion_requested__isnull=True,
+            user__is_active=True,
+        )
         .exclude(latitude__isnull=True)
         .exclude(longitude__isnull=True)
         .exclude(latitude=0, longitude=0)
         .exclude(user__in=told.values("user"))
         .exclude(user__in=pushed.values("user"))
-        .exclude(user__in=joined.values("user"))
+        .exclude(user__in=joined.filter(user__isnull=False).values("user"))
+        .exclude(user__email__in=joined_emails)
+        .exclude(user__in=banned)
+        .exclude(user__in=admins)
         .select_related("user")
     )
-    if auction.created_by_id:
-        candidates = candidates.exclude(user_id=auction.created_by_id)
     locations = (
         PickupLocation.objects.filter(auction=auction, latitude__isnull=False, longitude__isnull=False)
         .exclude(latitude=0, longitude=0)
@@ -138,9 +174,10 @@ def recipients(auction):
     )
     nearest = {}
     for location in locations:
-        in_range = candidates.annotate(distance=distance_to(location.latitude, location.longitude)).filter(
-            Q(distance__lte=F(radius)) | Q(**{f"{radius}__isnull": True})
-        )
+        in_range = candidates.annotate(
+            distance=distance_to(location.latitude, location.longitude),
+            max_distance=Coalesce(F(radius), Value(DEFAULT_RADIUS)),
+        ).filter(distance__lte=F("max_distance"))
         for userdata in in_range:
             if userdata.pk not in nearest or userdata.distance < nearest[userdata.pk][1]:
                 nearest[userdata.pk] = (userdata, userdata.distance, location)
@@ -151,6 +188,13 @@ def is_quiet(userdata, now):
     """Email only: not on the site in the last six days, but not gone either."""
     last = userdata.last_activity
     return last is not None and now - GONE_AFTER < last <= now - ACTIVE_WITHIN
+
+
+def was_in_the_weekly_email(userdata, opens):
+    """The retired weekly email already listed this auction for this user: its window was open when
+    their last one went. Only matters for the first weeks after the switch."""
+    last_weekly = userdata.last_weekly_promo_sent_at
+    return last_weekly is not None and opens <= last_weekly
 
 
 def when_text(auction, userdata):
@@ -169,13 +213,16 @@ class Command(BaseCommand):
     help = "Tell nearby users about promoted auctions, once each, by email or push"
 
     def handle(self, *args, **options):
-        if not cache.add(LOCK_KEY, 1, timeout=LOCK_SECONDS):
+        token = uuid.uuid4().hex
+        if not cache.add(LOCK_KEY, token, timeout=LOCK_SECONDS):
             logger.info("auction_promos is already running; skipping this tick.")
             return
         try:
             emails, pushes = self.promote_all(timezone.now())
         finally:
-            cache.delete(LOCK_KEY)
+            # Only our own lock: one that expired under us may belong to the next run by now.
+            if cache.get(LOCK_KEY) == token:
+                cache.delete(LOCK_KEY)
         logger.info("auction_promos: %s email(s), %s push(es)", emails, pushes)
         self.stdout.write(f"auction_promos: {emails} email(s), {pushes} push(es)")
 
@@ -184,12 +231,19 @@ class Command(BaseCommand):
         emails = pushes = 0
         for auction in auctions_to_promote(now):
             window = promotion_window(auction)
-            if window is None or now < window[0]:
+            if window is None or not window[0] <= now < window[1]:
                 continue
-            closes = window[1]
+            # Re-read per auction: the auction before this one may have just used somebody's one a day.
+            told_lately = set(
+                AuctionCampaign.objects.filter(
+                    kind=AuctionCampaign.KIND_PROMO, timestamp__gte=now - ONE_PER, user__isnull=False
+                ).values_list("user_id", flat=True)
+            )
             for userdata, distance, location in recipients(auction):
                 try:
-                    sent = self.promote(auction, userdata, distance, location, now, closes, domain)
+                    sent = self.promote(auction, window, userdata, distance, location, now, domain, told_lately)
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception:
                     logger.exception("auction_promos: failed for auction %s, user %s", auction.pk, userdata.user_id)
                     continue
@@ -199,27 +253,36 @@ class Command(BaseCommand):
                     pushes += 1
         return emails, pushes
 
-    def promote(self, auction, userdata, distance, location, now, closes, domain):
+    def promote(self, auction, window, userdata, distance, location, now, domain, told_lately):
         """Tell one user about one auction if it's time; the source it went by, or None."""
-        user = userdata.user
-        push = userdata.user_prefers_push()
-        if not push and (not user.email or not is_quiet(userdata, now)):
-            return None
+        opens, closes = window
+        # Cheapest first: most people in range are outside their 10 o'clock hour.
         if not is_send_time(userdata, now, closes):
             return None
+        if userdata.user_id in told_lately and not is_last_chance(userdata, now, closes):
+            return None
+        user = userdata.user
+        push = userdata.user_prefers_push()
+        if not push:
+            if not user.email or not is_quiet(userdata, now) or was_in_the_weekly_email(userdata, opens):
+                return None
         source = AuctionCampaign.SOURCE_PROMO_PUSH if push else AuctionCampaign.SOURCE_PROMO_EMAIL
         try:
-            # The claim: written first, so a send that fails is never repeated.
-            campaign = AuctionCampaign.objects.create(
-                kind=AuctionCampaign.KIND_PROMO,
-                auction=auction,
-                user=user,
-                email=user.email or "",
-                source=source,
-                email_sent=not push,
-            )
-        except ValidationError:
+            # The claim, before anything is sent: promo_key is unique, so of two runs racing for the
+            # same person only one gets past here, and a send that fails is never repeated.
+            with transaction.atomic():
+                campaign = AuctionCampaign.objects.create(
+                    kind=AuctionCampaign.KIND_PROMO,
+                    promo_key=AuctionCampaign.promo_key_for(auction, user),
+                    auction=auction,
+                    user=user,
+                    email=user.email or "",
+                    source=source,
+                    email_sent=not push,
+                )
+        except (ValidationError, IntegrityError):
             return None
+        told_lately.add(user.pk)
         auction_url = f"https://{domain}{auction.get_absolute_url()}?src={campaign.uuid}"
         kind = "online auction" if auction.is_online else "in-person auction"
         distance_text = distance_display(distance, user)
@@ -230,13 +293,15 @@ class Command(BaseCommand):
             body = f"{auction.title} — {kind}"
             if distance_text:
                 body += f", {distance_text} away"
-            send_push_to_user.delay(
-                user.pk,
-                title="Bidding is open" if auction.is_online else "Auction coming up",
-                body=body,
-                url=auction_url,
-                category="promo",
-                auction_pk=auction.pk,
+            transaction.on_commit(
+                lambda: send_push_to_user.delay(
+                    user.pk,
+                    title="Bidding is open" if auction.is_online else "Auction coming up",
+                    body=body,
+                    url=auction_url,
+                    category=CATEGORY_PROMO,
+                    auction_pk=auction.pk,
+                )
             )
             return source
         lots = list(get_recommended_lots(user=user, auction=auction.slug, qty=LOTS_IN_EMAIL))

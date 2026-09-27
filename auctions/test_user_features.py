@@ -40,22 +40,21 @@ class DistanceUnitTests(StandardTestCase):
 
         userdata = self.user.userdata
         userdata.distance_unit = "km"
-        userdata.local_distance = 100  # 100 miles in DB
+        userdata.email_me_about_new_in_person_auctions_distance = 100  # 100 miles in DB
         userdata.save()
 
         # Form should display ~161 km (100 * 1.60934)
         form = ChangeUserNotificationsForm(user=self.user, instance=userdata)
-        self.assertEqual(form.initial["local_distance"], 161)
-        self.assertEqual(form.fields["local_distance"].help_text, "km, from your address")
+        self.assertEqual(form.initial["email_me_about_new_in_person_auctions_distance"], 161)
+        self.assertEqual(
+            form.fields["email_me_about_new_in_person_auctions_distance"].help_text, "km, from your address"
+        )
 
         # When user submits with 80 km, it should save as ~50 miles
         form_data = {
-            "local_distance": 80,
             "email_me_about_new_auctions_distance": 160,
-            "email_me_about_new_in_person_auctions_distance": 160,
+            "email_me_about_new_in_person_auctions_distance": 80,
             "email_me_about_new_auctions": True,
-            "email_me_about_new_local_lots": True,
-            "email_me_about_new_lots_ship_to_location": True,
             "email_me_when_people_comment_on_my_lots": True,
             "email_me_about_new_chat_replies": True,
             "email_me_about_new_in_person_auctions": True,
@@ -67,7 +66,7 @@ class DistanceUnitTests(StandardTestCase):
         saved_instance = form.save()
 
         # Verify values are stored in miles
-        self.assertEqual(saved_instance.local_distance, 50)  # 80 km / 1.60934 ≈ 50 miles
+        self.assertEqual(saved_instance.email_me_about_new_in_person_auctions_distance, 50)  # 80 km ≈ 50 miles
         self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 99)  # 160 km / 1.60934 ≈ 99 miles
 
     def test_a_km_radius_survives_a_round_trip_untouched(self):
@@ -94,16 +93,13 @@ class DistanceUnitTests(StandardTestCase):
 
         userdata = self.user.userdata
         userdata.distance_unit = "mi"
-        userdata.local_distance = 100
+        userdata.email_me_about_new_in_person_auctions_distance = 100
         userdata.save()
 
         form_data = {
-            "local_distance": 50,
             "email_me_about_new_auctions_distance": 100,
-            "email_me_about_new_in_person_auctions_distance": 100,
+            "email_me_about_new_in_person_auctions_distance": 50,
             "email_me_about_new_auctions": True,
-            "email_me_about_new_local_lots": True,
-            "email_me_about_new_lots_ship_to_location": True,
             "email_me_when_people_comment_on_my_lots": True,
             "email_me_about_new_chat_replies": True,
             "email_me_about_new_in_person_auctions": True,
@@ -115,7 +111,7 @@ class DistanceUnitTests(StandardTestCase):
         saved_instance = form.save()
 
         # Values should be saved as-is in miles
-        self.assertEqual(saved_instance.local_distance, 50)
+        self.assertEqual(saved_instance.email_me_about_new_in_person_auctions_distance, 50)
         self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 100)
 
     def test_distance_filter_converts_miles_to_km(self):
