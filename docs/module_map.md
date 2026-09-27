@@ -369,9 +369,9 @@ this only quotes its opening sentence.
 - **`test_email_layout.py`** (208 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
-- **`test_email_send_sites.py`** (280 lines)
+- **`test_email_send_sites.py`** (288 lines)
   Every templated email, sent through post_office with real model objects, the way the site sends it.
-  `SendSiteTests`
+  `SendSiteTests`, `SuiteMailBackendTests`
 - **`test_endauctions.py`** (902 lines)
   Tests for the ``endauctions`` command and the websocket consumers.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
@@ -941,9 +941,9 @@ This will make sure the app is always imported when
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
   `CacheBustedStaticFilesStorage`
-- **`test_runner.py`** (85 lines)
-  The test runner: the cheap password hasher, and the timezone reset between tests.
-  `reset_timezone_between_tests`, `use_fast_hashers`, `FastParallelTestSuite`, `FastTestRunner`
+- **`test_runner.py`** (101 lines)
+  The test runner: the cheap password hasher, mail kept in memory, and the timezone reset between tests.
+  `test_settings`, `reset_timezone_between_tests`, `apply_test_settings`, `FastParallelTestSuite`, `FastTestRunner`
 - **`urls.py`** (83 lines)
 - **`uvicorn_worker.py`** (15 lines)
   Custom gunicorn worker that runs uvicorn on the stdlib asyncio loop.

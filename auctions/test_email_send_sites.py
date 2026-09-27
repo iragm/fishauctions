@@ -278,3 +278,11 @@ class SendSiteTests(StandardTestCase):
         with patch("auctions.tasks.mail.send") as send:
             send_club_member_email(member, "Welcome", "Hi", force_email=True)
         self.assertTrue(send.call_args.kwargs["message"].startswith("Hey there,"))
+
+
+class SuiteMailBackendTests(StandardTestCase):
+    def test_post_office_never_reaches_a_real_server(self):
+        """The runner, not the environment, picks post_office's backend: the dev env's is a real SMTP login."""
+        from post_office.settings import get_backend
+
+        self.assertEqual(get_backend(), "django.core.mail.backends.locmem.EmailBackend")
