@@ -10,7 +10,7 @@
   "postCreateCommand": ". /workspace/.devcontainer/post-create.sh",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {},
-    "ghcr.io/mikaello/devcontainer-features/modern-shell-utils:2": {},
+    "ghcr.io/mikaello/devcontainer-features/modern-shell-utils:3": {},
     "ghcr.io/devcontainers/features/docker-in-docker:4.1.1": {
       "moby": false
     },
