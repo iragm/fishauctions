@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.test import RequestFactory
 from django.urls import reverse
 
@@ -11,6 +12,7 @@ from auctions.forms import QUICK_ADD_LOT_FIELDS, CreateLotForm, LabelPrintFields
 from auctions.mobile.services.label_pdf import build_label_view
 from auctions.models import AuctionDropdown, AuctionHistory, AuctionRandomOption, Lot
 from auctions.services import clone_auction
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 
@@ -123,9 +125,12 @@ class DealingTests(CustomRandomTestCase):
         )
 
 
+@isolated_cache("custom-random-reroll")
 class RerollOnEditTests(CustomRandomTestCase):
     def setUp(self):
         super().setUp()
+        # The cooldown is a cache key per lot.
+        cache.clear()
         self.switch_on("A", "B")
         self.lot = self.new_lot()
         Lot.objects.filter(auction=self.auction).update(custom_random="A", label_printed=True)
@@ -151,6 +156,19 @@ class RerollOnEditTests(CustomRandomTestCase):
         self.reroll(chance=0)
         self.assertEqual(self.lot.custom_random, "A")
         self.assertFalse(self.lot.label_needs_reprinting)
+
+    def test_one_roll_per_lot_per_cooldown(self):
+        self.reroll(chance=0)
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "A")
+        cache.delete(f"custom_random_reroll:{self.lot.pk}")
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "B")
+
+    def test_a_non_sellers_edit_does_not_start_the_cooldown(self):
+        self.reroll(user=self.user_with_no_lots)
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "B")
 
     def test_only_the_sellers_edits_reroll(self):
         self.reroll(user=self.user_with_no_lots)

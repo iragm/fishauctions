@@ -17,6 +17,7 @@ from django.contrib.auth.models import User
 from django.db.models import (
     BooleanField,
     Exists,
+    F,
     OuterRef,
     Q,
     Value,
@@ -563,9 +564,13 @@ def _recent_auctions(user, limit=10):
     return auctions[:limit]
 
 
+#: ``?auction=`` for the buying dashboard across every auction, and lots not in one.
+ALL_AUCTIONS = "all"
+
+
 class BuyingDashboard(HTMxTableView):
     """Buying dashboard: the lots you watched, bid on or won in one auction, ``?auction=<slug>`` or the last
-    one you used.
+    one you used. ``?auction=all`` is every auction at once.
     """
 
     model = Lot
@@ -575,7 +580,8 @@ class BuyingDashboard(HTMxTableView):
     htmx_table_header_template = "auctions/partials/lot_buying_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_auction()
+        self.all_auctions = request.GET.get("auction") == ALL_AUCTIONS
+        self.auction = None if self.all_auctions else self.get_auction()
         self.queryset = self.get_lots()
         return super().dispatch(request, *args, **kwargs)
 
@@ -592,36 +598,49 @@ class BuyingDashboard(HTMxTableView):
         return recent[0] if recent else None
 
     def get_lots(self):
-        if not self.auction:
+        if self.all_auctions:
+            lots = Lot.objects.filter(is_deleted=False)
+            # Newest auction first, then its lots in order; lots not in an auction last.
+            order = (F("auction__date_start").desc(nulls_last=True), "auction", "lot_number_int", "pk")
+        elif self.auction:
+            lots = Lot.objects.filter(auction=self.auction, is_deleted=False)
+            order = ("lot_number_int", "pk")
+        else:
             return Lot.objects.none()
         user = self.request.user
         return (
-            Lot.objects.filter(auction=self.auction, is_deleted=False)
-            .annotate(
+            lots.annotate(
                 watching=Exists(Watch.objects.filter(lot_number=OuterRef("pk"), user=user)),
                 bidding=Exists(Bid.objects.filter(lot_number=OuterRef("pk"), user=user, is_deleted=False)),
             )
             .filter(Q(watching=True) | Q(bidding=True) | Lot.won_by_q(user))
             .select_related("auction", "auctiontos_winner")
             .prefetch_related("bid_set")
-            .order_by("lot_number_int", "pk")
+            .order_by(*order)
         )
 
     def get_table_kwargs(self):
-        return {"user": self.request.user}
+        kwargs = {"user": self.request.user}
+        if not self.all_auctions:
+            kwargs["exclude"] = ("auction",)
+        return kwargs
 
     def get_possible_filters(self):
         filters = [("Watched", "watched"), ("Won", "won"), ("Lost", "lost")]
-        if self.auction and (self.auction.is_online or self.auction.online_bidding != "disable"):
+        if self.all_auctions or (self.auction and (self.auction.is_online or self.auction.online_bidding != "disable")):
             filters += [("Bids", "bids"), ("Outbid", "outbid")]
         return filters
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
-        if self.auction and not self.request.htmx:
-            context["recent_auctions"] = _recent_auctions(self.request.user)
-            context["note"] = self.get_note(self.auction)
+        context["all_auctions"] = self.all_auctions
+        context["auction_param"] = ALL_AUCTIONS if self.all_auctions else getattr(self.auction, "slug", "")
+        if not self.request.htmx:
+            if self.auction or self.all_auctions:
+                context["recent_auctions"] = _recent_auctions(self.request.user)
+            if self.auction:
+                context["note"] = self.get_note(self.auction)
         return context
 
     def get_note(self, auction):
@@ -652,7 +671,13 @@ class BuyingCSV(BuyingDashboard):
     def get(self, request, *args, **kwargs):
         lots = BuyingLotFilter(request.GET, queryset=self.queryset.select_related("species"), request=request).qs
         response = HttpResponse(content_type="text/csv")
-        name = attachment_filename(f"buying_{self.auction.slug}" if self.auction else "buying")
+        name = attachment_filename(
+            f"buying_{self.auction.slug}"
+            if self.auction
+            else f"buying_{ALL_AUCTIONS}"
+            if self.all_auctions
+            else "buying"
+        )
         response["Content-Disposition"] = f'attachment; filename="{name}.csv"'
         writer = safe_csv_writer(response)
         writer.writerow(["Status", "Lot number", "Name", "Scientific name", "Auction", "Price", "Link"])

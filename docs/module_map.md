@@ -169,7 +169,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14060 lines)
+- **`models.py`** (14069 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (139 lines)
   The Django admin for the moderation queue: reports, copyright notices and strikes.
@@ -232,7 +232,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1034 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1611 lines)
+- **`tables.py`** (1613 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1833 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -271,7 +271,7 @@ this only quotes its opening sentence.
   What the assistant does when nobody is looking at a page.
 - **`test_auction_admin_views.py`** (834 lines)
   Regression tests for auction-admin and lot-management views with thin coverage: the add-to-calendar
-- **`test_auction_links.py`** (589 lines)
+- **`test_auction_links.py`** (626 lines)
   Auction join links, the lot list's behaviour, and the Cloudflare image pipeline.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
@@ -301,7 +301,7 @@ this only quotes its opening sentence.
   `BulkAddLotsAutoTests`, `UpdateAuctionStatsCommandTestCase`, `LotsByUserViewTest`, `ImportLotsFromCSVViewTests`
 - **`test_bulk_import_views.py`** (590 lines)
   Gaps in the bulk-import and export views: the per-row lot save (closed submission, bad input), the
-- **`test_buying.py`** (222 lines)
+- **`test_buying.py`** (257 lines)
   The buying dashboard: which lots it lists, the status badge, its keywords, and the one note above it.
   `BuyingDashboardTests`, `BuyingDashboardPushNoteTests`
 - **`test_cache_hygiene.py`** (132 lines)
@@ -355,7 +355,7 @@ this only quotes its opening sentence.
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
   `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`
-- **`test_custom_random.py`** (346 lines)
+- **`test_custom_random.py`** (364 lines)
   The custom random field: an auction's option list that each lot is dealt from, and nobody edits.
   `CustomRandomTestCase`, `DealingTests`, `RerollOnEditTests`, `NobodyEditsItTests`, `ShownPrintedAndSearchedTests`, `OptionsAPITests`, `OptionsOverMCPTests`
 - **`test_data_leak_penetration.py`** (259 lines)
@@ -375,7 +375,7 @@ this only quotes its opening sentence.
 - **`test_email_layout.py`** (208 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
-- **`test_email_send_sites.py`** (288 lines)
+- **`test_email_send_sites.py`** (325 lines)
   Every templated email, sent through post_office with real model objects, the way the site sends it.
   `SendSiteTests`, `SuiteMailBackendTests`
 - **`test_endauctions.py`** (902 lines)
@@ -614,7 +614,7 @@ this only quotes its opening sentence.
 - **`auction_promos.py`** (334 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
-- **`auctiontos_notifications.py`** (227 lines)
+- **`auctiontos_notifications.py`** (233 lines)
   `send_tos_notification`, `Command`
 - **`backfill_bap_reasons.py`** (120 lines)
   `Command`
@@ -669,7 +669,7 @@ this only quotes its opening sentence.
 - **`import_nec_speakers.py`** (403 lines)
   Import the Northeast Council's speaker database from a WordPress WXR export.
   `clean_text`, `Command`
-- **`link_accounts.py`** (71 lines)
+- **`link_accounts.py`** (98 lines)
   Link every participant row to its person's account, once, for rows written before saving did it.
   `Command`
 - **`load_demo_data.py`** (86 lines)
@@ -685,7 +685,7 @@ this only quotes its opening sentence.
   `Command`
 - **`register_discord_commands.py`** (138 lines)
   `Command`
-- **`sendnotifications.py`** (65 lines)
+- **`sendnotifications.py`** (83 lines)
   `Command`
 - **`set_user_location.py`** (193 lines)
   `Command`
@@ -853,7 +853,7 @@ Every view on the site, split by the part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1068 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (920 lines)
+- **`browse.py`** (945 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (508 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.

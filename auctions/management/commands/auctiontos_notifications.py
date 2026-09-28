@@ -15,6 +15,9 @@ from auctions.models import (
 )
 from auctions.notifications import CATEGORY_AUCTION_REMINDER, notify_user
 
+#: How long after an online auction ends its sellers can still be reminded to print their labels.
+PRINT_REMINDER_WINDOW = datetime.timedelta(days=3)
+
 _TOS_PUSH_TITLES = {
     "online_auction_welcome": "You're in — {auction}",
     "in_person_auction_welcome": "You're in — {auction}",
@@ -110,6 +113,9 @@ class Command(BaseCommand):
         online_auction_print_reminder = print_reminder_qs.filter(
             auction__is_online=True,
             auction__date_end__lte=timezone.now() - datetime.timedelta(hours=1),
+            # A row linked to its account long after the auction (link_accounts, a sign-in) has the flag
+            # unset too, and a reminder for an auction that ended weeks ago is only noise.
+            auction__date_end__gte=timezone.now() - PRINT_REMINDER_WINDOW,
         )
         for tos in online_auction_print_reminder:
             tos.print_reminder_email_sent = True

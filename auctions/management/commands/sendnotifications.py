@@ -1,9 +1,11 @@
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.urls import reverse
+from django.utils.http import urlencode
 from post_office import mail
 
 from auctions.models import Auction, Lot, Watch
+from auctions.views.browse import ALL_AUCTIONS
 
 
 class Command(BaseCommand):
@@ -14,6 +16,9 @@ class Command(BaseCommand):
         # Keyed by user pk so each watcher is notified once, and so opted-in app users can get a push
         # instead of the email (notify_user, below). Value is the User for the routing decision.
         notify_targets = {}
+        # The auctions each watcher's ending lots are in (None for a lot outside one), so the link can
+        # open the buying dashboard on that auction rather than whichever one they last joined.
+        watched_auctions = {}
         auctions = Auction.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False, is_online=True)
         for auction in auctions:
             if auction.ending_soon:
@@ -27,6 +32,7 @@ class Command(BaseCommand):
                     self.stdout.write(f" | +-- {watch}")
                     if watch.user:
                         notify_targets[watch.user.pk] = watch.user
+                        watched_auctions.setdefault(watch.user.pk, set()).add(auction.slug)
                 auction.watch_warning_email_sent = True
                 auction.save(update_fields=["watch_warning_email_sent"])
             # else:
@@ -41,6 +47,7 @@ class Command(BaseCommand):
             self.stdout.write(f"+-- {watch}")
             if watch.user:
                 notify_targets[watch.user.pk] = watch.user
+                watched_auctions.setdefault(watch.user.pk, set()).add(None)
         for lot in ending_soon:
             self.stdout.write(f"{lot}")
             lot.watch_warning_email_sent = True
@@ -48,18 +55,29 @@ class Command(BaseCommand):
         # Collected all watchers; push for opted-in app users, otherwise email exactly as before.
         from auctions.notifications import notify_user
 
-        watched_url = f"https://{current_site.domain}{reverse('watched')}"
         for user in notify_targets.values():
+            watched_url = self.watched_url(current_site.domain, watched_auctions.get(user.pk, set()))
             notify_user(
                 user,
                 category="watched",
                 title="Watched lots ending soon",
                 body="Lots you're watching are ending soon — tap to place a bid.",
                 url=watched_url,
-                send_email=lambda user=user: mail.send(
+                send_email=lambda user=user, watched_url=watched_url: mail.send(
                     user.email,
                     template="watched_items_ending",
-                    context={"domain": current_site.domain, "name": user.first_name},
+                    context={
+                        "domain": current_site.domain,
+                        "name": user.first_name,
+                        "watched_url": f"{watched_url}&src=email",
+                    },
                 ),
             )
             self.stdout.write(f"Notified {user.email} about their watched items")
+
+    @staticmethod
+    def watched_url(domain, auctions):
+        """The buying dashboard's watched lots: in the one auction they're in, or all of them."""
+        only = next(iter(auctions)) if len(auctions) == 1 else None
+        query = urlencode({"query": "watched", "auction": only or ALL_AUCTIONS})
+        return f"https://{domain}{reverse('buying')}?{query}"

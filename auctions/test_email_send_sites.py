@@ -6,15 +6,19 @@ calling the real send site is cheap it is called; otherwise ``mail.send`` gets t
 the send site passes, named in a comment beside it.
 """
 
+import datetime
+import io
 from unittest.mock import PropertyMock, patch
 
 from django.contrib.sites.models import Site
+from django.core.management import call_command
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from post_office import mail
 from post_office.models import Email
 
-from auctions.models import Club, ClubHistory, ClubMember, Lot
+from auctions.models import AuctionTOS, Club, ClubHistory, ClubMember, Lot, Watch
 from auctions.tests import StandardTestCase
 
 ADDRESS = "PO Box 1, Burlington VT 05401"
@@ -181,14 +185,47 @@ class SendSiteTests(StandardTestCase):
         self.assertNotIn("//lots/new", email.message + email.html_message)
 
     def test_site_notices(self):
-        # sendnotifications: {"domain", "name"}; email_unseen_chats: {"name", "domain", "data", "unsubscribe"}
+        # sendnotifications: {"domain", "name", "watched_url"}; email_unseen_chats: {"name", "domain", "data", "unsubscribe"}
         for template, context in (
-            ("watched_items_ending", {"domain": self.domain, "name": "Jamie"}),
+            ("watched_items_ending", {"domain": self.domain, "name": "Jamie", "watched_url": "https://x/buying/"}),
             ("unread_chat_messages", {"domain": self.domain, "name": "Jamie", "data": self.user.userdata}),
         ):
             with self.subTest(template):
                 mail.send("jamie@example.com", template=template, context=context)
                 self.check(self.sent("jamie@example.com"), "Hey Jamie,", club_header=False)
+
+    def test_watched_items_ending_opens_the_auction_the_lots_are_in(self):
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(minutes=30)
+        self.online_auction.watch_warning_email_sent = False
+        self.online_auction.save()
+        self.user_with_no_lots.email = "wes@example.com"
+        self.user_with_no_lots.save()
+        Watch.objects.create(user=self.user_with_no_lots, lot_number=self.lot)
+        call_command("sendnotifications", stdout=io.StringIO())
+        email = self.sent("wes@example.com")
+        self.check(email, "Hey Wes,", club_header=False)
+        link = f"https://{self.domain}{reverse('buying')}?query=watched&auction={self.online_auction.slug}&src=email"
+        self.assertIn(link, email.message)
+        self.assertIn(link.replace("&", "&amp;"), email.html_message)
+
+    def test_watched_lots_in_several_places_open_all_auctions(self):
+        from auctions.management.commands.sendnotifications import Command
+
+        for auctions in ({"one", "two"}, {"one", None}, {None}):
+            with self.subTest(auctions=auctions):
+                self.assertTrue(Command.watched_url("x", auctions).endswith("?query=watched&auction=all"))
+        self.assertTrue(Command.watched_url("x", {"one"}).endswith("?query=watched&auction=one"))
+
+    def test_print_reminder_only_after_a_recent_auction(self):
+        # A row linked long after its auction ended still has the flag unset.
+        for days_ago, reminded in ((2, True), (10, False)):
+            with self.subTest(days_ago=days_ago):
+                self.online_auction.date_end = timezone.now() - datetime.timedelta(days=days_ago)
+                self.online_auction.save()
+                AuctionTOS.objects.filter(pk=self.online_tos.pk).update(print_reminder_email_sent=False)
+                call_command("auctiontos_notifications", stdout=io.StringIO())
+                self.online_tos.refresh_from_db()
+                self.assertEqual(self.online_tos.print_reminder_email_sent, reminded)
 
     def test_missing_name_greets_there(self):
         self.online_tos.name = ""

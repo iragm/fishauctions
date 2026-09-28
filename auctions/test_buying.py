@@ -63,6 +63,41 @@ class BuyingDashboardTests(StandardTestCase):
         self.assertNotContains(response, "Other auction lot")
         self.assertContains(response, f"{watched.lot_link}?src=buying")
 
+    def test_all_auctions_lists_every_auction_and_names_each(self):
+        watched = self._lot("Watched duckweed", active=True)
+        Watch.objects.create(user=self.userB, lot_number=watched)
+        elsewhere = self._lot("Other auction lot", auction=self.in_person_auction)
+        Watch.objects.create(user=self.userB, lot_number=elsewhere)
+        standalone = Lot.objects.create(lot_name="No auction at all", user=self.user, quantity=1)
+        Watch.objects.create(user=self.userB, lot_number=standalone)
+        self._lot("Nothing to do with me", active=True)
+        response = self.client.get(reverse("buying"), {"auction": "all"})
+        self.assertIsNone(response.context["auction"])
+        for name in ("Watched duckweed", "Other auction lot", "No auction at all", "A test lot"):
+            self.assertContains(response, name)
+        self.assertNotContains(response, "Nothing to do with me")
+        self.assertIn("auction", [column.name for column in response.context["table"].columns])
+        self.assertContains(response, str(self.in_person_auction))
+        self.assertContains(response, 'id="id_query"')
+        self.assertContains(response, f"{reverse('my_won_lot_csv')}?auction=all")
+        rows = _csv_rows(self.client.get(reverse("my_won_lot_csv"), {"auction": "all", "query": "watched"}))
+        self.assertEqual(
+            sorted(row[2] for row in rows[1:]), ["No auction at all", "Other auction lot", "Watched duckweed"]
+        )
+
+    def test_one_auction_has_no_auction_column(self):
+        columns = [column.name for column in self.client.get(self.url).context["table"].columns]
+        self.assertEqual(columns, ["status", "lot_number", "lot_name", "price"])
+
+    def test_all_auctions_is_the_last_option_in_the_dropdown(self):
+        html = self.client.get(self.url).content.decode()
+        menu = html.split('class="dropdown-menu dropdown-menu-scroll"')[1].split("</ul>")[0]
+        self.assertIn(f'href="?auction={self.online_auction.slug}"', menu)
+        self.assertTrue(menu.strip().endswith('data-query-sync-url="?auction=all">All auctions</a></li>'), menu)
+        all_menu = self.client.get(reverse("buying"), {"auction": "all"}).content.decode()
+        self.assertIn('class="dropdown-item active" href="?auction=all"', all_menu)
+        self.assertNotIn(reverse("my_auction_invoice", kwargs={"slug": self.online_auction.slug}), all_menu)
+
     def test_keywords_combine_with_text(self):
         watched = self._lot("Watched duckweed", active=True)
         Watch.objects.create(user=self.userB, lot_number=watched)

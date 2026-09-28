@@ -26,6 +26,7 @@ from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, validate_email
 from django.db import models, transaction
@@ -91,6 +92,8 @@ logger = logging.getLogger(__name__)
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
 # A seller's edit re-deals the lot's custom random option this often; see Lot.reroll_custom_random_on_edit.
 CUSTOM_RANDOM_REROLL_CHANCE = 0.25
+# After a roll, whichever way it went, that lot's edits don't roll again for this long (seconds).
+CUSTOM_RANDOM_REROLL_COOLDOWN = 20 * 60
 
 # The privacy policy is a BlogPost so it can be edited without a deploy; /privacy/, /blog/privacy/
 # and the app's sign-up link all use this slug.
@@ -8261,9 +8264,15 @@ class Lot(CachedPropertiesMixin, models.Model):
         when *user* is the seller. Moving what's on a lot onto the option a seller wanted then only
         sometimes sticks, and every change lands in the auction history, so editing until an option comes
         up is easy to spot.
+
+        One roll per lot per :data:`CUSTOM_RANDOM_REROLL_COOLDOWN`: bulk add autosaves every field as it
+        changes, and a roll per save would re-deal most edited lots and let a seller retype until it lands.
         """
         auction = self.auction
         if not (auction and auction.use_custom_random_field and self.custom_random and self.is_owned_by(user)):
+            return
+        # add() is atomic: only the first edit in the window gets to roll.
+        if not cache.add(f"custom_random_reroll:{self.pk}", True, CUSTOM_RANDOM_REROLL_COOLDOWN):
             return
         if secrets.SystemRandom().random() >= CUSTOM_RANDOM_REROLL_CHANCE:
             return

@@ -8,12 +8,12 @@
   {% if note == "push_offer" %}{% webpush_header %}{% endif %}
 {% endblock %}
 
-{% block htmx_table_filter_form %}{% if auction %}{{ block.super }}{% endif %}{% endblock %}
+{% block htmx_table_filter_form %}{% if auction or all_auctions %}{{ block.super }}{% endif %}{% endblock %}
 
 {% block htmx_table %}
-  {% if auction %}
+  {% if auction or all_auctions %}
     {{ block.super }}
-    <a href="{% url 'my_won_lot_csv' %}?auction={{ auction.slug }}" data-query-sync-url="{% url 'my_won_lot_csv' %}?auction={{ auction.slug }}" class="btn btn-primary"><i class="bi bi-download"></i> Export CSV</a>
+    <a href="{% url 'my_won_lot_csv' %}?auction={{ auction_param }}" data-query-sync-url="{% url 'my_won_lot_csv' %}?auction={{ auction_param }}" class="btn btn-primary"><i class="bi bi-download"></i> Export CSV</a>
   {% endif %}
 {% endblock %}
 

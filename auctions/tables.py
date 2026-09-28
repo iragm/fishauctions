@@ -591,6 +591,8 @@ class LotHTMxTableForBuyers(tables.Table):
     """The buying dashboard: one badge per lot for where you stand on it."""
 
     status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
+    # Only for ?auction=all; the view excludes it otherwise.
+    auction = tables.Column(verbose_name="Auction", orderable=False, default="")
     lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
     lot_name = tables.Column(verbose_name="Lot", orderable=False)
     price = tables.Column(accessor="pk", verbose_name="Price", orderable=False)
@@ -612,7 +614,7 @@ class LotHTMxTableForBuyers(tables.Table):
     class Meta:
         model = Lot
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("status", "lot_number", "lot_name", "price")
+        fields = ("status", "auction", "lot_number", "lot_name", "price")
         row_attrs = {}
 
 

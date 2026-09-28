@@ -236,6 +236,43 @@ class LinkAccountsCommandTests(StandardTestCase):
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, orphan_user)
 
+    def test_tasks_run_inline_one_row_at_a_time(self):
+        from celery import current_app
+
+        orphan = self._make_orphan("inline@example.com")
+        User.objects.create_user(username="inlineu", password="x", email="inline@example.com")
+        eager = []
+        save = AuctionTOS.save
+
+        def record(tos, *args, **kwargs):
+            eager.append(current_app.conf.task_always_eager)
+            return save(tos, *args, **kwargs)
+
+        with patch.object(AuctionTOS, "save", record):
+            call_command("link_accounts", "--pause", "0", stdout=io.StringIO())
+        self.assertEqual(eager, [True])
+        self.assertFalse(current_app.conf.task_always_eager)
+        orphan.refresh_from_db()
+        self.assertIsNotNone(orphan.user)
+
+    def test_a_row_is_reread_before_it_is_saved(self):
+        first = self._make_orphan("first@example.com")
+        second = self._make_orphan("second@example.com")
+        User.objects.create_user(username="firstu", password="x", email="first@example.com")
+        User.objects.create_user(username="secondu", password="x", email="second@example.com")
+        save = AuctionTOS.save
+
+        def admin_edits_the_second_meanwhile(tos, *args, **kwargs):
+            if tos.pk == first.pk:
+                AuctionTOS.objects.filter(pk=second.pk).update(name="Renamed by an admin")
+            return save(tos, *args, **kwargs)
+
+        with patch.object(AuctionTOS, "save", admin_edits_the_second_meanwhile):
+            call_command("link_accounts", "--pause", "0", stdout=io.StringIO())
+        second.refresh_from_db()
+        self.assertEqual(second.name, "Renamed by an admin")
+        self.assertIsNotNone(second.user)
+
     def test_dry_run_makes_no_changes(self):
         orphan = self._make_orphan("orphan2@example.com")
         User.objects.create_user(username="orphanu2", password="x", email="orphan2@example.com")
