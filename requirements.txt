@@ -38,9 +38,9 @@ bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.98
+boto3==1.43.103
     # via django-ses
-botocore==1.43.98
+botocore==1.43.103
     # via
     #   boto3
     #   s3transfer
@@ -199,21 +199,21 @@ djangorestframework-simplejwt==5.5.1
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
-firebase-admin==7.6.0
+firebase-admin==7.7.0
     # via -r requirements.in
-fonttools[woff]==4.65.0
+fonttools[woff]==4.66.0
     # via weasyprint
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-api-core[grpc]==2.38.0
+google-api-core[grpc]==2.39.0
     # via
     #   firebase-admin
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-auth==2.58.0
+google-auth==2.58.1
     # via
     #   -r requirements.in
     #   google-api-core
@@ -224,17 +224,17 @@ google-cloud-core==2.7.0
     # via
     #   google-cloud-firestore
     #   google-cloud-storage
-google-cloud-firestore==2.31.0
+google-cloud-firestore==2.32.0
     # via firebase-admin
-google-cloud-storage==3.14.1
+google-cloud-storage==3.15.0
     # via firebase-admin
-google-crc32c==1.8.0
+google-crc32c==1.9.0
     # via
     #   google-cloud-storage
     #   google-resumable-media
 google-resumable-media==2.10.2
     # via google-cloud-storage
-googleapis-common-protos==1.75.3
+googleapis-common-protos==1.75.4
     # via
     #   google-api-core
     #   grpcio-status
@@ -289,7 +289,7 @@ linkify-it-py==2.2.0
     # via django-markdownfield
 mailchimp-marketing==3.0.80
     # via -r requirements.in
-markdown==3.10.3
+markdown==3.11
     # via -r requirements.in
 markdown-it-py==4.2.0
     # via
@@ -303,7 +303,7 @@ msgpack==1.2.2
     # via
     #   cachecontrol
     #   channels-redis
-multidict==6.9.0
+multidict==6.9.1
     # via
     #   aiohttp
     #   yarl
@@ -317,12 +317,12 @@ numpy==2.4.6
     # via
     #   -r requirements.in
     #   scipy
-oauthlib==3.3.1
+oauthlib==4.0.0
     # via
     #   -r requirements.in
     #   django-oauth-toolkit
     #   requests-oauthlib
-opentelemetry-api==1.44.0
+opentelemetry-api==1.45.0
     # via google-api-core
 packaging==26.3
     # via
@@ -387,7 +387,7 @@ pygeomag==1.1.0
     # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt[crypto]==2.14.0
+pyjwt[crypto]==2.15.0
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
@@ -414,7 +414,7 @@ python-dotenv==1.2.3
     # via
     #   pydantic-settings
     #   uvicorn
-pytz==2026.3.post1
+pytz==2026.4
     # via -r requirements.in
 pywebpush==2.5.0
     # via django-webpush
@@ -456,7 +456,7 @@ six==1.17.0
     #   -r requirements.in
     #   mailchimp-marketing
     #   python-dateutil
-soupsieve==2.9.2
+soupsieve==2.10
     # via beautifulsoup4
 sqlparse==0.6.0
     # via
@@ -514,7 +514,7 @@ urllib3==2.8.0
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.53.0
+uvicorn[standard]==0.54.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -525,7 +525,7 @@ vine==5.1.0
     #   kombu
 watchfiles==1.3.0
     # via uvicorn
-wcwidth==0.8.4
+wcwidth==0.9.1
     # via prompt-toolkit
 weasyprint==70.0
     # via django-weasyprint
