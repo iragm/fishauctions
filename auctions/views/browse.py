@@ -1,7 +1,7 @@
 """The lot lists people browse, and what they do to a lot without opening it.
 
-The main list, the recommendation feeds, "my bids" and "my watched", the autocompletes behind them,
-and the two writes that happen from a list: watching and bidding.
+The main list, the recommendation feeds, the buying and selling dashboards, the autocompletes behind
+them, and the two writes that happen from a list: watching and bidding.
 """
 
 import logging
@@ -35,16 +35,15 @@ from el_pagination.views import AjaxListView
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
+from webpush.models import PushInformation
 
 from auctions.bidding import place_bid_and_broadcast
 from auctions.filters import (
     AuctionTOSFilter,
+    BuyingLotFilter,
     LotAdminFilter,
     LotFilter,
-    UserBidLotFilter,
     UserLotFilter,
-    UserWatchLotFilter,
-    UserWonLotFilter,
     get_recommended_lots,
 )
 from auctions.helper_functions import cookie_coordinates
@@ -54,6 +53,7 @@ from auctions.models import (
     Auction,
     AuctionIgnore,
     AuctionTOS,
+    Bid,
     Category,
     ClubMember,
     Invoice,
@@ -65,8 +65,10 @@ from auctions.models import (
     UserInterestCategory,
     Watch,
 )
+from auctions.notifications import user_has_app_push
 from auctions.queryset_annotations import nearby_auctions
 from auctions.tables import (
+    LotHTMxTableForBuyers,
     LotHTMxTableForUsers,
 )
 
@@ -486,32 +488,6 @@ class RecommendedLots(ListView):
         return context
 
 
-class MyWonLots(LotListView):
-    """Show all lots won by the current user"""
-
-    def get_context_data(self, **kwargs):
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data["status"] = "closed"
-        context = super().get_context_data(**kwargs)
-        context["filter"] = UserWonLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context["lot_view_type"] = "mywonlots"
-        context["lotsAreHidden"] = -1
-        return context
-
-
-class MyBids(LotListView):
-    """Show all lots the current user has bid on"""
-
-    def get_context_data(self, **kwargs):
-        data = self.request.GET.copy()
-        context = super().get_context_data(**kwargs)
-        context["filter"] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context["lot_view_type"] = "mybids"
-        context["lotsAreHidden"] = -1
-        return context
-
-
 class MyLots(HTMxTableView):
     """Selling dashboard.  List of lots added by this user."""
 
@@ -523,12 +499,8 @@ class MyLots(HTMxTableView):
     # paginate_by = 100
 
     def dispatch(self, request, *args, **kwargs):
-        # Legacy ?filter=X bookmarks are canonicalized to ?query=X so the shared template's input
-        # pre-populates.
-        if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
-            params = request.GET.copy()
-            params["query"] = params.pop("filter")[0]
-            return HttpResponseRedirect(f"{request.path}?{params.urlencode()}")
+        if legacy := _filter_to_query_redirect(request):
+            return legacy
         filter_value = request.GET.get("query", "").strip().lower()
         qs = UserLotFilter(request=request).qs
         if filter_value == "bap":
@@ -558,20 +530,123 @@ class MyLots(HTMxTableView):
         return super().get(*args, **kwargs)
 
 
-class MyWatched(LotListView):
-    """Show all lots watched by the current user"""
+def _filter_to_query_redirect(request):
+    """``?filter=X`` becomes ``?query=X``, so the search box pre-populates. None when there's nothing to do."""
+    if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
+        params = request.GET.copy()
+        params["query"] = params.pop("filter")[0]
+        return HttpResponseRedirect(f"{request.path}?{params.urlencode()}")
+    return None
+
+
+class BuyingRedirect(RedirectView):
+    """``/lots/watched/``, ``/lots/won/`` and ``/bids/``, which are the buying dashboard filtered now."""
+
+    keyword = ""
+
+    def get_redirect_url(self, *args, **kwargs):
+        params = self.request.GET.copy()
+        params["query"] = self.keyword
+        return f"{reverse('buying')}?{params.urlencode()}"
+
+
+def _recent_auctions(user, limit=10):
+    """The auctions ``user`` joined most recently, newest first."""
+    auctions = []
+    for tos in (
+        AuctionTOS.objects.filter(user=user, auction__is_deleted=False)
+        .select_related("auction")
+        .order_by("-createdon")[: limit * 2]
+    ):
+        if tos.auction not in auctions:
+            auctions.append(tos.auction)
+    return auctions[:limit]
+
+
+class BuyingDashboard(HTMxTableView):
+    """Buying dashboard: the lots you watched, bid on or won in one auction, ``?auction=<slug>`` or the last
+    one you used.
+    """
+
+    model = Lot
+    table_class = LotHTMxTableForBuyers
+    filterset_class = BuyingLotFilter
+    template_name = "auctions/lot_buying.html"
+    htmx_table_header_template = "auctions/partials/lot_buying_table_header.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if legacy := _filter_to_query_redirect(request):
+            return legacy
+        self.auction = self.get_auction()
+        self.queryset = self.get_lots()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_auction(self):
+        slug = self.request.GET.get("auction")
+        if slug:
+            auction = Auction.objects.filter(slug=slug, is_deleted=False).first()
+            if auction:
+                return auction
+        last = self.request.user.userdata.last_auction_used
+        if last and not last.is_deleted:
+            return last
+        recent = _recent_auctions(self.request.user, limit=1)
+        return recent[0] if recent else None
+
+    def get_lots(self):
+        if not self.auction:
+            return Lot.objects.none()
+        user = self.request.user
+        return (
+            Lot.objects.filter(auction=self.auction, is_deleted=False)
+            .annotate(
+                watching=Exists(Watch.objects.filter(lot_number=OuterRef("pk"), user=user)),
+                bidding=Exists(Bid.objects.filter(lot_number=OuterRef("pk"), user=user, is_deleted=False)),
+            )
+            .filter(Q(watching=True) | Q(bidding=True) | Q(winner=user) | Q(auctiontos_winner__user=user))
+            .select_related("auction", "auctiontos_winner")
+            .prefetch_related("bid_set")
+            .order_by("lot_number_int", "pk")
+        )
+
+    def get_table_kwargs(self):
+        return {"user": self.request.user}
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["filter"] = UserWatchLotFilter(
-            self.request.GET,
-            queryset=self.get_queryset(),
-            request=self.request,
-            ignore=False,
-        )
-        context["lot_view_type"] = "watch"
-        context["lotsAreHidden"] = -1
+        auction = self.auction
+        context["auction"] = auction
+        if self.request.htmx:
+            return context
+        context["recent_auctions"] = _recent_auctions(self.request.user)
+        context["keywords"] = list(BuyingLotFilter.KEYWORDS)
+        query = self.request.GET.get("query", "").lower().split()
+        context["active_keywords"] = [keyword for keyword in BuyingLotFilter.KEYWORDS if keyword in query]
+        if auction:
+            context["bidding_enabled"] = auction.is_online or auction.online_bidding != "disable"
+            context["note"] = self.get_note(auction)
         return context
+
+    def get_note(self, auction):
+        """Which one line goes above the table, if any."""
+        user = self.request.user
+        if auction.pretty_much_over:
+            return "ended"
+        if not auction.is_online and auction.message_users_when_lots_sell:
+            has_app_push = user_has_app_push(user)
+            if user.userdata.push_notifications_when_lots_sell and (
+                has_app_push or PushInformation.objects.filter(user=user).exists()
+            ):
+                return "push_in_app" if has_app_push else "push_here"
+            # The app does its own asking; a WebView has no Push API.
+            if not has_app_push and not getattr(self.request, "is_mobile_app", False):
+                return "push_offer"
+            return None
+        if auction.is_online and auction.closed:
+            invoice = Invoice.objects.filter(auctiontos_user__user=user, auction=auction).first()
+            if invoice and invoice.status != "PAID" and invoice.rounded_net_after_payments < 0:
+                return "unpaid"
+        return None
 
 
 class LotsByUser(LotListView):

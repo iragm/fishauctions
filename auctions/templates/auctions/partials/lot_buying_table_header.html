@@ -1,0 +1,32 @@
+{% load webpush_notifications %}
+{% if not auction %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>You haven't joined an auction yet, <a href="{% url 'auctions' %}">find one to join here</a>.</div></div>
+{% elif note == "ended" %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>{{ auction }} has ended, <a href="{% url 'auctions' %}">find a new auction to join here</a>.</div></div>
+{% elif note == "push_in_app" %}
+<div class="help-note"><i class="bi bi-bell-fill"></i><div>You'll get a notification in the app as lots you're watching sell.</div></div>
+{% elif note == "push_here" %}
+<div class="help-note"><i class="bi bi-bell-fill"></i><div>You'll get a notification here as lots you're watching sell.</div></div>
+{% elif note == "push_offer" %}
+<div class="help-note"><i class="bi bi-bell-fill"></i><div>
+  <span id="subscribe_success" class="d-none">You'll get a notification here as lots you're watching sell.</span>
+  <span id="subscribe_message_area">Get a notification on this device as lots you're watching sell: {% webpush_button with_class="btn btn-primary btn-sm ms-1" %}</span>
+</div></div>
+{% elif note == "unpaid" %}
+<div class="help-note"><i class="bi bi-bag"></i><div>You still need to pay your invoice, <a href="{% url 'my_auction_invoice' slug=auction.slug %}">click here to see it</a>.</div></div>
+{% endif %}
+{% if auction %}
+<div class="d-flex flex-wrap gap-2 align-items-center mt-2 mb-2">
+  <div class="dropdown">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-hammer"></i> {{ auction }}</button>
+    <ul class="dropdown-menu dropdown-menu-scroll">
+      {% for recent in recent_auctions %}<li><a class="dropdown-item{% if recent.pk == auction.pk %} active{% endif %}" href="?auction={{ recent.slug }}" data-buying-auction="{{ recent.slug }}">{{ recent }}</a></li>{% endfor %}
+    </ul>
+  </div>
+  <button type="button" class="btn btn-sm buying-filter {% if 'watched' in active_keywords %}btn-primary active{% else %}btn-secondary{% endif %}" data-filter-key="watched"><i class="bi bi-star-fill"></i> Watched</button>
+  <button type="button" class="btn btn-sm buying-filter {% if 'won' in active_keywords %}btn-primary active{% else %}btn-secondary{% endif %}" data-filter-key="won"><i class="bi bi-calendar-check"></i> Won</button>
+  {% if bidding_enabled %}<button type="button" class="btn btn-sm buying-filter {% if 'bids' in active_keywords %}btn-primary active{% else %}btn-secondary{% endif %}" data-filter-key="bids"><i class="bi bi-coin"></i> Bids</button>{% endif %}
+  <a href="{% url 'my_auction_invoice' slug=auction.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-bag"></i> Invoice</a>
+  <a href="{{ auction.view_lot_link }}&order=recommended" class="btn btn-sm btn-primary"><i class="bi bi-search"></i> Find recommended lots in {{ auction }}</a>
+</div>
+{% endif %}

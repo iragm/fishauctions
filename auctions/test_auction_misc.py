@@ -590,35 +590,3 @@ class WatchViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
         self.assertEqual(response.status_code, 405)
-
-
-class MyBidsViewTests(StandardTestCase):
-    """Test my bids view with different user types"""
-
-    def test_my_bids_anonymous(self):
-        """Anonymous users should be redirected to login"""
-        response = self.client.get("/bids/")
-        # Should redirect to login (302) or be denied (403)
-        assert response.status_code in [302, 403]
-
-    def test_my_bids_logged_in(self):
-        """Logged in users can view their bids"""
-        self.client.login(username=self.userB.username, password="testpassword")
-        response = self.client.get("/bids/")
-        assert response.status_code == 200
-
-
-class MyWonLotsViewTests(StandardTestCase):
-    """Test my won lots view with different user types"""
-
-    def test_my_won_lots_anonymous(self):
-        """Anonymous users should be redirected to login"""
-        response = self.client.get("/lots/won/")
-        # Should redirect to login (302) or be denied (403)
-        assert response.status_code in [302, 403]
-
-    def test_my_won_lots_logged_in(self):
-        """Logged in users can view their won lots"""
-        self.client.login(username=self.userB.username, password="testpassword")
-        response = self.client.get("/lots/won/")
-        assert response.status_code == 200

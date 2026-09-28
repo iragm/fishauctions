@@ -1073,46 +1073,61 @@ class UserLotFilter(LotFilter):
         self.showBanned = True
 
 
-class UserWatchLotFilter(LotFilter):
-    """A version of the lot filter that only shows lots watched by the current user"""
+class BuyingLotFilter(django_filters.FilterSet):
+    """The buying dashboard's search box. ``watched``, ``won``, ``bids`` and ``lost`` are keywords, so
+    "guppy won" works; what's left searches names and lot numbers. ``watching`` and ``bidding`` are
+    annotated by the view.
+    """
 
-    @property
-    def qs(self):
-        primary_queryset = super().qs
-        return primary_queryset.filter(watch__user=self.user)
+    query = django_filters.CharFilter(
+        method="lot_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Type to filter...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # self.status = "all"
-        self.form.initial["status"] = "ended"
+    class Meta:
+        model = Lot
+        fields = []
 
+    KEYWORDS = ("watched", "won", "bids", "lost")
 
-class UserBidLotFilter(LotFilter):
-    """A version of the lot filter that only shows lots bid on by the current user"""
+    def keyword_q(self, keyword):
+        user = self.request.user
+        won = Q(winner=user) | Q(auctiontos_winner__user=user)
+        if keyword == "watched":
+            return Q(watching=True)
+        if keyword == "bids":
+            return Q(bidding=True)
+        if keyword == "won":
+            return won
+        return Q(winning_price__isnull=False) & ~won
 
-    @property
-    def qs(self):
-        primary_queryset = super().qs
-        return primary_queryset.filter(bid__user=self.user).distinct()
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # self.status = ""
-        self.form.initial["status"] = ""
-
-
-class UserWonLotFilter(LotFilter):
-    """A version of the lot filter that only shows lots won by the current user"""
-
-    @property
-    def qs(self):
-        primary_queryset = super().qs
-        return primary_queryset.filter(Q(winner=self.user) | Q(auctiontos_winner__user=self.user))
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # self.status = "ended"
-        self.form.initial["status"] = "closed"
+    def lot_search(self, queryset, name, value):
+        for keyword in self.KEYWORDS:
+            pattern = re.compile(rf"(?:^|\s){keyword}(?=\s|$)", re.IGNORECASE)
+            if pattern.search(value):
+                value = pattern.sub(" ", value)
+                queryset = queryset.filter(self.keyword_q(keyword))
+        value = value.strip()
+        if not value:
+            return queryset
+        q = (
+            Q(lot_name__icontains=value)
+            | Q(species__scientific_name__icontains=value)
+            | Q(species__common_name__icontains=value)
+            | Q(custom_lot_number=value)
+        )
+        if value.isdecimal():
+            q |= Q(lot_number_int=value)
+        return queryset.filter(q)
 
 
 def get_recommended_lots(

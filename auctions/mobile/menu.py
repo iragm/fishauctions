@@ -93,9 +93,7 @@ def _lots_section():
         "lots",
         [
             _row("Selling", reverse("selling"), "bi-cash-coin"),
-            _row("Watched lots", reverse("watched"), "bi-star-fill"),
-            _row("Bids", reverse("my_bids"), "bi-coin"),
-            _row("Won lots", reverse("won_lots"), "bi-calendar-check"),
+            _row("Buying", reverse("buying"), "bi-cart"),
         ],
         title="My lots",
     )

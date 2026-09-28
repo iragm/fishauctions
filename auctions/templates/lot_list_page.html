@@ -35,7 +35,7 @@
     {% endif %}
     {% for lot in object_list %}
     <tr class='nowrap'>
-      <td>{% if lot_view_type == 'mybids' and not lot.ended and not lot.sealed_bid and lot.high_bidder and lot.high_bidder.pk != request.user.pk %}<span class="badge bg-danger">Outbid</span> {% endif %}{% if lot.auction %}
+      <td>{% if lot.auction %}
             Lot {{ lot.lot_number_display }}
           {% else %}
             {% if lot.local_pickup %}

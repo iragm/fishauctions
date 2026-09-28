@@ -27,8 +27,7 @@ from auctions.tests import StandardTestCase, WritableMediaRoot
 
 class AuctionJoinLinksUserTests(StandardTestCase):
     """Joining through the UI must link the AuctionTOS to the joining user, or downstream user-FK lookups
-    break: the join-state check on the auction page, /bids/ and /lots/won/ (both via
-    LotFilter.possibleAuctions).
+    break: the join-state check on the auction page and the buying dashboard.
     """
 
     def setUp(self):
@@ -76,7 +75,7 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug}))
         self.assertTrue(response.context["hasChosenLocation"])
 
-    def test_won_lot_visible_on_won_lots_page_after_join(self):
+    def test_won_lot_visible_on_buying_page_after_join(self):
         self._join()
         tos = AuctionTOS.objects.get(auction=self.open_auction, user=self.fresh_user)
         seller_tos = AuctionTOS.objects.create(
@@ -94,10 +93,10 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         # date_posted is auto_now_add; push it out of the 20-minute new-lot window.
         Lot.objects.filter(pk=won.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
         self.client.force_login(self.fresh_user)
-        response = self.client.get(reverse("won_lots"))
+        response = self.client.get(reverse("buying") + f"?auction={self.open_auction.slug}")
         self.assertContains(response, "Fresh user won this")
 
-    def test_bid_lot_visible_on_bids_page_after_join(self):
+    def test_bid_lot_visible_on_buying_page_after_join(self):
         self._join()
         seller_tos = AuctionTOS.objects.create(
             user=self.user, auction=self.open_auction, pickup_location=self.open_location
@@ -112,7 +111,7 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         Lot.objects.filter(pk=lot.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
         Bid.objects.create(user=self.fresh_user, lot_number=lot, amount=5)
         self.client.force_login(self.fresh_user)
-        response = self.client.get(reverse("my_bids"))
+        response = self.client.get(reverse("buying") + f"?auction={self.open_auction.slug}")
         self.assertContains(response, "Fresh user bid on this")
 
     def test_next_param_is_carried_into_join_form_action(self):
@@ -257,8 +256,8 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
 
 
 class LotListUXTests(StandardTestCase):
-    """The persistent 'Outbid' chip on /bids/, the 20-minute new-lot message on the auction lot list, and
-    gating the 'Add Lots' button by the submission window.
+    """The persistent 'Outbid' chip on the buying dashboard, the 20-minute new-lot message on the auction lot
+    list, and gating the 'Add Lots' button by the submission window.
     """
 
     def setUp(self):
@@ -301,7 +300,7 @@ class LotListUXTests(StandardTestCase):
         Bid.objects.create(user=self.bidder, lot_number=lot, amount=50)
         Bid.objects.create(user=self.other, lot_number=lot, amount=100)
         self.client.force_login(self.bidder)
-        response = self.client.get(reverse("my_bids"))
+        response = self.client.get(reverse("buying") + f"?auction={self.ux_auction.slug}")
         self.assertContains(response, "Lot I got outbid on")
         self.assertContains(response, "Outbid")
 
@@ -310,7 +309,7 @@ class LotListUXTests(StandardTestCase):
         Bid.objects.create(user=self.bidder, lot_number=lot, amount=100)
         Bid.objects.create(user=self.other, lot_number=lot, amount=50)
         self.client.force_login(self.bidder)
-        response = self.client.get(reverse("my_bids"))
+        response = self.client.get(reverse("buying") + f"?auction={self.ux_auction.slug}")
         self.assertContains(response, "Lot I am winning")
         self.assertNotContains(response, "Outbid")
 

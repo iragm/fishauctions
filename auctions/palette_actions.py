@@ -14820,6 +14820,7 @@ NOT_A_SKILL: dict[str, str] = {
     "AccountSetupRedirect": _REDIRECT,
     "LotQRView": _REDIRECT,
     "MyLastAuctionLots": _REDIRECT,
+    "BuyingRedirect": _REDIRECT,
     "VolunteerJobAccept": (
         "The page a volunteer notification opens. Signing up means reading what the job is and when "
         "it starts, which is what the page is for."

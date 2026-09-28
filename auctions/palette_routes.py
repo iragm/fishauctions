@@ -1352,6 +1352,7 @@ EXCLUDED: dict[str, str] = {
     "lot_by_pk_and_slug": _DUPLICATE,
     "lot_in_auction": _DUPLICATE,
     "lot_in_auction_with_slug": _DUPLICATE,
+    "buying": "The page behind watched, won_lots and my_bids, which land on it filtered.",
     "service_worker": _INFRA,
 }
 

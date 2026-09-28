@@ -566,6 +566,49 @@ class LotHTMxTableForUsers(tables.Table):
         row_attrs = {}
 
 
+class LotHTMxTableForBuyers(tables.Table):
+    """The buying dashboard: one badge per lot for where you stand on it."""
+
+    status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
+    lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
+    lot_name = tables.Column(verbose_name="Lot", orderable=False)
+    price = tables.Column(accessor="pk", verbose_name="Price", orderable=False)
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def render_status(self, value, record):
+        tos_winner = record.auctiontos_winner
+        if record.winner_id == self.user.pk or (tos_winner and tos_winner.user_id == self.user.pk):
+            return mark_safe('<span class="badge bg-success text-dark">Won</span>')
+        if record.winning_price is not None:
+            return mark_safe('<span class="badge bg-secondary">Lost</span>')
+        if record.bidding:
+            bids = record.bids
+            if not record.ended and not record.sealed_bid and bids and bids[0].user_id != self.user.pk:
+                return mark_safe('<span class="badge bg-danger">Outbid</span>')
+            return mark_safe('<span class="badge bg-info text-dark">Bid</span>')
+        return mark_safe('<span class="badge bg-primary">Watched</span>')
+
+    def render_lot_name(self, value, record):
+        return format_html("<a href='{}?src=buying'>{}</a>", record.lot_link, value)
+
+    def render_price(self, value, record):
+        if record.sealed_bid and record.winning_price is None:
+            return ""
+        price = record.high_bid
+        if price in ("", None):
+            return ""
+        return f"{record.currency_symbol}{price}"
+
+    class Meta:
+        model = Lot
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("status", "lot_number", "lot_name", "price")
+        row_attrs = {}
+
+
 _PERMISSION_BADGES = [
     ("permission_admin", "Admin"),
     ("permission_edit_club", "Edit club settings"),
