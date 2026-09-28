@@ -215,8 +215,8 @@ class AuctionTOSEmailChangeGuardTests(StandardTestCase):
         self.assertEqual(tos.user, guard_user)
 
 
-class RelinkAuctiontosUsersCommandTests(StandardTestCase):
-    """Tests for the relink_auctiontos_users repair command."""
+class LinkAccountsCommandTests(StandardTestCase):
+    """``link_accounts``: rows written before their person had an account."""
 
     def _make_orphan(self, email):
         """An AuctionTOS with no user: no matching user exists yet, so save() can't auto-link."""
@@ -232,14 +232,14 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
     def test_relinks_orphaned_tos(self):
         orphan = self._make_orphan("orphan@example.com")
         orphan_user = User.objects.create_user(username="orphanu", password="x", email="orphan@example.com")
-        call_command("relink_auctiontos_users")
+        call_command("link_accounts")
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, orphan_user)
 
     def test_dry_run_makes_no_changes(self):
         orphan = self._make_orphan("orphan2@example.com")
         User.objects.create_user(username="orphanu2", password="x", email="orphan2@example.com")
-        call_command("relink_auctiontos_users", "--dry-run")
+        call_command("link_accounts", "--dry-run")
         orphan.refresh_from_db()
         self.assertIsNone(orphan.user)
 
@@ -248,7 +248,7 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
         dup_user = User.objects.create_user(username="dupu", password="x", email="dup@example.com")
         # A newer TOS already linked to the user in the same auction.
         own = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location, user=dup_user)
-        call_command("relink_auctiontos_users")
+        call_command("link_accounts")
         # The oldest record (the orphan) is kept as canonical and gets the user.
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, dup_user)
@@ -302,7 +302,7 @@ class LotListUXTests(StandardTestCase):
         self.client.force_login(self.bidder)
         response = self.client.get(reverse("buying") + f"?auction={self.ux_auction.slug}")
         self.assertContains(response, "Lot I got outbid on")
-        self.assertContains(response, "Outbid")
+        self.assertContains(response, ">Outbid</span>")
 
     def test_no_outbid_chip_when_high_bidder(self):
         lot = self._make_lot("Lot I am winning")
@@ -311,7 +311,7 @@ class LotListUXTests(StandardTestCase):
         self.client.force_login(self.bidder)
         response = self.client.get(reverse("buying") + f"?auction={self.ux_auction.slug}")
         self.assertContains(response, "Lot I am winning")
-        self.assertNotContains(response, "Outbid")
+        self.assertNotContains(response, ">Outbid</span>")
 
     def test_recently_added_lots_message(self):
         # The only lot was posted moments ago, so it is hidden by the 20-minute window.

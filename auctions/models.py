@@ -242,17 +242,6 @@ def find_image(name, user, auction):
     return qs.first()
 
 
-def email_q(lookup, email):
-    """``Q(<lookup>=email)``, or a Q that matches nothing when there is no address.
-
-    Rows are matched to an account by email all over the site, and participants added by hand often
-    have none: a bare ``Q(email=user.email)`` for an account without one matched every one of them.
-    """
-    if not email:
-        return Q(pk__in=[])
-    return Q(**{lookup: email})
-
-
 def distance_to(
     latitude,
     longitude,
@@ -350,6 +339,15 @@ def _display_name(user):
 def normalize_email(value):
     """Strip and lowercase an email; empty input returns "" (not None) to match field convention."""
     return (value or "").strip().lower()
+
+
+def account_for_email(email):
+    """The active account an address belongs to, or None: the one match behind ``AuctionTOS.link_user``,
+    ``ClubMember.save`` and ``signals.link_unattached_rows_for_user``.
+    """
+    if not email:
+        return None
+    return User.objects.filter(is_active=True, email__iexact=normalize_email(email)).order_by("pk").first()
 
 
 def clean_email_address(value):
@@ -2204,8 +2202,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if self.membership_number and not self.pk:
             if ClubMember.objects.filter(membership_number=self.membership_number).exists():
                 self.membership_number = _pick_unique_membership_number()
-        if not self.user_id and self.email:
-            self.user = User.objects.filter(email__iexact=self.email).order_by("pk").first()
+        if not self.user_id:
+            self.user = account_for_email(self.email)
         previous_membership_last_paid = None
         previous_expiration_date = None
         previous_email = None
@@ -5447,15 +5445,12 @@ class Auction(CachedPropertiesMixin, models.Model):
         return UserBan.objects.filter(banned_user=user.pk, user__pk__in=self.auction_admins_user_pks).exists()
 
     def tos_for_user(self, user):
-        """The AuctionTOS for a signed-in user, by user FK or account email, newest first, or None. Bid
-        enforcement and the lot page both use this.
+        """The signed-in user's AuctionTOS, newest first, or None. Bid enforcement and the lot page both use
+        this.
         """
         if not user or not getattr(user, "is_authenticated", False):
             return None
-        query = Q(user=user)
-        if user.email:
-            query |= Q(email=user.email)
-        return AuctionTOS.objects.filter(query, auction=self).order_by("-createdon").first()
+        return AuctionTOS.objects.filter(user=user, auction=self).order_by("-createdon").first()
 
     # Stat getter/setter properties
     @property
@@ -6792,10 +6787,38 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             return self.invoice.total_sold_club_cut
         return 0
 
+    def link_user(self):
+        """Link this row to its person's account, on every save: through the club member when there is one
+        (club-managed mode is 1:1), otherwise by email.
+
+        This is what lets every "mine" query use ``user`` alone, never the email. Only the link: the
+        account's details are never copied in, so typing in an address harvests nothing.
+        """
+        if self.user_id:
+            return
+        if self.clubmember_id and self.clubmember.user_id:
+            self.user_id = self.clubmember.user_id
+        else:
+            self.user = account_for_email(self.email)
+        # save() claims this row's lots for the account once the row exists.
+        self._newly_linked = bool(self.user_id)
+
     def save(self, *args, **kwargs):
         # Normalize a real email; leave None/"" alone (the "no email" filter uses email__isnull).
         if self.email:
             self.email = normalize_email(self.email)
+        if self.pk:
+            saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
+            if saved_tos and saved_tos.email != self.email:
+                # Email changes reset the email status.
+                self.email_address_status = "UNKNOWN"
+                # Unlink only on a real change to an address the linked user doesn't own.
+                user_owns_new_email = bool(
+                    self.user and self.user.email and normalize_email(self.user.email) == self.email
+                )
+                if not self.manually_added and saved_tos.email and not user_owns_new_email:
+                    # Unlink so link_user() below can link the right user.
+                    self.user = None
         if not self.pk:
             # logger.debug("new instance of auctionTOS")
             if self.auction.only_approved_sellers:
@@ -6815,13 +6838,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                         ).first()
                         if user_has_participated_before:
                             self.bidding_allowed = True
-            # no emails for in-person auctions, thankyouverymuch
-            if not self.auction.is_online:
-                pass
-            if self.email and not self.user:
-                self.user = User.objects.filter(is_active=True, email=self.email).first()
-        # Only on creation: don't copy user details, so adding public emails can't harvest data. See
-        # user_logged_in_callback in signals.py. Then set a bidder number.
+        self.link_user()
+        if getattr(self, "_newly_linked", False) and kwargs.get("update_fields") is not None:
+            # Check-in and the notification cron save a few columns; a link made here has to be one of them.
+            kwargs["update_fields"] = {*kwargs["update_fields"], "user"}
         if not self.bidder_number or self.bidder_number == "None":
             last_used = None
             if self.user or self.email:
@@ -6884,20 +6904,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             self.bidder_number = "ERROR"
         if str(self.memo) == "None":
             self.memo = ""
-        # Email changes reset the email status.
         if not self.name:
             self.name = "Unknown"
-        if self.pk:
-            saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
-            if saved_tos and saved_tos.email != self.email:
-                self.email_address_status = "UNKNOWN"
-                # Unlink only on a real change to an address the linked user doesn't own.
-                user_owns_new_email = bool(
-                    self.user and self.user.email and normalize_email(self.user.email) == self.email
-                )
-                if not self.manually_added and saved_tos.email and not user_owns_new_email:
-                    # Unlink so a later join can link the right user.
-                    self.user = None
         # if this is a known address, update the status
         if self.email and self.email_address_status == "UNKNOWN":
             existing_instance = (
@@ -6976,7 +6984,13 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
                 self.possible_duplicate = None
 
-        # The same user's other row in this auction: keep the older, merge this one in.
+        if getattr(self, "_newly_linked", False):
+            self._newly_linked = False
+            # Lots added while this row had no account.
+            Lot.objects.filter(auctiontos_seller=self, user__isnull=True).update(user=self.user_id)
+
+        # The same user's other row in this auction: keep the older, merge the newer into it. Usually the
+        # other row is older, but a row linked long after it was added is the older one.
         if self.user:
             existing = (
                 AuctionTOS.objects.filter(user=self.user, auction=self.auction)
@@ -6985,8 +6999,11 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 .first()
             )
             if existing:
-                existing.merge_duplicate(self, reason="same user account")
-                return
+                if self.createdon and existing.createdon and self.createdon < existing.createdon:
+                    self.merge_duplicate(existing, reason="same user account")
+                else:
+                    existing.merge_duplicate(self, reason="same user account")
+                    return
 
         if self.user:
             # The join reminder's row and the promo's row, when there are both.
@@ -8214,12 +8231,21 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.is_deleted = True
         self.save()
 
+    @staticmethod
+    def won_by_q(user):
+        """The lots ``user`` won: as the online high bidder (``winner``) or through their AuctionTOS."""
+        return Q(winner=user) | Q(auctiontos_winner__user=user)
+
+    def won_by(self, user):
+        """Whether ``user`` won this lot; :meth:`won_by_q` for one row."""
+        if not user or not user.is_authenticated:
+            return False
+        return self.winner_id == user.pk or bool(self.auctiontos_winner and self.auctiontos_winner.user_id == user.pk)
+
     def is_owned_by(self, user):
         """Whether `user` is the seller and may edit, delete or add images.
 
-        `Lot.user` is null on many real sellers' lots (created through an unlinked TOS), so the seller TOS is
-        checked too, by account or verified email, as `InvoiceView` does. `backfill_lot_users` repairs stored
-        rows.
+        `Lot.user` is null on lots an admin added for someone, so the seller's AuctionTOS is checked too.
         """
         if not user or not user.is_authenticated:
             return False
@@ -8228,9 +8254,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         tos = self.auctiontos_seller
         if not tos:
             return False
-        if tos.user_id and tos.user_id == user.pk:
-            return True
-        return bool(tos.email) and normalize_email(tos.email) == normalize_email(user.email)
+        return bool(tos.user_id) and tos.user_id == user.pk
 
     def reroll_custom_random_on_edit(self, user):
         """After *user* edits this lot, re-deal its ``custom_random`` with :data:`CUSTOM_RANDOM_REROLL_CHANCE`
@@ -11761,7 +11785,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def auctions_admined(self):
-        return Auction.objects.filter(email_q("auctiontos__email", self.user.email), auctiontos__is_admin=True).count()
+        return Auction.objects.filter(auctiontos__user=self.user, auctiontos__is_admin=True).count()
 
     @cached_property
     def auctions_i_admin(self):

@@ -16,17 +16,20 @@
 <div class="help-note"><i class="bi bi-bag"></i><div>You still need to pay your invoice, <a href="{% url 'my_auction_invoice' slug=auction.slug %}">click here to see it</a>.</div></div>
 {% endif %}
 {% if auction %}
+{% comment %}Two buttons so the row fits a phone: what you'd do in this auction is its menu, as on the selling dashboard, and the statuses are the Filters menu.{% endcomment %}
 <div class="d-flex flex-wrap gap-2 align-items-center mt-2 mb-2">
   <div class="dropdown">
     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-hammer"></i> {{ auction }}</button>
     <ul class="dropdown-menu dropdown-menu-scroll">
-      {% for recent in recent_auctions %}<li><a class="dropdown-item{% if recent.pk == auction.pk %} active{% endif %}" href="?auction={{ recent.slug }}" data-buying-auction="{{ recent.slug }}">{{ recent }}</a></li>{% endfor %}
+      <li><a class="dropdown-item" href="{% url 'my_auction_invoice' slug=auction.slug %}"><i class="bi bi-bag"></i> My invoice</a></li>
+      <li><a class="dropdown-item" href="{{ auction.view_lot_link }}&order=recommended"><i class="bi bi-search"></i> Recommended lots</a></li>
+      {% if recent_auctions|length > 1 or recent_auctions and recent_auctions.0 != auction %}
+      <li><hr class="dropdown-divider"></li>
+      <li><h6 class="dropdown-header">Switch auction</h6></li>
+      {% for recent in recent_auctions %}<li><a class="dropdown-item{% if recent.pk == auction.pk %} active{% endif %}" href="?auction={{ recent.slug }}" data-query-sync-url="?auction={{ recent.slug }}">{{ recent }}</a></li>{% endfor %}
+      {% endif %}
     </ul>
   </div>
-  <button type="button" class="btn btn-sm buying-filter {% if 'watched' in active_keywords %}btn-primary active{% else %}btn-secondary{% endif %}" data-filter-key="watched"><i class="bi bi-star-fill"></i> Watched</button>
-  <button type="button" class="btn btn-sm buying-filter {% if 'won' in active_keywords %}btn-primary active{% else %}btn-secondary{% endif %}" data-filter-key="won"><i class="bi bi-calendar-check"></i> Won</button>
-  {% if bidding_enabled %}<button type="button" class="btn btn-sm buying-filter {% if 'bids' in active_keywords %}btn-primary active{% else %}btn-secondary{% endif %}" data-filter-key="bids"><i class="bi bi-coin"></i> Bids</button>{% endif %}
-  <a href="{% url 'my_auction_invoice' slug=auction.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-bag"></i> Invoice</a>
-  <a href="{{ auction.view_lot_link }}&order=recommended" class="btn btn-sm btn-primary"><i class="bi bi-search"></i> Find recommended lots in {{ auction }}</a>
+  {% include "auctions/partials/htmx_table_filters.html" %}
 </div>
 {% endif %}

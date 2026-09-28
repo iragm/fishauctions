@@ -619,7 +619,7 @@ urlpatterns = [
         name="auction_printable_lot_list",
     ),
     path("selling/csv/", views.MyLotReportView.as_view(), name="my_lot_report"),
-    path("buying/csv/", views.MyWonLotCSV.as_view(), name="my_won_lot_csv"),
+    path("buying/csv/", login_required(views.BuyingCSV.as_view()), name="my_won_lot_csv"),
     path("auctions/<slug:slug>/lotlist/", views.AuctionLotsCSV.as_view(), name="lot_list"),
     path("auctions/<slug:slug>/delete/", views.AuctionDelete.as_view(), name="auction_delete"),
     path("auctions/<slug:slug>/chat/", views.AuctionChats.as_view(), name="auction_chat"),

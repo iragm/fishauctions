@@ -10,9 +10,6 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import (
-    Q,
-)
 from django.db.models.base import Model as Model
 from django.forms import modelformset_factory
 from django.http import (
@@ -41,7 +38,6 @@ from auctions.models import (
     Category,
     Invoice,
     Lot,
-    email_q,
     normalize_email,
 )
 from auctions.services import (
@@ -181,11 +177,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
         if not self.tos:
             # Without permission to edit the auction, you can only add lots for yourself.
-            self.tos = (
-                AuctionTOS.objects.filter(auction=self.auction)
-                .filter(email_q("email", request.user.email) | Q(user=request.user))
-                .first()
-            )
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
         block = lot_add_block(self.auction, self.tos, self.is_admin)
         if block:
             code, message = block
@@ -300,11 +292,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
         if not self.tos:
             # Without permission to edit the auction, you can only add lots for yourself.
-            self.tos = (
-                AuctionTOS.objects.filter(auction=self.auction)
-                .filter(email_q("email", request.user.email) | Q(user=request.user))
-                .first()
-            )
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
         block = lot_add_block(self.auction, self.tos, self.is_admin)
         if block:
             code, message = block
@@ -347,11 +335,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     return JsonResponse({"success": False, "error": "User not found in this auction"})
             else:
                 # Adding lots for yourself
-                self.tos = (
-                    AuctionTOS.objects.filter(auction=self.auction)
-                    .filter(email_q("email", request.user.email) | Q(user=request.user))
-                    .first()
-                )
+                self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
                 if not self.tos:
                     return JsonResponse({"success": False, "error": "You must join this auction before adding lots"})
 
@@ -650,11 +634,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             if not self.tos:
                 return JsonResponse({"success": False, "error": "User not found in this auction"})
         else:
-            self.tos = (
-                AuctionTOS.objects.filter(auction=self.auction)
-                .filter(email_q("email", request.user.email) | Q(user=request.user))
-                .first()
-            )
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
 
         if not self.tos:
             return JsonResponse({"success": False, "error": "You must join this auction first"})

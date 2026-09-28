@@ -167,7 +167,12 @@ ROUTE_LIST: list[Route] = [
         keywords=["messages", "chat", "notifications", "follow a lot", "unsubscribe from a lot"],
     ),
     _r("my_lot_report", "Download my lots as a spreadsheet", "My stuff", keywords=["csv", "export my lots"]),
-    _r("my_won_lot_csv", "Download lots I won as a spreadsheet", "My stuff", keywords=["csv", "export purchases"]),
+    _r(
+        "my_won_lot_csv",
+        "Download my buying dashboard as a spreadsheet",
+        "My stuff",
+        keywords=["csv", "export purchases"],
+    ),
     _r("lot_by_pk", "A specific lot's page", "My stuff", scope=SCOPE_LOT, keywords=["view lot", "open lot"]),
     _r(
         "report_lot",

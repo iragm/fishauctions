@@ -1146,8 +1146,9 @@ class ClubMemberToastEscapingTests(TestCase):
 class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
     """A seller whose lot has user=None must still be able to manage it.
 
-    Lots copy their owner from AuctionTOS.user, which is null for imported bidders, and every edit was
-    refused with "Only the lot creator can edit a lot".
+    The fixture's AuctionTOS carries the seller's email with no account linked -- a row written before
+    saving linked by email. Signing in, saving the row or ``link_accounts`` links it, and ownership then
+    follows ``AuctionTOS.user``; an address alone never grants it.
     """
 
     def setUp(self):
@@ -1189,8 +1190,15 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
     def edit_url(self):
         return reverse("edit_lot", kwargs={"pk": self.orphaned_lot.pk})
 
-    def test_is_owned_by_matches_on_tos_email(self):
+    def test_an_address_alone_is_not_ownership(self):
         assert self.orphaned_lot.user is None
+        assert self.orphaned_lot.is_owned_by(self.seller) is False
+
+    def test_saving_the_tos_links_it_and_claims_its_lots(self):
+        self.unlinked_tos.save()
+        self.orphaned_lot.refresh_from_db()
+        assert self.unlinked_tos.user == self.seller
+        assert self.orphaned_lot.user == self.seller
         assert self.orphaned_lot.is_owned_by(self.seller) is True
         assert self.orphaned_lot.is_owned_by(self.user_who_does_not_join) is False
 
@@ -1228,6 +1236,8 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         assert self.orphaned_lot.is_deleted is True
 
     def test_seller_can_manage_images(self):
+        self.unlinked_tos.save()
+        self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.image_permission_check(self.seller) is True
         assert self.orphaned_lot.image_permission_check(self.user_who_does_not_join) is False
 
@@ -1250,19 +1260,19 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         assert lot.user is None
         assert lot.added_by == self.admin_user
 
-    def test_backfill_command_repairs_stored_lot_user(self):
-        call_command("backfill_lot_users")
+    def test_link_accounts_repairs_stored_lot_user(self):
+        call_command("link_accounts")
         self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.user == self.seller
 
-    def test_backfill_command_dry_run_changes_nothing(self):
-        call_command("backfill_lot_users", "--dry-run")
+    def test_link_accounts_dry_run_changes_nothing(self):
+        call_command("link_accounts", "--dry-run")
         self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.user is None
 
-    def test_backfill_command_uses_a_linked_tos_before_email(self):
+    def test_link_accounts_uses_a_linked_tos_before_email(self):
         AuctionTOS.objects.filter(pk=self.unlinked_tos.pk).update(user=self.user_who_does_not_join)
-        call_command("backfill_lot_users")
+        call_command("link_accounts")
         self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.user == self.user_who_does_not_join
 

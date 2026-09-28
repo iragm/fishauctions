@@ -113,11 +113,7 @@ def _lots_won(user):
     """Lots this person won, reached either way. Same reason as :func:`_lots_sold`."""
     from auctions.models import Lot
 
-    return (
-        Lot.objects.filter(Q(winner=user) | Q(auctiontos_winner__user=user), is_deleted=False)
-        .select_related("auction")
-        .distinct()
-    )
+    return Lot.objects.filter(Lot.won_by_q(user), is_deleted=False).select_related("auction").distinct()
 
 
 def _invoices(user):

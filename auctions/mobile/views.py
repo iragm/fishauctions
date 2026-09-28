@@ -28,7 +28,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from auctions import dmca, voice
-from auctions.account_deletion import cancel_deletion
 from auctions.models import (
     PRIVACY_POLICY_SLUG,
     Auction,
@@ -44,6 +43,7 @@ from auctions.models import (
     Watch,
 )
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
+from auctions.signals import on_sign_in
 
 from .authentication import OptionalJWTAuthentication
 from .menu import menu_for
@@ -135,8 +135,7 @@ class MobileLoginView(APIView):
         if user is None:
             return Response({"detail": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Same as the web user_logged_in signal.
-        cancel_deletion(user)
+        on_sign_in(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {
@@ -191,8 +190,7 @@ class MobileGoogleAuthView(APIView):
         if user is None:
             return Response({"detail": "Unable to authenticate."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # As in MobileLoginView: coming back cancels a pending deletion.
-        cancel_deletion(user)
+        on_sign_in(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {"access": str(refresh.access_token), "refresh": str(refresh)},
@@ -288,7 +286,7 @@ class MobileSocialAuthView(APIView):
                 logger.warning("Social sign-in produced a session for unverified user %s; refusing.", user.pk)
                 return Response({"detail": "Please verify your email address first."}, status=status.HTTP_403_FORBIDDEN)
             self._store_apple_refresh_token(sociallogin, provider, uid, data)
-            cancel_deletion(user)
+            on_sign_in(user)
             refresh = RefreshToken.for_user(user)
             return Response(
                 {"access": str(refresh.access_token), "refresh": str(refresh)},
@@ -388,7 +386,7 @@ class MobileSocialCompleteView(APIView):
 
         # Single use: the JWT pair is the durable credential from here on.
         PendingSocialLogin.discard(pending_token)
-        cancel_deletion(user)
+        on_sign_in(user)
         refresh = RefreshToken.for_user(user)
         return Response(
             {"access": str(refresh.access_token), "refresh": str(refresh)},

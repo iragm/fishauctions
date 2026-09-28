@@ -8,88 +8,45 @@
   {% if note == "push_offer" %}{% webpush_header %}{% endif %}
 {% endblock %}
 
+{% block htmx_table_filter_form %}{% if auction %}{{ block.super }}{% endif %}{% endblock %}
+
 {% block htmx_table %}
-  {{ block.super }}
-  <a href="{% url 'my_won_lot_csv' %}" class="btn btn-primary"><i class="bi bi-download"></i> Export my won lots CSV</a>
+  {% if auction %}
+    {{ block.super }}
+    <a href="{% url 'my_won_lot_csv' %}?auction={{ auction.slug }}" data-query-sync-url="{% url 'my_won_lot_csv' %}?auction={{ auction.slug }}" class="btn btn-primary"><i class="bi bi-download"></i> Export CSV</a>
+  {% endif %}
 {% endblock %}
 
 {% block extra_js %}
   {{ block.super }}
-  {{ keywords|json_script:"buying-keywords" }}
+  {% if note == "push_offer" %}
   <script>
+    {% comment %}The lot page's subscribe wrapper: webpush.js rewrites the button's text once it knows whether this browser is subscribed, and that is the only signal it gives.{% endcomment %}
     (function () {
-      const queryInput = document.getElementById('id_query');
-      const keywords = JSON.parse(document.getElementById('buying-keywords').textContent);
-      const buttons = document.querySelectorAll('.buying-filter');
-
-      function words() {
-        return queryInput.value.trim().split(/\s+/).filter(Boolean);
-      }
-
-      function syncButtons() {
-        const current = words().map(function (word) { return word.toLowerCase(); });
-        buttons.forEach(function (button) {
-          const on = current.includes(button.dataset.filterKey);
-          button.classList.toggle('btn-primary', on);
-          button.classList.toggle('active', on);
-          button.classList.toggle('btn-secondary', !on);
-          button.setAttribute('aria-pressed', on ? 'true' : 'false');
-        });
-      }
-
-      {% comment %}One status at a time: a click swaps the keyword in the search box and leaves the rest of what was typed.{% endcomment %}
-      buttons.forEach(function (button) {
-        button.addEventListener('click', function () {
-          const key = button.dataset.filterKey;
-          const wasOn = words().some(function (word) { return word.toLowerCase() === key; });
-          const rest = words().filter(function (word) { return !keywords.includes(word.toLowerCase()); });
-          if (!wasOn) {
-            rest.push(key);
-          }
-          queryInput.value = rest.join(' ');
-          queryInput.dispatchEvent(new Event('input', { bubbles: true }));
-          queryInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true }));
-        });
-      });
-      if (queryInput) {
-        queryInput.addEventListener('input', syncButtons);
-      }
-
-      document.querySelectorAll('[data-buying-auction]').forEach(function (link) {
-        link.addEventListener('click', function (event) {
-          event.preventDefault();
-          const url = new URL(window.location);
-          url.searchParams.set('auction', link.dataset.buyingAuction);
-          url.searchParams.delete('page');
-          window.location = url;
-        });
-      });
-
-      {% if note == "push_offer" %}
-      {% comment %}The lot page's subscribe wrapper: webpush.js rewrites the button's text once it knows whether this browser is subscribed, and that is the only signal it gives.{% endcomment %}
       const targetNode = document.getElementById('webpush-subscribe-button');
-      if (targetNode) {
-        const observer = new MutationObserver(function (mutationsList) {
-          for (let mutation of mutationsList) {
-            if (mutation.type === 'childList') {
-              if (targetNode.textContent == "Subscribe to Push Messaging") {
-                $('#subscribe_success').addClass("d-none");
-                $('#subscribe_message_area').removeClass("d-none");
-              } else {
-                $('#subscribe_message_area').addClass("d-none");
-                $('#subscribe_success').removeClass("d-none");
-                $.post({url: "{% url 'enable_notifications' %}",
-                  beforeSend: function (request) {
-                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-                  }
-                });
-              }
+      if (!targetNode) {
+        return;
+      }
+      const observer = new MutationObserver(function (mutationsList) {
+        for (let mutation of mutationsList) {
+          if (mutation.type === 'childList') {
+            if (targetNode.textContent == "Subscribe to Push Messaging") {
+              $('#subscribe_success').addClass("d-none");
+              $('#subscribe_message_area').removeClass("d-none");
+            } else {
+              $('#subscribe_message_area').addClass("d-none");
+              $('#subscribe_success').removeClass("d-none");
+              $.post({url: "{% url 'enable_notifications' %}",
+                beforeSend: function (request) {
+                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                }
+              });
             }
           }
-        });
-        observer.observe(targetNode, { childList: true, subtree: true });
-      }
-      {% endif %}
+        }
+      });
+      observer.observe(targetNode, { childList: true, subtree: true });
     })();
   </script>
+  {% endif %}
 {% endblock %}

@@ -50,7 +50,7 @@ from django.utils.http import urlencode
 from django.utils.text import Truncator
 
 from . import command_palette, palette_routes, source_code
-from .models import AuctionTOS, ClubMember, DonationVendor, Lot, email_q
+from .models import AuctionTOS, ClubMember, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
@@ -547,7 +547,7 @@ def _club_member_arriving(auction, hint: str):
 
 
 def _own_tos(user, auction):
-    return AuctionTOS.objects.filter(auction=auction).filter(Q(user=user) | email_q("email", user.email)).first()
+    return AuctionTOS.objects.filter(auction=auction, user=user).first()
 
 
 def _is_auction_admin(user, auction) -> bool:
@@ -5105,9 +5105,9 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     ours = _my_auctions(user)
     # One query for joined status.
     joined_mine = set(
-        AuctionTOS.objects.filter(auction__in=[auction.pk for auction in ours])
-        .filter(Q(user=user) | email_q("email", user.email))
-        .values_list("auction_id", flat=True)
+        AuctionTOS.objects.filter(auction__in=[auction.pk for auction in ours], user=user).values_list(
+            "auction_id", flat=True
+        )
     )
     mine = [
         {
@@ -5140,9 +5140,9 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     nearest = sorted(zip(auctions, distances, strict=False), key=lambda pair: pair[1])[:LIST_LIMIT]
     # One query for joined status.
     joined = set(
-        AuctionTOS.objects.filter(auction__in=[auction.pk for auction, _ in nearest])
-        .filter(Q(user=user) | email_q("email", user.email))
-        .values_list("auction_id", flat=True)
+        AuctionTOS.objects.filter(auction__in=[auction.pk for auction, _ in nearest], user=user).values_list(
+            "auction_id", flat=True
+        )
     )
     rows = []
     for auction, miles in nearest:
@@ -10818,14 +10818,7 @@ def leave_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
     lot, problem = _resolve_lot(request, params)
     if problem:
         return problem
-    won_it = bool(
-        (lot.winner_id and lot.winner_id == user.pk)
-        or (
-            lot.auctiontos_winner
-            and lot.auctiontos_winner.user_id
-            and (lot.auctiontos_winner.user_id == user.pk or lot.auctiontos_winner.email == user.email)
-        )
-    )
+    won_it = lot.won_by(user)
     sold_it = bool(lot.is_owned_by(user))
     named = _str(params, "as").lower() or _str(params, "role").lower()
     if named in {"buyer", "winner"} and not won_it:

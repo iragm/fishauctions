@@ -1073,10 +1073,25 @@ class UserLotFilter(LotFilter):
         self.showBanned = True
 
 
+def buying_status(lot, user):
+    """Where ``user`` stands on a lot from the buying dashboard's queryset (which annotates ``bidding``):
+    won, lost, outbid, bid or watched.
+    """
+    if lot.won_by(user):
+        return "won"
+    if lot.winning_price is not None:
+        return "lost"
+    if lot.bidding:
+        bids = lot.bids
+        if not lot.ended and not lot.sealed_bid and bids and bids[0].user_id != user.pk:
+            return "outbid"
+        return "bid"
+    return "watched"
+
+
 class BuyingLotFilter(django_filters.FilterSet):
-    """The buying dashboard's search box. ``watched``, ``won``, ``bids`` and ``lost`` are keywords, so
-    "guppy won" works; what's left searches names and lot numbers. ``watching`` and ``bidding`` are
-    annotated by the view.
+    """The buying dashboard's search box. :data:`KEYWORDS` pick statuses, any of them, and what's left
+    searches names and lot numbers, so "guppy won" works. The view annotates ``watching`` and ``bidding``.
     """
 
     query = django_filters.CharFilter(
@@ -1097,11 +1112,10 @@ class BuyingLotFilter(django_filters.FilterSet):
         model = Lot
         fields = []
 
-    KEYWORDS = ("watched", "won", "bids", "lost")
+    KEYWORDS = ("watched", "won", "lost", "bids", "outbid")
 
     def keyword_q(self, keyword):
-        user = self.request.user
-        won = Q(winner=user) | Q(auctiontos_winner__user=user)
+        won = Lot.won_by_q(self.request.user)
         if keyword == "watched":
             return Q(watching=True)
         if keyword == "bids":
@@ -1111,23 +1125,33 @@ class BuyingLotFilter(django_filters.FilterSet):
         return Q(winning_price__isnull=False) & ~won
 
     def lot_search(self, queryset, name, value):
+        keywords = []
         for keyword in self.KEYWORDS:
             pattern = re.compile(rf"(?:^|\s){keyword}(?=\s|$)", re.IGNORECASE)
             if pattern.search(value):
                 value = pattern.sub(" ", value)
-                queryset = queryset.filter(self.keyword_q(keyword))
+                keywords.append(keyword)
         value = value.strip()
-        if not value:
-            return queryset
-        q = (
-            Q(lot_name__icontains=value)
-            | Q(species__scientific_name__icontains=value)
-            | Q(species__common_name__icontains=value)
-            | Q(custom_lot_number=value)
-        )
-        if value.isdecimal():
-            q |= Q(lot_number_int=value)
-        return queryset.filter(q)
+        if value:
+            q = (
+                Q(lot_name__icontains=value)
+                | Q(species__scientific_name__icontains=value)
+                | Q(species__common_name__icontains=value)
+                | Q(custom_lot_number=value)
+            )
+            if value.isdecimal():
+                q |= Q(lot_number_int=value)
+            queryset = queryset.filter(q)
+        # Statuses are the Filters checkboxes, so ticking two shows both.
+        statuses = Q()
+        for keyword in keywords:
+            if keyword == "outbid":
+                # Who is winning is worked out from the bids in Python (Lot.bids), so this one can't be a Q.
+                user = self.request.user
+                statuses |= Q(pk__in=[lot.pk for lot in queryset if buying_status(lot, user) == "outbid"])
+            else:
+                statuses |= self.keyword_q(keyword)
+        return queryset.filter(statuses)
 
 
 def get_recommended_lots(

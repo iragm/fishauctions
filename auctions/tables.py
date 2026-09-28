@@ -15,6 +15,7 @@ from django.utils.html import format_html, format_html_join, strip_tags
 from django.utils.safestring import mark_safe
 
 from . import donations
+from .filters import buying_status
 from .helper_functions import static_html
 from .models import (
     Auction,
@@ -566,6 +567,26 @@ class LotHTMxTableForUsers(tables.Table):
         row_attrs = {}
 
 
+#: The buying dashboard's badge for each of filters.buying_status's answers.
+BUYING_BADGES = {
+    "won": ("Won", "bg-success text-dark"),
+    "lost": ("Lost", "bg-secondary"),
+    "outbid": ("Outbid", "bg-danger"),
+    "bid": ("Bid", "bg-info text-dark"),
+    "watched": ("Watched", "bg-primary"),
+}
+
+
+def buying_price(lot):
+    """The price a buyer sees: blank while a sealed bid is still sealed."""
+    if lot.sealed_bid and lot.winning_price is None:
+        return ""
+    price = lot.high_bid
+    if price in ("", None):
+        return ""
+    return f"{lot.currency_symbol}{price}"
+
+
 class LotHTMxTableForBuyers(tables.Table):
     """The buying dashboard: one badge per lot for where you stand on it."""
 
@@ -579,28 +600,14 @@ class LotHTMxTableForBuyers(tables.Table):
         super().__init__(*args, **kwargs)
 
     def render_status(self, value, record):
-        tos_winner = record.auctiontos_winner
-        if record.winner_id == self.user.pk or (tos_winner and tos_winner.user_id == self.user.pk):
-            return mark_safe('<span class="badge bg-success text-dark">Won</span>')
-        if record.winning_price is not None:
-            return mark_safe('<span class="badge bg-secondary">Lost</span>')
-        if record.bidding:
-            bids = record.bids
-            if not record.ended and not record.sealed_bid and bids and bids[0].user_id != self.user.pk:
-                return mark_safe('<span class="badge bg-danger">Outbid</span>')
-            return mark_safe('<span class="badge bg-info text-dark">Bid</span>')
-        return mark_safe('<span class="badge bg-primary">Watched</span>')
+        label, css = BUYING_BADGES[buying_status(record, self.user)]
+        return format_html('<span class="badge {}">{}</span>', css, label)
 
     def render_lot_name(self, value, record):
         return format_html("<a href='{}?src=buying'>{}</a>", record.lot_link, value)
 
     def render_price(self, value, record):
-        if record.sealed_bid and record.winning_price is None:
-            return ""
-        price = record.high_bid
-        if price in ("", None):
-            return ""
-        return f"{record.currency_symbol}{price}"
+        return buying_price(record)
 
     class Meta:
         model = Lot

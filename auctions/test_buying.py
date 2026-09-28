@@ -1,6 +1,8 @@
 """The buying dashboard: which lots it lists, the status badge, its keywords, and the one note above it."""
 
+import csv
 import datetime
+import io
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -9,6 +11,10 @@ from django.utils import timezone
 
 from auctions.models import Auction, AuctionTOS, Bid, Invoice, Lot, PickupLocation, Watch
 from auctions.tests import StandardTestCase
+
+
+def _csv_rows(response):
+    return list(csv.reader(io.StringIO(response.content.decode("utf-8"))))
 
 
 class BuyingDashboardTests(StandardTestCase):
@@ -35,10 +41,6 @@ class BuyingDashboardTests(StandardTestCase):
                 self.assertRedirects(
                     response, reverse("buying") + f"?src=email&query={keyword}", fetch_redirect_response=False
                 )
-
-    def test_filter_param_becomes_the_search_box(self):
-        response = self.client.get(reverse("buying") + "?filter=watched")
-        self.assertRedirects(response, reverse("buying") + "?query=watched", fetch_redirect_response=False)
 
     def test_anonymous_is_sent_to_log_in(self):
         self.client.logout()
@@ -71,6 +73,9 @@ class BuyingDashboardTests(StandardTestCase):
         watched_duckweed = self.client.get(self.url, {"query": "duckweed watched"}, HTTP_HX_REQUEST="true")
         self.assertContains(watched_duckweed, "Watched duckweed")
         self.assertNotContains(watched_duckweed, "A test lot")
+        won_or_watched = self.client.get(self.url, {"query": "won watched"}, HTTP_HX_REQUEST="true")
+        self.assertContains(won_or_watched, "Watched duckweed")
+        self.assertContains(won_or_watched, "B test lot")
 
     def test_one_badge_for_where_you_stand(self):
         lost = self._lot("Someone else got it", winning_price=10, auctiontos_winner=self.tosC, active=False)
@@ -102,9 +107,51 @@ class BuyingDashboardTests(StandardTestCase):
         self.assertNotContains(response, "A test lot")
 
     def test_auction_dropdown_lists_joined_auctions(self):
+        AuctionTOS.objects.create(
+            user=self.userB, auction=self.in_person_auction, pickup_location=self.in_person_location
+        )
         response = self.client.get(self.url)
-        self.assertEqual(response.context["recent_auctions"], [self.online_auction])
-        self.assertContains(response, f'data-buying-auction="{self.online_auction.slug}"')
+        self.assertEqual(response.context["recent_auctions"], [self.in_person_auction, self.online_auction])
+        self.assertContains(response, f'data-query-sync-url="?auction={self.in_person_auction.slug}"')
+        self.assertContains(response, f'data-query-sync-url="?auction={self.online_auction.slug}"')
+
+    def test_outbid_filter(self):
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.online_auction.save()
+        winning = self._lot("Winning this one", active=True)
+        Bid.objects.create(user=self.userB, lot_number=winning, amount=50)
+        losing = self._lot("Losing this one", active=True)
+        Bid.objects.create(user=self.userB, lot_number=losing, amount=5)
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=losing, amount=50)
+        response = self.client.get(self.url, {"query": "one outbid"}, HTTP_HX_REQUEST="true")
+        self.assertContains(response, "Losing this one")
+        self.assertNotContains(response, "Winning this one")
+        self.assertNotContains(response, "A test lot")
+
+    def test_bid_filters_only_where_there_is_online_bidding(self):
+        filters = [key for label, key in self.client.get(self.url).context["possible_filters"]]
+        self.assertIn("outbid", filters)
+        self.in_person_auction.online_bidding = "disable"
+        self.in_person_auction.save()
+        response = self.client.get(reverse("buying") + f"?auction={self.in_person_auction.slug}")
+        filters = [key for label, key in response.context["possible_filters"]]
+        self.assertNotIn("bids", filters)
+        self.assertNotIn("outbid", filters)
+
+    def test_csv_is_the_table(self):
+        watched = self._lot("Watched duckweed", active=True)
+        Watch.objects.create(user=self.userB, lot_number=watched)
+        self._lot("Deleted win", winning_price=5, auctiontos_winner=self.tosB, is_deleted=True)
+        rows = _csv_rows(self.client.get(reverse("my_won_lot_csv"), {"auction": self.online_auction.slug}))
+        self.assertEqual(rows[0][0], "Status")
+        self.assertEqual(
+            sorted((row[0], row[2]) for row in rows[1:]),
+            [("Watched", "Watched duckweed"), ("Won", "A test lot"), ("Won", "B test lot"), ("Won", "C test lot")],
+        )
+        rows = _csv_rows(
+            self.client.get(reverse("my_won_lot_csv"), {"auction": self.online_auction.slug, "query": "b won"})
+        )
+        self.assertEqual([row[2] for row in rows[1:]], ["B test lot"])
 
     def test_no_auction_points_at_the_auction_list(self):
         self.client.force_login(self.user_who_does_not_join)
@@ -112,6 +159,10 @@ class BuyingDashboardTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context["auction"])
         self.assertContains(response, f'href="{reverse("auctions")}"')
+        self.assertNotContains(response, 'id="id_query"')
+        self.assertNotContains(response, reverse("my_won_lot_csv"))
+        rows = _csv_rows(self.client.get(reverse("my_won_lot_csv")))
+        self.assertEqual(len(rows), 1)
 
     def test_unpaid_invoice_after_an_online_auction_ends(self):
         invoice = Invoice.objects.get(auctiontos_user=self.tosB)

@@ -53,7 +53,6 @@ from auctions.models import (
     Lot,
     SearchHistory,
     UserData,
-    email_q,
 )
 from auctions.tables import (
     AuctionHTMxTable,
@@ -344,17 +343,12 @@ class AllAuctions(LocationMixin, HTMxTableView):
         qs = qs.exclude(is_deleted=True)
         joined_subquery = Exists(
             AuctionTOS.objects.filter(
-                Q(user=self.request.user) | email_q("email", self.request.user.email),
+                user=self.request.user,
                 auction=OuterRef("pk"),
             )
         )
         qs = (
-            qs.filter(
-                Q(auctiontos__user=self.request.user)
-                | email_q("auctiontos__email", self.request.user.email)
-                | Q(created_by=self.request.user)
-                | standard_filter
-            )
+            qs.filter(Q(auctiontos__user=self.request.user) | Q(created_by=self.request.user) | standard_filter)
             .annotate(joined=joined_subquery)
             .distinct()
         )

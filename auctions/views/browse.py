@@ -44,6 +44,7 @@ from auctions.filters import (
     LotAdminFilter,
     LotFilter,
     UserLotFilter,
+    buying_status,
     get_recommended_lots,
 )
 from auctions.helper_functions import cookie_coordinates
@@ -67,9 +68,13 @@ from auctions.models import (
 )
 from auctions.notifications import user_has_app_push
 from auctions.queryset_annotations import nearby_auctions
+from auctions.services import attachment_filename
+from auctions.services import csv_writer as safe_csv_writer
 from auctions.tables import (
+    BUYING_BADGES,
     LotHTMxTableForBuyers,
     LotHTMxTableForUsers,
+    buying_price,
 )
 
 from .base import MILES_TO_KM, HTMxTableView, check_club_permission, club_from_url
@@ -499,8 +504,12 @@ class MyLots(HTMxTableView):
     # paginate_by = 100
 
     def dispatch(self, request, *args, **kwargs):
-        if legacy := _filter_to_query_redirect(request):
-            return legacy
+        # Legacy ?filter=X bookmarks are canonicalized to ?query=X so the shared template's input
+        # pre-populates.
+        if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
+            params = request.GET.copy()
+            params["query"] = params.pop("filter")[0]
+            return HttpResponseRedirect(f"{request.path}?{params.urlencode()}")
         filter_value = request.GET.get("query", "").strip().lower()
         qs = UserLotFilter(request=request).qs
         if filter_value == "bap":
@@ -528,15 +537,6 @@ class MyLots(HTMxTableView):
                 )
                 messages.info(self.request, msg, extra_tags="safe")
         return super().get(*args, **kwargs)
-
-
-def _filter_to_query_redirect(request):
-    """``?filter=X`` becomes ``?query=X``, so the search box pre-populates. None when there's nothing to do."""
-    if "query" not in request.GET and request.GET.get("filter") and not request.htmx:
-        params = request.GET.copy()
-        params["query"] = params.pop("filter")[0]
-        return HttpResponseRedirect(f"{request.path}?{params.urlencode()}")
-    return None
 
 
 class BuyingRedirect(RedirectView):
@@ -575,8 +575,6 @@ class BuyingDashboard(HTMxTableView):
     htmx_table_header_template = "auctions/partials/lot_buying_table_header.html"
 
     def dispatch(self, request, *args, **kwargs):
-        if legacy := _filter_to_query_redirect(request):
-            return legacy
         self.auction = self.get_auction()
         self.queryset = self.get_lots()
         return super().dispatch(request, *args, **kwargs)
@@ -603,7 +601,7 @@ class BuyingDashboard(HTMxTableView):
                 watching=Exists(Watch.objects.filter(lot_number=OuterRef("pk"), user=user)),
                 bidding=Exists(Bid.objects.filter(lot_number=OuterRef("pk"), user=user, is_deleted=False)),
             )
-            .filter(Q(watching=True) | Q(bidding=True) | Q(winner=user) | Q(auctiontos_winner__user=user))
+            .filter(Q(watching=True) | Q(bidding=True) | Lot.won_by_q(user))
             .select_related("auction", "auctiontos_winner")
             .prefetch_related("bid_set")
             .order_by("lot_number_int", "pk")
@@ -612,19 +610,18 @@ class BuyingDashboard(HTMxTableView):
     def get_table_kwargs(self):
         return {"user": self.request.user}
 
+    def get_possible_filters(self):
+        filters = [("Watched", "watched"), ("Won", "won"), ("Lost", "lost")]
+        if self.auction and (self.auction.is_online or self.auction.online_bidding != "disable"):
+            filters += [("Bids", "bids"), ("Outbid", "outbid")]
+        return filters
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        auction = self.auction
-        context["auction"] = auction
-        if self.request.htmx:
-            return context
-        context["recent_auctions"] = _recent_auctions(self.request.user)
-        context["keywords"] = list(BuyingLotFilter.KEYWORDS)
-        query = self.request.GET.get("query", "").lower().split()
-        context["active_keywords"] = [keyword for keyword in BuyingLotFilter.KEYWORDS if keyword in query]
-        if auction:
-            context["bidding_enabled"] = auction.is_online or auction.online_bidding != "disable"
-            context["note"] = self.get_note(auction)
+        context["auction"] = self.auction
+        if self.auction and not self.request.htmx:
+            context["recent_auctions"] = _recent_auctions(self.request.user)
+            context["note"] = self.get_note(self.auction)
         return context
 
     def get_note(self, auction):
@@ -647,6 +644,31 @@ class BuyingDashboard(HTMxTableView):
             if invoice and invoice.status != "PAID" and invoice.rounded_net_after_payments < 0:
                 return "unpaid"
         return None
+
+
+class BuyingCSV(BuyingDashboard):
+    """The buying dashboard's rows as a CSV: the same auction and the same search."""
+
+    def get(self, request, *args, **kwargs):
+        lots = BuyingLotFilter(request.GET, queryset=self.queryset.select_related("species"), request=request).qs
+        response = HttpResponse(content_type="text/csv")
+        name = attachment_filename(f"buying_{self.auction.slug}" if self.auction else "buying")
+        response["Content-Disposition"] = f'attachment; filename="{name}.csv"'
+        writer = safe_csv_writer(response)
+        writer.writerow(["Status", "Lot number", "Name", "Scientific name", "Auction", "Price", "Link"])
+        for lot in lots:
+            writer.writerow(
+                [
+                    BUYING_BADGES[buying_status(lot, request.user)][0],
+                    lot.lot_number_display,
+                    lot.lot_name,
+                    lot.scientific_name,
+                    lot.auction,
+                    buying_price(lot),
+                    "https://" + lot.full_lot_link,
+                ]
+            )
+        return response
 
 
 class LotsByUser(LotListView):

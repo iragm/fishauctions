@@ -100,6 +100,9 @@ Never edit `requirements.txt`. Edit `requirements.in` / `requirements-test.in`, 
   MariaDB will not `DROP`, so the migration passes on a fresh test DB and fails on the real one.
 - **Template tags open and close on one line.** Django's lexer has no `re.DOTALL`, so a split
   `{# #}`, `{% %}` or `{{ }}` renders onto the page as text. Use `{% comment %}` for anything longer.
+- **"Mine" is `user`, never an email.** Rows are linked to an account when written
+  (`AuctionTOS.link_user`, `ClubMember.save`, `signals.on_sign_in`, all through
+  `models.account_for_email`), so `Lot.won_by_q(user)` and `auctiontos__user=user` are complete.
 - **`.delay()` goes inside `transaction.on_commit`.** A `post_delete` fires inside Django's delete
   transaction; enqueuing directly once left a task pointing at an image already gone from Cloudflare.
 - **Anything over 300 lines says what it is for** in a module docstring. **There is no line limit.**
