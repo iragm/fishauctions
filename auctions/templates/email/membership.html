@@ -1,0 +1,5 @@
+{% extends "email/base.html" %}
+{% comment %}A club's membership email. The club sends it, so its name heads it and the footer names it first; tasks.membership_email_footer says what the footer must carry and why.{% endcomment %}
+{% block header %}{% include "email/club_header.html" %}{% endblock %}
+{% block content %}{{ body }}{% endblock %}
+{% block footer %}{% include "email/membership_footer.html" %}{% endblock %}

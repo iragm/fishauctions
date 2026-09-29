@@ -954,6 +954,11 @@ class ClubMemberResendCardView(APIView):
                 toast=f"{member.display_name} is marked do-not-contact, so no email was sent.",
                 toast_type="danger",
             )
+        if not member.club.can_send_email:
+            return close_modal_response(
+                toast="Add your club's mailing address in club settings first: every email the club sends carries it.",
+                toast_type="danger",
+            )
         try:
             sent = send_membership_card_email(member)
         except Exception:

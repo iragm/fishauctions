@@ -19,11 +19,13 @@ from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.template.defaultfilters import date as date_format
 from django.urls import reverse
 from django.utils import timezone
 
 from auctions.models import Lot, PageView
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 from auctions.views import (
     PAGE_VIEW_HISTORY_CHART_SOURCES,
@@ -298,6 +300,7 @@ class LotPageViewHistoryViewTests(StandardTestCase):
         self.assertEqual(self.client.get(self.url).status_code, 404)
 
 
+@isolated_cache("selling-page-view-history")
 class SellingDashboardPageViewHistoryTests(StandardTestCase):
     """The same modal on /selling/, totalled over everything the reader is selling."""
 
@@ -310,7 +313,16 @@ class SellingDashboardPageViewHistoryTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
+        # Keyed on user pk, which every test's fixture reuses.
+        cache.clear()
         self.url = reverse("my_lots_page_view_history")
+
+    def test_it_is_reused_for_a_while(self):
+        _view_on(self.lot, 0, user=self.user_with_no_lots)
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(self.url).context["history"]["total_views"], 1)
+        _view_on(self.lot, 0, user=self.user_with_no_lots)
+        self.assertEqual(self.client.get(self.url).context["history"]["total_views"], 1)
 
     def test_the_button_is_on_the_selling_dashboard(self):
         self.client.force_login(self.user)

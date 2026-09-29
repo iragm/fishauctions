@@ -50,7 +50,7 @@ from django.utils.http import urlencode
 from django.utils.text import Truncator
 
 from . import command_palette, palette_routes, source_code
-from .models import AuctionTOS, ClubMember, DonationVendor, Lot, email_q
+from .models import AuctionTOS, ClubMember, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
     check_in_auctiontos,
@@ -106,8 +106,11 @@ class Action:
     aliases: set[str] = field(default_factory=set)
     #: Who this is worth describing to. See :func:`actions_for`.
     needs: str = NEEDS_ANYONE
-    #: Ask first, always: the write destroys a previous answer (undo_sale) or can't be taken back
-    #: (place_bid). Maps to MCP ``destructiveHint``.
+    #: MCP ``destructiveHint``, on OpenAI's definition, which its plugin review enforces: the write
+    #: deletes something (remove_lot), overwrites what somebody typed or decided (edit_lot,
+    #: set_lot_winner), revokes access (set_member_active), moves money (refund_lot), or sends a
+    #: message that can't be recalled (send_club_announcement). Adding a row is not destructive, and
+    #: nor is a toggle or a pointer the same tool flips back (check_in, watch_lot, set_my_auction).
     destructive: bool = False
     #: Whether the palette counts down first. False only for writes that are non-destructive,
     #: idempotent and undone by an existing tool (check_in). Changes nothing about MCP: still a
@@ -117,14 +120,14 @@ class Action:
     #: ``True`` on writes that set rather than append. See ``mcp.tools.idempotent``.
     idempotent: bool | None = None
     #: MCP ``openWorldHint``. True where the point of the tool is to reach somebody or something
-    #: outside this site: an email to an address we don't own, a Discord post, a push notification,
-    #: a Google Calendar, the public repository ``read_source`` reads. It is about the tool's
-    #: purpose, not its side effects -- half the writes here send a notification of some kind, and a
-    #: rule that counted those would mark the whole registry and tell a reader nothing.
+    #: outside this site -- an email, a Discord post, a push notification, a Google Calendar, the
+    #: public repository ``read_source`` reads -- or to publish something anyone on the internet can
+    #: read: a lot listing (add_lot), a public reply (answer_question), feedback. OpenAI's review
+    #: counts "publish content" as open-world, and this site is not a private workspace.
     #:
-    #: **A lot being publicly visible on this site is not open-world.** A bounded service somebody
-    #: is signed in to stays closed however public its pages are; that is the line a plugin
-    #: directory draws, and the same line ``add_lot`` and ``answer_question`` sit on the near side of.
+    #: It is about the tool's purpose, not its side effects: half the writes here send a
+    #: notification of some kind, and editing a public lot changes a public page, and a rule that
+    #: counted those would mark the whole registry and tell a reader nothing.
     open_world: bool = False
     #: Offered over ``/mcp/`` only, never in the palette's tool list. Not set here: set from
     #: :data:`MCP_ONLY_SKILLS`, which is where the reason for each one is written down.
@@ -544,7 +547,7 @@ def _club_member_arriving(auction, hint: str):
 
 
 def _own_tos(user, auction):
-    return AuctionTOS.objects.filter(auction=auction).filter(Q(user=user) | email_q("email", user.email)).first()
+    return AuctionTOS.objects.filter(auction=auction, user=user).first()
 
 
 def _is_auction_admin(user, auction) -> bool:
@@ -1357,7 +1360,7 @@ def no_sale(request, params: dict[str, Any]) -> dict[str, Any]:
         user=user,
     )
     result: dict[str, Any] = {}
-    view.pop_queue_and_set_next(lot, result)
+    view.advance_queue_and_set_next(lot, result)
     next_lot = result.get("next_queued_lot_number")
     summary = str(message or f"Lot {lot.lot_number_display} didn't sell.")
     if next_lot:
@@ -3182,6 +3185,10 @@ def _card_recipient_for_admin(request, params: dict[str, Any]):
     return _resolve_member(club, _str(params, "person") or _str(params, "name"))
 
 
+#: Club.can_send_email is False: every email a club sends from here carries its postal address.
+NO_MAILING_ADDRESS = "{club} can't send email until it adds a mailing address in its club settings."
+
+
 def _send_card(request, member, *, for_self: bool) -> dict[str, Any]:
     """Email one member their card, with the page's refusals and history line."""
     from .models import ClubHistory
@@ -3197,6 +3204,8 @@ def _send_card(request, member, *, for_self: bool) -> dict[str, Any]:
         )
     if member.contact_status == "do_not_contact":
         return _error(f"{named} is marked do-not-contact at {member.club.name}, so nothing was sent.")
+    if not member.club.can_send_email:
+        return _error(NO_MAILING_ADDRESS.format(club=member.club.name))
     try:
         sent = send_membership_card_email(member)
     except Exception:
@@ -4169,18 +4178,21 @@ def _watched_ending_soon(user, auction, limit: int = 5):
             }
             for lot in live[:limit]
         ]
-    entries = LotQueueEntry.objects.filter(auction=auction).select_related("lot")
-    if not entries.exists():
+    entries = list(
+        LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).select_related("lot").order_by("order")
+    )
+    if not entries:
         return None
     return [
         {
             "lot_number": entry.lot.lot_number_display,
             "name": untrusted_short(entry.lot.lot_name),
             "url": entry.lot.lot_link,
-            "place_in_queue": entry.order,
+            "place_in_queue": place,
         }
-        for entry in entries.filter(lot__in=watched_ids)[:limit]
-    ]
+        for place, entry in enumerate(entries, start=1)
+        if entry.lot_id in watched_ids
+    ][:limit]
 
 
 #: Default rows per list lookup.
@@ -4797,7 +4809,10 @@ def lot_queue(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if auction.is_online:
         return _error(f"{auction.title} is an online auction, so there's no lot queue — lots end on their own clock.")
-    entries = list(LotQueueEntry.objects.filter(auction=auction).select_related("lot").order_by("order"))
+    # From the lot on the block; the lots the room has passed aren't the queue any more.
+    entries = list(
+        LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).select_related("lot").order_by("order")
+    )
     if not entries:
         return {
             "found": False,
@@ -5090,9 +5105,9 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     ours = _my_auctions(user)
     # One query for joined status.
     joined_mine = set(
-        AuctionTOS.objects.filter(auction__in=[auction.pk for auction in ours])
-        .filter(Q(user=user) | email_q("email", user.email))
-        .values_list("auction_id", flat=True)
+        AuctionTOS.objects.filter(auction__in=[auction.pk for auction in ours], user=user).values_list(
+            "auction_id", flat=True
+        )
     )
     mine = [
         {
@@ -5125,9 +5140,9 @@ def auctions_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     nearest = sorted(zip(auctions, distances, strict=False), key=lambda pair: pair[1])[:LIST_LIMIT]
     # One query for joined status.
     joined = set(
-        AuctionTOS.objects.filter(auction__in=[auction.pk for auction, _ in nearest])
-        .filter(Q(user=user) | email_q("email", user.email))
-        .values_list("auction_id", flat=True)
+        AuctionTOS.objects.filter(auction__in=[auction.pk for auction, _ in nearest], user=user).values_list(
+            "auction_id", flat=True
+        )
     )
     rows = []
     for auction, miles in nearest:
@@ -5892,6 +5907,7 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         action=f"Edited {told} on lot {lot.lot_number_display} {via(request)}",
         user=user,
     )
+    lot.reroll_custom_random_on_edit(user)
     undo_params: dict[str, Any] = {"lot_id": lot.pk}
     for key, value in previous.items():
         if value in (None, ""):
@@ -6883,7 +6899,7 @@ def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
         "message_count": vendor.emails.count(),
         "club_sends_the_email": bool(club.sends_donation_email),
         "club_donation_context": club.donation_context.strip() or None,
-        "club_mailing_address": club.donation_mailing_address.strip() or None,
+        "club_mailing_address": club.mailing_address.strip() or None,
         # Only where it is the thing needed: for an email vendor it is a second copy of the club's
         # settings nobody asked for.
         "what_their_form_asks_for": (
@@ -10251,10 +10267,10 @@ def _queued_lot_or_problem(request, auction, params: dict[str, Any]):
 def _queue_position(auction, lot) -> int | None:
     from .models import LotQueueEntry
 
-    entry = LotQueueEntry.objects.filter(auction=auction, lot=lot).first()
+    entry = LotQueueEntry.objects.filter(auction=auction, lot=lot, passed_at__isnull=True).first()
     if not entry:
         return None
-    return LotQueueEntry.objects.filter(auction=auction, order__lte=entry.order).count()
+    return LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True, order__lte=entry.order).count()
 
 
 def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -10262,7 +10278,7 @@ def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     refusals and side effects included.
     """
     from .models import LotQueueEntry
-    from .views import process_queue_notifications
+    from .views import add_lot_to_queue
 
     auction, problem = _queue_auction_or_problem(request, params)
     if problem:
@@ -10272,23 +10288,19 @@ def queue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if lot.sold:
         return _error(f"Lot {lot.lot_number_display} has already been sold, so it can't be queued.")
-    if LotQueueEntry.objects.filter(auction=auction, lot=lot).exists():
-        return _error(
-            f"Lot {lot.lot_number_display} is already in the queue, at number {_queue_position(auction, lot)}."
-        )
-    highest = LotQueueEntry.objects.filter(auction=auction).aggregate(top=models.Max("order"))["top"] or 0
-    LotQueueEntry.objects.create(auction=auction, lot=lot, order=highest + 1, added_by=request.user)
-    if not lot.added_to_queue:
-        lot.added_to_queue = True
-        lot.save(update_fields=["added_to_queue"])
-    process_queue_notifications(auction)
+    already = _queue_position(auction, lot)
+    if already:
+        return _error(f"Lot {lot.lot_number_display} is already in the queue, at number {already}.")
+    error = add_lot_to_queue(auction, lot, request.user)
+    if error:
+        return _error(error)
     position = _queue_position(auction, lot)
     return _ok(
         f"Queued lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}. "
         f"It's number {position} in the running order.",
         **_lot_echo(lot),
         position=position,
-        queue_length=LotQueueEntry.objects.filter(auction=auction).count(),
+        queue_length=LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).count(),
         followups=[{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}],
     )
 
@@ -10309,7 +10321,7 @@ def unqueue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"Lot {lot.lot_number_display} isn't in {auction.title}'s queue.")
     entries.delete()
     process_queue_notifications(auction)
-    remaining = LotQueueEntry.objects.filter(auction=auction).count()
+    remaining = LotQueueEntry.objects.filter(auction=auction, passed_at__isnull=True).count()
     return _ok(
         f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, out of the queue. "
         f"{remaining} lot{'s' if remaining != 1 else ''} still queued.",
@@ -10778,6 +10790,8 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
         )
     if member.contact_status == "do_not_contact":
         return _error(f"{untrusted_short(member.display_name)} is marked do-not-contact, so no email was sent.")
+    if not club.can_send_email:
+        return _error(NO_MAILING_ADDRESS.format(club=club.name))
     send_membership_card_email(member)
     ClubHistory.objects.create(
         club=club,
@@ -10804,14 +10818,7 @@ def leave_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
     lot, problem = _resolve_lot(request, params)
     if problem:
         return problem
-    won_it = bool(
-        (lot.winner_id and lot.winner_id == user.pk)
-        or (
-            lot.auctiontos_winner
-            and lot.auctiontos_winner.user_id
-            and (lot.auctiontos_winner.user_id == user.pk or lot.auctiontos_winner.email == user.email)
-        )
-    )
+    won_it = lot.won_by(user)
     sold_it = bool(lot.is_owned_by(user))
     named = _str(params, "as").lower() or _str(params, "role").lower()
     if named in {"buyer", "winner"} and not won_it:
@@ -11174,6 +11181,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_lot_species,
         aliases={"lot_id", "scientific_name", "name"},
@@ -11388,6 +11396,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         resolver=add_lot,
         aliases={"seller", "lot_name", "price", "count"},
         confirm_template="Add a lot",
@@ -11464,6 +11473,7 @@ register(
             "i_bred_this_fish": "boolean, optional. Applies to every lot in the list.",
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         resolver=add_lots,
         aliases={"seller", "items", "names"},
         confirm_template="Add several lots",
@@ -11566,6 +11576,7 @@ register(
             "value": "string, optional. What to set the field named by 'setting' to.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_contact_info,
         aliases={"field", "coordinates", "full_name", "phone", "region"},
@@ -11585,6 +11596,7 @@ register(
         ),
         params={"username": "string, required. The username they want."},
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_username,
         aliases={"name", "value", "new_username"},
@@ -11605,6 +11617,7 @@ register(
         ),
         params={"email": "string, required. The address they want to move to."},
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=change_email,
         aliases={"value", "address", "new_email"},
@@ -11749,6 +11762,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=send_membership_card,
         aliases={"name"},
         confirm_template="Send a membership card",
@@ -11776,6 +11790,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_lot_winner,
         confirm_template="Record a sale",
@@ -11883,6 +11898,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_person,
         # clear_fields: undo's own, to put a blank back.
@@ -11937,6 +11953,7 @@ register(
             ),
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=edit_lot,
         # clear_fields: undo's own, to put a blank back.
@@ -12185,6 +12202,7 @@ register(
             "memo": "string, optional. An admin-only note about them.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_club_member,
         aliases={"name", "phone", "bidder_number"},
@@ -12398,6 +12416,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=update_club_event,
         aliases={"title", "name", "where"},
         confirm_template="Change an event",
@@ -12426,6 +12445,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=send_club_announcement,
         aliases={"message", "name", "scheduled_for"},
         confirm_template="Send an announcement",
@@ -12593,6 +12613,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_club_setting,
         aliases={"name"},
@@ -12664,6 +12685,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_pickup_location,
         aliases={"name", "field"},
@@ -12725,6 +12747,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=rename_dropdown_option,
         aliases={"value", "to"},
@@ -12769,6 +12792,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=rename_random_option,
         aliases={"value", "to"},
@@ -12840,6 +12864,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         resolver=request_volunteers,
         aliases={"job", "name"},
         confirm_template="Ask for volunteers",
@@ -12885,6 +12910,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_auction_setting,
         aliases={"name"},
@@ -13449,6 +13475,8 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
+        open_world=True,
         resolver=answer_question,
         aliases={"reply", "lot_id", "query", "name"},
         confirm_template="Reply on a lot",
@@ -13610,6 +13638,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=update_donation_vendor,
         aliases={"name", "notes", "date", "url"},
@@ -13971,6 +14000,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_member_active,
         aliases={"name", "status", "deactivate", "reactivate"},
@@ -14050,6 +14080,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_point_rule,
         confirm_template="Set a breeder points rule",
@@ -14097,6 +14128,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=resend_member_card,
         aliases={"name"},
@@ -14126,6 +14158,8 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
+        open_world=True,
         idempotent=True,
         resolver=leave_feedback,
         aliases={"name", "query", "lot_id", "comment", "feedback", "role"},
@@ -14779,6 +14813,7 @@ NOT_A_SKILL: dict[str, str] = {
     "AccountSetupRedirect": _REDIRECT,
     "LotQRView": _REDIRECT,
     "MyLastAuctionLots": _REDIRECT,
+    "BuyingRedirect": _REDIRECT,
     "VolunteerJobAccept": (
         "The page a volunteer notification opens. Signing up means reading what the job is and when "
         "it starts, which is what the page is for."

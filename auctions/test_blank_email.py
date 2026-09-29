@@ -1,7 +1,7 @@
 """An account with no email address matches nobody by email.
 
-Rows are matched to accounts by address all over the site, and participants added by hand often have
-none. A bare ``Q(email=user.email)`` for an account whose address is blank matched every one of them:
+Rows are linked to accounts by address (``models.account_for_email``), and participants added by hand
+often have none. A bare ``Q(email=user.email)`` for an account whose address is blank matched every one of them:
 signing in claimed them all, and their invoices listed as the account's own.
 """
 
@@ -9,7 +9,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
 from django.urls import reverse
 
-from auctions.models import AuctionTOS, Club, ClubMember, Invoice, email_q
+from auctions.models import AuctionTOS, Club, ClubMember, Invoice, account_for_email
 from auctions.tests import StandardTestCase
 
 
@@ -21,9 +21,11 @@ class BlankEmailTests(StandardTestCase):
             auction=self.in_person_auction, pickup_location=self.in_person_location, name="Walk-in", email=""
         )
 
-    def test_email_q_matches_nothing_for_a_blank_address(self):
-        self.assertFalse(AuctionTOS.objects.filter(email_q("email", "")).exists())
-        self.assertFalse(AuctionTOS.objects.filter(email_q("email", None)).exists())
+    def test_a_blank_address_belongs_to_no_account(self):
+        self.assertIsNone(account_for_email(""))
+        self.assertIsNone(account_for_email(None))
+        self.hand_added.save()
+        self.assertIsNone(self.hand_added.user_id)
 
     def test_signing_in_claims_nobody(self):
         club = Club.objects.create(name="Blank email club")

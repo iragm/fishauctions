@@ -9,9 +9,6 @@ import logging
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import (
-    Q,
-)
 from django.db.models.base import Model as Model
 from django.forms import modelformset_factory
 from django.http import (
@@ -39,7 +36,6 @@ from auctions.models import (
     AuctionTOS,
     Invoice,
     InvoiceAdjustment,
-    email_q,
 )
 from auctions.tables import (
     InvoiceHTMxTable,
@@ -69,9 +65,7 @@ class Invoices(LoginRequiredMixin, HTMxTableView):
         for anything reading it without the table.
         """
         return (
-            Invoice.objects.filter(
-                Q(auctiontos_user__user=self.request.user) | email_q("auctiontos_user__email", self.request.user.email)
-            )
+            Invoice.objects.filter(auctiontos_user__user=self.request.user)
             .select_related("auction", "auction__club", "auctiontos_user")
             .order_by("-date")
         )
@@ -223,10 +217,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 invoice.club
                 and invoice.buyer == request.user
                 or invoice.auctiontos_user
-                and (
-                    (request.user.email and invoice.auctiontos_user.email == request.user.email)
-                    or invoice.auctiontos_user.user == request.user
-                )
+                and invoice.auctiontos_user.user_id == request.user.pk
             ):
                 mark_invoice_viewed_by_user = True
                 auth = True

@@ -746,6 +746,20 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
         <td>{{ compare_auction.number_of_lots_with_scanned_qr }}</td>
         {% endif %}
       </tr>
+      <tr>
+        <td>Lots added by sellers / by admins</td>
+        <td>{{ auction.lots_added_by.sellers }} / {{ auction.lots_added_by.admins }}</td>
+        {% if compare_auction %}
+        <td>{{ compare_auction.lots_added_by.sellers }} / {{ compare_auction.lots_added_by.admins }}</td>
+        {% endif %}
+      </tr>
+      <tr>
+        <td>Labels first printed by sellers / by admins</td>
+        <td>{{ auction.labels_first_printed_by.sellers }} / {{ auction.labels_first_printed_by.admins }}</td>
+        {% if compare_auction %}
+        <td>{{ compare_auction.labels_first_printed_by.sellers }} / {{ compare_auction.labels_first_printed_by.admins }}</td>
+        {% endif %}
+      </tr>
       {% if not auction.is_online %}
       <tr>
         <td>Lots added to the selling queue</td>

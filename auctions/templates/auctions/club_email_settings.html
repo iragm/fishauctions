@@ -1,10 +1,18 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags %}
+{% load crispy_forms_tags email_tags %}
 {% block title %}Email Settings &mdash; {{ club.name }}{% endblock %}
 
 {% block content %}
 {{ form.media }}
 {% include "club_ribbon.html" %}
+
+{% if not club.can_send_email %}
+<div class="alert alert-warning text-dark mb-3" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  <strong>Membership emails are off until you add a mailing address.</strong>
+  Every email your club sends has to carry its postal address. <a href="{% url 'club_edit' club.slug %}">Add it in club settings</a>.
+</div>
+{% endif %}
 
 {% if show_email_routing %}
 <p class="mb-2">
@@ -85,7 +93,9 @@
           <div class="mb-2"><strong>Subject:</strong> Welcome to the {{ club.name }}!</div>
           <hr class="my-2">
 
-          <div class="mb-3">Dear {{ preview_name }},</div>
+          {% include "email/club_header.html" with icon_url=club.icon_thumbnail_url %}
+
+          <div class="mb-3">Hey {{ preview_name }},</div>
 
           <div class="mb-3" data-field="welcome_opening">
             {{ form.welcome_opening }}
@@ -96,7 +106,7 @@
 
           {% if preview_member_link %}
           <div class="mb-3">
-            <span class="text-info">View your membership</span>
+            {% email_button %}<a>View your membership</a>{% endemail_button %}
           </div>
           {% else %}
           <div class="mb-3 small fst-italic">
@@ -119,13 +129,8 @@
               <div class="invalid-feedback d-block">{{ form.welcome_closing.errors|join:" " }}</div>
             {% endif %}
           </div>
+          {% include "email/membership_footer.html" with footer=preview_footer %}
 
-          <div class="mt-3 pt-3 border-top">
-            {% if club.icon %}
-              <img src="{{ club.icon_thumbnail_url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
-            {% endif %}
-            <span>{{ club.name }}</span>
-          </div>
         </div>
 
         <div class="form-check">
@@ -141,7 +146,9 @@
           <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership has been renewed</div>
           <hr class="my-2">
 
-          <div class="mb-3">Dear {{ preview_name }},</div>
+          {% include "email/club_header.html" with icon_url=club.icon_thumbnail_url %}
+
+          <div class="mb-3">Hey {{ preview_name }},</div>
 
           <div class="mb-3" data-field="renewal_opening">
             {{ form.renewal_opening }}
@@ -155,7 +162,7 @@
 
           {% if preview_member_link %}
           <div class="mb-3">
-            <span class="text-info">View your membership</span>
+            {% email_button %}<a>View your membership</a>{% endemail_button %}
           </div>
           {% else %}
           <div class="mb-3 small fst-italic">
@@ -178,13 +185,8 @@
               <div class="invalid-feedback d-block">{{ form.renewal_closing.errors|join:" " }}</div>
             {% endif %}
           </div>
+          {% include "email/membership_footer.html" with footer=preview_footer %}
 
-          <div class="mt-3 pt-3 border-top">
-            {% if club.icon %}
-              <img src="{{ club.icon_thumbnail_url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
-            {% endif %}
-            <span>{{ club.name }}</span>
-          </div>
         </div>
 
         <div class="form-check">
@@ -200,7 +202,9 @@
           <div class="mb-2"><strong>Subject:</strong> Your {{ club.name }} membership expires in 30 days <span class="small">(or "…expires tomorrow" for the day-before reminder)</span></div>
           <hr class="my-2">
 
-          <div class="mb-3">Dear {{ preview_name }},</div>
+          {% include "email/club_header.html" with icon_url=club.icon_thumbnail_url %}
+
+          <div class="mb-3">Hey {{ preview_name }},</div>
 
           <div class="mb-3" data-field="expiring_soon_opening">
             {{ form.expiring_soon_opening }}
@@ -216,7 +220,7 @@
 
           {% if preview_member_link %}
           <div class="mb-3">
-            <span class="text-info">View your membership</span>
+            {% email_button %}<a>View your membership</a>{% endemail_button %}
           </div>
           {% else %}
           <div class="mb-3 small fst-italic">
@@ -239,13 +243,8 @@
               <div class="invalid-feedback d-block">{{ form.expiring_soon_closing.errors|join:" " }}</div>
             {% endif %}
           </div>
+          {% include "email/membership_footer.html" with footer=preview_footer %}
 
-          <div class="mt-3 pt-3 border-top">
-            {% if club.icon %}
-              <img src="{{ club.icon_thumbnail_url }}" alt="" style="height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;">
-            {% endif %}
-            <span>{{ club.name }}</span>
-          </div>
         </div>
 
         <div class="form-check">

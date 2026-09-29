@@ -13,7 +13,7 @@
 <div class="d-flex flex-wrap gap-2 align-items-center mt-2 mb-2">
   <a href="{% url 'new_lot' %}" class="btn btn-sm btn-success text-dark"><i class="bi bi-calendar-plus"></i> Create new lot</a>
   {% comment %}The same 15-day history the lot page offers, totalled over every lot you are selling.  A modal rather than a page: it is a glance at how the week went, not somewhere to navigate to and back from.{% endcomment %}
-  <button type="button" class="btn btn-sm btn-primary" hx-get="{% url 'my_lots_page_view_history' %}" hx-target="#modals-here" hx-trigger="click"><i class="bi bi-graph-up"></i> 15 day view history</button>
+  <button type="button" class="btn btn-sm btn-primary" hx-get="{% url 'my_lots_page_view_history' %}" hx-target="#modals-here" hx-trigger="click"><i class="bi bi-graph-up htmx-busy-hide"></i><span class="spinner-border spinner-border-sm htmx-busy-show" aria-hidden="true"></span> 15 day view history</button>
   {% if userdata.last_auction_used %}
   <div class="dropdown">
     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-hammer"></i> {{ userdata.last_auction_used }}</button>

@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.test import RequestFactory
 from django.urls import reverse
 
@@ -11,6 +12,7 @@ from auctions.forms import QUICK_ADD_LOT_FIELDS, CreateLotForm, LabelPrintFields
 from auctions.mobile.services.label_pdf import build_label_view
 from auctions.models import AuctionDropdown, AuctionHistory, AuctionRandomOption, Lot
 from auctions.services import clone_auction
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 
@@ -43,13 +45,29 @@ class DealingTests(CustomRandomTestCase):
         self.switch_on("A", "B")
         self.assertIn(self.new_lot().custom_random, {"A", "B"})
 
-    def test_the_deal_ignores_what_other_lots_have(self):
-        """Balancing would make the next lot's option predictable, so a seller could order their lots."""
-        self.switch_on("A", "B")
+    def test_a_new_lot_gets_whichever_of_two_picks_fewer_lots_hold(self):
+        self.switch_on("A", "B", "C")
         Lot.objects.filter(auction=self.auction).update(custom_random="A")
-        with patch("auctions.models.secrets.choice", return_value="A") as choice:
-            self.assertEqual(self.new_lot().custom_random, "A")
-        choice.assert_called_once_with(["A", "B"])
+        with patch("auctions.models.secrets.SystemRandom.sample", return_value=["A", "B"]) as sample:
+            self.assertEqual(self.new_lot().custom_random, "B")
+        sample.assert_called_once_with(["A", "B", "C"], 2)
+
+    def test_a_tie_between_the_two_picks_is_a_coin_flip(self):
+        self.switch_on("A", "B", "C")
+        Lot.objects.filter(auction=self.auction).update(custom_random="A")
+        with (
+            patch("auctions.models.secrets.SystemRandom.sample", return_value=["B", "C"]),
+            patch("auctions.models.secrets.choice", return_value="C") as choice,
+        ):
+            self.assertEqual(self.new_lot().custom_random, "C")
+        choice.assert_called_once_with(["B", "C"])
+
+    def test_dealing_keeps_the_options_even(self):
+        self.switch_on("A", "B")
+        for number in range(7):
+            self.new_lot(f"Lot {number}")
+        values = self.values()
+        self.assertLessEqual(abs(values.count("A") - values.count("B")), 1, values)
 
     def test_nothing_is_dealt_while_it_is_off(self):
         AuctionRandomOption.objects.create(auction=self.auction, value="A")
@@ -105,6 +123,68 @@ class DealingTests(CustomRandomTestCase):
         self.assertTrue(
             AuctionHistory.objects.filter(auction=self.auction, action="Added custom random option 'A'").exists()
         )
+
+
+@isolated_cache("custom-random-reroll")
+class RerollOnEditTests(CustomRandomTestCase):
+    def setUp(self):
+        super().setUp()
+        # The cooldown is a cache key per lot.
+        cache.clear()
+        self.switch_on("A", "B")
+        self.lot = self.new_lot()
+        Lot.objects.filter(auction=self.auction).update(custom_random="A", label_printed=True)
+        self.lot.refresh_from_db()
+
+    def reroll(self, user=None, chance=1.0):
+        with patch("auctions.models.CUSTOM_RANDOM_REROLL_CHANCE", chance):
+            self.lot.reroll_custom_random_on_edit(user or self.user)
+        self.lot.refresh_from_db()
+
+    def test_a_reroll_deals_again_flags_the_label_and_is_in_the_history(self):
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "B")
+        self.assertTrue(self.lot.label_needs_reprinting)
+        self.assertTrue(
+            AuctionHistory.objects.filter(
+                auction=self.auction,
+                action=f"Lot {self.lot.lot_number_display}'s Table re-dealt from A to B after an edit",
+            ).exists()
+        )
+
+    def test_most_edits_leave_it_alone(self):
+        self.reroll(chance=0)
+        self.assertEqual(self.lot.custom_random, "A")
+        self.assertFalse(self.lot.label_needs_reprinting)
+
+    def test_one_roll_per_lot_per_cooldown(self):
+        self.reroll(chance=0)
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "A")
+        cache.delete(f"custom_random_reroll:{self.lot.pk}")
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "B")
+
+    def test_a_non_sellers_edit_does_not_start_the_cooldown(self):
+        self.reroll(user=self.user_with_no_lots)
+        self.reroll()
+        self.assertEqual(self.lot.custom_random, "B")
+
+    def test_only_the_sellers_edits_reroll(self):
+        self.reroll(user=self.user_with_no_lots)
+        self.assertEqual(self.lot.custom_random, "A")
+
+    def test_editing_over_mcp_rolls(self):
+        request = RequestFactory().post("/")
+        request.user = self.user
+        request.palette_page = {}
+        with patch("auctions.models.CUSTOM_RANDOM_REROLL_CHANCE", 1.0):
+            result = palette_actions.run_action(
+                request, "edit_lot", {"auction": self.auction.slug, "lot": self.lot.lot_number_display, "quantity": 2}
+            )
+        self.assertTrue(result.get("ok"), result)
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.custom_random, "B")
 
 
 class NobodyEditsItTests(CustomRandomTestCase):

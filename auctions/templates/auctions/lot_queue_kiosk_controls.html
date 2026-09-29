@@ -1,0 +1,47 @@
+{% comment %}
+Back and Next for a projector screen of the lot queue. Context: auction, scope (a selector for the
+element holding the screen's [data-queue-entry], the entry it shows), keys_when_fullscreen_only.
+
+The arrow keys and Page Up/Down drive it too, which is what a presentation clicker sends. Each press
+says which lot the screen showed, so a press that crosses a sale (or another screen's press) does
+nothing rather than skipping a lot; the screen refreshes and the next press moves on from there.
+{% endcomment %}
+<div class="queue-kiosk-controls position-fixed bottom-0 end-0 m-3 d-flex gap-2" style="z-index:1050;">
+  <button type="button" class="btn btn-primary" data-queue-move="back" aria-label="Previous lot"><i class="bi bi-chevron-left"></i> Back</button>
+  <button type="button" class="btn btn-primary" data-queue-move="next" aria-label="Next lot">Next <i class="bi bi-chevron-right"></i></button>
+</div>
+<script>
+  (function () {
+    var url = "{% url 'auction_lot_queue' slug=auction.slug %}";
+    var scope = "{{ scope|escapejs }}";
+    var fullscreenOnly = {% if keys_when_fullscreen_only %}true{% else %}false{% endif %};
+    function queueMove(action) {
+      var shown = document.querySelector(scope + ' [data-queue-entry]');
+      var body = new URLSearchParams();
+      body.append('action', action);
+      body.append('from', shown ? shown.getAttribute('data-queue-entry') : '');
+      fetch(url, { method: 'POST', headers: { 'X-CSRFToken': '{{ csrf_token }}' }, body: body })
+        .then(function () { document.body.dispatchEvent(new Event('queue-updated')); })
+        .catch(function () {
+          window.jQuery.toast({ title: 'Network connection problem, try again', type: 'danger', delay: 5000 });
+        });
+    }
+    document.querySelectorAll('[data-queue-move]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        queueMove(button.getAttribute('data-queue-move'));
+        button.blur();
+      });
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) { return; }
+      if (fullscreenOnly && !(document.fullscreenElement || document.webkitFullscreenElement)) { return; }
+      var tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) { return; }
+      var action = { ArrowRight: 'next', PageDown: 'next', ArrowLeft: 'back', PageUp: 'back' }[e.key];
+      if (action) {
+        e.preventDefault();
+        queueMove(action);
+      }
+    });
+  })();
+</script>

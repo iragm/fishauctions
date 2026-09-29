@@ -61,7 +61,7 @@ class DonationTestMixin:
         self.club = Club.objects.create(
             name="Test Aquarium Society",
             enable_donation_tracking=True,
-            donation_mailing_address="TAS\n1 Main St\nSpringfield, IL 62701",
+            mailing_address="TAS\n1 Main St\nSpringfield, IL 62701",
             donation_context="501(c)(3) #12-3456789",
         )
         self.admin = User.objects.create_user(username="don_admin", password="pw", email="admin@example.com")
@@ -582,7 +582,7 @@ class SendingTests(DonationTestMixin, TestCase):
 
     def test_sending_is_refused_without_a_postal_address(self):
         """CAN-SPAM requires a physical address on a bulk solicitation; refuse rather than omit."""
-        self.club.donation_mailing_address = ""
+        self.club.mailing_address = ""
         self.club.save()
         self.vendor.refresh_from_db()
         with self.assertRaises(donations.DonationSendError):
@@ -605,7 +605,7 @@ class SendingTests(DonationTestMixin, TestCase):
 
     def test_a_club_named_in_its_own_address_is_not_named_twice(self):
         """Most clubs type their name at the top of the address, and it read as a stutter."""
-        self.club.donation_mailing_address = "Test Aquarium Society\n1 Main St\nSpringfield, IL 62701"
+        self.club.mailing_address = "Test Aquarium Society\n1 Main St\nSpringfield, IL 62701"
         self.club.save()
         self.vendor.refresh_from_db()
         footer = donations.unsubscribe_footer(self.vendor)
@@ -613,7 +613,7 @@ class SendingTests(DonationTestMixin, TestCase):
         self.assertIn("Test Aquarium Society\n1 Main St", footer)
 
     def test_a_club_missing_from_its_own_address_is_still_named(self):
-        self.club.donation_mailing_address = "1 Main St\nSpringfield, IL 62701"
+        self.club.mailing_address = "1 Main St\nSpringfield, IL 62701"
         self.club.save()
         self.vendor.refresh_from_db()
         footer = donations.unsubscribe_footer(self.vendor)
@@ -1140,7 +1140,7 @@ class DonationSettingsTests(DonationTestMixin, TestCase):
                 "donation_email_mode": Club.DONATION_EMAIL_MODE_COPY,
                 "donation_followup_days": 14,
                 "donation_context": "501(c)(3) #99",
-                "donation_mailing_address": "PO Box 1",
+                "mailing_address": "PO Box 1",
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -1159,7 +1159,7 @@ class DonationSettingsTests(DonationTestMixin, TestCase):
                 "donation_email_mode": Club.DONATION_EMAIL_MODE_ROUTED,
                 "donation_followup_days": 7,
                 "donation_context": "",
-                "donation_mailing_address": "PO Box 1",
+                "mailing_address": "PO Box 1",
             },
         )
         self.club.refresh_from_db()
@@ -1179,7 +1179,7 @@ class DonationSettingsTests(DonationTestMixin, TestCase):
                 "donation_email_mode": Club.DONATION_EMAIL_MODE_COPY,
                 "donation_followup_days": 7,
                 "donation_context": "",
-                "donation_mailing_address": "",
+                "mailing_address": "",
             },
         )
         self.club.refresh_from_db()
@@ -1633,20 +1633,29 @@ class DonationSettingsFormTests(DonationTestMixin, TestCase):
             "donation_email_mode": Club.DONATION_EMAIL_MODE_COPY,
             "donation_followup_days": 7,
             "donation_context": "",
-            "donation_mailing_address": "PO Box 1\nSpringfield, IL 62701",
+            "mailing_address": "PO Box 1\nSpringfield, IL 62701",
         }
         data.update(overrides)
         return self.client.post(self.url, data)
 
     def test_a_mailing_address_is_required_to_turn_it_on(self):
-        response = self.post(donation_mailing_address="")
+        """The address is set in club settings, so this page refuses and points there."""
+        Club.objects.filter(pk=self.club.pk).update(mailing_address="", enable_donation_tracking=False)
+        response = self.post()
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "postal address")
+        self.assertContains(response, reverse("club_edit", kwargs={"slug": self.club.slug}))
         self.club.refresh_from_db()
-        self.assertEqual(self.club.donation_mailing_address, "TAS\n1 Main St\nSpringfield, IL 62701")
+        self.assertFalse(self.club.enable_donation_tracking)
+
+    def test_the_address_is_not_edited_here(self):
+        self.post(mailing_address="Somewhere else")
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.mailing_address, "TAS\n1 Main St\nSpringfield, IL 62701")
 
     def test_turning_it_off_does_not_need_an_address(self):
-        response = self.post(enable_donation_tracking="", donation_mailing_address="")
+        Club.objects.filter(pk=self.club.pk).update(mailing_address="")
+        response = self.post(enable_donation_tracking="")
         self.assertEqual(response.status_code, 302)
         self.club.refresh_from_db()
         self.assertFalse(self.club.enable_donation_tracking)
@@ -2087,9 +2096,9 @@ class DonationSkillTests(DonationTestMixin, TestCase):
     def test_writing_to_a_stranger_says_it_cannot_be_taken_back(self):
         contact = palette_actions.get_action("contact_donation_vendor")
         self.assertTrue(contact.destructive)
-        # The two that only move a row of our own don't claim to destroy anything.
+        # Adding a row of our own destroys nothing; overwriting the notes on one does.
         self.assertFalse(palette_actions.get_action("add_donation_vendor").destructive)
-        self.assertFalse(palette_actions.get_action("update_donation_vendor").destructive)
+        self.assertTrue(palette_actions.get_action("update_donation_vendor").destructive)
 
 
 @isolated_cache("donations")
@@ -2254,7 +2263,7 @@ class WebformVendorTests(DonationTestMixin, TestCase):
                 "donation_email_mode": Club.DONATION_EMAIL_MODE_COPY,
                 "donation_followup_days": 7,
                 "donation_context": "",
-                "donation_mailing_address": "PO Box 1",
+                "mailing_address": "PO Box 1",
                 "donation_tax_id": "99-9999999",
                 "donation_tax_status": "501(c)(7)",
                 "donation_contact_name": "Sam Officer",

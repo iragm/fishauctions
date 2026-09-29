@@ -1,8 +1,10 @@
 """The lot pages an auction is actually run from: labels, push, set-winner and the queue."""
 
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 from django.urls import reverse
+from django.utils import timezone
 
 from auctions.models import (
     Auction,
@@ -867,18 +869,19 @@ class LotQueueViewTestCase(StandardTestCase):
             self.assertNotContains(response, "Next up")
             self.assertNotContains(response, "Online high bid")
 
-    def test_current_lot_skips_a_lot_sold_elsewhere(self):
+    def test_current_lot_stays_on_a_lot_sold_elsewhere_until_next(self):
         self._login_admin()
         next_lot = self._make_in_person_lot("Next up")
-        LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
+        entry = LotQueueEntry.objects.create(auction=self.in_person_auction, lot=self.in_person_lot, order=1)
         LotQueueEntry.objects.create(auction=self.in_person_auction, lot=next_lot, order=2)
-        self.in_person_lot.auctiontos_winner = self.in_person_buyer
-        self.in_person_lot.winning_price = 10
-        self.in_person_lot.save()
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(auctiontos_winner=self.in_person_buyer, winning_price=10)
+        response = self.client.get(self.current_lot_url() + "?partial=lot")
+        # A GET moves nothing: the screen shows what the room is on until someone says otherwise.
+        self.assertContains(response, self.in_person_lot.lot_name)
+        self.assertContains(response, "Sold")
+        self.client.post(self.get_url(), data={"action": "next", "from": entry.pk})
         response = self.client.get(self.current_lot_url() + "?partial=lot")
         self.assertContains(response, "Next up")
-        # A GET doesn't pop the queue.
-        assert LotQueueEntry.objects.filter(lot=self.in_person_lot).exists()
 
     # --- set-winner integration ----------------------------------------------
     def test_set_winner_pops_queue_and_returns_next(self):
@@ -892,8 +895,9 @@ class LotQueueViewTestCase(StandardTestCase):
         )
         data = response.json()
         assert data["success_message"] is not None
-        # The sold lot's entry is popped, and the new head's number is reported back.
-        assert not LotQueueEntry.objects.filter(auction=self.in_person_auction, lot=self.in_person_lot).exists()
+        # The sold lot's entry is kept, passed, and the new lot on the block is reported back.
+        assert LotQueueEntry.objects.get(lot=self.in_person_lot).passed_at is not None
+        assert LotQueueEntry.objects.get(lot=next_lot).passed_at is None
         assert data["next_queued_lot_number"] == next_lot.lot_number_display
 
     def test_set_winner_last_lot_returns_null_next(self):
@@ -933,7 +937,7 @@ class LotQueueViewTestCase(StandardTestCase):
         for i in range(10):
             filler = self._make_in_person_lot(f"filler {i}")
             filler.coming_up_push_sent = True
-            filler.selling_push_notification_sent = True
+            filler.selling_push_sent_at = timezone.now()
             filler.save()
             LotQueueEntry.objects.create(auction=self.in_person_auction, lot=filler, order=i + 1)
         watched = self._make_in_person_lot("watched")
@@ -981,9 +985,9 @@ class LotQueueViewTestCase(StandardTestCase):
         with patch_views("send_user_notification") as mock_notify:
             self.client.post(self.get_url(), data={"lot_pk": self.in_person_lot.pk})
         assert mock_notify.call_count == 0
-        # The lot is flagged as already sold-soon so it is never re-notified.
+        # The pull-up started the cooldown, so reaching the block moments later doesn't push again.
         self.in_person_lot.refresh_from_db()
-        assert self.in_person_lot.selling_push_notification_sent is True
+        assert self.in_person_lot.selling_push_sent_at is not None
 
     def test_coming_up_then_about_to_be_sold_overwrites(self):
         """A lot 10 away gets "coming up soon"; reaching the head fires "about to be sold" with the same tag,
@@ -1004,7 +1008,7 @@ class LotQueueViewTestCase(StandardTestCase):
         coming_up_tag = coming_up_calls[0].kwargs["payload"]["tag"]
         watched.refresh_from_db()
         assert watched.coming_up_push_sent is True
-        assert watched.selling_push_notification_sent is False
+        assert watched.selling_push_sent_at is None
         # Removing the filler makes it the head.
         head_entry = LotQueueEntry.objects.get(auction=self.in_person_auction, lot=filler)
         with patch_views("send_user_notification") as mock_notify:
@@ -1015,7 +1019,7 @@ class LotQueueViewTestCase(StandardTestCase):
         # The same tag replaces rather than stacks.
         assert sold_calls[0].kwargs["payload"]["tag"] == coming_up_tag
         watched.refresh_from_db()
-        assert watched.selling_push_notification_sent is True
+        assert watched.selling_push_sent_at is not None
 
     # --- added_to_queue stat -------------------------------------------------
     def test_adding_lot_sets_sticky_added_to_queue(self):
@@ -1044,6 +1048,235 @@ class LotQueueViewTestCase(StandardTestCase):
             call.args[0] == f"auctions_{self.in_person_auction.pk}" and call.args[1].get("type") == "queue_updated"
             for call in fake_layer.group_send.call_args_list
         )
+
+    # --- moving the queue: Next, Back, and recording the lot on the block ---------
+    def _queue(self, *names):
+        lots = [self._make_in_person_lot(name) for name in names]
+        entries = [
+            LotQueueEntry.objects.create(auction=self.in_person_auction, lot=lot, order=i + 1)
+            for i, lot in enumerate(lots)
+        ]
+        return lots, entries
+
+    def _move(self, action, showing):
+        return self.client.post(self.get_url(), data={"action": action, "from": showing.pk if showing else 0})
+
+    def _on_the_block(self):
+        from auctions.views.selling import queue_entries, queue_split
+
+        entry = queue_split(queue_entries(self.in_person_auction))[1]
+        return entry.lot if entry else None
+
+    def _sell(self, lot, price="10", winner="555"):
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        data = {"lot": lot.lot_number_display, "price": price, "winner": winner, "action": "save"}
+        return self.client.post(url, data=data).json()
+
+    def _pull_up(self, lot, preview=False):
+        url = reverse(
+            "htmx_lot", kwargs={"slug": self.in_person_auction.slug, "custom_lot_number": lot.custom_lot_number}
+        )
+        return self.client.get(url + ("?preview=1" if preview else ""))
+
+    @staticmethod
+    def _announced(mock, lot):
+        return [c for c in mock.call_args_list if c.kwargs["payload"]["head"] == f"{lot.lot_name} is about to be sold"]
+
+    def test_next_and_back_move_the_lot_on_the_block(self):
+        self._login_admin()
+        (a, b), (entry_a, entry_b) = self._queue("A", "B")
+        self._move("next", entry_a)
+        assert self._on_the_block() == b
+        entry_a.refresh_from_db()
+        assert entry_a.passed_at is not None
+        self._move("back", entry_b)
+        assert self._on_the_block() == a
+
+    def test_a_press_from_a_screen_that_is_behind_does_nothing(self):
+        """Two presses of Next before the screen refreshes, or Next as a sale moves the queue: one lot, not two."""
+        self._login_admin()
+        (_a, b, _c), (entry_a, _entry_b, _entry_c) = self._queue("A", "B", "C")
+        self._move("next", entry_a)
+        response = self._move("next", entry_a)
+        assert self._on_the_block() == b
+        self.assertNotContains(response, "last lot")
+
+    def test_the_ends_of_the_queue_say_so(self):
+        self._login_admin()
+        (a,), (entry_a,) = self._queue("A")
+        self.assertContains(self._move("back", entry_a), "first lot")
+        self._move("next", entry_a)
+        assert self._on_the_block() is None
+        self.assertContains(self._move("next", None), "last lot")
+        self._move("back", None)
+        assert self._on_the_block() == a
+
+    def test_recording_the_lot_on_the_block_moves_the_queue_and_announces_the_next(self):
+        self._login_admin()
+        (a, b), _entries = self._queue("A", "B")
+        self._watch_with_push(b, self.user_with_no_lots)
+        with patch_views("send_user_notification") as mock_notify:
+            data = self._sell(a)
+        assert self._on_the_block() == b
+        assert data["next_queued_lot_number"] == b.lot_number_display
+        assert len(self._announced(mock_notify, b)) == 1
+
+    def test_winners_recorded_later_follow_the_room_not_the_recorder(self):
+        """The queue run with Next, winners entered afterwards: watchers hear it when the room gets there,
+        once, and set winners walks the recorder through the queue behind it.
+        """
+        self._login_admin()
+        (a, b, c), (entry_a, entry_b, _entry_c) = self._queue("A", "B", "C")
+        self._watch_with_push(b, self.user_with_no_lots)
+        with patch_views("send_user_notification") as mock_notify:
+            self._move("next", entry_a)
+            self._move("next", entry_b)
+            assert self._on_the_block() == c
+            data = self._sell(a)
+            assert data["next_queued_lot_number"] == b.lot_number_display
+            self._pull_up(b)
+            data = self._sell(b)
+            assert data["next_queued_lot_number"] == c.lot_number_display
+        assert self._on_the_block() == c
+        assert len(self._announced(mock_notify, b)) == 1
+
+    def test_set_winners_pulls_up_the_first_lot_still_to_record(self):
+        self._login_admin()
+        (a, _b), (entry_a, _entry_b) = self._queue("A", "B")
+        self._move("next", entry_a)
+        winners_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        # The lot on the block first...
+        assert self.client.get(winners_url).context["queue_head_lot_number"] == _b.lot_number_display
+        self._move("next", LotQueueEntry.objects.get(lot=_b))
+        # ...then, once the room has finished, the first lot nobody recorded.
+        assert self.client.get(winners_url).context["queue_head_lot_number"] == a.lot_number_display
+
+    def test_a_double_check_pulls_up_the_next_lot_even_though_it_is_recorded(self):
+        self._login_admin()
+        (a, b), _entries = self._queue("A", "B")
+        self._sell(a)
+        self._sell(b)
+        data = self._sell(a)
+        assert data["success_message"] == "This lot has been double checked"
+        assert data["next_queued_lot_number"] == b.lot_number_display
+
+    def test_a_double_check_that_does_not_match_still_pulls_up_the_next_lot(self):
+        self._login_admin()
+        (a, b), _entries = self._queue("A", "B")
+        self._sell(a, price="10")
+        data = self._sell(a, price="12")
+        assert data["banner"] == "error"
+        assert data["last_sold_lot_number"] == a.lot_number_display
+        assert data["next_queued_lot_number"] == b.lot_number_display
+        # The first sale stands until someone undoes it, and the queue stays where the room is.
+        a.refresh_from_db()
+        assert a.winning_price == 10
+        assert self._on_the_block() == b
+
+    def test_a_lot_sold_out_of_turn_is_skipped(self):
+        """Two people recording different lots: each is pulled up the next lot nobody has recorded."""
+        self._login_admin()
+        (a, b, c), _entries = self._queue("A", "B", "C")
+        self._sell(b)
+        assert self._on_the_block() == a
+        data = self._sell(a)
+        assert data["next_queued_lot_number"] == c.lot_number_display
+        assert self._on_the_block() == c
+
+    def test_next_skips_recorded_lots_but_back_does_not(self):
+        self._login_admin()
+        (_a, b, c), (entry_a, _entry_b, entry_c) = self._queue("A", "B", "C")
+        Lot.objects.filter(pk=b.pk).update(auctiontos_winner=self.in_person_buyer, winning_price=5)
+        self._move("next", entry_a)
+        assert self._on_the_block() == c
+        self._move("back", entry_c)
+        assert self._on_the_block() == b
+
+    def test_a_lot_lingering_on_the_block_is_not_announced_again(self):
+        self._login_admin()
+        a = self._make_in_person_lot("A")
+        self._watch_with_push(a, self.user_with_no_lots)
+        with patch_views("send_user_notification") as mock_notify:
+            self.client.post(self.get_url(), data={"lot_pk": a.pk})
+            Lot.objects.filter(pk=a.pk).update(selling_push_sent_at=timezone.now() - timedelta(minutes=30))
+            # Every queue change reruns the pass; the lot on the block has had its turn announced.
+            self.client.post(self.get_url(), data={"lot_pk": self._make_in_person_lot("B").pk})
+        assert len(self._announced(mock_notify, a)) == 1
+
+    def test_going_back_to_a_lot_announces_it_again_only_after_the_cooldown(self):
+        self._login_admin()
+        (_a, b), (entry_a, entry_b) = self._queue("A", "B")
+        self._watch_with_push(b, self.user_with_no_lots)
+        with patch_views("send_user_notification") as mock_notify:
+            self._move("next", entry_a)
+            # Next once too often and straight back: nothing new.
+            self._move("back", entry_b)
+            self._move("next", entry_a)
+        assert len(self._announced(mock_notify, b)) == 1
+        Lot.objects.filter(pk=b.pk).update(selling_push_sent_at=timezone.now() - timedelta(minutes=3))
+        with patch_views("send_user_notification") as mock_notify:
+            # The room came back to it later: it's really being sold now.
+            self._move("back", entry_b)
+            self._move("next", entry_a)
+        assert len(self._announced(mock_notify, b)) == 1
+
+    def test_a_mistyped_lot_number_is_announced_again_when_it_really_comes_up(self):
+        self._login_admin()
+        lot = self._make_in_person_lot("Typo")
+        self._watch_with_push(lot, self.user_with_no_lots)
+        with patch_views("send_user_notification") as mock_notify:
+            # Still being typed: set winners previews it without announcing.
+            self._pull_up(lot, preview=True)
+            assert not self._announced(mock_notify, lot)
+            # Tabbed away from with the wrong number, then pulled up again at once.
+            self._pull_up(lot)
+            self._pull_up(lot)
+            assert len(self._announced(mock_notify, lot)) == 1
+            Lot.objects.filter(pk=lot.pk).update(selling_push_sent_at=timezone.now() - timedelta(minutes=40))
+            self._pull_up(lot)
+        assert len(self._announced(mock_notify, lot)) == 2
+
+    def test_re_adding_a_passed_lot_puts_it_back_on_the_end(self):
+        self._login_admin()
+        (a, b), (entry_a, _entry_b) = self._queue("A", "B")
+        self._move("next", entry_a)
+        self.client.post(self.get_url(), data={"lot_pk": a.pk})
+        entry_a.refresh_from_db()
+        assert entry_a.passed_at is None
+        assert entry_a.order == 3
+        assert self._on_the_block() == b
+
+    def test_reorder_keeps_passed_lots_in_front(self):
+        self._login_admin()
+        (_a, b, c), (entry_a, entry_b, entry_c) = self._queue("A", "B", "C")
+        self._move("next", entry_a)
+        self.client.post(self.get_url(), data={"action": "reorder", "order[]": [entry_c.pk, entry_b.pk]})
+        for entry in (entry_a, entry_b, entry_c):
+            entry.refresh_from_db()
+        assert (entry_a.order, entry_c.order, entry_b.order) == (1, 2, 3)
+        assert self._on_the_block() == c
+
+    def test_a_lot_that_did_not_sell_can_be_queued_for_another_go(self):
+        self._login_admin()
+        (a, b), (_entry_a, entry_b) = self._queue("A", "B")
+        self._watch_with_push(a, self.user_with_no_lots)
+        with patch_views("send_user_notification"):
+            self.client.post(reverse("lot_end_unsold", kwargs={"pk": a.pk}))
+            self.client.post(self.get_url(), data={"lot_pk": a.pk})
+            data = self._sell(b)
+        assert data["next_queued_lot_number"] == a.lot_number_display
+        assert self._on_the_block() == a
+        Lot.objects.filter(pk=a.pk).update(selling_push_sent_at=timezone.now() - timedelta(minutes=10))
+        with patch_views("send_user_notification") as mock_notify:
+            self._move("back", LotQueueEntry.objects.get(lot=a))
+            self._move("next", entry_b)
+        assert len(self._announced(mock_notify, a)) == 1
+
+    def test_ending_the_lot_on_the_block_unsold_moves_the_queue(self):
+        self._login_admin()
+        (a, b), _entries = self._queue("A", "B")
+        self.client.post(reverse("lot_end_unsold", kwargs={"pk": a.pk}))
+        assert self._on_the_block() == b
 
 
 class AlternativeSplitLabelTests(StandardTestCase):

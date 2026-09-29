@@ -65,7 +65,8 @@
           const normalizedHref = href && href.trim() ? href.split('?')[0] : '';
           const baseUrl = link.dataset.querySyncUrl || normalizedHref;
           if (baseUrl) {
-            link.setAttribute('href', query ? baseUrl + '?query=' + encodeURIComponent(query) : baseUrl);
+            const separator = baseUrl.includes('?') ? '&' : '?';
+            link.setAttribute('href', query ? baseUrl + separator + 'query=' + encodeURIComponent(query) : baseUrl);
           }
         });
 

@@ -680,7 +680,10 @@ class ClubMemberResendCardTests(TestCase):
 
     def setUp(self):
         self.club = Club.objects.create(
-            name="Resend Card Club", show_member_barcode=True, membership_annual_fee=Decimal(20)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Resend Card Club",
+            show_member_barcode=True,
+            membership_annual_fee=Decimal(20),
         )
         self.admin = User.objects.create_user(username="resend_admin", password="testpass", email="ra@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, name="Resend Admin", permission_add_edit=True)
@@ -722,6 +725,14 @@ class ClubMemberResendCardTests(TestCase):
                 club=self.club, action__contains="Emailed membership card to John Smith"
             ).exists()
         )
+
+    def test_a_club_without_a_mailing_address_is_told_why(self):
+        Club.objects.filter(pk=self.club.pk).update(mailing_address="")
+        self.client.login(username="resend_admin", password="testpass")
+        with patch("auctions.tasks.mail.send") as send:
+            response = self.client.post(self.action_url)
+        self.assertFalse(send.called)
+        self.assertIn("mailing address", response.headers.get("HX-Trigger", "") + response.content.decode())
 
     def test_sending_always_emails_even_for_a_push_subscriber(self):
         """Resending a card always emails, even for a push subscriber."""
@@ -779,7 +790,10 @@ class MembershipEmailWalletButtonTests(TestCase):
 
     def setUp(self):
         self.club = Club.objects.create(
-            name="Wallet Email Club", show_member_barcode=True, membership_annual_fee=Decimal(20)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Wallet Email Club",
+            show_member_barcode=True,
+            membership_annual_fee=Decimal(20),
         )
         self.member = ClubMember.objects.create(club=self.club, name="Wallet Member", email="wallet@example.com")
 
@@ -851,7 +865,10 @@ class ClubMemberRenewAPITests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user(username="renew_api_owner", password="testpass", email="ra@example.com")
         self.club = Club.objects.create(
-            name="Renew API Club", membership_system="rolling", membership_annual_fee=Decimal(25)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Renew API Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal(25),
         )
         raw_key, prefix, key_hash = ClubAPIKey.generate()
         self.api_key = ClubAPIKey.objects.create(
@@ -1129,8 +1146,9 @@ class ClubMemberToastEscapingTests(TestCase):
 class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
     """A seller whose lot has user=None must still be able to manage it.
 
-    Lots copy their owner from AuctionTOS.user, which is null for imported bidders, and every edit was
-    refused with "Only the lot creator can edit a lot".
+    The fixture's AuctionTOS carries the seller's email with no account linked -- a row written before
+    saving linked by email. Signing in, saving the row or ``link_accounts`` links it, and ownership then
+    follows ``AuctionTOS.user``; an address alone never grants it.
     """
 
     def setUp(self):
@@ -1172,8 +1190,15 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
     def edit_url(self):
         return reverse("edit_lot", kwargs={"pk": self.orphaned_lot.pk})
 
-    def test_is_owned_by_matches_on_tos_email(self):
+    def test_an_address_alone_is_not_ownership(self):
         assert self.orphaned_lot.user is None
+        assert self.orphaned_lot.is_owned_by(self.seller) is False
+
+    def test_saving_the_tos_links_it_and_claims_its_lots(self):
+        self.unlinked_tos.save()
+        self.orphaned_lot.refresh_from_db()
+        assert self.unlinked_tos.user == self.seller
+        assert self.orphaned_lot.user == self.seller
         assert self.orphaned_lot.is_owned_by(self.seller) is True
         assert self.orphaned_lot.is_owned_by(self.user_who_does_not_join) is False
 
@@ -1211,6 +1236,8 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         assert self.orphaned_lot.is_deleted is True
 
     def test_seller_can_manage_images(self):
+        self.unlinked_tos.save()
+        self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.image_permission_check(self.seller) is True
         assert self.orphaned_lot.image_permission_check(self.user_who_does_not_join) is False
 
@@ -1233,19 +1260,19 @@ class LotOwnershipWithUnlinkedTosTests(StandardTestCase):
         assert lot.user is None
         assert lot.added_by == self.admin_user
 
-    def test_backfill_command_repairs_stored_lot_user(self):
-        call_command("backfill_lot_users")
+    def test_link_accounts_repairs_stored_lot_user(self):
+        call_command("link_accounts")
         self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.user == self.seller
 
-    def test_backfill_command_dry_run_changes_nothing(self):
-        call_command("backfill_lot_users", "--dry-run")
+    def test_link_accounts_dry_run_changes_nothing(self):
+        call_command("link_accounts", "--dry-run")
         self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.user is None
 
-    def test_backfill_command_uses_a_linked_tos_before_email(self):
+    def test_link_accounts_uses_a_linked_tos_before_email(self):
         AuctionTOS.objects.filter(pk=self.unlinked_tos.pk).update(user=self.user_who_does_not_join)
-        call_command("backfill_lot_users")
+        call_command("link_accounts")
         self.orphaned_lot.refresh_from_db()
         assert self.orphaned_lot.user == self.user_who_does_not_join
 

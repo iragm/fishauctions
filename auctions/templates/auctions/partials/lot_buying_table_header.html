@@ -1,0 +1,36 @@
+{% load webpush_notifications %}
+{% if not auction and not all_auctions %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>You haven't joined an auction yet, <a href="{% url 'auctions' %}">find one to join here</a>.</div></div>
+{% elif note == "ended" %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>{{ auction }} has ended, <a href="{% url 'auctions' %}">find a new auction to join here</a>.</div></div>
+{% elif note == "push_in_app" %}
+<div class="help-note"><i class="bi bi-bell-fill"></i><div>You'll get a notification in the app as lots you're watching sell.</div></div>
+{% elif note == "push_here" %}
+<div class="help-note"><i class="bi bi-bell-fill"></i><div>You'll get a notification here as lots you're watching sell.</div></div>
+{% elif note == "push_offer" %}
+<div class="help-note"><i class="bi bi-bell-fill"></i><div>
+  <span id="subscribe_success" class="d-none">You'll get a notification here as lots you're watching sell.</span>
+  <span id="subscribe_message_area">Get a notification on this device as lots you're watching sell: {% webpush_button with_class="btn btn-primary btn-sm ms-1" %}</span>
+</div></div>
+{% elif note == "unpaid" %}
+<div class="help-note"><i class="bi bi-bag"></i><div>You still need to pay your invoice, <a href="{% url 'my_auction_invoice' slug=auction.slug %}">click here to see it</a>.</div></div>
+{% endif %}
+{% if auction or all_auctions %}
+{% comment %}Two buttons so the row fits a phone: what you'd do in this auction is its menu, as on the selling dashboard, and the statuses are the Filters menu.{% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center mt-2 mb-2">
+  <div class="dropdown">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-hammer"></i> {% if all_auctions %}All auctions{% else %}{{ auction }}{% endif %}</button>
+    <ul class="dropdown-menu dropdown-menu-scroll">
+      {% if auction %}
+      <li><a class="dropdown-item" href="{% url 'my_auction_invoice' slug=auction.slug %}"><i class="bi bi-bag"></i> My invoice</a></li>
+      <li><a class="dropdown-item" href="{{ auction.view_lot_link }}&order=recommended"><i class="bi bi-search"></i> Recommended lots</a></li>
+      <li><hr class="dropdown-divider"></li>
+      {% endif %}
+      <li><h6 class="dropdown-header">Switch auction</h6></li>
+      {% for recent in recent_auctions %}<li><a class="dropdown-item{% if recent.pk == auction.pk %} active{% endif %}" href="?auction={{ recent.slug }}" data-query-sync-url="?auction={{ recent.slug }}">{{ recent }}</a></li>{% endfor %}
+      <li><a class="dropdown-item{% if all_auctions %} active{% endif %}" href="?auction=all" data-query-sync-url="?auction=all">All auctions</a></li>
+    </ul>
+  </div>
+  {% include "auctions/partials/htmx_table_filters.html" %}
+</div>
+{% endif %}

@@ -4,16 +4,18 @@ Each pairs with a filter in :mod:`auctions.filters` and renders through
 ``views.base.HTMxTableView``. HTML columns use ``format_html``: lot names are public input.
 """
 
+import re
 from urllib.parse import urlencode
 
 import django_tables2 as tables
 from django.contrib.humanize.templatetags.humanize import naturalday
 from django.db.models import F
 from django.urls import reverse
-from django.utils.html import format_html, format_html_join
+from django.utils.html import format_html, format_html_join, strip_tags
 from django.utils.safestring import mark_safe
 
 from . import donations
+from .filters import buying_status
 from .helper_functions import static_html
 from .models import (
     Auction,
@@ -562,6 +564,57 @@ class LotHTMxTableForUsers(tables.Table):
             "auction",
             "views",
         )
+        row_attrs = {}
+
+
+#: The buying dashboard's badge for each of filters.buying_status's answers.
+BUYING_BADGES = {
+    "won": ("Won", "bg-success text-dark"),
+    "lost": ("Lost", "bg-secondary"),
+    "outbid": ("Outbid", "bg-danger"),
+    "bid": ("Bid", "bg-info text-dark"),
+    "watched": ("Watched", "bg-primary"),
+}
+
+
+def buying_price(lot):
+    """The price a buyer sees: blank while a sealed bid is still sealed."""
+    if lot.sealed_bid and lot.winning_price is None:
+        return ""
+    price = lot.high_bid
+    if price in ("", None):
+        return ""
+    return f"{lot.currency_symbol}{price}"
+
+
+class LotHTMxTableForBuyers(tables.Table):
+    """The buying dashboard: one badge per lot for where you stand on it."""
+
+    status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
+    # Only for ?auction=all; the view excludes it otherwise.
+    auction = tables.Column(verbose_name="Auction", orderable=False, default="")
+    lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
+    lot_name = tables.Column(verbose_name="Lot", orderable=False)
+    price = tables.Column(accessor="pk", verbose_name="Price", orderable=False)
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def render_status(self, value, record):
+        label, css = BUYING_BADGES[buying_status(record, self.user)]
+        return format_html('<span class="badge {}">{}</span>', css, label)
+
+    def render_lot_name(self, value, record):
+        return format_html("<a href='{}?src=buying'>{}</a>", record.lot_link, value)
+
+    def render_price(self, value, record):
+        return buying_price(record)
+
+    class Meta:
+        model = Lot
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("status", "auction", "lot_number", "lot_name", "price")
         row_attrs = {}
 
 
@@ -1443,3 +1496,118 @@ class DonationVendorHTMxTable(tables.Table):
             reverse("club_donation_dossier" if off_site else "club_donation_contact", kwargs={"pk": record.pk}),
             "bi-clipboard-check" if off_site else "bi-envelope",
         )
+
+
+def natural_sort_key(text):
+    """Sort "Table 2" before "Table 10": runs of digits compare as numbers, the rest ignoring case.
+
+    ``re.split`` with a group puts text at even indexes and digits at odd ones, so two keys never
+    compare a number with a string.
+    """
+    parts = re.split(r"(\d+)", str(text))
+    return tuple(int(part) if index % 2 else part.casefold() for index, part in enumerate(parts))
+
+
+class PrintableLotListTable(tables.Table):
+    """Every lot in an auction, on paper, with the fields its labels print.
+
+    The columns come from ``Auction.label_print_fields``, and a cell is filled only when the lot's own
+    label would print it: a sold lot's label drops its minimum bid, so its row does too. Sold lots show
+    their winner, as a sold label does. A column no lot has anything for is left off, and the auction
+    date goes in the page heading instead of on every row.
+
+    The rows are a list sorted in Python, not a queryset, so that every column sorts naturally with
+    blanks last -- tables are often a custom random field, and "Table 10" belongs after "Table 9".
+    """
+
+    class Meta:
+        template_name = "tables/bootstrap_htmx.html"
+        attrs = {"class": "table table-sm lot-list"}
+        # Blank cells stay blank on paper, rather than a column of dashes.
+        default = ""
+
+    def __init__(self, data, *, auction, **kwargs):
+        fields = set((auction.label_print_fields or "").split(","))
+        headers = {
+            "lot_number": "Lot",
+            "lot_name": "Name",
+            "category": "Category",
+            "quantity": "Qty",
+            "donation": "Donation",
+            "min_bid": "Min bid",
+            "buy_now": "Buy now",
+            "custom_checkbox": auction.custom_checkbox_name or "Custom checkbox",
+            "custom_dropdown": auction.custom_dropdown_name or "Custom dropdown",
+            "custom_random": auction.custom_random_name or "Custom random field",
+            "i_bred_this_fish": "Breeder",
+            "custom_field_1": auction.custom_field_1_name or "Notes",
+            "description": "Description",
+            "seller": "Seller",
+            "winner": "Winner",
+        }
+        rows = list(data)
+        for lot in rows:
+            cells = self.cells(lot, fields)
+            lot.list_cells = {name: display for name, (display, _sort) in cells.items()}
+            lot.list_sort = {name: (not sort, natural_sort_key(sort)) for name, (_display, sort) in cells.items()}
+        in_use = {name for lot in rows for name, display in lot.list_cells.items() if display}
+        kwargs["extra_columns"] = [
+            (
+                name,
+                tables.Column(verbose_name=header, accessor=f"list_cells__{name}", order_by=f"list_sort__{name}"),
+            )
+            for name, header in headers.items()
+            # Always a lot number, even when nothing else is filled in.
+            if name in in_use or name == "lot_number"
+        ]
+        super().__init__(rows, **kwargs)
+
+    @staticmethod
+    def cells(lot, fields):
+        """``{column: (display, sort text)}`` for one lot; a blank display is a blank cell."""
+
+        def on(field, value):
+            return value if field in fields and value else ""
+
+        def price(label, amount):
+            return f"{lot.currency_symbol}{amount}" if label else ""
+
+        name = on("lot_name", lot.lot_name)
+        # Species under the name, as the label prints it -- see Lot.scientific_name_line.
+        species = ""
+        if "scientific_name" in fields:
+            if lot.scientific_name_line:
+                species = format_html("<i>{}</i>", lot.scientific_name_line)
+            else:
+                species = lot.common_name_line
+        seller = on("seller_name", lot.seller_name)
+        email = on("seller_email", lot.seller_email)
+        description = lot.description_label if "description_label" in fields else ""
+        location = lot.winner_location if lot.auction.multi_location and lot.winner_name else ""
+        return {
+            "lot_number": (lot.lot_number_display, lot.lot_number_display),
+            "lot_name": (_stacked(name, species), name or strip_tags(species)),
+            "category": (on("category", lot.category and str(lot.category)),) * 2,
+            "quantity": (on("quantity_label", lot.quantity_label) and str(lot.quantity),) * 2,
+            "donation": (on("donation_label", lot.donation_label) and "Yes",) * 2,
+            "min_bid": (price(on("min_bid_label", lot.min_bid_label), lot.reserve_price),) * 2,
+            "buy_now": (price(on("buy_now_label", lot.buy_now_label), lot.buy_now_price),) * 2,
+            "custom_checkbox": (on("custom_checkbox_label", lot.custom_checkbox_label) and "Yes",) * 2,
+            "custom_dropdown": (on("custom_dropdown_label", lot.custom_dropdown_label),) * 2,
+            "custom_random": (on("custom_random_label", lot.custom_random_label),) * 2,
+            "i_bred_this_fish": (on("i_bred_this_fish_label", lot.i_bred_this_fish_label) and "Yes",) * 2,
+            "custom_field_1": (on("custom_field_1", lot.custom_field_1),) * 2,
+            "description": (
+                mark_safe(description),  # noqa: S308 - Lot.description_label is sanitized down to <br>
+                strip_tags(description),
+            ),
+            "seller": (_stacked(seller, email), seller or email),
+            "winner": (_stacked(lot.winner_name, location), lot.winner_name),
+        }
+
+
+def _stacked(first, second):
+    """Two values in one cell, the second small underneath; either may be blank."""
+    if first and second:
+        return format_html("{}<br><small>{}</small>", first, second)
+    return first or (format_html("<small>{}</small>", second) if second else "")

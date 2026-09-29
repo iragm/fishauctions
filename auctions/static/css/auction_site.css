@@ -917,3 +917,13 @@ details.auction-advanced[open] > summary {
 body.has-unsaved-changes-bar {
     padding-bottom: 5rem;
 }
+
+/* Lot queue Back/Next on a projector screen: out of the room's way until the operator reaches for them. */
+.queue-kiosk-controls { opacity: 0.35; transition: opacity 0.2s; }
+.queue-kiosk-controls:hover, .queue-kiosk-controls:focus-within { opacity: 1; }
+
+/* A button whose htmx request is in flight swaps its icon for a spinner. htmx adds .htmx-request to
+   the element making the request; its own indicator style only fades, which would leave a gap. */
+.htmx-busy-show { display: none; }
+.htmx-request .htmx-busy-show { display: inline-block; }
+.htmx-request .htmx-busy-hide { display: none; }

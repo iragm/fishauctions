@@ -71,7 +71,7 @@ class MenuPayloadTests(TestCase):
     def test_signed_in_gets_the_account_sections(self):
         payload = menu_for(self.user)
         self.assertEqual(_section_ids(payload), ["main", "lots", "account", "about"])
-        self.assertIn(reverse("my_bids"), _paths(payload))
+        self.assertIn(reverse("buying"), _paths(payload))
         self.assertIn(reverse("account_setup"), _paths(payload))
 
     def test_the_settings_pages_are_behind_the_account_row(self):

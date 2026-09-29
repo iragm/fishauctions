@@ -16,6 +16,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import (
     Count,
@@ -85,7 +86,7 @@ from .base import (
     close_modal_response,
     safe_next_url,
 )
-from .selling import notify_watchers_lot_selling_soon
+from .selling import announce_lot_on_the_block, queue_has_reached, queue_lot_recorded
 
 logger = logging.getLogger(__name__)
 #: Page-view history window. Also what keeps it cheap: PageView is the largest table.
@@ -101,6 +102,9 @@ PAGE_VIEW_HISTORY_CHART_SOURCES = 6
 #: on a quiet lot doesn't draw as a full-height bar.
 PAGE_VIEW_HISTORY_MIN_Y = 4
 PAGE_VIEW_HISTORY_Y_TICKS = 4
+
+#: How long the selling dashboard's history is reused before a click counts it again.
+SELLING_PAGE_VIEW_HISTORY_SECONDS = 20 * 60
 
 
 def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
@@ -197,12 +201,12 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     }
 
 
-def page_view_history_context(request, page_views, *, title, subtitle):
+def page_view_history_context(request, history, *, title, subtitle):
     """The context both history modals render. The "How they got here" table is superuser-only; the chart
     and referrers are for everyone. Decided here so a new surface can't gate it differently.
     """
     return {
-        "history": page_view_history(page_views),
+        "history": history,
         "modal_title": title,
         "modal_subtitle": subtitle,
         "show_source_table": request.user.is_superuser,
@@ -239,7 +243,7 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
             "auctions/page_view_history_modal.html",
             page_view_history_context(
                 request,
-                PageView.objects.filter(lot_number=lot),
+                page_view_history(PageView.objects.filter(lot_number=lot)),
                 title="How people found this lot",
                 subtitle=lot.lot_name,
             ),
@@ -248,22 +252,28 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
 
 class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
     """The same 15 days totalled over the requesting user's lots (matched as ``UserLotFilter`` does), as a
-    subquery so the PageView query stays owner-bounded.
+    subquery so the PageView query stays owner-bounded. Kept per user for
+    :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`, so only the first click waits for it.
     """
 
     def get(self, request):
-        lots = (
-            Lot.objects.exclude(is_deleted=True)
-            .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
-            .order_by()
-            .values("pk")
-        )
+        key = f"selling_page_view_history:{request.user.pk}"
+        history = cache.get(key)
+        if history is None:
+            lots = (
+                Lot.objects.exclude(is_deleted=True)
+                .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
+                .order_by()
+                .values("pk")
+            )
+            history = page_view_history(PageView.objects.filter(lot_number__in=lots))
+            cache.set(key, history, SELLING_PAGE_VIEW_HISTORY_SECONDS)
         return render(
             request,
             "auctions/page_view_history_modal.html",
             page_view_history_context(
                 request,
-                PageView.objects.filter(lot_number__in=lots),
+                history,
                 title="How people found your lots",
                 subtitle="Every lot you are selling",
             ),
@@ -602,7 +612,12 @@ class ViewLot(DetailView):
 
 
 class ViewLotSimple(ViewLot, AuctionViewMixin):
-    """Minimalist view of a lot, just image and description.  For htmx calls"""
+    """Minimalist view of a lot, just image and description.  For htmx calls.
+
+    An admin pulling a lot up on set winners announces it, unless it's ``?preview=1`` (a lot number still
+    being typed) or the queue has already got to it: the queue announces its own lots, and a lot behind
+    it is being recorded after the room sold it.
+    """
 
     template_name = "view_lot_simple.html"
     enable_404 = False
@@ -613,18 +628,14 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
         context["lot"] = lot
         if lot and lot.auction:
             self.auction = lot.auction
-            if self.is_auction_admin and self.auction.message_users_when_lots_sell and not lot.sold:
-                # The websocket chat message is transient and keeps firing on every view.
-                result = {
-                    "type": "chat_message",
-                    "info": "CHAT",
-                    "message": "This lot is about to be sold!",
-                    "pk": -1,
-                    "username": "System",
-                }
-                lot.send_websocket_message(result)
-                # Deduped helper, so queue and pull-up don't both notify.
-                notify_watchers_lot_selling_soon(lot, request_user=self.request.user)
+            if (
+                self.is_auction_admin
+                and self.auction.message_users_when_lots_sell
+                and not lot.sold
+                and self.request.GET.get("preview") != "1"
+                and not queue_has_reached(lot)
+            ):
+                announce_lot_on_the_block(lot, request_user=self.request.user)
         return context
 
 
@@ -1054,6 +1065,7 @@ class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):
                 user=self.request.user,
                 form=form,
             )
+            self.object.reroll_custom_random_on_edit(self.request.user)
         return result
 
 
@@ -1288,6 +1300,8 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                     obj.winner = obj.auctiontos_winner.user
                 # winner isn't set when auctiontos_winner is first set; winner is rarely used in auctions.
             obj.save()
+            if obj.sold and {"auctiontos_winner", "winning_price"} & set(form.changed_data):
+                queue_lot_recorded(self.auction, obj)
             # Teach the cache only here, on a real change: auction admins correcting a lot, revertible
             # on the gaps page. Seller forms don't.
             if self.auction.use_scientific_name and species_changed and obj.lot_name:

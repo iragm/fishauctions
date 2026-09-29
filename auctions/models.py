@@ -26,6 +26,7 @@ from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, validate_email
 from django.db import models, transaction
@@ -89,6 +90,10 @@ from .moderation_models import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 CUSTOM_DROPDOWN_MAX_LENGTH = 15
+# A seller's edit re-deals the lot's custom random option this often; see Lot.reroll_custom_random_on_edit.
+CUSTOM_RANDOM_REROLL_CHANCE = 0.25
+# After a roll, whichever way it went, that lot's edits don't roll again for this long (seconds).
+CUSTOM_RANDOM_REROLL_COOLDOWN = 20 * 60
 
 # The privacy policy is a BlogPost so it can be edited without a deploy; /privacy/, /blog/privacy/
 # and the app's sign-up link all use this slug.
@@ -240,17 +245,6 @@ def find_image(name, user, auction):
     return qs.first()
 
 
-def email_q(lookup, email):
-    """``Q(<lookup>=email)``, or a Q that matches nothing when there is no address.
-
-    Rows are matched to an account by email all over the site, and participants added by hand often
-    have none: a bare ``Q(email=user.email)`` for an account without one matched every one of them.
-    """
-    if not email:
-        return Q(pk__in=[])
-    return Q(**{lookup: email})
-
-
 def distance_to(
     latitude,
     longitude,
@@ -348,6 +342,15 @@ def _display_name(user):
 def normalize_email(value):
     """Strip and lowercase an email; empty input returns "" (not None) to match field convention."""
     return (value or "").strip().lower()
+
+
+def account_for_email(email):
+    """The active account an address belongs to, or None: the one match behind ``AuctionTOS.link_user``,
+    ``ClubMember.save`` and ``signals.link_unattached_rows_for_user``.
+    """
+    if not email:
+        return None
+    return User.objects.filter(is_active=True, email__iexact=normalize_email(email)).order_by("pk").first()
 
 
 def clean_email_address(value):
@@ -1039,11 +1042,14 @@ class Club(CloudflareImageMixin, models.Model):
             "to be retyped for each vendor."
         ),
     )
-    donation_mailing_address = models.TextField(
+    mailing_address = models.TextField(
         blank=True,
         default="",
-        verbose_name="Donation mailing address",
-        help_text="Where vendors should send physical donations. Included in donation emails.",
+        verbose_name="Mailing address",
+        help_text=(
+            "Required before the club can send email from this site: the law wants a postal address on "
+            "it. Also where vendors send physical donations."
+        ),
     )
     # The dossier: the answers every vendor's donation-request form asks for, kept once instead of
     # being hunted down per form. Text only -- no uploads, so no determination letter lives here.
@@ -1350,7 +1356,7 @@ class Club(CloudflareImageMixin, models.Model):
             ("Phone", self.donation_phone),
             ("Website", self.donation_website),
             ("Expected attendance", self.donation_expected_attendance),
-            ("Mailing address", self.donation_mailing_address.strip()),
+            ("Mailing address", self.mailing_address.strip()),
             ("About the club", self.donation_context.strip()),
         ]
         return [(label, value) for label, value in rows if value]
@@ -1364,6 +1370,16 @@ class Club(CloudflareImageMixin, models.Model):
         when = timezone.localtime(event.date_start).strftime("%B %-d, %Y")
         where = f" at {event.location}" if event.location else ""
         return f"{event.title} on {when}{where}"
+
+    @property
+    def mailing_address_one_line(self):
+        """The mailing address as "PO Box 1, City ST": for a footer line. ``splitlines`` also drops the \\r a textarea sends."""
+        return ", ".join(line.strip() for line in self.mailing_address.splitlines() if line.strip())
+
+    @property
+    def can_send_email(self):
+        """False until the club has a mailing address: every email the club sends from this site carries it."""
+        return bool(self.mailing_address.strip())
 
     @property
     def sends_donation_email(self):
@@ -2189,8 +2205,8 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if self.membership_number and not self.pk:
             if ClubMember.objects.filter(membership_number=self.membership_number).exists():
                 self.membership_number = _pick_unique_membership_number()
-        if not self.user_id and self.email:
-            self.user = User.objects.filter(email__iexact=self.email).order_by("pk").first()
+        if not self.user_id:
+            self.user = account_for_email(self.email)
         previous_membership_last_paid = None
         previous_expiration_date = None
         previous_email = None
@@ -4167,6 +4183,17 @@ class Auction(CachedPropertiesMixin, models.Model):
             return False
         return True
 
+    @staticmethod
+    def starting_values(is_online):
+        """What a new auction starts with where it differs from the model default."""
+        # The model default for alternate_split_mode is "custom".
+        values = {"alternate_split_mode": "off"}
+        if is_online:
+            values["use_quantity_field"] = True
+        else:
+            values.update(online_bidding="disable", buy_now="disable", reserve_price="disable")
+        return values
+
     def __str__(self):
         result = self.title
         if "auction" not in self.title.lower():
@@ -4990,6 +5017,24 @@ class Auction(CachedPropertiesMixin, models.Model):
         )
 
     @cached_property
+    def lots_added_by(self):
+        """Lots added by their seller and by an admin, the rule the pre-registration discount uses: an
+        admin adding their own lot is a seller, and a lot with no ``added_by`` (API import) is an admin's.
+        """
+        counts = self.lots_qs.aggregate(total=Count("pk"), sellers=Count("pk", filter=Q(added_by=F("user"))))
+        return {"sellers": counts["sellers"], "admins": counts["total"] - counts["sellers"]}
+
+    @cached_property
+    def labels_first_printed_by(self):
+        """Lots whose label was first printed by their seller and by an admin, same rule as
+        ``lots_added_by``. Lots never printed, or printed before this was recorded, aren't counted.
+        """
+        counts = self.lots_qs.filter(label_first_printed_by__isnull=False).aggregate(
+            total=Count("pk"), sellers=Count("pk", filter=Q(label_first_printed_by=F("user")))
+        )
+        return {"sellers": counts["sellers"], "admins": counts["total"] - counts["sellers"]}
+
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # Lots ever queued (sticky Lot.added_to_queue).
         return self.lots_qs.filter(added_to_queue=True).count()
@@ -5403,15 +5448,12 @@ class Auction(CachedPropertiesMixin, models.Model):
         return UserBan.objects.filter(banned_user=user.pk, user__pk__in=self.auction_admins_user_pks).exists()
 
     def tos_for_user(self, user):
-        """The AuctionTOS for a signed-in user, by user FK or account email, newest first, or None. Bid
-        enforcement and the lot page both use this.
+        """The signed-in user's AuctionTOS, newest first, or None. Bid enforcement and the lot page both use
+        this.
         """
         if not user or not getattr(user, "is_authenticated", False):
             return None
-        query = Q(user=user)
-        if user.email:
-            query |= Q(email=user.email)
-        return AuctionTOS.objects.filter(query, auction=self).order_by("-createdon").first()
+        return AuctionTOS.objects.filter(user=user, auction=self).order_by("-createdon").first()
 
     # Stat getter/setter properties
     @property
@@ -6038,10 +6080,36 @@ class Auction(CachedPropertiesMixin, models.Model):
             midpoint = "end"
         return before + [midpoint] + after
 
+    def custom_random_counts(self, options, exclude=None):
+        """How many live lots here, other than *exclude*, hold each of *options*, keyed by the option
+        lowercased.
+        """
+        counts = {option.lower(): 0 for option in options}
+        lots = Lot.objects.filter(auction=self, is_deleted=False)
+        if exclude is not None:
+            lots = lots.exclude(pk=exclude.pk)
+        held = lots.values_list("custom_random").annotate(n=Count("pk")).order_by()
+        for value, n in held:
+            if value.lower() in counts:
+                counts[value.lower()] += n
+        return counts
+
+    @staticmethod
+    def pick_custom_random(options, counts):
+        """Power of two choices: two different options at random, whichever fewer lots hold, a coin flip
+        on a tie. Keeps the options near even without making the next deal predictable -- except with
+        exactly two options, where it just alternates.
+        """
+        if len(options) < 2:
+            return options[0]
+        first, second = secrets.SystemRandom().sample(options, 2)
+        if counts[first.lower()] == counts[second.lower()]:
+            return secrets.choice([first, second])
+        return min(first, second, key=lambda option: counts[option.lower()])
+
     def deal_custom_random(self, current=""):
         """The ``custom_random`` a lot here should hold: *current* while it is still an option, otherwise one
-        at random. Uniform and from ``secrets``, never balanced: a balanced or predictable deal lets a seller
-        add lots in the order that lands them where they want.
+        dealt by :meth:`pick_custom_random`.
         """
         options = list(AuctionRandomOption.objects.filter(auction=self).order_by("pk").values_list("value", flat=True))
         if not options:
@@ -6049,7 +6117,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         canonical = {option.lower(): option for option in options}
         if current and current.lower() in canonical:
             return canonical[current.lower()]
-        return secrets.choice(options)
+        return self.pick_custom_random(options, self.custom_random_counts(options))
 
     def assign_custom_random(self):
         """Deal a ``custom_random`` to every lot here without a current option, as :meth:`deal_custom_random`
@@ -6060,15 +6128,16 @@ class Auction(CachedPropertiesMixin, models.Model):
         options = list(AuctionRandomOption.objects.filter(auction=self).order_by("pk").values_list("value", flat=True))
         if not options:
             return
-        valid = {option.lower() for option in options}
+        counts = self.custom_random_counts(options)
         to_deal = []
         for lot in Lot.objects.filter(auction=self, is_deleted=False).only(
             "pk", "custom_random", "label_printed", "label_needs_reprinting"
         ):
-            if lot.custom_random.lower() not in valid:
+            if lot.custom_random.lower() not in counts:
                 if lot.custom_random and lot.label_printed:
                     lot.label_needs_reprinting = True
-                lot.custom_random = secrets.choice(options)
+                lot.custom_random = self.pick_custom_random(options, counts)
+                counts[lot.custom_random.lower()] += 1
                 to_deal.append(lot)
         Lot.objects.bulk_update(to_deal, ["custom_random", "label_needs_reprinting"], batch_size=500)
 
@@ -6721,10 +6790,38 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             return self.invoice.total_sold_club_cut
         return 0
 
+    def link_user(self):
+        """Link this row to its person's account, on every save: through the club member when there is one
+        (club-managed mode is 1:1), otherwise by email.
+
+        This is what lets every "mine" query use ``user`` alone, never the email. Only the link: the
+        account's details are never copied in, so typing in an address harvests nothing.
+        """
+        if self.user_id:
+            return
+        if self.clubmember_id and self.clubmember.user_id:
+            self.user_id = self.clubmember.user_id
+        else:
+            self.user = account_for_email(self.email)
+        # save() claims this row's lots for the account once the row exists.
+        self._newly_linked = bool(self.user_id)
+
     def save(self, *args, **kwargs):
         # Normalize a real email; leave None/"" alone (the "no email" filter uses email__isnull).
         if self.email:
             self.email = normalize_email(self.email)
+        if self.pk:
+            saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
+            if saved_tos and saved_tos.email != self.email:
+                # Email changes reset the email status.
+                self.email_address_status = "UNKNOWN"
+                # Unlink only on a real change to an address the linked user doesn't own.
+                user_owns_new_email = bool(
+                    self.user and self.user.email and normalize_email(self.user.email) == self.email
+                )
+                if not self.manually_added and saved_tos.email and not user_owns_new_email:
+                    # Unlink so link_user() below can link the right user.
+                    self.user = None
         if not self.pk:
             # logger.debug("new instance of auctionTOS")
             if self.auction.only_approved_sellers:
@@ -6744,13 +6841,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                         ).first()
                         if user_has_participated_before:
                             self.bidding_allowed = True
-            # no emails for in-person auctions, thankyouverymuch
-            if not self.auction.is_online:
-                pass
-            if self.email and not self.user:
-                self.user = User.objects.filter(is_active=True, email=self.email).first()
-        # Only on creation: don't copy user details, so adding public emails can't harvest data. See
-        # user_logged_in_callback in signals.py. Then set a bidder number.
+        self.link_user()
+        if getattr(self, "_newly_linked", False) and kwargs.get("update_fields") is not None:
+            # Check-in and the notification cron save a few columns; a link made here has to be one of them.
+            kwargs["update_fields"] = {*kwargs["update_fields"], "user"}
         if not self.bidder_number or self.bidder_number == "None":
             last_used = None
             if self.user or self.email:
@@ -6813,20 +6907,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             self.bidder_number = "ERROR"
         if str(self.memo) == "None":
             self.memo = ""
-        # Email changes reset the email status.
         if not self.name:
             self.name = "Unknown"
-        if self.pk:
-            saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
-            if saved_tos and saved_tos.email != self.email:
-                self.email_address_status = "UNKNOWN"
-                # Unlink only on a real change to an address the linked user doesn't own.
-                user_owns_new_email = bool(
-                    self.user and self.user.email and normalize_email(self.user.email) == self.email
-                )
-                if not self.manually_added and saved_tos.email and not user_owns_new_email:
-                    # Unlink so a later join can link the right user.
-                    self.user = None
         # if this is a known address, update the status
         if self.email and self.email_address_status == "UNKNOWN":
             existing_instance = (
@@ -6905,7 +6987,13 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
                 self.possible_duplicate = None
 
-        # The same user's other row in this auction: keep the older, merge this one in.
+        if getattr(self, "_newly_linked", False):
+            self._newly_linked = False
+            # Lots added while this row had no account.
+            Lot.objects.filter(auctiontos_seller=self, user__isnull=True).update(user=self.user_id)
+
+        # The same user's other row in this auction: keep the older, merge the newer into it. Usually the
+        # other row is older, but a row linked long after it was added is the older one.
         if self.user:
             existing = (
                 AuctionTOS.objects.filter(user=self.user, auction=self.auction)
@@ -6914,8 +7002,11 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 .first()
             )
             if existing:
-                existing.merge_duplicate(self, reason="same user account")
-                return
+                if self.createdon and existing.createdon and self.createdon < existing.createdon:
+                    self.merge_duplicate(existing, reason="same user account")
+                else:
+                    existing.merge_duplicate(self, reason="same user account")
+                    return
 
         if self.user:
             # The join reminder's row and the promo's row, when there are both.
@@ -7479,13 +7570,14 @@ class Lot(CachedPropertiesMixin, models.Model):
     coming_up_push_sent.help_text = (
         "Set once this lot's watchers got the 'coming up soon -- N lots away' push while it sat in the "
         "top 10 of the in-person queue. Deduped so that push fires at most once per lot; the later "
-        "'about to be sold' push (selling_push_notification_sent) overwrites it on the device."
+        "'about to be sold' push (selling_push_sent_at) overwrites it on the device."
     )
-    selling_push_notification_sent = models.BooleanField(default=False)
-    selling_push_notification_sent.help_text = (
-        "Set once this lot's watchers got the final 'about to be sold' push (it reached the head of "
-        "the queue or was pulled up on the set-winners screen). Deduped so that push fires at most "
-        "once per lot; shares a notification tag with the 'coming up soon' push so it overwrites it."
+    selling_push_sent_at = models.DateTimeField(null=True, blank=True)
+    selling_push_sent_at.help_text = (
+        "When this lot's watchers last got the 'about to be sold' push (it came up in the in-person "
+        "queue or was pulled up on the set-winners screen). Another is sent only if the lot comes up "
+        "again after SELLING_PUSH_COOLDOWN, which is what a mistyped lot number looks like; shares a "
+        "notification tag with the 'coming up soon' push so it overwrites it."
     )
     added_to_queue = models.BooleanField(default=False)
     added_to_queue.help_text = (
@@ -7552,6 +7644,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     category_checked = models.BooleanField(default=False)
     label_printed = models.BooleanField(default=False)
     label_needs_reprinting = models.BooleanField(default=False)
+    # Kept through reprints; the stats page compares it to ``user`` to split seller from admin printing.
+    label_first_printed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     partial_refund_percent = models.IntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True
     )
@@ -8140,12 +8234,21 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.is_deleted = True
         self.save()
 
+    @staticmethod
+    def won_by_q(user):
+        """The lots ``user`` won: as the online high bidder (``winner``) or through their AuctionTOS."""
+        return Q(winner=user) | Q(auctiontos_winner__user=user)
+
+    def won_by(self, user):
+        """Whether ``user`` won this lot; :meth:`won_by_q` for one row."""
+        if not user or not user.is_authenticated:
+            return False
+        return self.winner_id == user.pk or bool(self.auctiontos_winner and self.auctiontos_winner.user_id == user.pk)
+
     def is_owned_by(self, user):
         """Whether `user` is the seller and may edit, delete or add images.
 
-        `Lot.user` is null on many real sellers' lots (created through an unlinked TOS), so the seller TOS is
-        checked too, by account or verified email, as `InvoiceView` does. `backfill_lot_users` repairs stored
-        rows.
+        `Lot.user` is null on lots an admin added for someone, so the seller's AuctionTOS is checked too.
         """
         if not user or not user.is_authenticated:
             return False
@@ -8154,9 +8257,46 @@ class Lot(CachedPropertiesMixin, models.Model):
         tos = self.auctiontos_seller
         if not tos:
             return False
-        if tos.user_id and tos.user_id == user.pk:
-            return True
-        return bool(tos.email) and normalize_email(tos.email) == normalize_email(user.email)
+        return bool(tos.user_id) and tos.user_id == user.pk
+
+    def reroll_custom_random_on_edit(self, user):
+        """After *user* edits this lot, re-deal its ``custom_random`` with :data:`CUSTOM_RANDOM_REROLL_CHANCE`
+        when *user* is the seller. Moving what's on a lot onto the option a seller wanted then only
+        sometimes sticks, and every change lands in the auction history, so editing until an option comes
+        up is easy to spot.
+
+        One roll per lot per :data:`CUSTOM_RANDOM_REROLL_COOLDOWN`: bulk add autosaves every field as it
+        changes, and a roll per save would re-deal most edited lots and let a seller retype until it lands.
+        """
+        auction = self.auction
+        if not (auction and auction.use_custom_random_field and self.custom_random and self.is_owned_by(user)):
+            return
+        # add() is atomic: only the first edit in the window gets to roll.
+        if not cache.add(f"custom_random_reroll:{self.pk}", True, CUSTOM_RANDOM_REROLL_COOLDOWN):
+            return
+        if secrets.SystemRandom().random() >= CUSTOM_RANDOM_REROLL_CHANCE:
+            return
+        options = list(
+            AuctionRandomOption.objects.filter(auction=auction).order_by("pk").values_list("value", flat=True)
+        )
+        if not options:
+            return
+        old = self.custom_random
+        new = auction.pick_custom_random(options, auction.custom_random_counts(options, exclude=self))
+        if new == old:
+            return
+        self.custom_random = new
+        if self.label_printed:
+            self.label_needs_reprinting = True
+        Lot.objects.filter(pk=self.pk).update(
+            custom_random=self.custom_random, label_needs_reprinting=self.label_needs_reprinting
+        )
+        auction.create_history(
+            applies_to="LOTS",
+            action=f"Lot {self.lot_number_display}'s {auction.custom_random_name or 'custom random field'} "
+            f"re-dealt from {old} to {new} after an edit",
+            user=user,
+        )
 
     def image_permission_check(self, user):
         """See if `user` can add/edit images to this lot"""
@@ -8592,6 +8732,16 @@ class Lot(CachedPropertiesMixin, models.Model):
         )
         self.bap_points_awarded = points
         self.save(update_fields=["bap_points_awarded"])
+
+    @staticmethod
+    def mark_labels_printed(lots, user):
+        """Mark *lots* printed by *user*. Only the first printer is recorded."""
+        for lot in lots:
+            lot.label_printed = True
+            lot.label_needs_reprinting = False
+            if lot.label_first_printed_by_id is None:
+                lot.label_first_printed_by_id = getattr(user, "pk", None)
+        Lot.objects.bulk_update(lots, ["label_printed", "label_needs_reprinting", "label_first_printed_by"])
 
     @property
     def pre_registered(self):
@@ -11644,7 +11794,7 @@ class UserData(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def auctions_admined(self):
-        return Auction.objects.filter(email_q("auctiontos__email", self.user.email), auctiontos__is_admin=True).count()
+        return Auction.objects.filter(auctiontos__user=self.user, auctiontos__is_admin=True).count()
 
     @cached_property
     def auctions_i_admin(self):
@@ -13112,10 +13262,7 @@ class RemotePrintJob(models.Model):
         if count <= 0:
             return 0
         lots = [lot for lot in self.lots_qs()[:count] if not lot.is_deleted]
-        for lot in lots:
-            lot.label_printed = True
-            lot.label_needs_reprinting = False
-        Lot.objects.bulk_update(lots, ["label_printed", "label_needs_reprinting"])
+        Lot.mark_labels_printed(lots, self.user)
         return len(lots)
 
 
@@ -13440,8 +13587,9 @@ class VolunteerSignup(InvalidatesRelatedCache, models.Model):
 
 
 class LotQueueEntry(models.Model):
-    """An in-person auction's ordered queue of lots about to be sold, built by scanning. Set winners pulls
-    the head; watchers get "coming up" and "about to be sold" pushes (deduped per lot).
+    """An in-person auction's running order, built by scanning. Entries are kept after their lot sells:
+    the passed ones are a prefix, and the first entry not passed is the lot on the block. Next, Back
+    and recording the lot on the block move that line (:mod:`auctions.views.selling`).
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE, related_name="lot_queue_entries")
@@ -13449,6 +13597,13 @@ class LotQueueEntry(models.Model):
     order = models.PositiveIntegerField()
     added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     createdon = models.DateTimeField(auto_now_add=True)
+    passed_at = models.DateTimeField(null=True, blank=True)
+    passed_at.help_text = "When the room moved past this lot. Unset while it's still to come or on the block."
+    announced = models.BooleanField(default=False)
+    announced.help_text = (
+        "The 'about to be sold' pass has run for this lot's turn on the block. Cleared whenever another "
+        "lot is on the block, so coming back to it announces it again (subject to the lot's cooldown)."
+    )
 
     class Meta:
         ordering = ["auction", "order"]

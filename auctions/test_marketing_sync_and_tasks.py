@@ -453,7 +453,11 @@ class SafelyTests(TestCase):
 
 class WelcomeEmailTaskTests(TestCase):
     def setUp(self):
-        self.club = Club.objects.create(name="Welcome Club", send_welcome_email_to_new_members=True)
+        self.club = Club.objects.create(
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Welcome Club",
+            send_welcome_email_to_new_members=True,
+        )
         self.old = timezone.now() - datetime.timedelta(days=2)
         self.alice = self._member("Alice", "alice@example.com")
         self.bob = self._member("Bob", "bob@example.com")
@@ -526,6 +530,7 @@ class WelcomeEmailTaskTests(TestCase):
 class ExpirationReminderTaskTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
+            mailing_address="PO Box 1, Springfield IL 62701",
             name="Reminder Club",
             membership_system="rolling",
             membership_annual_fee=Decimal("25.00"),
@@ -608,7 +613,10 @@ class ExpirationReminderTaskTests(TestCase):
 class MembershipCardEmailTests(TestCase):
     def setUp(self):
         self.club = Club.objects.create(
-            name="Card Club", membership_system="rolling", membership_annual_fee=Decimal(20)
+            mailing_address="PO Box 1, Springfield IL 62701",
+            name="Card Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal(20),
         )
         self.user = User.objects.create_user(username="card_user", password="x", email="card@example.com")
         self.member = ClubMember.objects.create(club=self.club, name="Card Holder", email="card@example.com")

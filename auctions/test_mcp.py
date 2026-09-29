@@ -111,8 +111,9 @@ class RegistryConformance(SimpleTestCase):
     def test_the_tools_that_reach_outside_this_site_are_the_ones_that_send(self):
         """``openWorldHint`` is the tool's purpose, not its side effects.
 
-        Eleven: the ones whose whole job is to reach an address, a server or a calendar this site
-        doesn't own, plus ``read_source``, which fetches the published repository. Pinned as a set
+        The ones whose whole job is to reach an address, a server or a calendar this site doesn't
+        own, the four that publish to anyone on the internet, and ``read_source``, which fetches the
+        published repository. Pinned as a set
         rather than a count, because the failure it guards against is a *new* sender quietly
         defaulting to false -- not the list getting shorter.
         """
@@ -131,6 +132,10 @@ class RegistryConformance(SimpleTestCase):
                 "request_volunteers",
                 "cancel_volunteer_request",
                 "change_email",
+                "add_lot",
+                "add_lots",
+                "answer_question",
+                "leave_feedback",
             },
         )
 
@@ -1430,6 +1435,14 @@ class ResourceLinkTests(StandardTestCase):
         uris = [link["uri"] for link in resources.links_for("list_lots", {"auction": "spring"})]
         self.assertEqual(uris, ["auction://spring"])
 
+    def test_a_write_carries_no_links(self):
+        """ChatGPT showed add_lot's two links as two file attachments, and asked before opening them."""
+        result = tools.call_tool(
+            self._request_for(self.user), "add_lot", {"name": "Echo Snail", "auction": self.in_person_auction.slug}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(self._links(result), [])
+
     def test_a_lot_result_links_to_the_lot_and_the_auction(self):
         links = resources.links_for("edit_lot", {"auction": "spring", "lot": "14"})
         self.assertEqual([link["uri"] for link in links], ["lot://spring/14", "auction://spring"])
@@ -1487,3 +1500,33 @@ class ConfirmationTierTests(SimpleTestCase):
         action = palette_actions.get_action("review_points")
         self.assertIn("undo", action.params["decision"])
         self.assertFalse(action.destructive)
+
+
+class SubmissionFileTests(SimpleTestCase):
+    """``manage.py chatgpt_submission``: the justifications OpenAI's form imports."""
+
+    def test_every_destructive_tool_says_why(self):
+        from auctions.management.commands import chatgpt_submission
+
+        for action in palette_actions.ACTIONS.values():
+            if action.destructive:
+                self.assertIn(
+                    action.name, chatgpt_submission._DESTROYS, f"{action.name} is destructive; say what it destroys"
+                )
+            elif action.open_world and not tools.read_only(action):
+                self.assertIn(
+                    action.name,
+                    chatgpt_submission._SENDS_BUT_KEEPS,
+                    f"{action.name} sends something outside the site; say why that isn't destructive",
+                )
+
+    def test_the_file_matches_what_tools_list_serves(self):
+        from auctions.management.commands import chatgpt_submission
+
+        built = chatgpt_submission.build()["tools"]
+        served = {descriptor["name"]: descriptor["annotations"] for descriptor in tools.tool_descriptors(None)}
+        self.assertEqual(set(built), set(served))
+        for name, entry in built.items():
+            self.assertEqual(entry["annotations"], served[name])
+            for sentence in entry["justifications"].values():
+                self.assertTrue(sentence.strip(), f"{name} has an empty justification")

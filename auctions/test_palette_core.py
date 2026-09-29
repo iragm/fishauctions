@@ -62,7 +62,27 @@ class CommandPaletteTests(StandardTestCase):
         titles = self._all_item_titles(resp)
         self.assertTrue(any("View lots" in t for t in titles))
         self.assertTrue(any("View users" in t for t in titles))  # admin-only
-        self.assertTrue(any("Quick checkout" in t for t in titles))  # admin-only
+        self.assertFalse(any("Quick checkout" in t for t in titles))  # in-person only
+
+    def test_quick_checkout_for_in_person_admin(self):
+        tomorrow = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.date_start = tomorrow
+        self.in_person_auction.lot_submission_end_date = tomorrow
+        self.in_person_auction.save()
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        titles = self._all_item_titles(self.client.get(reverse("command_palette")))
+        self.assertTrue(any("Quick checkout" in t for t in titles))
+        titles = self._all_item_titles(self.client.get(reverse("command_palette"), {"q": "checkout"}))
+        self.assertTrue(any("Quick checkout" in t for t in titles))
+
+    def test_no_quick_checkout_for_online_auction_search(self):
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self._login(self.user)
+        titles = self._all_item_titles(self.client.get(reverse("command_palette"), {"q": "checkout"}))
+        self.assertFalse(any("Quick checkout" in t for t in titles))
 
     def test_default_items_for_non_admin_shows_invoice(self):
         self.invoiceB.status = "UNPAID"

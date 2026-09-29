@@ -539,39 +539,6 @@ class AddSingleAuctionTOSToClubTests(StandardTestCase):
 
 
 class PersonalCSVExportTests(StandardTestCase):
-    def test_won_lots_csv_lists_only_my_live_wins(self):
-        won = Lot.objects.create(
-            lot_name="My win",
-            auction=self.online_auction,
-            auctiontos_seller=self.online_tos,
-            auctiontos_winner=self.tosC,
-            winning_price=12,
-            active=False,
-        )
-        Lot.objects.create(
-            lot_name="Deleted win",
-            auction=self.online_auction,
-            auctiontos_seller=self.online_tos,
-            auctiontos_winner=self.tosC,
-            winning_price=12,
-            active=False,
-            is_deleted=True,
-        )
-        AuctionTOS.objects.filter(pk=self.tosC.pk).update(email=self.user_with_no_lots.email)
-        self.client.login(username="no_lots", password="testpassword")
-        response = self.client.get(reverse("my_won_lot_csv"))
-        self.assertEqual(response["Content-Type"], "text/csv")
-        names = [row[1] for row in _csv_rows(response)[1:]]
-        self.assertEqual(names, [won.lot_name])
-
-    def test_won_lots_csv_for_an_account_without_email_is_not_everyone_s_wins(self):
-        self.user_with_no_lots.email = ""
-        self.user_with_no_lots.save()
-        AuctionTOS.objects.filter(pk=self.tosB.pk).update(email="")
-        self.client.login(username="no_lots", password="testpassword")
-        rows = _csv_rows(self.client.get(reverse("my_won_lot_csv")))
-        self.assertEqual(len(rows), 1)
-
     def test_my_lot_report_status_column(self):
         Lot.objects.create(
             lot_name="Removed lot", auction=self.online_auction, auctiontos_seller=self.online_tos, banned=True

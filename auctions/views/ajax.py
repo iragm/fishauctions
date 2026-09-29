@@ -269,15 +269,7 @@ class Feedback(APIView):
         winner_checks_pass = False
         seller_checks_pass = False
         if leave_as == "winner":
-            if lot.winner:
-                if lot.winner.pk == request.user.pk:
-                    winner_checks_pass = True
-            if lot.auctiontos_winner:
-                if lot.auctiontos_winner.user:
-                    if (lot.auctiontos_winner.user.pk == request.user.pk) or (
-                        request.user.email and lot.auctiontos_winner.email == request.user.email
-                    ):
-                        winner_checks_pass = True
+            winner_checks_pass = lot.won_by(request.user)
         # Anything else was a DataError 500, or a stored rating of 7 that no count reads.
         rating = data.get("rating")
         if rating not in FEEDBACK_RATINGS:

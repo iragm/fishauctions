@@ -4439,6 +4439,7 @@ class ClubEditForm(forms.ModelForm):
             "description",
             "location",
             "location_coordinates",
+            "mailing_address",
         ]
         help_texts = {
             "name": "Changing this will change the URL for your club's page, as well as any API keys you're using.",
@@ -4451,6 +4452,7 @@ class ClubEditForm(forms.ModelForm):
             "discord_invite_link": forms.URLInput(attrs={"placeholder": "https://discord.gg/yourclub"}),
             "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
             "location": forms.TextInput(attrs={"placeholder": "Search for your club's location"}),
+            "mailing_address": forms.Textarea(attrs={"rows": 3, "placeholder": "PO Box 123\nCity, State 12345"}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -4476,8 +4478,17 @@ class ClubEditForm(forms.ModelForm):
                 "location",
                 "location_coordinates",
             ),
+            "mailing_address",
         )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+    def clean_mailing_address(self):
+        # Clearing it silently stops every membership and donation email, so it can change but not go.
+        address = self.cleaned_data.get("mailing_address") or ""
+        if self.instance.pk and self.instance.can_send_email and not address.strip():
+            msg = "Every email your club sends has to carry this address. You can change it, but not remove it."
+            raise forms.ValidationError(msg)
+        return address
 
 
 class LotCategoryForm(forms.ModelForm):
@@ -5950,7 +5961,6 @@ class ClubDonationSettingsForm(forms.ModelForm):
             "donation_email_mode",
             "donation_followup_days",
             "donation_context",
-            "donation_mailing_address",
             # The dossier, for vendors whose donation request form is on their own site.
             "donation_legal_name",
             "donation_tax_id",
@@ -5967,9 +5977,6 @@ class ClubDonationSettingsForm(forms.ModelForm):
                     "rows": 4,
                     "placeholder": "nonprofit id number or other information to use in the context of outgoing emails",
                 }
-            ),
-            "donation_mailing_address": forms.Textarea(
-                attrs={"rows": 3, "placeholder": "Club name\n123 Main St\nCity, State 12345"}
             ),
         }
 
@@ -6012,6 +6019,22 @@ class ClubDonationSettingsForm(forms.ModelForm):
                 ),
             ),
         ]
+        # The address lives in club settings now (every email the club sends carries it), so here it
+        # is only shown.
+        settings_link = reverse("club_edit", kwargs={"slug": club.slug}) if club and club.pk else ""
+        if club and club.can_send_email:
+            mailing_address_note = format_html(
+                '<p class="small">Mailing address, in the footer of every donation email: {} '
+                '<a href="{}">Change it in club settings</a></p>',
+                club.mailing_address_one_line,
+                settings_link,
+            )
+        else:
+            mailing_address_note = format_html(
+                '<p class="small">Donation emails carry your club\'s mailing address. '
+                '<a href="{}">Add it in club settings</a> before turning donation tracking on.</p>',
+                settings_link,
+            )
         if not routing_enabled:
             # Without SES routing, copy/paste is the only mode: shown, fixed.
             self.fields["donation_email_mode"].disabled = True
@@ -6025,7 +6048,7 @@ class ClubDonationSettingsForm(forms.ModelForm):
             "donation_email_mode",
             "donation_followup_days",
             "donation_context",
-            "donation_mailing_address",
+            LiteralHTML(mailing_address_note),
             Fieldset(
                 "Your details, for their form",
                 HTML(
@@ -6054,16 +6077,13 @@ class ClubDonationSettingsForm(forms.ModelForm):
         return mode
 
     def clean(self):
-        # Every donation email needs the club's postal address; ask here.
+        # Every donation email needs the club's postal address, which is set in club settings.
         cleaned_data = super().clean()
-        if (
-            cleaned_data.get("enable_donation_tracking")
-            and not (cleaned_data.get("donation_mailing_address") or "").strip()
-        ):
+        if cleaned_data.get("enable_donation_tracking") and not self.instance.can_send_email:
             self.add_error(
-                "donation_mailing_address",
-                "Donation emails have to carry a postal address for the club, so this is required "
-                "while donation tracking is on.",
+                "enable_donation_tracking",
+                "Donation emails have to carry a postal address for the club. Add your mailing address "
+                "in club settings first.",
             )
         return cleaned_data
 

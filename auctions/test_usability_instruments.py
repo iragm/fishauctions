@@ -369,6 +369,28 @@ class AuctionEditFormLayoutTests(StandardTestCase):
         form = self._form(auction=auction, user=self.user_with_no_lots)
         self.assertFalse(form.advanced_open)
 
+    def _new_in_person_auction(self):
+        return Auction.objects.create(
+            created_by=self.user_with_no_lots,
+            title="A first in-person auction",
+            is_online=False,
+            date_start=timezone.now(),
+            **Auction.starting_values(is_online=False),
+        )
+
+    def test_a_new_in_person_auction_starts_closed(self):
+        """An in-person auction starts on "No online bidding", which is not a decision."""
+        auction = self._new_in_person_auction()
+        form = self._form(auction=auction, user=self.user_with_no_lots)
+        self.assertIn("online_bidding", form.advanced_fields)
+        self.assertFalse(form.advanced_open)
+
+    def test_turning_on_online_bidding_keeps_advanced_open(self):
+        auction = self._new_in_person_auction()
+        auction.online_bidding = "allow"
+        auction.save()
+        self.assertTrue(self._form(auction=auction, user=self.user_with_no_lots).advanced_open)
+
     def test_a_rejected_advanced_field_forces_the_section_open(self):
         """A closed <details> over a rejected field is a form that cannot be fixed."""
         form = self._form(data={"tax": "not a number", "date_start": "", "date_end": ""})

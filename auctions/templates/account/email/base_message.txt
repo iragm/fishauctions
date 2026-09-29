@@ -1,0 +1,4 @@
+{% load email_tags %}{% autoescape off %}Hey {{ user.first_name|default:"there" }},
+
+{% block content %}{% endblock content %}
+{% email_footer_text %}{% endautoescape %}

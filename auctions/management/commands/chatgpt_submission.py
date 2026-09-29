@@ -1,6 +1,6 @@
 """Write ``chatgpt-app-submission.json``, the file OpenAI's plugin form imports.
 
-The form asks for three hints and three justifications on every one of the 114 tools, plus five
+The form asks for three hints and three justifications on every tool, plus five
 positive and three negative test cases. OpenAI's own skill for this reads a codebase and writes the
 prose; this reads :data:`auctions.palette_actions.ACTIONS` instead, because the registry already
 holds the truth the reviewer is checking -- what each tool does, whether it writes, whether it
@@ -82,6 +82,10 @@ _REACHES = {
     "cancel_volunteer_request": "the push notification it had already sent to those phones",
     "change_email": "a confirmation email to the new address, which is what makes the change take effect",
     "read_source": "this site's own source code, published as a public repository",
+    "add_lot": "the lot is listed on its auction's page, which anyone on the internet can read once the auction is public",
+    "add_lots": "the lots are listed on their auction's page, which anyone on the internet can read once the auction is public",
+    "answer_question": "the reply is posted publicly on the lot's page",
+    "leave_feedback": "the rating and comment are shown on the other person's public profile",
 }
 
 
@@ -105,23 +109,156 @@ def behaviour(action: palette_actions.Action) -> str:
     return sentence
 
 
+#: What a destructive tool actually destroys, overwrites, sends for good, or commits to. OpenAI's
+#: reviewer is checking exactly this, and it is never in the opening clause of a description, which
+#: says what a tool is *for*. ``test_mcp.SubmissionFileTests`` fails a destructive tool with no entry.
+_DESTROYS = {
+    "remove_lot_image": "It deletes the picture from the lot; putting it back means adding the image again.",
+    "undo_check_in": "It clears a person's checked-in status, overwriting what the check-in desk recorded.",
+    "refund_lot": (
+        "It moves money: the refund comes off the invoice and the seller's payout, and for a card sale "
+        "it is sent back through Square, which cannot be reversed from this site."
+    ),
+    "place_bid": "It places a bid that other bidders see at once and that the bidder cannot generally withdraw.",
+    "retract_announcement": (
+        "It deletes the announcement's Discord post and website entry, or cancels it for good if it "
+        "had not gone out yet."
+    ),
+    "remove_dropdown_option": "It deletes one option from an auction's custom dropdown.",
+    "remove_random_option": (
+        "It deletes one option from an auction's custom random field and overwrites that value on every "
+        "lot that had it with one of the remaining options."
+    ),
+    "cancel_volunteer_request": "It cancels a request for help and withdraws the notification sent with it.",
+    "undo_last": "It reverses the user's previous change, overwriting whatever that change had set.",
+    "contact_donation_vendor": "It sends an email to an outside business, which cannot be recalled once sent.",
+    "undo_sale": "It clears the recorded winner and selling price of a lot.",
+    "remove_lot": (
+        "It deletes a lot from its auction, or deactivates a lot that is in no auction, which also "
+        "removes the bids on it."
+    ),
+    "remove_bid": "It deletes a bid, and the lot's price falls back to the next-highest bid.",
+    "remove_award": "It clears the points decision on a lot and takes back the points it had awarded.",
+    "remove_person": (
+        "It deletes a person's place in an auction, and is refused if they have an invoice, lots to "
+        "sell or lots they won."
+    ),
+    "remove_invoice_adjustment": "It deletes one charge or discount line from an invoice that is still open.",
+    "update_contact_info": (
+        "It overwrites the user's name, phone number or address on their account and on the auctions "
+        "and clubs that hold a copy of it."
+    ),
+    "update_username": "It replaces the user's username, which is also the address of their public page.",
+    "change_email": (
+        "It sends a confirmation email that cannot be recalled, and replaces the account's email "
+        "address once that link is opened."
+    ),
+    "send_membership_card": (
+        "It sends an email that cannot be recalled, though only to the address already on that "
+        "membership and only with that member's own card."
+    ),
+    "resend_member_card": (
+        "It sends an email that cannot be recalled, though only to the member's own address on file "
+        "and never to a member marked do-not-contact."
+    ),
+    "set_lot_winner": (
+        "It records a lot's winner and price, and when told to ignore errors it overwrites a sale "
+        "that was already recorded."
+    ),
+    "update_person": (
+        "It overwrites a participant's contact details, name, bidder number or note, and can take away "
+        "their permission to bid or sell."
+    ),
+    "edit_lot": "It overwrites a lot's name, description, prices or other fields with new values.",
+    "update_club_member": "It overwrites a club member's contact details, membership number, name or note.",
+    "update_club_event": (
+        "It overwrites an event's date, title or description, or calls it off, and pushes the change "
+        "to the club's calendar and Discord."
+    ),
+    "send_club_announcement": (
+        "Once its short retract window has passed it sends emails and push notifications that cannot "
+        "be recalled; retract_announcement can still take down the Discord post and website entry."
+    ),
+    "update_club_setting": (
+        "It overwrites one of a club's settings, including the wording of the welcome and renewal emails it sends."
+    ),
+    "update_pickup_location": (
+        "It overwrites a pickup location's address, time or directions, which people may already have chosen."
+    ),
+    "rename_dropdown_option": "It overwrites the name of one option on an auction's custom dropdown.",
+    "rename_random_option": "It overwrites the name of a random-field option on every lot that was given it.",
+    "update_auction_setting": (
+        "It overwrites one of an auction's settings, such as the minimum bid, the club's cut or "
+        "whether the auction is listed publicly."
+    ),
+    "request_volunteers": (
+        "It sends a push notification to everyone at the auction that cannot be unseen, though "
+        "cancel_volunteer_request withdraws the request itself."
+    ),
+    "update_donation_vendor": ("It overwrites a donation vendor's status, contact details, notes or follow-up date."),
+    "set_member_active": (
+        "Deactivating a member takes away their membership until someone reactivates them, which "
+        "revokes access even though nothing is deleted."
+    ),
+    "set_point_rule": (
+        "It replaces what a genus or category is worth in a club's points program, which changes "
+        "what later awards give."
+    ),
+    "set_lot_species": "It overwrites the scientific name recorded on a lot.",
+    "leave_feedback": (
+        "It overwrites any rating or comment the same person left on that lot before, and the result is public."
+    ),
+    "answer_question": (
+        "It posts a public reply on the lot's page, which the seller cannot take back through this server."
+    ),
+}
+
+#: Writes that reach outside the site or publish something, and are not destructive. The generic
+#: sentence says whatever a tool does can be corrected afterwards, which a publication might not
+#: be, so each says what takes it back.
+_SENDS_BUT_KEEPS = {
+    "add_club_event": (
+        "It deletes nothing, and the event it posts can be moved, renamed or called off afterwards with "
+        "update_club_event, which updates the calendar and Discord to match."
+    ),
+    "add_lot": "It only adds a new lot, deleting and overwriting nothing, and remove_lot takes it down again.",
+    "add_lots": ("It only adds new lots, deleting and overwriting nothing, and remove_lot takes each one down again."),
+}
+
+
 def justifications(action: palette_actions.Action) -> dict[str, str]:
-    """One sentence each, about this tool's behaviour rather than about its annotation."""
+    """One sentence each, about this tool's behaviour rather than about its annotation.
+
+    A read is not quite stateless: resolving an auction records it as ``last_auction_used``
+    (``palette_actions.remember_auction``), and saying so is cheaper than a reviewer finding it.
+    """
     what = behaviour(action)
-    if tools.read_only(action):
-        read_only = f"Reads and returns, changing nothing: {what}."
-        destructive = "Reads only, so there is nothing for it to delete, overwrite or undo."
+    if action.danger == palette_actions.DANGER_NAVIGATE:
+        read_only = (
+            f"Only returns a link to a page on this site ({what}); nothing is saved unless the person "
+            "does it on that page themselves."
+        )
+        destructive = "It only returns a link, so it deletes, overwrites and sends nothing."
+    elif tools.read_only(action):
+        read_only = f"Only looks up and returns data ({what})"
+        if action.accepts("auction"):
+            read_only += (
+                "; the one thing it records is which auction the account last asked about, so the next "
+                "request can leave it out"
+            )
+        read_only += "."
+        destructive = "It only reads, so it deletes, overwrites and sends nothing."
     else:
-        read_only = f"Writes one row in this site's own database: {what}."
+        read_only = f"Changes data on this site: {what}."
         if action.destructive:
-            destructive = (
-                "Cannot be taken back by calling it again: what it removes, overwrites or commits to "
-                "is gone from the person's own record of the auction."
+            destructive = _DESTROYS.get(
+                action.name, "What it removes, overwrites or commits to cannot be put back by calling it again."
             )
         else:
-            destructive = (
-                "Adds or sets a value the same person can change again from the website; it deletes "
-                "nothing and overwrites no earlier answer."
+            destructive = _SENDS_BUT_KEEPS.get(
+                action.name,
+                "It deletes nothing and takes no payment, and whatever it adds or changes can be "
+                "corrected afterwards, on the website or with another tool here.",
             )
     if action.open_world:
         open_world = f"Reaches outside this site: {_REACHES.get(action.name, what)}."

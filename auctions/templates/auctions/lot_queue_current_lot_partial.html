@@ -1,9 +1,13 @@
-{% comment %}Fullscreen current lot: the lot set winners sells next, details only. Context: auction, lot (or None).{% endcomment %}
-{% if lot %}
+{% comment %}Fullscreen current lot: the lot on the block, details only. Context: auction, on_the_block (entry or None).{% endcomment %}
+<div data-queue-entry="{% if on_the_block %}{{ on_the_block.pk }}{% else %}0{% endif %}">
+{% if on_the_block %}
+{% with lot=on_the_block.lot %}
 <div class="text-center mb-2">
   <span class="badge bg-primary fs-4">Lot {{ lot.lot_number_display }}</span>
+  {% if lot.sold %}<span class="badge bg-success text-dark fs-4">Sold</span>{% endif %}
 </div>
 {% include 'view_lot_simple.html' with lot_info_only=True %}
+{% endwith %}
 {% else %}
 <div class="container mt-5">
   <div class="alert alert-info text-center fs-4" role="alert">
@@ -11,3 +15,4 @@
   </div>
 </div>
 {% endif %}
+</div>

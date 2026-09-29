@@ -60,6 +60,7 @@ from auctions.models import (
     UserLabelPrefs,
 )
 from auctions.printing import inches_per_unit
+from auctions.templatetags.email_tags import first_name
 
 from .base import ClubViewMixin, check_club_permission, close_modal_response
 from .club_pages import _membership_renewal_state, _process_pending_membership_renewal_for_member
@@ -1004,18 +1005,20 @@ class ClubEmailSettingsView(FormFrictionMixin, LoginRequiredMixin, ClubViewMixin
         user = self.request.user
         preview_member = self.club.members.filter(user=user, is_deleted=False).first()
         if preview_member:
-            preview_name = (preview_member.name or "").strip() or "Member"
+            preview_name = first_name(preview_member.name) or "there"
             preview_member_link = preview_member.member_page_url
             preview_barcode_url = preview_member.barcode_image_link if preview_member.club.show_member_barcode else ""
         else:
-            full_name = user.get_full_name() if user.is_authenticated else ""
-            preview_name = full_name.strip() or "Member"
+            preview_name = first_name(user.first_name if user.is_authenticated else "") or "there"
             preview_member_link = ""
             preview_barcode_url = ""
         context["preview_name"] = preview_name
         context["preview_member_link"] = preview_member_link
         context["preview_barcode_url"] = preview_barcode_url
         context["membership_numbers_enabled"] = self.club.show_member_barcode
+        from auctions.tasks import membership_email_footer
+
+        context["preview_footer"] = membership_email_footer(self.club)
         # Wallet buttons ride under the barcode in the real emails, for configured wallets only.
         from auctions import apple_wallet, google_wallet
 

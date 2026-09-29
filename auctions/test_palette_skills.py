@@ -249,7 +249,12 @@ class ClubSkillTestCase(SkillTestCase):
 
     def setUp(self):
         super().setUp()
-        self.club = Club.objects.create(name="Palette Aquarium Society", active=True, points_per_lot=5)
+        self.club = Club.objects.create(
+            name="Palette Aquarium Society",
+            active=True,
+            points_per_lot=5,
+            mailing_address="PO Box 1, Springfield IL 62701",
+        )
         self.club_admin = ClubMember.objects.create(
             club=self.club,
             user=self.admin_user,

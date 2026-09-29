@@ -18,6 +18,7 @@ the slow htmx poll is a fallback for a dropped socket.
      hx-trigger="queue-updated from:body, every 30s" hx-swap="innerHTML">
   {% include 'auctions/lot_queue_current_lot_partial.html' %}
 </div>
+{% include 'auctions/lot_queue_kiosk_controls.html' with scope="#current-lot" %}
 {% endblock %}
 
 {% block extra_js %}

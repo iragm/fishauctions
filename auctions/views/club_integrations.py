@@ -134,21 +134,21 @@ class MailchimpCallbackView(LoginRequiredMixin, View):
         return redirect(config_url)
 
 
-def _prefill_donation_address(club, address, provider):
-    """Fill a blank donation mailing address from the marketing provider's required postal address.
+def _prefill_mailing_address(club, address, provider):
+    """Fill a blank club mailing address from the marketing provider's required postal address.
 
     Never overwrites an address the club typed. Returns True if it filled one in.
     """
     from auctions.models import Club
 
     address = (address or "").strip()
-    if not address or club.donation_mailing_address.strip():
+    if not address or club.mailing_address.strip():
         return False
-    club.donation_mailing_address = address
-    Club.objects.filter(pk=club.pk).update(donation_mailing_address=address)
+    club.mailing_address = address
+    Club.objects.filter(pk=club.pk).update(mailing_address=address)
     ClubHistory.objects.create(
         club=club,
-        action=f"Donation mailing address filled in from {provider}",
+        action=f"Mailing address filled in from {provider}",
         applies_to="SETTINGS",
     )
     return True
@@ -214,11 +214,10 @@ class MailchimpAudienceSelectView(LoginRequiredMixin, ClubViewMixin, View):
         )
         messages.success(request, f"Syncing {count} member(s) into the '{audience_name}' Mailchimp audience.")
         defaults = mc.account_defaults(client) or {}
-        if _prefill_donation_address(club, mc.format_mailing_address(defaults.get("contact")), "Mailchimp"):
+        if _prefill_mailing_address(club, mc.format_mailing_address(defaults.get("contact")), "Mailchimp"):
             messages.info(
                 request,
-                "We also filled in your donation mailing address from Mailchimp — check it on the "
-                "donation settings page.",
+                "We also filled in your club's mailing address from Mailchimp — check it in club settings.",
             )
         return redirect(config_url)
 
@@ -1003,10 +1002,10 @@ class BrevoListSelectView(LoginRequiredMixin, ClubViewMixin, View):
         )
         messages.success(request, f"Syncing {count} member(s) into the '{list_name}' Brevo list.")
         info = brevo.account_info(brevo.get_client(club))
-        if _prefill_donation_address(club, brevo.format_mailing_address(info.get("address")), "Brevo"):
+        if _prefill_mailing_address(club, brevo.format_mailing_address(info.get("address")), "Brevo"):
             messages.info(
                 request,
-                "We also filled in your donation mailing address from Brevo — check it on the donation settings page.",
+                "We also filled in your club's mailing address from Brevo — check it in club settings.",
             )
         return redirect(config_url)
 

@@ -17,6 +17,8 @@ REAL_ADDRESS = "Some Fish Club, PO Box 1, Burlington VT 05401"
 
 FOOTER_HTML = "{% load email_tags %}{% email_footer %}"
 FOOTER_TEXT = "{% load email_tags %}{% email_footer_text %}"
+#: email/base.html, which ends with the footer.
+LAYOUT = '{% extends "email/base.html" %}'
 
 
 def render(source, **context):
@@ -30,16 +32,25 @@ class EveryEmailTemplateCarriesTheFooterTests(TestCase):
         from post_office.models import EmailTemplate
 
         missing = []
-        for template in EmailTemplate.objects.all():
-            if (template.html_content or "").strip() and FOOTER_HTML not in template.html_content:
-                missing.append(f"{template.name}.html_content")
-            if (template.content or "").strip() and FOOTER_TEXT not in template.content:
-                missing.append(f"{template.name}.content")
+        with override_settings(MAILING_ADDRESS=REAL_ADDRESS):
+            # Rendered rather than searched: the HTML footer comes from the layout, which a template
+            # could switch off by overriding its footer block.
+            for template in EmailTemplate.objects.all():
+                for field in ("html_content", "content"):
+                    body = getattr(template, field) or ""
+                    if body.strip() and REAL_ADDRESS not in render(body, domain="example.com"):
+                        missing.append(f"{template.name}.{field}")
         if missing:
             self.fail(
-                "These email templates have no sender-identification footer. Add "
-                f"'{FOOTER_HTML}' (or the _text twin) in a data migration:\n  " + "\n  ".join(missing)
+                "These email templates have no sender-identification footer. Extend email/base.html "
+                f"or add '{FOOTER_TEXT}' to a text part in a data migration:\n  " + "\n  ".join(missing)
             )
+
+    def test_the_layout_renders_the_footer(self):
+        with override_settings(MAILING_ADDRESS=REAL_ADDRESS):
+            out = render(LAYOUT + "{% block content %}Hello{% endblock %}", domain="example.com")
+        self.assertIn("Hello", out)
+        self.assertIn(REAL_ADDRESS, out)
 
     def test_there_are_templates_to_check(self):
         """A migration that stopped seeding templates would otherwise make the test above vacuous."""
@@ -109,9 +120,7 @@ class DonationRequestNeedsAnAddressTests(TestCase):
     def setUp(self):
         # Saved straight onto the model: a club that switched tracking on before the form asked for
         # an address is exactly the case this has to survive.
-        self.club = Club.objects.create(
-            name="Some Fish Club", donation_mailing_address="", enable_donation_tracking=True
-        )
+        self.club = Club.objects.create(name="Some Fish Club", mailing_address="", enable_donation_tracking=True)
         self.vendor = DonationVendor.objects.create(club=self.club, name="Pet Shop", email="shop@example.com")
 
     def test_footer_refuses_to_build_without_an_address(self):
@@ -123,7 +132,7 @@ class DonationRequestNeedsAnAddressTests(TestCase):
     def test_footer_has_the_address_and_the_opt_out_once_it_is_set(self):
         from auctions import donations
 
-        self.club.donation_mailing_address = "PO Box 1, Burlington VT 05401"
+        self.club.mailing_address = "PO Box 1, Burlington VT 05401"
         self.club.save()
         footer = donations.unsubscribe_footer(self.vendor)
         self.assertIn("PO Box 1, Burlington VT 05401", footer)
@@ -139,11 +148,10 @@ class DonationRequestNeedsAnAddressTests(TestCase):
                 "enable_donation_tracking": True,
                 "donation_email_mode": Club.DONATION_EMAIL_MODE_COPY,
                 "donation_followup_days": 14,
-                "donation_mailing_address": "",
             },
         )
         self.assertFalse(form.is_valid())
-        self.assertIn("donation_mailing_address", form.errors)
+        self.assertIn("club settings", str(form.errors["enable_donation_tracking"]))
 
     def test_contacting_a_vendor_without_an_address_offers_the_settings_page(self):
         """A club that switched tracking on before that rule existed gets a screen, not a traceback."""
@@ -155,4 +163,4 @@ class DonationRequestNeedsAnAddressTests(TestCase):
         response = self.client.get(reverse("club_donation_contact", kwargs={"pk": self.vendor.pk}))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "mailing address")
-        self.assertContains(response, reverse("club_donation_settings", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, reverse("club_edit", kwargs={"slug": self.club.slug}))

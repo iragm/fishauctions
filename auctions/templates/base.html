@@ -341,7 +341,7 @@ window.onload = function() {
                   <a class="nav-link" href="{% url 'selling' %}">Selling <span id="total_unread_lot_messages" class="badge rounded-pill bg-warning text-dark fw-bold"></span></a>
                   </li>
                   <li class="nav-item">
-                    <a class="nav-link" href="{% url 'watched' %}">Watched lots</a>
+                    <a class="nav-link" href="{% url 'buying' %}">Buying</a>
                   </li>
                   {% if request.user.is_superuser %}
                   <li class="nav-item dropdown">
@@ -401,9 +401,7 @@ window.onload = function() {
                     <div class="dropdown-menu">
                       <h6 class="dropdown-header"><i class="bi bi-calendar"></i> Lots</h6>
                       <a class="dropdown-item" href="{% url 'selling' %}"><i class="bi bi-cash-coin"></i> Selling</a>
-                      <a class="dropdown-item" href="{% url 'watched' %}"><i class="bi bi-star-fill"></i> Watched lots</a>
-                      <a class="dropdown-item" href="{% url 'my_bids' %}"><i class="bi bi-coin"></i> Bids</a>
-                      <a class="dropdown-item" href="{% url 'won_lots' %}"><i class="bi bi-calendar-check"></i> Won lots</a>
+                      <a class="dropdown-item" href="{% url 'buying' %}"><i class="bi bi-cart"></i> Buying</a>
                       <div class="dropdown-divider"></div>
                       {% comment %}Three rows, not eleven. Contact info, Preferences, Label printing, Ignore categories and Messages -- and everything that used to be in the preferences ribbon's More dropdown -- are behind Account, which lands on the page you were last on (see auctions/account_nav.py). Invoices and Feedback keep a row of their own: neither is a setting, and both are things people come to the menu looking for.{% endcomment %}
                       <a class="dropdown-item" href="{% url 'my_invoices' %}"><i class="bi bi-bag"></i> Invoices</a>

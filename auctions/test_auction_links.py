@@ -27,8 +27,7 @@ from auctions.tests import StandardTestCase, WritableMediaRoot
 
 class AuctionJoinLinksUserTests(StandardTestCase):
     """Joining through the UI must link the AuctionTOS to the joining user, or downstream user-FK lookups
-    break: the join-state check on the auction page, /bids/ and /lots/won/ (both via
-    LotFilter.possibleAuctions).
+    break: the join-state check on the auction page and the buying dashboard.
     """
 
     def setUp(self):
@@ -76,7 +75,7 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug}))
         self.assertTrue(response.context["hasChosenLocation"])
 
-    def test_won_lot_visible_on_won_lots_page_after_join(self):
+    def test_won_lot_visible_on_buying_page_after_join(self):
         self._join()
         tos = AuctionTOS.objects.get(auction=self.open_auction, user=self.fresh_user)
         seller_tos = AuctionTOS.objects.create(
@@ -94,10 +93,10 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         # date_posted is auto_now_add; push it out of the 20-minute new-lot window.
         Lot.objects.filter(pk=won.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
         self.client.force_login(self.fresh_user)
-        response = self.client.get(reverse("won_lots"))
+        response = self.client.get(reverse("buying") + f"?auction={self.open_auction.slug}")
         self.assertContains(response, "Fresh user won this")
 
-    def test_bid_lot_visible_on_bids_page_after_join(self):
+    def test_bid_lot_visible_on_buying_page_after_join(self):
         self._join()
         seller_tos = AuctionTOS.objects.create(
             user=self.user, auction=self.open_auction, pickup_location=self.open_location
@@ -112,7 +111,7 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         Lot.objects.filter(pk=lot.pk).update(date_posted=timezone.now() - datetime.timedelta(days=1))
         Bid.objects.create(user=self.fresh_user, lot_number=lot, amount=5)
         self.client.force_login(self.fresh_user)
-        response = self.client.get(reverse("my_bids"))
+        response = self.client.get(reverse("buying") + f"?auction={self.open_auction.slug}")
         self.assertContains(response, "Fresh user bid on this")
 
     def test_next_param_is_carried_into_join_form_action(self):
@@ -216,8 +215,8 @@ class AuctionTOSEmailChangeGuardTests(StandardTestCase):
         self.assertEqual(tos.user, guard_user)
 
 
-class RelinkAuctiontosUsersCommandTests(StandardTestCase):
-    """Tests for the relink_auctiontos_users repair command."""
+class LinkAccountsCommandTests(StandardTestCase):
+    """``link_accounts``: rows written before their person had an account."""
 
     def _make_orphan(self, email):
         """An AuctionTOS with no user: no matching user exists yet, so save() can't auto-link."""
@@ -233,14 +232,51 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
     def test_relinks_orphaned_tos(self):
         orphan = self._make_orphan("orphan@example.com")
         orphan_user = User.objects.create_user(username="orphanu", password="x", email="orphan@example.com")
-        call_command("relink_auctiontos_users")
+        call_command("link_accounts")
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, orphan_user)
+
+    def test_tasks_run_inline_one_row_at_a_time(self):
+        from celery import current_app
+
+        orphan = self._make_orphan("inline@example.com")
+        User.objects.create_user(username="inlineu", password="x", email="inline@example.com")
+        eager = []
+        save = AuctionTOS.save
+
+        def record(tos, *args, **kwargs):
+            eager.append(current_app.conf.task_always_eager)
+            return save(tos, *args, **kwargs)
+
+        with patch.object(AuctionTOS, "save", record):
+            call_command("link_accounts", "--pause", "0", stdout=io.StringIO())
+        self.assertEqual(eager, [True])
+        self.assertFalse(current_app.conf.task_always_eager)
+        orphan.refresh_from_db()
+        self.assertIsNotNone(orphan.user)
+
+    def test_a_row_is_reread_before_it_is_saved(self):
+        first = self._make_orphan("first@example.com")
+        second = self._make_orphan("second@example.com")
+        User.objects.create_user(username="firstu", password="x", email="first@example.com")
+        User.objects.create_user(username="secondu", password="x", email="second@example.com")
+        save = AuctionTOS.save
+
+        def admin_edits_the_second_meanwhile(tos, *args, **kwargs):
+            if tos.pk == first.pk:
+                AuctionTOS.objects.filter(pk=second.pk).update(name="Renamed by an admin")
+            return save(tos, *args, **kwargs)
+
+        with patch.object(AuctionTOS, "save", admin_edits_the_second_meanwhile):
+            call_command("link_accounts", "--pause", "0", stdout=io.StringIO())
+        second.refresh_from_db()
+        self.assertEqual(second.name, "Renamed by an admin")
+        self.assertIsNotNone(second.user)
 
     def test_dry_run_makes_no_changes(self):
         orphan = self._make_orphan("orphan2@example.com")
         User.objects.create_user(username="orphanu2", password="x", email="orphan2@example.com")
-        call_command("relink_auctiontos_users", "--dry-run")
+        call_command("link_accounts", "--dry-run")
         orphan.refresh_from_db()
         self.assertIsNone(orphan.user)
 
@@ -249,7 +285,7 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
         dup_user = User.objects.create_user(username="dupu", password="x", email="dup@example.com")
         # A newer TOS already linked to the user in the same auction.
         own = AuctionTOS.objects.create(auction=self.online_auction, pickup_location=self.location, user=dup_user)
-        call_command("relink_auctiontos_users")
+        call_command("link_accounts")
         # The oldest record (the orphan) is kept as canonical and gets the user.
         orphan.refresh_from_db()
         self.assertEqual(orphan.user, dup_user)
@@ -257,8 +293,8 @@ class RelinkAuctiontosUsersCommandTests(StandardTestCase):
 
 
 class LotListUXTests(StandardTestCase):
-    """The persistent 'Outbid' chip on /bids/, the 20-minute new-lot message on the auction lot list, and
-    gating the 'Add Lots' button by the submission window.
+    """The persistent 'Outbid' chip on the buying dashboard, the 20-minute new-lot message on the auction lot
+    list, and gating the 'Add Lots' button by the submission window.
     """
 
     def setUp(self):
@@ -301,18 +337,18 @@ class LotListUXTests(StandardTestCase):
         Bid.objects.create(user=self.bidder, lot_number=lot, amount=50)
         Bid.objects.create(user=self.other, lot_number=lot, amount=100)
         self.client.force_login(self.bidder)
-        response = self.client.get(reverse("my_bids"))
+        response = self.client.get(reverse("buying") + f"?auction={self.ux_auction.slug}")
         self.assertContains(response, "Lot I got outbid on")
-        self.assertContains(response, "Outbid")
+        self.assertContains(response, ">Outbid</span>")
 
     def test_no_outbid_chip_when_high_bidder(self):
         lot = self._make_lot("Lot I am winning")
         Bid.objects.create(user=self.bidder, lot_number=lot, amount=100)
         Bid.objects.create(user=self.other, lot_number=lot, amount=50)
         self.client.force_login(self.bidder)
-        response = self.client.get(reverse("my_bids"))
+        response = self.client.get(reverse("buying") + f"?auction={self.ux_auction.slug}")
         self.assertContains(response, "Lot I am winning")
-        self.assertNotContains(response, "Outbid")
+        self.assertNotContains(response, ">Outbid</span>")
 
     def test_recently_added_lots_message(self):
         # The only lot was posted moments ago, so it is hidden by the 20-minute window.

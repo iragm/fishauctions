@@ -1,0 +1,52 @@
+{% extends "auctions/htmx_table_view.html" %}
+{% load webpush_notifications %}
+
+{% block title %}Buying{% endblock %}
+
+{% block extra_head %}
+  {% comment %}webpush.js dereferences the subscribe button on load, so only load it when the button is rendered.{% endcomment %}
+  {% if note == "push_offer" %}{% webpush_header %}{% endif %}
+{% endblock %}
+
+{% block htmx_table_filter_form %}{% if auction or all_auctions %}{{ block.super }}{% endif %}{% endblock %}
+
+{% block htmx_table %}
+  {% if auction or all_auctions %}
+    {{ block.super }}
+    <a href="{% url 'my_won_lot_csv' %}?auction={{ auction_param }}" data-query-sync-url="{% url 'my_won_lot_csv' %}?auction={{ auction_param }}" class="btn btn-primary"><i class="bi bi-download"></i> Export CSV</a>
+  {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+  {{ block.super }}
+  {% if note == "push_offer" %}
+  <script>
+    {% comment %}The lot page's subscribe wrapper: webpush.js rewrites the button's text once it knows whether this browser is subscribed, and that is the only signal it gives.{% endcomment %}
+    (function () {
+      const targetNode = document.getElementById('webpush-subscribe-button');
+      if (!targetNode) {
+        return;
+      }
+      const observer = new MutationObserver(function (mutationsList) {
+        for (let mutation of mutationsList) {
+          if (mutation.type === 'childList') {
+            if (targetNode.textContent == "Subscribe to Push Messaging") {
+              $('#subscribe_success').addClass("d-none");
+              $('#subscribe_message_area').removeClass("d-none");
+            } else {
+              $('#subscribe_message_area').addClass("d-none");
+              $('#subscribe_success').removeClass("d-none");
+              $.post({url: "{% url 'enable_notifications' %}",
+                beforeSend: function (request) {
+                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                }
+              });
+            }
+          }
+        }
+      });
+      observer.observe(targetNode, { childList: true, subtree: true });
+    })();
+  </script>
+  {% endif %}
+{% endblock %}

@@ -648,13 +648,21 @@ class ClubIntegrationTests(AccountTestCase):
         self.club.refresh_from_db()
         self.assertFalse(self.club.add_auctions_to_calendar)
 
+    def test_the_mailing_address_is_a_setting(self):
+        result = self._run(
+            "update_club_setting", {"club": self.club.name, "setting": "mailing_address", "value": "PO Box 7"}
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.mailing_address, "PO Box 7")
+
     def test_donation_tracking_is_a_setting_too(self):
-        """Turning donation tracking on asks for the address a receipt needs, which is the form's own rule."""
+        """Turning donation tracking on needs the club's mailing address first, which is the form's own rule."""
         first = self._run(
             "update_club_setting", {"club": self.club.name, "setting": "enable_donation_tracking", "value": True}
         )
-        self.assertIn("more_info_needed", first)
-        self.club.donation_mailing_address = "1 Club Street"
+        self.assertIn("mailing address", first.get("error", ""))
+        self.club.mailing_address = "1 Club Street"
         self.club.save()
         result = self._run(
             "update_club_setting", {"club": self.club.name, "setting": "enable_donation_tracking", "value": True}

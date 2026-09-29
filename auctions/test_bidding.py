@@ -413,7 +413,7 @@ class DecimalBidValidationTests(TestCase):
 
 class BiddingPermissionsHardeningTests(TestCase):
     """Bid-path hardening: admin-team bans, own-lot and seller-ban checks via auctiontos_seller, invoice
-    gate for email-matched TOS, under-reserve bids, and CreateUserBan cleanup.
+    gate for a TOS linked after it was written, under-reserve bids, and CreateUserBan cleanup.
     """
 
     def setUp(self):
@@ -492,12 +492,16 @@ class BiddingPermissionsHardeningTests(TestCase):
         self.assertFalse(check_all_permissions(lot, self.bidder))
 
     def test_own_lot_blocked_via_auctiontos_seller(self):
-        """Sellers can't bid on their own lot when matched via auctiontos_seller by email."""
+        """Sellers can't bid on their own lot when it is theirs only through auctiontos_seller."""
         from auctions.bidding import check_bidding_permissions
 
         self.unlinked_tos.refresh_from_db()
         self.assertIsNone(self.unlinked_tos.user)
         lot = self._make_lot(self.unlinked_tos, user=None)
+        # Saving links the row by email; before that nothing ties it to the account.
+        self.unlinked_tos.save()
+        Lot.objects.filter(pk=lot.pk).update(user=None)
+        lot.refresh_from_db()
         self.assertEqual(check_bidding_permissions(lot, self.unlinked_user), "You can't bid on your own lot")
 
     def test_seller_ban_applies_when_lot_user_is_none(self):
@@ -507,10 +511,11 @@ class BiddingPermissionsHardeningTests(TestCase):
         UserBan.objects.create(user=self.coadmin, banned_user=self.bidder)
         self.assertEqual(check_all_permissions(lot, self.bidder), "This user has banned you from bidding on their lots")
 
-    def test_invoice_gate_applies_to_email_matched_tos(self):
-        """A closed invoice blocks bidding for a TOS with no linked user."""
+    def test_invoice_gate_applies_to_a_tos_linked_later(self):
+        """A closed invoice blocks bidding for a TOS that was written before its account."""
         from auctions.bidding import bid_on_lot
 
+        self.unlinked_tos.save()
         invoice = Invoice.objects.create(auctiontos_user=self.unlinked_tos, auction=self.auction)
         Invoice.objects.filter(pk=invoice.pk).update(status="UNPAID")
         lot = self._make_lot(self.coadmin_tos, user=self.coadmin)
@@ -573,7 +578,7 @@ class BiddingPermissionsHardeningTests(TestCase):
         newer = AuctionTOS.objects.create(
             auction=self.auction, pickup_location=self.location, email="tempdupe@example.com", name="dupe"
         )
-        AuctionTOS.objects.filter(pk=newer.pk).update(email="hardbidder@example.com")
+        AuctionTOS.objects.filter(pk=newer.pk).update(user=self.bidder)
         self.assertEqual(self.auction.tos_for_user(self.bidder).pk, newer.pk)
 
     def test_create_user_ban_survives_soft_deleted_lots(self):

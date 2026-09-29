@@ -15,7 +15,7 @@
       <li>On a phone, tap <strong>Scan with camera</strong> and point it at the QR code.</li>
       <li>Type a lot number below and press <strong>Add</strong>.</li>
     </ul>
-    <p class="mb-0">Drag the <i class="bi bi-grip-vertical"></i> handle to reorder, or the <i class="bi bi-x-lg"></i> to remove. The <strong>Set lot winners</strong> page sells the top lot next automatically. <strong>Fullscreen queue</strong> and <strong>Fullscreen current lot</strong> put it up on a screen for the room.</p>
+    <p class="mb-0">Recording a winner for the lot selling now moves the queue on, or use <strong>Next</strong> and <strong>Back</strong> (on a projector, the arrow keys or a presentation clicker). <strong>Fullscreen queue</strong> and <strong>Fullscreen current lot</strong> put it up on a screen for the room.</p>
   </div></div>
 
   <form id="queue-add-form" class="mb-2"
@@ -60,6 +60,7 @@ parsed as a comment and leaks into the page.)
        hx-get="{% url 'auction_lot_queue_fullscreen' slug=auction.slug %}"
        hx-trigger="load, queue-updated from:body, every 30s" hx-swap="innerHTML">
   </div>
+  {% include 'auctions/lot_queue_kiosk_controls.html' with scope="#fullscreen-queue-content" keys_when_fullscreen_only=True %}
 </div>
 {% endblock %}
 
@@ -202,20 +203,21 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
       }
     });
 
-    // Real-time queue updates over the admin auction websocket: when a winner is set (or the queue
-    // is edited) on another device, the server broadcasts queue_updated and we re-fetch both the
-    // editable list and the fullscreen queue immediately, instead of waiting for the 30s poll fallback.
+    // queue-updated re-fetches the editable list here and the fullscreen queue through its hx-trigger.
+    // Fired by the kiosk Next/Back, and by the admin auction websocket when a winner is set (or the
+    // queue is edited) on another device, instead of waiting for the 30s poll fallback.
+    document.body.addEventListener('queue-updated', function () {
+      if (window.htmx) {
+        htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
+      }
+    });
     try {
       var wsProtocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
       var queueSocket = new WebSocket(wsProtocol + window.location.host + '/ws/auctions/{{ auction.pk }}/');
       queueSocket.onmessage = function (e) {
         var data = JSON.parse(e.data);
         if (data.type === 'queue_updated') {
-          if (window.htmx) {
-            htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
-            // Fire the htmx trigger the fullscreen queue listens for (hx-trigger="queue-updated from:body").
-            document.body.dispatchEvent(new Event('queue-updated'));
-          }
+          document.body.dispatchEvent(new Event('queue-updated'));
         }
       };
     } catch (err) {

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from auctions.models import (
@@ -1181,3 +1182,58 @@ class StatsCompareSlugGuardReviewTests(StandardTestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200, "a bad ?compare= slug must not 500")
         self.assertIsNone(response.context.get("compare_auction"), "a bad compare slug must not set compare_auction")
+
+
+class LotsAddedAndLabelsPrintedByTests(StandardTestCase):
+    """Seller or admin: an admin's own lots are theirs as a seller."""
+
+    def setUp(self):
+        super().setUp()
+        self.auction = Auction.objects.create(
+            created_by=self.admin_user, title="Who did the work", date_start=timezone.now(), is_online=False
+        )
+        location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=timezone.now())
+        self.seller = self.user_with_no_lots
+        tos = {"auction": self.auction, "pickup_location": location}
+        self.seller_tos = AuctionTOS.objects.create(user=self.seller, bidder_number="1", **tos)
+        self.admin_tos = AuctionTOS.objects.create(user=self.admin_user, is_admin=True, bidder_number="2", **tos)
+        self.no_account_tos = AuctionTOS.objects.create(name="Walk-in", bidder_number="3", **tos)
+
+    def _lot(self, tos, added_by):
+        return Lot.objects.create(
+            lot_name="lot", auction=self.auction, auctiontos_seller=tos, user=tos.user, added_by=added_by, quantity=1
+        )
+
+    def test_lots_added_by(self):
+        self._lot(self.seller_tos, self.seller)
+        self._lot(self.seller_tos, self.admin_user)
+        self._lot(self.admin_tos, self.admin_user)
+        self._lot(self.no_account_tos, self.admin_user)
+        self._lot(self.seller_tos, None)  # club API import
+        self.assertEqual(self.auction.lots_added_by, {"sellers": 2, "admins": 3})
+
+    def test_labels_first_printed_by(self):
+        sellers_own = self._lot(self.seller_tos, self.seller)
+        for_the_seller = self._lot(self.seller_tos, self.seller)
+        admins_own = self._lot(self.admin_tos, self.admin_user)
+        walk_in = self._lot(self.no_account_tos, self.admin_user)
+        self._lot(self.seller_tos, self.seller)  # never printed
+        Lot.mark_labels_printed([sellers_own], self.seller)
+        Lot.mark_labels_printed([for_the_seller, admins_own, walk_in], self.admin_user)
+        self.assertEqual(self.auction.labels_first_printed_by, {"sellers": 2, "admins": 2})
+
+    def test_only_the_first_print_counts(self):
+        lot = self._lot(self.seller_tos, self.seller)
+        Lot.mark_labels_printed([lot], self.admin_user)
+        Lot.mark_labels_printed([Lot.objects.get(pk=lot.pk)], self.seller)
+        lot.refresh_from_db()
+        self.assertEqual(lot.label_first_printed_by, self.admin_user)
+
+    def test_stats_page_shows_both(self):
+        self._lot(self.seller_tos, self.seller)
+        self._lot(self.seller_tos, self.admin_user)
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("auction_stats", kwargs={"slug": self.auction.slug}))
+        page = response.content.decode()
+        self.assertRegex(page, r"Lots added by sellers / by admins</td>\s*<td>1 / 1</td>")
+        self.assertRegex(page, r"Labels first printed by sellers / by admins</td>\s*<td>0 / 0</td>")

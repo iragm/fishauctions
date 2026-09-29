@@ -167,7 +167,12 @@ ROUTE_LIST: list[Route] = [
         keywords=["messages", "chat", "notifications", "follow a lot", "unsubscribe from a lot"],
     ),
     _r("my_lot_report", "Download my lots as a spreadsheet", "My stuff", keywords=["csv", "export my lots"]),
-    _r("my_won_lot_csv", "Download lots I won as a spreadsheet", "My stuff", keywords=["csv", "export purchases"]),
+    _r(
+        "my_won_lot_csv",
+        "Download my buying dashboard as a spreadsheet",
+        "My stuff",
+        keywords=["csv", "export purchases"],
+    ),
     _r("lot_by_pk", "A specific lot's page", "My stuff", scope=SCOPE_LOT, keywords=["view lot", "open lot"]),
     _r(
         "report_lot",
@@ -352,6 +357,14 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
         keywords=["bulk printing", "all labels"],
+    ),
+    _r(
+        "auction_printable_lot_list",
+        "Printable list of every lot",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["lot list", "print lots", "paper list", "table numbers", "preview lots"],
     ),
     _r(
         "auction_printing_pdf",
@@ -1344,6 +1357,7 @@ EXCLUDED: dict[str, str] = {
     "lot_by_pk_and_slug": _DUPLICATE,
     "lot_in_auction": _DUPLICATE,
     "lot_in_auction_with_slug": _DUPLICATE,
+    "buying": "The page behind watched, won_lots and my_bids, which land on it filtered.",
     "service_worker": _INFRA,
 }
 

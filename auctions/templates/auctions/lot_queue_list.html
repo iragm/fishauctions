@@ -1,38 +1,50 @@
 {% comment %}
-Lot queue list partial. Rendered on the queue page and swapped in after every add/remove/reorder.
-Context: auction, entries (ordered LotQueueEntry list), error (optional string).
+Lot queue list partial. Rendered on the queue page and swapped in after every add/remove/reorder/next/back.
+Context: auction, passed (entries the room has moved past), on_the_block (entry or None), to_come
+(entries after it), error (optional string).
 {% endcomment %}
 {% if error %}
 <div class="alert alert-danger" role="alert">
   <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
 </div>
 {% endif %}
-{% if entries %}
-<p class="text-muted small mb-2">{{ entries|length }} lot{{ entries|length|pluralize }} queued. Drag the <i class="bi bi-grip-vertical"></i> handle to reorder. The lot at the top is sold next.</p>
+{% if passed or on_the_block %}
+<div class="d-flex align-items-center gap-2 mb-2">
+  <button type="button" class="btn btn-primary btn-sm"
+          hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
+          hx-vals='{"action": "back", "from": "{% if on_the_block %}{{ on_the_block.pk }}{% else %}0{% endif %}"}'
+          hx-target="#queue-list" hx-swap="innerHTML"><i class="bi bi-chevron-left"></i> Back</button>
+  <button type="button" class="btn btn-primary btn-sm"
+          hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
+          hx-vals='{"action": "next", "from": "{% if on_the_block %}{{ on_the_block.pk }}{% else %}0{% endif %}"}'
+          hx-target="#queue-list" hx-swap="innerHTML">Next <i class="bi bi-chevron-right"></i></button>
+</div>
+{% endif %}
+{% if passed %}
+<details class="mb-2">
+  <summary class="text-muted small">{{ passed|length }} lot{{ passed|length|pluralize }} done</summary>
+  <ul class="list-group mt-1">
+    {% for entry in passed %}
+    <li class="list-group-item d-flex align-items-center gap-2 py-1">
+      <span class="flex-grow-1 text-truncate text-muted">Lot {{ entry.lot.lot_number_display }}<span class="d-none d-sm-inline"> &mdash; {{ entry.lot.lot_name }}</span></span>
+      {% if entry.lot.sold %}<span class="badge bg-success text-dark">Sold</span>{% elif entry.lot.ended_unsold %}<span class="badge bg-secondary">Not sold</span>{% else %}<span class="badge bg-secondary">No winner yet</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+{% if on_the_block or to_come %}
+<p class="text-muted small mb-2">Drag the <i class="bi bi-grip-vertical"></i> handle to reorder.</p>
 <ul id="queue-sortable" class="list-group">
-  {% for entry in entries %}
-  <li class="list-group-item d-flex align-items-center gap-2" data-entry-id="{{ entry.pk }}">
-    <span class="queue-drag-handle text-muted" style="cursor:grab;" title="Drag to reorder" aria-label="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
-    <span class="badge bg-secondary">{{ forloop.counter }}</span>
-    {% if entry.lot.thumbnail %}
-    <img src="{{ entry.lot.thumbnail.thumbnail_url }}" alt="" style="width:56px;height:42px;object-fit:cover;" class="rounded">
-    {% else %}
-    <span class="text-muted d-inline-flex align-items-center justify-content-center rounded" style="width:56px;height:42px;background:#303030;"><i class="bi bi-image"></i></span>
-    {% endif %}
-    <span class="flex-grow-1 text-truncate">
-      <strong>Lot {{ entry.lot.lot_number_display }}</strong>
-      <span class="d-none d-sm-inline">&mdash; {{ entry.lot.lot_name }}</span>
-    </span>
-    <button type="button" class="btn btn-sm btn-danger"
-            hx-post="{% url 'auction_lot_queue' slug=auction.slug %}"
-            hx-vals='{"action": "remove", "entry_id": "{{ entry.pk }}"}'
-            hx-target="#queue-list" hx-swap="innerHTML"
-            title="Remove from queue" aria-label="Remove lot {{ entry.lot.lot_number_display }} from the queue">
-      <i class="bi bi-x-lg"></i>
-    </button>
-  </li>
+  {% if on_the_block %}{% include 'auctions/lot_queue_list_item.html' with entry=on_the_block position=1 current=True %}{% endif %}
+  {% for entry in to_come %}
+  {% include 'auctions/lot_queue_list_item.html' with entry=entry position=forloop.counter|add:1 %}
   {% endfor %}
 </ul>
+{% elif passed %}
+<div class="alert alert-info mb-0" role="alert">
+  <i class="bi bi-info-circle"></i> That was the last queued lot.
+</div>
 {% else %}
 <div class="alert alert-info mb-0" role="alert">
   <i class="bi bi-info-circle"></i> The queue is empty. Scan a lot's QR code or type a lot number above to add the first lot.

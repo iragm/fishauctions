@@ -12,10 +12,14 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
+from django.template.loader import render_to_string
+from django.utils.safestring import mark_safe
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
 from post_office import mail
 
 from auctions import geocoding
+from auctions.templatetags.email_tags import club_icon_url as email_club_icon_url
+from auctions.templatetags.email_tags import first_name, link_button
 
 # Constants for update_auction_stats scheduling
 STATS_UPDATE_LOCK_MINUTES = 5  # Minutes to lock auction before recalculation to prevent concurrent updates
@@ -81,8 +85,7 @@ def _club_member_membership_link(member, current_site=None):
 
 
 def _greeting_name(member):
-    name = (member.name or "").strip()
-    return name or "Member"
+    return first_name(member.name) or "there"
 
 
 # Inline style for wallet buttons in email: clients strip <style> and know no Bootstrap.
@@ -215,6 +218,51 @@ def _event_directions_url(event):
     return ""
 
 
+def membership_email_footer(club, member=None, current_site=None):
+    """Who sent a membership email and how to stop them, as the footer's context.
+
+    CASL wants a commercial message to name its sender, give that sender's postal address and a way to
+    reach them, and carry an unsubscribe link; a renewal reminder asks for dues, so it counts. The club
+    wrote it and chose who gets it, so the club is the sender. The site built it, so it is named too.
+    """
+    from django.urls import reverse
+
+    from auctions.email_footer import mailing_address
+
+    current_site = current_site or Site.objects.get_current()
+    # No member: the settings page's preview, whose links go nowhere.
+    unsubscribe_url = "#"
+    if member:
+        path = reverse("club_member_contact_pref", kwargs={"slug": club.url_key, "uuid": member.uuid, "level": "none"})
+        unsubscribe_url = f"https://{current_site.domain}{path}"
+    return {
+        "club_name": club.name,
+        "club_address": _address_without_club_name(club),
+        "contact_email": _membership_email_reply_to(club),
+        "site_name": settings.NAVBAR_BRAND,
+        "site_address": mailing_address(),
+        "unsubscribe_url": unsubscribe_url,
+    }
+
+
+def _address_without_club_name(club):
+    """The club's address on one line, minus a first line that is just the club's name: the footer
+    already says "Sent by <club>". Only an exact line: "Tropical Fish Club, PO Box 5" is the address."""
+    lines = [line.strip() for line in club.mailing_address.splitlines() if line.strip()]
+    if len(lines) > 1 and lines[0].casefold() == club.name.strip().casefold():
+        lines = lines[1:]
+    return ", ".join(lines)
+
+
+def _membership_footer_text(footer):
+    lines = ["--", f"Sent by {footer['club_name']} via {footer['site_name']}", footer["club_address"]]
+    lines.append(footer["contact_email"])
+    if footer["site_address"]:
+        lines.append(f"{footer['site_name']}: {footer['site_address']}")
+    lines.append(f"Unsubscribe from {footer['club_name']} emails: {footer['unsubscribe_url']}")
+    return lines
+
+
 def _render_membership_email_html(
     member,
     intro_text,
@@ -226,8 +274,9 @@ def _render_membership_email_html(
     opening_text="",
     closing_text="",
     wallet_buttons_html="",
+    footer=None,
 ):
-    html_parts = [f"Dear {escape(_greeting_name(member))},<br><br>"]
+    html_parts = [f"Hey {escape(_greeting_name(member))},<br><br>"]
     if opening_text:
         html_parts.append(escape(opening_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
@@ -235,7 +284,7 @@ def _render_membership_email_html(
         html_parts.append(escape(intro_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
     html_parts.append(f"{escape(message_text)}<br><br>")
-    html_parts.append(f"<a href='{escape(membership_link)}'>View your membership</a><br><br>")
+    html_parts.append(link_button(membership_link, "View your membership"))
     if barcode_url:
         html_parts.append(
             f"<div><img src='{escape(barcode_url)}' alt='Membership barcode' "
@@ -249,20 +298,36 @@ def _render_membership_email_html(
     if closing_text:
         html_parts.append(escape(closing_text).replace("\n", "<br>"))
         html_parts.append("<br><br>")
-    if club_icon_url:
-        html_parts.append(
-            f"<div><img src='{escape(club_icon_url)}' alt='{escape(member.club.name)}' "
-            "style='height:32px;width:32px;object-fit:contain;vertical-align:middle;margin-right:8px;'>"
-            f"{escape(member.club.name)}</div>"
-        )
-    else:
-        html_parts.append(escape(member.club.name))
-    return "".join(html_parts)
+    return render_to_string(
+        "email/membership.html",
+        # The parts are escaped above.
+        {
+            "body": mark_safe("".join(html_parts)),  # noqa: S308
+            "club": member.club,
+            "icon_url": club_icon_url,
+            "footer": footer or membership_email_footer(member.club, member),
+        },
+    )
 
 
 def send_club_member_email(member, subject, message_text, email_type="welcome", force_email=False):
-    """Send one of the club's membership emails. ``force_email`` skips push, for an admin-confirmed resend."""
+    """Send one of the club's membership emails. ``force_email`` skips push, for an admin-confirmed resend.
+
+    Nothing goes out until the club has a mailing address (``Club.can_send_email``): the footer has to
+    carry it. The club's email settings page says so; the send is not queued for later, since a club
+    that adds its address next month shouldn't then welcome everyone who joined in between.
+    """
     if not member.email or member.contact_status == "do_not_contact":
+        return False
+    if not member.club.can_send_email:
+        from auctions.models import ClubHistory
+
+        # In the club's history, since nightly sends have nobody to tell and the email is not retried.
+        ClubHistory.objects.create(
+            club=member.club,
+            action=f"Didn't email {member} ({email_type.replace('_', ' ')}): the club has no mailing address",
+            applies_to="MEMBERSHIP",
+        )
         return False
     current_site = Site.objects.get_current()
     membership_link = _club_member_membership_link(member, current_site=current_site)
@@ -291,7 +356,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
     if include_event:
         next_text, next_html = next_event_fragment(member.club, current_site, include_event=include_event)
 
-    text_parts = [f"Dear {_greeting_name(member)},", ""]
+    text_parts = [f"Hey {_greeting_name(member)},", ""]
     if opening_text:
         text_parts.extend([opening_text, ""])
     text_parts.extend([intro_text, ""])
@@ -306,10 +371,9 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
         text_parts.extend(["", next_text])
     if closing_text:
         text_parts.extend(["", closing_text])
-    text_parts.extend(["", member.club.name])
-    club_icon_url = member.club.icon_display_url or ""
-    if club_icon_url and not club_icon_url.startswith("http"):
-        club_icon_url = f"https://{current_site.domain}{club_icon_url}"
+    footer = membership_email_footer(member.club, member, current_site)
+    text_parts.extend(["", *_membership_footer_text(footer)])
+    club_icon_url = email_club_icon_url(member.club, current_site.domain)
     html_message = _render_membership_email_html(
         member,
         intro_text=intro_text,
@@ -321,6 +385,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
         opening_text=opening_text,
         closing_text=closing_text,
         wallet_buttons_html=_wallet_buttons_html(google_wallet_url, apple_wallet_url),
+        footer=footer,
     )
 
     def _send_membership_email():

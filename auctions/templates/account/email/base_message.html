@@ -1,0 +1,4 @@
+{% extends "email/base.html" %}
+{% comment %}HTML twin of base_message.txt: allauth sends both when both exist. Each *_message.html fills the message block.{% endcomment %}
+{% block content %}<p>Hey {{ user.first_name|default:"there" }},</p>
+{% block message %}{% endblock message %}{% endblock content %}

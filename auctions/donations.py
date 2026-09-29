@@ -584,7 +584,7 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
         lines.append(f"Contact name: {vendor.contact_name}")
     if club.donation_context.strip():
         lines.append(f"About the club: {truncate_for_model(club.donation_context, CONTEXT_LIMIT)}")
-    if club.donation_mailing_address.strip():
+    if club.can_send_email:
         # The address is in every footer; the body needs it only if they ask where to send.
         instruction = (
             "Club mailing address. Put it in the body if their message asks where or how to send a "
@@ -592,7 +592,7 @@ def build_draft_prompt(vendor, *, context="", last_email="", last_email_is_outgo
             if mode == DRAFT_MODE_REPLY
             else "Club mailing address, already in the footer of every email. Do not repeat it in the body:"
         )
-        lines.append(f"{instruction}\n{club.donation_mailing_address.strip()}")
+        lines.append(f"{instruction}\n{club.mailing_address.strip()}")
     next_event = _next_event_line(club)
     if next_event:
         lines.append(f"Next event: {next_event}")
@@ -744,7 +744,7 @@ def unsubscribe_footer(vendor):
 
     domain = Site.objects.get_current().domain
     club = vendor.club
-    address = club.donation_mailing_address.strip()
+    address = club.mailing_address.strip()
     if not address:
         msg = f"{club.name} has no mailing address set, and a donation request has to carry one."
         raise MissingMailingAddress(msg)
@@ -820,9 +820,9 @@ def send_request(vendor, *, subject, body, user):
         msg = "Email routing is not enabled on this site, so donation email can't be sent from here."
         raise DonationSendError(msg)
     # A US bulk solicitation needs a postal address, and here we send it. Copy/paste mode only warns.
-    if not club.donation_mailing_address.strip():
+    if not club.can_send_email:
         msg = (
-            "Add a donation mailing address in donation settings first — a postal address for the "
+            "Add a mailing address in club settings first — a postal address for the "
             "club is required on donation emails sent from this site."
         )
         raise DonationSendError(msg)

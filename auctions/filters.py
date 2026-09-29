@@ -1073,46 +1073,85 @@ class UserLotFilter(LotFilter):
         self.showBanned = True
 
 
-class UserWatchLotFilter(LotFilter):
-    """A version of the lot filter that only shows lots watched by the current user"""
-
-    @property
-    def qs(self):
-        primary_queryset = super().qs
-        return primary_queryset.filter(watch__user=self.user)
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # self.status = "all"
-        self.form.initial["status"] = "ended"
-
-
-class UserBidLotFilter(LotFilter):
-    """A version of the lot filter that only shows lots bid on by the current user"""
-
-    @property
-    def qs(self):
-        primary_queryset = super().qs
-        return primary_queryset.filter(bid__user=self.user).distinct()
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # self.status = ""
-        self.form.initial["status"] = ""
+def buying_status(lot, user):
+    """Where ``user`` stands on a lot from the buying dashboard's queryset (which annotates ``bidding``):
+    won, lost, outbid, bid or watched.
+    """
+    if lot.won_by(user):
+        return "won"
+    if lot.winning_price is not None:
+        return "lost"
+    if lot.bidding:
+        bids = lot.bids
+        if not lot.ended and not lot.sealed_bid and bids and bids[0].user_id != user.pk:
+            return "outbid"
+        return "bid"
+    return "watched"
 
 
-class UserWonLotFilter(LotFilter):
-    """A version of the lot filter that only shows lots won by the current user"""
+class BuyingLotFilter(django_filters.FilterSet):
+    """The buying dashboard's search box. :data:`KEYWORDS` pick statuses, any of them, and what's left
+    searches names and lot numbers, so "guppy won" works. The view annotates ``watching`` and ``bidding``.
+    """
 
-    @property
-    def qs(self):
-        primary_queryset = super().qs
-        return primary_queryset.filter(Q(winner=self.user) | Q(auctiontos_winner__user=self.user))
+    query = django_filters.CharFilter(
+        method="lot_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Type to filter...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # self.status = "ended"
-        self.form.initial["status"] = "closed"
+    class Meta:
+        model = Lot
+        fields = []
+
+    KEYWORDS = ("watched", "won", "lost", "bids", "outbid")
+
+    def keyword_q(self, keyword):
+        won = Lot.won_by_q(self.request.user)
+        if keyword == "watched":
+            return Q(watching=True)
+        if keyword == "bids":
+            return Q(bidding=True)
+        if keyword == "won":
+            return won
+        return Q(winning_price__isnull=False) & ~won
+
+    def lot_search(self, queryset, name, value):
+        keywords = []
+        for keyword in self.KEYWORDS:
+            pattern = re.compile(rf"(?:^|\s){keyword}(?=\s|$)", re.IGNORECASE)
+            if pattern.search(value):
+                value = pattern.sub(" ", value)
+                keywords.append(keyword)
+        value = value.strip()
+        if value:
+            q = (
+                Q(lot_name__icontains=value)
+                | Q(species__scientific_name__icontains=value)
+                | Q(species__common_name__icontains=value)
+                | Q(custom_lot_number=value)
+            )
+            if value.isdecimal():
+                q |= Q(lot_number_int=value)
+            queryset = queryset.filter(q)
+        # Statuses are the Filters checkboxes, so ticking two shows both.
+        statuses = Q()
+        for keyword in keywords:
+            if keyword == "outbid":
+                # Who is winning is worked out from the bids in Python (Lot.bids), so this one can't be a Q.
+                user = self.request.user
+                statuses |= Q(pk__in=[lot.pk for lot in queryset if buying_status(lot, user) == "outbid"])
+            else:
+                statuses |= self.keyword_q(keyword)
+        return queryset.filter(statuses)
 
 
 def get_recommended_lots(

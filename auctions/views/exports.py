@@ -51,7 +51,6 @@ from auctions.models import (
     LotHistory,
     PageView,
     add_price_info,
-    email_q,
     find_image,
 )
 from auctions.services import attachment_filename
@@ -65,42 +64,12 @@ from .base import AuctionViewMixin, check_club_permission
 logger = logging.getLogger(__name__)
 
 
-class MyWonLotCSV(LoginRequiredMixin, View):
-    """CSV file showing won lots"""
-
-    def get(self, request):
-        lots = add_price_info(
-            Lot.objects.filter(Q(winner=request.user) | email_q("auctiontos_winner__email", request.user.email))
-            .exclude(is_deleted=True)
-            # auction as well as species: lot.scientific_name reads the auction's setting.
-            .select_related("species", "auction")
-        )
-        current_site = Site.objects.get_current()
-        response = HttpResponse(content_type="text/csv")
-        domain = attachment_filename(current_site.domain.replace(".", "_"))
-        response["Content-Disposition"] = f'attachment; filename="my_won_lots_from_{domain}.csv"'
-        writer = safe_csv_writer(response)
-        writer.writerow(["Lot number", "Name", "Scientific name", "Auction", "Winning price", "Link"])
-        for lot in lots:
-            writer.writerow(
-                [
-                    lot.lot_number_display,
-                    lot.lot_name,
-                    lot.scientific_name,
-                    lot.auction,
-                    f"{lot.currency_symbol}{lot.winning_price}",
-                    "https://" + lot.full_lot_link,
-                ]
-            )
-        return response
-
-
 class MyLotReportView(LoginRequiredMixin, View):
     """CSV file showing sold lots"""
 
     def get(self, request):
         lots = add_price_info(
-            Lot.objects.filter(Q(user=request.user) | email_q("auctiontos_seller__email", request.user.email))
+            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
             .exclude(is_deleted=True)
             # auction too: lot.scientific_name reads the auction's setting.
             .select_related("bap_award__club_member__club", "species", "auction")

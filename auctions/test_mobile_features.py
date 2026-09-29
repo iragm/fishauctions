@@ -1239,6 +1239,7 @@ class MobileLabelsPrintedApiTests(StandardTestCase):
         self.lot.refresh_from_db()
         self.assertTrue(self.lot.label_printed)
         self.assertFalse(self.lot.label_needs_reprinting)
+        self.assertEqual(self.lot.label_first_printed_by, self.user)
 
     def test_clears_needs_reprinting_like_the_pdf_views_do(self):
         Lot.objects.filter(pk=self.lot.pk).update(label_printed=True, label_needs_reprinting=True)

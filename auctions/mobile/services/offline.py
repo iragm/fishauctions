@@ -364,6 +364,7 @@ class _OpApplier:
                 return self._conflict("invoice_not_open", "The seller's invoice is not open")
             self._end_unsold(lot)
             self._record(op["op_id"], "set_winner", None, {})
+            self._queue_recorded(lot)
             return "applied", {}
 
         winner = self.resolve_user(op.get("winner"))
@@ -387,6 +388,7 @@ class _OpApplier:
 
         self._set_winner(lot, winner, price)
         self._record(op["op_id"], "set_winner", None, {})
+        self._queue_recorded(lot)
         return "applied", {}
 
     # -- effects (mirror DynamicSetLotWinner) ---------------------------------
@@ -410,6 +412,14 @@ class _OpApplier:
             f"Lot {_lot_number_display(self.auction, lot)} was already sold to bidder "
             f"{bidder} for {symbol}{lot.winning_price} on the server"
         )
+
+    def _queue_recorded(self, lot):
+        """As set winners: the lot queue moves on if this lot was on the block. After the op's savepoint
+        commits, since moving the queue sends pushes.
+        """
+        from auctions.views.selling import queue_lot_recorded
+
+        transaction.on_commit(lambda: queue_lot_recorded(self.auction, lot))
 
     def _end_unsold(self, lot):
         """Mirror DynamicSetLotWinner.end_unsold: mark unsold, history, websocket."""

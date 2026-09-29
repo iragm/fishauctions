@@ -632,6 +632,19 @@ def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
         )
 
 
+@receiver(post_save, sender=User)
+def link_rows_to_a_changed_email(sender, instance, created, **kwargs):
+    """A new account address may be on rows added before this account had it. New accounts wait for their
+    first sign-in, after the address is verified.
+    """
+    if created or not instance.email:
+        return
+    from .models import normalize_email
+
+    if normalize_email(getattr(instance, "_previous_email", "")) != normalize_email(instance.email):
+        link_unattached_rows_for_user(instance)
+
+
 @receiver(pre_save, sender="auctions.Lot")
 def update_lot_info(sender, instance, **kwargs):
     """Fill out the location and address from the user; set end date from auction."""
@@ -653,43 +666,31 @@ def update_lot_info(sender, instance, **kwargs):
         instance.reserve_price = instance.auction.minimum_bid
 
 
-def link_unattached_tos_for_user(user, reason="duplicate detected on login"):
-    """Link AuctionTOS rows matching this user's email with no user, merging with an existing row in the
-    same auction. Shared by the login signal and ``relink_auctiontos_users``. Also claims lots sold
-    while unlinked, which have ``user=None``.
+def link_unattached_rows_for_user(user):
+    """Link the AuctionTOS and ClubMember rows carrying ``user``'s email that have no account yet.
+
+    Saving does the work: ``AuctionTOS.link_user`` and ``ClubMember.save`` link by email, merge a
+    same-auction duplicate and claim the lots. This catches rows written before the account existed, or
+    before it had this address. Run on sign-in, on an email change, and by ``link_accounts``.
     """
-    from auctions.models import AuctionTOS, Lot
+    from auctions.models import AuctionTOS, ClubMember
 
     if not user.email:
         # Hand-added participants often have no address: a blank one would claim every one of them.
         return
-    linked_tos_pks = []
-    auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
-    for auctiontos in auctiontoss:
-        existing = AuctionTOS.objects.filter(user=user, auction=auctiontos.auction).first()
-        if existing:
-            if auctiontos.createdon and existing.createdon and auctiontos.createdon < existing.createdon:
-                canonical, duplicate = auctiontos, existing
-                canonical.user = user
-                AuctionTOS.objects.filter(pk=canonical.pk).update(user=user)
-            else:
-                canonical, duplicate = existing, auctiontos
-            canonical.merge_duplicate(duplicate, reason=reason)
-            linked_tos_pks.append(canonical.pk)
-        else:
-            auctiontos.user = user
-            auctiontos.save()
-            linked_tos_pks.append(auctiontos.pk)
-    if linked_tos_pks:
-        Lot.objects.filter(auctiontos_seller__pk__in=linked_tos_pks, user__isnull=True).update(user=user)
+    for tos in AuctionTOS.objects.filter(user__isnull=True, email__iexact=user.email):
+        # A merge by an earlier row's save can delete a later one.
+        if AuctionTOS.objects.filter(pk=tos.pk).exists():
+            tos.save()
+    for member in ClubMember.objects.filter(user__isnull=True, email__iexact=user.email, is_deleted=False):
+        member.save()
 
 
-@receiver(user_logged_in)
-def user_logged_in_callback(sender, user, request, **kwargs):
-    """On sign-in: cancel a pending account deletion, link unattached AuctionTOS and ClubMember rows."""
-    # Signing in is how a pending deletion is called off.
+def on_sign_in(user, request=None):
+    """Everything signing in does, by any route: the web's ``user_logged_in`` and the app's token logins."""
     from auctions.account_deletion import cancel_deletion
 
+    # Signing in is how a pending deletion is called off.
     if cancel_deletion(user) and request is not None and hasattr(request, "_messages"):
         # Not every sign-in has message middleware (JWT, WebView handoff); the email says it too.
         from django.contrib import messages
@@ -698,16 +699,14 @@ def user_logged_in_callback(sender, user, request, **kwargs):
             request,
             "Welcome back!  Your account was scheduled to be deleted, and signing in has cancelled that.",
         )
-
-    link_unattached_tos_for_user(user)
-    record_sign_in_stitch(user, request)
-
-    from auctions.models import ClubMember
-
-    # No ClubHistory: automatic, no actor.
-    if user.email:
-        ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
+    link_unattached_rows_for_user(user)
     ensure_single_club_membership_for_user(user)
+
+
+@receiver(user_logged_in)
+def user_logged_in_callback(sender, user, request, **kwargs):
+    on_sign_in(user, request)
+    record_sign_in_stitch(user, request)
 
 
 def record_sign_in_stitch(user, request):

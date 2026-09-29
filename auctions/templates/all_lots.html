@@ -5,17 +5,8 @@
 {% if lot_view_type == "all" %}
 Lots
 {% endif %}
-{% if lot_view_type == "watch" %}
-Watched items
-{% endif %}
-{% if lot_view_type == "mybids" %}
-Bids
-{% endif %}
 {% if lot_view_type == "mylots" %}
 Your lots
-{% endif %}
-{% if lot_view_type == "mywonlots" %}
-Won lots
 {% endif %}
 {% if lot_view_type == "user" %}
 {% if user == request.user %}
@@ -43,22 +34,12 @@ Your lots{% else %}
     {% if lot_view_type == "all" %}
       Lots
       {% endif %}
-      {% if lot_view_type == "watch" %}
-      Watched lots
-      {% endif %}
-      {% if lot_view_type == "mybids" %}
-      Bids
-      {% endif %}
       {% if lot_view_type == "mylots" %}
       Your lots
       {% endif %}
       {% if lot_view_type == "user" %}
       All lots from {{ user }}
       {% endif %}
-      {% if lot_view_type == "mywonlots" %}
-      Lots you've won
-     <br><a href="{% url 'my_won_lot_csv' %}" class="btn btn-sm btn-primary"><i class="bi bi-download me-1"></i>Export my won lots CSV</a>
-     {% endif %}
       {% endif %}
       {% endif %}</h3>
 

@@ -37,7 +37,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "account_change_password", "account_delete", "account_deleted", "socialaccount_connections",
         "socialaccount_login_cancelled", "socialaccount_signup", "mobile_socialaccount_connections",
         "preferences", "notification_preferences", "contact_info", "change_username", "printing",
-        "ignore_categories", "feedback", "messages", "my_bids", "my_invoices", "selling", "watched",
+        "ignore_categories", "feedback", "messages", "my_bids", "my_invoices", "selling", "buying", "watched",
         "won_lots", "my_lot_report", "my_won_lot_csv", "my_lots_page_view_history", "user_api_keys",
         "chat_subscriptions", "auction_confirm", "all_my_users", "paypal_seller", "square_seller",
         "account_data_export",

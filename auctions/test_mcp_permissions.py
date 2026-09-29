@@ -107,7 +107,7 @@ class CrossTenantTestCase(TestCase):
             # On, so the donation tools get as far as their permission check rather than stopping at
             # a feature flag and passing the audit for the wrong reason.
             enable_donation_tracking=True,
-            donation_mailing_address="NA\n1 North St\nSpringfield, IL 62701",
+            mailing_address="NA\n1 North St\nSpringfield, IL 62701",
         )
         ClubMember.objects.create(
             club=self.their_club,
