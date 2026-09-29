@@ -1,0 +1,18 @@
+{% load help_tags %}
+{% comment %}Outline only -- see HELP.md. The in-person and hybrid videos are still right, but say nothing about quick checkout or Square.{% endcomment %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This guide is still being written. The video below covers the whole thing.</div></div>
+{% if enable_help %}{% include 'youtube_embed.html' with videoId=in_person_tutorial chapters=in_person_tutorial_chapters %}{% endif %}
+<h2 class="h5 mt-4" id="big-picture">The big picture</h2>
+<h2 class="h5 mt-4" id="create">1. Create the auction</h2>
+<h2 class="h5 mt-4" id="rules">2. Set the rules</h2>
+<h2 class="h5 mt-4" id="people">3. Bidders and bidder numbers</h2>
+<h2 class="h5 mt-4" id="helpers">4. Helpers and auction admins</h2>
+<h2 class="h5 mt-4" id="lots">5. Getting lots in, before and on the day</h2>
+<h2 class="h5 mt-4" id="labels">6. Labels</h2>
+<h2 class="h5 mt-4" id="check-in">7. Check-in at the door</h2>
+<h2 class="h5 mt-4" id="selling">8. Selling: the auctioneer's table</h2>
+<h2 class="h5 mt-4" id="checkout">9. Checkout and payment</h2>
+<h2 class="h5 mt-4" id="online-bidding">Letting people bid online too</h2>
+{% if enable_help %}{% include 'youtube_embed.html' with videoId=hybrid_tutorial chapters=hybrid_tutorial_chapters %}{% endif %}
+<h2 class="h5 mt-4" id="common-problems">Things that go wrong on the day</h2>
+<h2 class="h5 mt-4" id="next-year">Next year's auction</h2>

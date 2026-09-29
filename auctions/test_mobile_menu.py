@@ -141,7 +141,7 @@ class MenuPayloadTests(TestCase):
             payload = menu_for(self.user)
             self.assertNotIn(reverse("promo"), _paths(payload))
             # The rest of the section survives -- only the one row is gated.
-            self.assertIn(reverse("faq"), _paths(payload))
+            self.assertIn(reverse("help"), _paths(payload))
 
     def test_the_rows_the_app_owns_are_never_sent(self):
         """The rows the app owns are never sent: each is a native screen with its own gating, and sign out does

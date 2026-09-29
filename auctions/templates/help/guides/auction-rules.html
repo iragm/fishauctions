@@ -1,0 +1,16 @@
+{% load help_tags %}
+{% comment %}One section per rule or small family of rules, each with an example of when you'd change it. Use {% rule %} for every setting so help_guides knows it's covered, and {% rule_value %} or a helptip to show the reader's own auction.{% endcomment %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This guide is still being written.</div></div>
+<h2 class="h5 mt-4" id="dates">Dates</h2>
+<h2 class="h5 mt-4" id="fees">Fees and the club's cut</h2>
+<h2 class="h5 mt-4" id="alternate-split">Charging some sellers less</h2>
+<p>{% rule "alternate_split_mode" %} lets some sellers pay different fees from everybody else. Club members, usually: the club takes 30% from the public and 20% from its own members. The other common one is a vendor table that pays a flat fee instead.</p>
+<p>{% rule "alternative_split_label" %} is what those people are called on invoices and on the users page.</p>
+{% if help.is_admin %}{% helptip %}{{ help.auction.title }} uses the label “{{ help.auction.alternative_split_label }}” for this.{% endhelptip %}{% endif %}
+{% mike %}Mike set his club's label to “Friends of Mike”. It was on every invoice for a year.{% endmike %}
+<h2 class="h5 mt-4" id="bidding">Bidding</h2>
+<h2 class="h5 mt-4" id="lots">Lots</h2>
+<h2 class="h5 mt-4" id="people">Who can join, buy and sell</h2>
+<h2 class="h5 mt-4" id="invoices">Invoices and payment</h2>
+<h2 class="h5 mt-4" id="club">The club</h2>
+<h2 class="h5 mt-4" id="custom-fields">Extra fields on lots</h2>

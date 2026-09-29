@@ -1,0 +1,17 @@
+{% comment %}The help menu, drawn exactly like the Account setup menu (account_sidebar.html): a column at >=lg, one button opening an offcanvas below it. Rows come from help_guides.groups_for().{% endcomment %}
+<button class="btn btn-primary btn-sm d-lg-none mb-3" type="button"
+        data-bs-toggle="offcanvas" data-bs-target="#helpSidebar" aria-controls="helpSidebar">
+  <i class="bi bi-list"></i> Help menu
+</button>
+<div class="offcanvas-lg offcanvas-start" tabindex="-1" id="helpSidebar" aria-labelledby="helpSidebarLabel">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title" id="helpSidebarLabel">Help</h5>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" data-bs-target="#helpSidebar" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body d-block p-0">
+    <form class="px-3 mb-2" action="{% url 'help' %}" method="get" role="search">
+      <input class="form-control form-control-sm" type="search" name="q" value="{{ query }}" placeholder="Search help" aria-label="Search help">
+    </form>
+    {% include "account_sidebar_nav.html" with account_nav_groups=help_nav_groups %}
+  </div>
+</div>

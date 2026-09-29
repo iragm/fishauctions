@@ -148,6 +148,8 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
+- **`help_guides.py`** (637 lines)
+  The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`helper_functions.py`** (162 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
   `static_html`, `scrub_emails`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
@@ -186,11 +188,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15027 lines)
+- **`palette_actions.py`** (15047 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1861 lines)
+- **`palette_routes.py`** (1871 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -386,6 +388,9 @@ this only quotes its opening sentence.
   `BulkAddFormsetEditLockTests`, `CreateLotFormAuctionMoveTests`, `ManageUsersThroughClubPermissionTests`, `EditLotUsesItsOwnAuctionTests`, `PickupLocationFormAuctionTests`, `NumericLimitTests`, `LotFilterTests`, `NumericLookingSearchTests`, `AuctionTOSKeywordBoundaryTests`, `GetClubsTests`
 - **`test_form_friction.py`** (535 lines)
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
+- **`test_help.py`** (181 lines)
+  The help guides: that they cover every page and rule, that they are public, and that they talk about your auction.
+  `HelpCoverageTests`, `HelpPagesArePublicTests`, `HelpIsAboutYourAuctionTests`, `HelpOverMcpTests`
 - **`test_helpers.py`** (1386 lines)
   Tests for helper functions, model utilities, template tags and context processors.
   `HelperFunctionsTestCase`, `ModelUtilityFunctionsTestCase`, `FormsUtilityTestCase`, `TemplateTagsTestCase`, `ContextProcessorsTestCase`, `FooterIconTests`, `SiteWebmanifestTests`, `GoogleLoginTemplateVisibilityTests`, `AdminSetupChecklistViewTests`
@@ -537,7 +542,7 @@ this only quotes its opening sentence.
 - **`test_support.py`** (40 lines)
   Support code shared by the test modules. Holds no tests of its own.
   `isolated_cache`
-- **`test_support_page.py`** (273 lines)
+- **`test_support_page.py`** (272 lines)
   /support/, and a way to reach a human that works with no account.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
 - **`test_sweep_decisions.py`** (310 lines)
@@ -556,7 +561,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (405 lines)
+- **`test_tenancy.py`** (406 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_untrusted_text.py`** (114 lines)
@@ -590,7 +595,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1324 lines)
+- **`urls.py`** (1328 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -824,6 +829,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`email_tags.py`** (136 lines)
   Tags for emailed templates: the footer, the club header, the button and the greeting's first name.
   `email_footer`, `email_footer_text`, `first_name`, `button_html`, `link_button`, `ButtonNode`, `email_button`, `club_for_email`, `club_icon_url`, `email_club_header`
+- **`help_tags.py`** (126 lines)
+  Tags for writing help guides (``auctions/templates/help/guides/``).
+  `page`, `rule`, `rule_value`, `helptip`, `mike`
 - **`membership_tags.py`** (115 lines)
   `membership_barcode`, `google_wallet_save_url`
 - **`species_tags.py`** (11 lines)
@@ -840,7 +848,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (786 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
-- **`auction_admin.py`** (1284 lines)
+- **`auction_admin.py`** (1270 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (717 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
@@ -891,6 +899,9 @@ Every view on the site, split by the part of it the view belongs to.
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (951 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
+- **`help.py`** (90 lines)
+  The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
+  `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
 - **`invoices.py`** (385 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`

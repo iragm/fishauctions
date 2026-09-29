@@ -271,6 +271,8 @@ urlpatterns = [
         "robots.txt",
         TemplateView.as_view(template_name="robots.txt", content_type="text/plain"),
     ),
+    # Unnamed, like robots.txt: it is for crawlers, not a page anybody navigates to.
+    path("sitemap.xml", views.SitemapView.as_view()),
     path(
         "ads.txt",
         TemplateView.as_view(template_name="ads.txt", content_type="text/plain"),
@@ -454,7 +456,7 @@ urlpatterns = [
     ),
     path(
         "auctions/<slug:slug>/help/",
-        login_required(views.AuctionHelp.as_view()),
+        views.AuctionHelp.as_view(),
         name="auction_help",
     ),
     path(
@@ -695,6 +697,8 @@ urlpatterns = [
         name="remote_print_job_cancel",
     ),
     path("faq/", views.FAQ.as_view(), name="faq"),
+    path("help/", views.HelpIndexView.as_view(), name="help"),
+    path("help/<slug:slug>/", views.HelpGuideView.as_view(), name="help_guide"),
     path("support/", views.SupportView.as_view(), name="support"),
     # /contact/ is the App Store Support URL and what older links point at. Unnamed on purpose: a
     # name would put it in front of the palette route audit as a page to describe.

@@ -119,7 +119,13 @@ ROUTE_LIST: list[Route] = [
         keywords=["new speaker", "add a presenter", "add a program"],
     ),
     _r("promo", "About this site", "Browsing", keywords=["about", "what is this", "marketing"]),
-    _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "help", "how does this work"]),
+    _r(
+        "help",
+        "Help guides",
+        "Browsing",
+        keywords=["help", "how do i", "how does this work", "guide", "instructions", "tutorial"],
+    ),
+    _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "questions"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
     _r(
@@ -1135,6 +1141,10 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    "help_guide": (
+        "One help guide. search_help answers with a link to the section that holds the answer, which "
+        "beats landing on the top of a guide, and the help index lists every guide."
+    ),
     # The MCP endpoint and its authorization server
     "mcp": (
         "The Model Context Protocol endpoint. Another program's way in, authenticated by a bearer "

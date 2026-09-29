@@ -712,6 +712,38 @@ body.detail-panel-open {
     margin-bottom: 0;
 }
 
+/* A help-note about the reader's own auction or club (help_tags.helptip). The success
+   green instead of the link blue, so "this is about you" reads differently from "this is
+   how it works". */
+.help-tip {
+    background: rgba(0, 188, 140, 0.09);
+    border-left-color: rgba(0, 188, 140, 0.6);
+}
+
+.help-tip > .bi {
+    color: #00bc8c;
+}
+
+/* A Mike story in a help guide (help_tags.mike): set apart, never a box. */
+.help-mike {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem 0.25rem;
+    font-style: italic;
+    color: #adb5bd;
+}
+
+.help-mike > .bi {
+    font-style: normal;
+    line-height: 1.5;
+}
+
+/* Rules linked from the rules page scroll to just under the navbar, not under it. */
+.help-rule {
+    scroll-margin-top: 5rem;
+}
+
 /* Cookie/terms bar ---------------------------------------------------------
    Fixed over the bottom of every page for signed-out visitors. Two things it
    has to do on a phone that the inline styles it used to carry did not: stay

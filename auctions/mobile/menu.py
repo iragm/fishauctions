@@ -158,7 +158,7 @@ def _about_section():
     rows = []
     if settings.ENABLE_PROMO_PAGE:
         rows.append(_row("About site", reverse("promo"), "bi-globe"))
-    rows.append(_row("FAQ", reverse("faq"), "bi-question-circle"))
+    rows.append(_row("Help", reverse("help"), "bi-question-circle"))
     rows.append(_row("Terms and Conditions", reverse("tos"), "bi-file-text"))
     rows.append(_row("Privacy policy", reverse("privacy_policy"), "bi-shield-lock"))
     if dmca.is_configured():

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Help{% endblock %}
+{% block meta_description %}Step-by-step guides for running and taking part in fish club auctions, online and in person.{% endblock %}
+{% block extra_head %}<link rel="canonical" href="{{ request.scheme }}://{{ request.get_host }}{% url 'help' %}">{% endblock %}
+{% block content %}
+{% if your_guide %}
+<div class="help-note help-tip"><i class="bi bi-person-check"></i><div>You were last in {{ help.auction.title }}. <a href="{{ your_guide.url }}?auction={{ help.auction.slug }}">{{ your_guide.title }}</a> is the guide for it.</div></div>
+{% endif %}
+{% if query %}
+  <h1 class="h4 mb-3">Help about “{{ query }}”</h1>
+  {% for result in results %}
+  <div class="mb-3">
+    <a href="{{ result.url }}">{{ result.heading }}</a> <small class="text-muted">in {{ result.guide }}</small>
+    <div class="small">{{ result.excerpt }}</div>
+  </div>
+  {% empty %}
+  <p>Nothing in the guides mentions that yet. Try fewer words, or <a href="{% url 'support' %}">ask a person</a>.</p>
+  {% endfor %}
+{% else %}
+  <h1 class="h4 mb-3">Help</h1>
+  {% for group in groups %}
+  <h2 class="h6 text-muted mt-4">{{ group.title }}</h2>
+  <div class="list-group mb-2">
+    {% for guide in group.guides %}
+    <a class="list-group-item list-group-item-action" href="{{ guide.url }}{% if help.auction %}?auction={{ help.auction.slug }}{% endif %}">
+      <i class="bi {{ guide.icon }} me-1"></i> <strong>{{ guide.title }}</strong>
+      <div class="small text-muted">{{ guide.summary }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endfor %}
+{% endif %}
+<p class="mt-4 small text-muted">Stuck anyway? <a href="{% url 'support' %}">Get in touch</a>.</p>
+{% endblock %}

@@ -618,20 +618,6 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         ]
 
 
-class AuctionHelp(LoginRequiredMixin, AuctionViewMixin, TemplateView):
-    template_name = "auction_help.html"
-
-    def dispatch(self, request, *args, **kwargs):
-        if not settings.ENABLE_HELP:
-            return redirect(reverse("home"))
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["auction"] = self.auction
-        return context
-
-
 class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of users (AuctionTOS) associated with an auction"""
 
