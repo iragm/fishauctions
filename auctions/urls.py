@@ -263,6 +263,7 @@ urlpatterns = [
     path("admin-unlinked-auctions/link/", views.LinkAuctionsToClub.as_view(), name="link_auctions_to_club"),
     path("admin-lifecycle/", views.AdminLifecycle.as_view(), name="admin_lifecycle"),
     path("admin-early-adds/", views.AdminEarlyAdds.as_view(), name="admin_early_adds"),
+    path("admin-free-text/", views.AdminFreeTextUsage.as_view(), name="admin_free_text"),
     path("admin-session-replay/", views.AdminSessionReplay.as_view(), name="admin_session_replay"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),

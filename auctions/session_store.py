@@ -1,5 +1,4 @@
-"""``cached_db`` sessions that fall back to the database when Redis doesn't answer, and that leave
-Redis after two weeks idle.
+"""``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
 
 Django's own guards ``load`` and ``save`` but not ``exists`` (every new session) or the refill after a
 miss, so a Redis stall 500'd first visits. ``delete`` still raises: a sign-out that left the session in

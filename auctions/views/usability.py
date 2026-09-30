@@ -12,6 +12,9 @@ since only about a fifth of auctions have a club.
 
 :class:`AdminEarlyAdds` plots promoted in-person auctions' gross against how early their lots and people
 were added (:mod:`auctions.early_adds`).
+
+:class:`AdminFreeTextUsage` groups invoice adjustment notes and custom field names by common terms
+(:mod:`auctions.free_text_usage`). Temporary, for writing the help.
 """
 
 import logging
@@ -25,7 +28,7 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
-from auctions import club_health, club_matching, early_adds, lifecycle, usability_report
+from auctions import club_health, club_matching, early_adds, free_text_usage, lifecycle, usability_report
 from auctions.models import Auction, Club, ClubHealth
 from auctions.services import link_auction_to_club
 
@@ -273,6 +276,18 @@ class AdminEarlyAdds(AdminOnlyViewMixin, TemplateView):
             }
             for point in points
         ]
+        return context
+
+
+class AdminFreeTextUsage(AdminOnlyViewMixin, TemplateView):
+    """What invoice adjustments and custom fields are used for, grouped by common terms."""
+
+    template_name = "dashboard_free_text_usage.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["adjustments"] = free_text_usage.adjustments()
+        context["fields"] = free_text_usage.custom_fields()
         return context
 
 

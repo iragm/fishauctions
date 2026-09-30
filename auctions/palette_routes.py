@@ -1096,6 +1096,13 @@ ROUTE_LIST: list[Route] = [
         keywords=["lots added early", "does adding lots early help", "early signups", "gross correlation"],
     ),
     _r(
+        "admin_free_text",
+        "Adjustments and custom fields",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["invoice adjustments", "custom fields", "what are adjustments used for", "custom field names"],
+    ),
+    _r(
         "admin_session_replay",
         "Read one person's session",
         "Site admin",

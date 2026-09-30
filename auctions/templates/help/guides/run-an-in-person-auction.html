@@ -262,7 +262,7 @@
 </div>
 
 <h2 class="h5 mt-4" id="after">After the auction</h2>
-<p><strong>Pay the sellers.</strong> Most clubs mail a check within a week or two, to the address on the seller's invoice. Filter the Users tab by <strong>Club owes</strong>. No address? Ask before you write the check.</p>
+<p><strong>Pay the sellers.</strong> Most clubs mail a check within a week or two, to the address on the seller's invoice. Filter the Users tab by <strong>Club owes</strong>. No address? Ask before you write the check. <a href="{% url 'help_guide' slug='payments' %}#seller-payouts">Why there's no payout button</a>.</p>
 <p>{% page "auction_stats" "Stats" %} shows how the day went: what the club made, how prices held up hour by hour, and how many people were there for the first time. If your stats disagree with the invoices, open the invoices page once; stats catch up after.</p>
 <p>About {% if help.site.in_person_unsold %}{{ help.site.in_person_unsold }}{% else %}10&ndash;12{% endif %}% of lots going unsold is normal at an in-person auction here.</p>
 {% if help.stats_auction and not help.stats_auction.is_online and help.stats.unsold_pct is not None %}{% helptip "graph-up" %}{{ help.stats.unsold_pct }}% of the lots in {{ help.stats_auction.title }} went unsold.{% endhelptip %}{% endif %}

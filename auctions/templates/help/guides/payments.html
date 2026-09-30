@@ -99,3 +99,13 @@
 <h2 class="h5 mt-4" id="chasing">Who hasn't paid?</h2>
 <p>On the Users tab, filter by <strong>Owes the club</strong> and <strong>Ready</strong>. There are filters for who has and hasn't opened their invoice, too.</p>
 {% if help.is_admin %}{% helptip %}<a href="{% url 'auction_tos_list' slug=help.auction.slug %}?query=+open+owes+club">People in {{ help.auction.title }} with an open invoice who owe the club</a>.{% endhelptip %}{% endif %}
+
+<h2 class="h5 mt-4" id="seller-payouts">Paying sellers</h2>
+<p>This site doesn't pay sellers, and it never will.</p>
+<ul>
+  <li>Connecting Square lets the people running your auctions take payments, and refund ones made through an invoice. That's close to impossible to misuse.</li>
+  <li>A payout button would let any of them send the club's money anywhere: add a user, add a lot for them, mark it sold for $1,000, pay out.</li>
+  <li>Sellers can't take or ask for their payout here either.</li>
+</ul>
+<p>Pay them from the <strong>Users CSV</strong>, under <strong>Export</strong> on the Users tab. Filter the tab by <strong>Club owes</strong> first and the file has only the people the club owes, with the amount in <strong>Invoice total due</strong>. It imports into PayPal, QuickBooks, or whatever your treasurer uses.</p>
+{% if help.is_admin %}{% helptip %}<a href="{% url 'auction_tos_list' slug=help.auction.slug %}?query=+club+owes">People in {{ help.auction.title }} the club owes</a>.{% endhelptip %}{% endif %}

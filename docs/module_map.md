@@ -143,6 +143,9 @@ this only quotes its opening sentence.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
 - **`forms.py`** (6347 lines)
   Every form on the site.
+- **`free_text_usage.py`** (212 lines)
+  What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
+  `Row`, `Group`, `phrase`, `terms`, `group_by_term`, `top_terms`, `section`, `adjustments`, `custom_fields`
 - **`friction_models.py`** (74 lines)
   Where people get stuck: one row per rejected form submission.
   `FormFailure`
@@ -154,7 +157,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (542 lines)
+- **`help_guides.py`** (543 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (305 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -201,7 +204,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1884 lines)
+- **`palette_routes.py`** (1891 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -226,8 +229,8 @@ this only quotes its opening sentence.
   DRF serializers for the club API.
 - **`services.py`** (1338 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
-- **`session_store.py`** (40 lines)
-  ``cached_db`` sessions that fall back to the database when Redis doesn't answer.
+- **`session_store.py`** (54 lines)
+  ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
   `SessionStore`
 - **`signals.py`** (1011 lines)
   Signal handlers for the auctions app.
@@ -368,8 +371,8 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1376 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_crawler_sessions.py`** (99 lines)
-  `IsCrawlerTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`
+- **`test_crawler_sessions.py`** (122 lines)
+  `IsCrawlerTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
   `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`
@@ -406,6 +409,8 @@ this only quotes its opening sentence.
   `BulkAddFormsetEditLockTests`, `CreateLotFormAuctionMoveTests`, `ManageUsersThroughClubPermissionTests`, `EditLotUsesItsOwnAuctionTests`, `PickupLocationFormAuctionTests`, `NumericLimitTests`, `LotFilterTests`, `NumericLookingSearchTests`, `AuctionTOSKeywordBoundaryTests`, `GetClubsTests`
 - **`test_form_friction.py`** (535 lines)
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
+- **`test_free_text_usage.py`** (48 lines)
+  `FreeTextUsageTests`
 - **`test_help.py`** (409 lines)
   The help guides: that they cover every page and rule, that they are public, and that they talk about your auction.
   `HelpCoverageTests`, `RuleUsageWordingTests`, `HelpPagesArePublicTests`, `HelpIsAboutYourAuctionTests`, `HelpOverMcpTests`, `HelpFormattingTests`, `HelpUsesYourAuctionTests`, `HelpKnowsYourPhoneTests`, `HelpStatsTests`, `PaymentPagesAreHelpTests`
@@ -613,7 +618,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1324 lines)
+- **`urls.py`** (1325 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -779,7 +784,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`authentication.py`** (43 lines)
   Authentication classes for mobile endpoints.
   `OptionalJWTAuthentication`
-- **`menu.py`** (184 lines)
+- **`menu.py`** (185 lines)
   The app's navigation drawer, built here and served in /api/mobile/config/.
   `menu_for`
 - **`permissions.py`** (17 lines)
@@ -948,9 +953,9 @@ Every view on the site, split by the part of it the view belongs to.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (492 lines)
   Adding species and common names, and the superuser's cleanup queue.
-- **`usability.py`** (311 lines)
+- **`usability.py`** (326 lines)
   The usability dashboards: measurements, the buyer funnel, and club outreach.
-  `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminEarlyAdds`, `AdminSessionReplay`
+  `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminEarlyAdds`, `AdminFreeTextUsage`, `AdminSessionReplay`
 - **`webhooks.py`** (964 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`

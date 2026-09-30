@@ -415,6 +415,7 @@ NOT_IN_HELP: dict[str, str] = {
     "admin_unlinked_auctions": "Site operator only.",
     "admin_lifecycle": "Site operator only.",
     "admin_early_adds": "Site operator only.",
+    "admin_free_text": "Site operator only.",
     "admin_session_replay": "Site operator only.",
     "admin_user_map": "Site operator only.",
     "admin_user_signups": "Site operator only.",
