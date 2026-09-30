@@ -1,9 +1,118 @@
 {% load help_tags %}
-{% comment %}Outline only -- see HELP.md.{% endcomment %}
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This guide is still being written.</div></div>
-<h2 class="h5 mt-4" id="before">Before the day: joining and adding lots</h2>
+{% comment %}See HELP.md for the voice. Written for the people who come to the auction; the organizers have their own guide. The help-tips say how the reader's own auction is set up, from what its auction page already shows.{% endcomment %}
+<p>An in-person auction is the kind you know: a hall, an auctioneer, and a bidder number on a card. The club uses this site to register people, list the lots and add up everyone's invoice.</p>
+<p>You don't need an account to buy. One helps if you're selling.</p>
+
+<h2 class="h5 mt-4" id="what-to-expect">What to expect</h2>
+<div class="row g-3 mb-3">
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-list-ul"></i> Before</h3>
+    <p class="card-text small mb-0">The lots are on the auction's page ahead of time, so you can see what's coming.</p>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-hand-index"></i> During</h3>
+    <p class="card-text small mb-0">Bid out loud, with your bidder number. Nothing to do on your phone.</p>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-bag-check"></i> After</h3>
+    <p class="card-text small mb-0">Go to checkout. Your invoice says what you owe, or what the club owes you.</p>
+  </div></div></div>
+</div>
+<p>The auction page has the address, a map and the time. That time is when bidding starts; doors usually open earlier. If the flyer and the site disagree, ask the club: reply to any email you've had about the auction, or use the <strong>Email</strong> button on its page.</p>
+{% tip %}First time? Bring cash or a card, a cooler for what you buy, and a pen to note the lots you want.{% endtip %}
+
+<h2 class="h5 mt-4" id="before">Before the day: adding your lots</h2>
+<p>Bringing fish to sell? Add them on the site first. You skip the line at the door, your bags arrive labelled, and you usually pay the club a smaller cut{% if help.site.self_added_premium %}. Lots sellers add themselves also sell for about {{ help.site.self_added_premium }}% more here{% endif %}.</p>
+<ol>
+  <li><strong>Sign in.</strong> <strong>Sign in with Google</strong> or <strong>Apple</strong> is one click.</li>
+  <li><strong>Open the auction's page</strong> from your club's link or flyer.</li>
+  <li><strong>Join:</strong> scroll to the bottom, tick <strong>Yes, I will be at this auction</strong>, and click <strong>Join auction</strong>.</li>
+  <li><strong>Click {% page "bulk_add_lots_auto_for_myself" "Add Lots" %}</strong> near the top of the page.</li>
+  <li><strong>One lot per row</strong>: what it is and how many ("3 Corydoras sterbai"). Each row saves itself and gets a lot number.</li>
+  <li><strong>Photos help.</strong> <strong>Add image</strong> or <strong>Full editor</strong> on a row. Many clubs put each lot's photo on a screen as it sells{% if help.photos.premium %}, and at the biggest in-person auctions here, a lot with a photo sells for about {{ help.photos.premium }}% more{% endif %}.</li>
+  <li><strong>Print labels:</strong> <strong>Print Labels</strong> on the auction page, once everything's in. You'll get a reminder email the day before.</li>
+  <li><strong>Tape a label to each bag</strong> with clear packing tape, right over the label so it stays dry.</li>
+</ol>
+{% if help.auction and not help.auction.is_online and help.auction.pre_register_lot_discount_percent %}{% helptip %}{{ help.auction.title }} takes {{ help.auction.pre_register_lot_discount_percent }}% less of the price on lots you add yourself.{% endhelptip %}{% endif %}
+<ul>
+  <li><strong>No printer?</strong> Write the lot number and what's in it on each bag with a marker.</li>
+  <li><strong>"Page not found", or can't add lots?</strong> Adding lots hasn't opened, or has closed; the auction page says when. Bring your lots and register them at the door.</li>
+  <li><strong>Not bringing a lot after all?</strong> Delete it from your {% page "selling" "Selling" %} page, so nobody waits for it. A lot that never reaches the table isn't charged the unsold lot fee; one that goes up and doesn't sell may be.</li>
+  <li><strong>Can't manage any of this?</strong> Ask the club. They can add your lots for you.</li>
+</ul>
+{% tip %}No time for photos? <a href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI agent</a> and ask it to find your lots in this auction that have no picture, and add one to each.{% endtip %}
+<p>Bagging tips: <a href="{% url 'help_guide' slug='bagging-fish' %}">Bagging fish for an auction</a>.</p>
+{% mike %}Mike labelled his bags at home, in the kitchen, with the tap running. The labels were on the right bags until they got wet. Clear tape over the whole label.{% endmike %}
+
 <h2 class="h5 mt-4" id="check-in">At the door: your bidder number</h2>
+<p>Tell the desk your name. They'll find you, or add you, and give you your bidder number, often on a card or paddle. It stays the same at every auction this club runs.</p>
+<ul>
+  <li><strong>Forgotten it?</strong> It's on any of your invoices, under {% page "my_invoices" "Invoices" %} in the menu under your name.</li>
+  <li><strong>Membership card:</strong> some clubs scan it at the door. Have it on your phone, in Apple or Google Wallet, or printed.</li>
+  <li><strong>The phone app</strong> may check you in as you walk in, and shows your bidder number.</li>
+  <li><strong>Lots that aren't on the site yet:</strong> the desk adds them and prints labels, or gives you lot numbers to write on the bags.</li>
+</ul>
+
 <h2 class="h5 mt-4" id="bidding">Bidding in the room</h2>
+<p>Hold up your number and bid the usual way. When a lot sells, somebody next to the auctioneer types in the lot number, the price and your bidder number, and it goes straight on your invoice.</p>
+<ul>
+  <li>A lot with a buy now price on its label can be bought before its turn. Take it and your number to the desk.</li>
+  <li>Keep your card safe. A bid recorded against the wrong number ends up on somebody else's invoice.</li>
+  <li>With the phone app, <strong>Scan lots</strong> on the auction page turns your camera on a table of bags: point it at the labels and it tells you what's what, or finds the one you're after.</li>
+</ul>
+
+<h2 class="h5 mt-4" id="coming-up">"Your lot is coming up"</h2>
+<p>Watch a lot on the site, and your phone tells you when it's about to be sold. Go get a coffee in between.</p>
+<ol>
+  <li>Click <strong>Watch</strong> on the lots you want.</li>
+  <li>A bell appears under the lot. Click the button next to it: <strong>Subscribe to Push Messaging</strong> in a browser, or <strong>Notify me when bidding starts</strong> in the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a>. That covers every lot you watch, from then on.</li>
+  <li>Click <strong>Test notification</strong> there. If nothing arrives, nothing will on the day either.</li>
+</ol>
+{% if help.auction and not help.auction.is_online %}{% helptip %}{% if help.auction.message_users_when_lots_sell %}{{ help.auction.title }} sends these.{% else %}{{ help.auction.title }} has these turned off.{% endif %}{% endhelptip %}{% endif %}
+{% push_status %}
+<h3 class="h6 mt-3" id="queue">What you'll get</h3>
+<p>Some clubs scan each bag into a <strong>lot queue</strong> as it reaches the auctioneer's table: the running order for the next few lots. Your notifications follow it.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>Coming up soon</th><td>It's one of the next ten lots. Time to head back to your seat.</td></tr>
+    <tr><th>About to be sold</th><td>Bidding is starting now.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The second replaces the first, so you don't end up with a pile of them. A club with no queue sends only "about to be sold", when the lot number is typed in at the table.</p>
+<ul>
+  <li><strong>On an iPhone</strong>, use the app. Safari only sends notifications from a site you've added to your home screen.</li>
+  <li><strong>Set your phone to vibrate.</strong> You'll feel it, and nobody else hears it.</li>
+  <li><strong>Got one after the lot sold?</strong> The club typed the lot in after it sold. Tell them; the lot queue fixes it.</li>
+  <li><strong>Turning them off:</strong> untick <strong>Push notifications when lots sell</strong> on {% page "notification_preferences" "Notifications" %}. Unwatching a lot stops that one.</li>
+</ul>
+<p>With the app, you can also get a running total of what you've bought, as you win each lot.</p>
+
 <h2 class="h5 mt-4" id="online-bidding">Bidding from home</h2>
+<p>Some in-person auctions let you bid on the site too. The auction page says so, and when online bidding opens and closes.</p>
+{% if help.auction and not help.auction.is_online %}{% helptip %}{% if help.auction.online_bidding == "disable" %}Online bidding is off in {{ help.auction.title }}. Bid in the room.{% elif help.auction.online_bidding == "buy_now_only" %}{{ help.auction.title }} sells some lots at their buy now price on the site, but doesn't take online bids.{% else %}{{ help.auction.title }} takes online bids{% if help.auction.date_online_bidding_ends %} until {{ help.auction.date_online_bidding_ends|date:"M j, g:i A" }}{% endif %}.{% endif %}{% endhelptip %}{% endif %}
+<ul>
+  <li><strong>Online bids</strong> work like an online auction: put in the most you'd pay, and the site bids for you. The lot still sells in the room, and your bid counts there.</li>
+  <li><strong>Buy now before the day:</strong> first come, first served. It goes on your invoice; pick it up at the desk after you check in.</li>
+  <li><strong>A silent auction table:</strong> scan the QR code on a lot's label with your phone and bid. The high bid when the table closes wins.</li>
+</ul>
+<p>You need an account, and to have joined the auction, to bid online. Not to bid in the room.</p>
+
 <h2 class="h5 mt-4" id="checkout">Paying and going home</h2>
+<ol>
+  <li>Go to checkout and give your bidder number or name.</li>
+  <li>The desk tells you what you owe, or what the club owes you. {% page "my_auction_invoice" "My Invoice" %} on the auction page shows the same.</li>
+  <li>Pay how the club takes it: cash, check, or card. Some clubs show a QR code you scan to pay on your phone.</li>
+  <li>Take your lots, and any of yours that didn't sell.</li>
+</ol>
+<p>Afterwards you'll get an email with your invoice, thanking you for coming. It's your receipt, not a bill.</p>
+{% tip %}Something on your invoice you didn't buy? Tell the desk before you leave. It's almost always a mistyped bidder number, and quicker to fix while everyone's there.{% endtip %}
+
 <h2 class="h5 mt-4" id="selling">If you brought lots to sell</h2>
+<ul>
+  <li><strong>Your invoice nets it out.</strong> Sold more than you bought? The club pays you the difference, usually by check within a week or two, to the address on your account.</li>
+  <li><strong>A star on your invoice</strong> marks lots you added yourself before the day. They got the pre-registration discount, if the club has one.</li>
+  <li><strong>Leaving early?</strong> Pay for what you've bought so far at checkout. The club pays you for your lots when they sell.</li>
+  <li><strong>Unsold lots</strong> come back to you at checkout. Can't find one? The invoice lists every lot you brought and whether it sold.</li>
+</ul>

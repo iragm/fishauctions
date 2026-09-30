@@ -2,7 +2,7 @@
 
 * Reach: ``PageView`` grouped by route, via :func:`route_name` and Django's resolver.
 * Failure: ``FormFailure`` (:mod:`auctions.friction_models`), grouped by form.
-* Adoption: :mod:`auctions.field_adoption`.
+* Adoption: :mod:`auctions.field_adoption`, shown on the help's rules guide rather than here.
 * :func:`buyer_funnel`: where buyers stop, from existing rows.
 
 ``base_page_view.html`` records a view on every page extending ``base.html``, with no timer.

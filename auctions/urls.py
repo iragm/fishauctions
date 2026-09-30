@@ -262,6 +262,7 @@ urlpatterns = [
     path("admin-unlinked-auctions/", views.UnlinkedAuctions.as_view(), name="admin_unlinked_auctions"),
     path("admin-unlinked-auctions/link/", views.LinkAuctionsToClub.as_view(), name="link_auctions_to_club"),
     path("admin-lifecycle/", views.AdminLifecycle.as_view(), name="admin_lifecycle"),
+    path("admin-early-adds/", views.AdminEarlyAdds.as_view(), name="admin_early_adds"),
     path("admin-session-replay/", views.AdminSessionReplay.as_view(), name="admin_session_replay"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
@@ -755,11 +756,6 @@ urlpatterns = [
         "api/auctionstats/<slug:slug>/activity",
         views.AuctionStatsActivityJSONView.as_view(),
         name="auction_stats_activity",
-    ),
-    path(
-        "api/auctionstats/<slug:slug>/pictures",
-        views.AuctionStatsImagesJSONView.as_view(),
-        name="auction_stats_pictures",
     ),
     path(
         "api/auctionstats/<slug:slug>/distance_traveled",

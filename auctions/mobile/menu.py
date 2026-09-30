@@ -136,6 +136,7 @@ def _admin_section():
             _row("Usability", reverse("admin_usability") + "?days=30", "bi-clipboard-data"),
             _row("Club health", reverse("admin_club_health"), "bi-heart-pulse"),
             _row("Lifecycle", reverse("admin_lifecycle"), "bi-people"),
+            _row("Early lots and gross", reverse("admin_early_adds"), "bi-graph-up"),
             _row("Session replay", reverse("admin_session_replay"), "bi-list-ol"),
             _row("User signups", reverse("admin_user_signups") + "?days=90", "bi-person-plus"),
             _row("Command palette searches", reverse("command_palette_analytics"), "bi-search"),

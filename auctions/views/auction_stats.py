@@ -11,7 +11,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.db.models import (
-    Avg,
     Count,
     F,
     IntegerField,
@@ -45,7 +44,6 @@ from auctions.models import (
     SearchHistory,
     UserData,
     Watch,
-    median_value,
 )
 
 from .base import AuctionStatsPermissionsMixin, AuctionViewMixin
@@ -634,69 +632,6 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
             and "referrers" in self.compare_auction.cached_stats
         ):
             compare_data = self.compare_auction.cached_stats["referrers"]["data"]
-            data = data + compare_data
-
-        return data
-
-
-class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
-    def get_labels(self):
-        # Check if we have cached stats
-        if self.auction.cached_stats and "images" in self.auction.cached_stats:
-            return self.auction.cached_stats["images"]["labels"]
-
-        return ["No images", "One image", "More than one image"]
-
-    def get_providers(self):
-        providers = []
-        # Check if we have cached stats
-        if self.auction.cached_stats and "images" in self.auction.cached_stats:
-            providers = self.auction.cached_stats["images"]["providers"]
-        else:
-            providers = ["Median sell price", "Average sell price", "Number of lots"]
-
-        # Add comparison auction providers if available
-        if self.compare_auction and self.compare_auction.cached_stats and "images" in self.compare_auction.cached_stats:
-            compare_providers = [
-                f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["images"]["providers"]
-            ]
-            providers = providers + compare_providers
-
-        return providers
-
-    def get_data(self):
-        # Get main auction data
-        if self.auction.cached_stats and "images" in self.auction.cached_stats:
-            data = self.auction.cached_stats["images"]["data"]
-        else:
-            # Excludes banned and deleted lots, like set_stat_images.
-            lots = (
-                self.auction.lots_qs.filter(winning_price__isnull=False)
-                .exclude(banned=True)
-                .annotate(num_images=Count("lotimage"))
-            )
-            lots_with_no_images = lots.filter(num_images=0)
-            lots_with_one_image = lots.filter(num_images=1)
-            lots_with_one_or_more_images = lots.filter(num_images__gt=1)
-            medians = []
-            averages = []
-            counts = []
-            for lots in [
-                lots_with_no_images,
-                lots_with_one_image,
-                lots_with_one_or_more_images,
-            ]:
-                try:
-                    medians.append(median_value(lots, "winning_price"))
-                except Exception:
-                    medians.append(0)
-                averages.append(lots.aggregate(avg_value=Avg("winning_price"))["avg_value"])
-                counts.append(lots.count())
-            data = [medians, averages, counts]
-
-        # Add comparison auction data if available
-        if self.compare_auction and self.compare_auction.cached_stats and "images" in self.compare_auction.cached_stats:
-            compare_data = self.compare_auction.cached_stats["images"]["data"]
             data = data + compare_data
 
         return data

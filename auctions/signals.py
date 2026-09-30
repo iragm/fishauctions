@@ -100,9 +100,16 @@ def on_save_auction(sender, instance, **kwargs):
 
     # if this is an existing auction
     if instance.pk:
-        logger.info("updating date end on lots because this is an existing auction")
         if instance.date_end:
-            if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
+            # A lot takes the auction's end when it's added, so moving the auction's end has to move its
+            # lots. Only until the last hour of the old end: after that, dynamic endings own each lot's end.
+            old_end = type(instance).objects.filter(pk=instance.pk).values_list("date_end", flat=True).first()
+            moved_in_time = (
+                old_end is not None
+                and old_end != instance.date_end
+                and timezone.now() < old_end - datetime.timedelta(hours=1)
+            )
+            if moved_in_time or instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
                 from auctions.models import Lot
 
                 lots = Lot.objects.exclude(is_deleted=True).filter(

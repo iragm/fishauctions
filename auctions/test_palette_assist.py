@@ -2203,6 +2203,8 @@ class DriftTests(PaletteAssistTestCase):
     #: guarantee is about the *page*, and the twin is the proof it exists.
     SHARES_A_VIEW_WITH_ITS_TWIN = {
         "unqueue_lot": "queue_lot",
+        "move_queued_lot": "queue_lot",
+        "step_queue": "queue_lot",
         "add_lots": "add_lot",
         "set_lot_species": "edit_lot",
         "add_dropdown_option": "update_auction_setting",

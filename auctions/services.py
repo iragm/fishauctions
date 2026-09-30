@@ -817,7 +817,6 @@ AUCTION_FIELDS_TO_CLONE = [
     "lot_entry_fee_for_club_members",
     "registration_fee",
     "registration_fee_for_club_members",
-    "set_lot_winners_url",
     "require_phone_number",
     "buy_now",
     "reserve_price",

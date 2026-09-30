@@ -1,0 +1,97 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. /ai/ redirects here (#connect). The reader's own connections and keys are help_tags.ai_connections; the forms there still post to /ai/ (UserAPIKeyView).{% endcomment %}
+{% mcp_url as mcp_address %}
+<p>An AI assistant, like Claude, ChatGPT or Grok, can use this site the same way you do. You ask in plain English; it finds the pages and does the typing.</p>
+<div class="row g-3 mb-3">
+  <div class="col-md-6"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-chat-left-text"></i> Ask it things like</h3>
+    <ul class="small mb-0 ps-3">
+      <li>"Add a trio of guppies to Saturday's auction."</li>
+      <li>"Which of my lots haven't sold?"</li>
+      <li>"Find the cichlids in this auction and watch them, so I get a notification when they come up."</li>
+      <li>"Add a good picture from the internet to each of my lots that doesn't have one."</li>
+      <li>"My new address is 12 Mill Lane." It updates every auction and club that has the old one.</li>
+    </ul>
+  </div></div></div>
+  <div class="col-md-6"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-people"></i> Running an auction</h3>
+    <ul class="small mb-0 ps-3">
+      <li>"Bump lot 5 for bidder 325." <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}#bumps">Bumps</a></li>
+      <li>"Who still owes money in the spring auction?"</li>
+      <li>"Is there anything this site can do that my club isn't using?"</li>
+      <li>"Summarize the help on labels for me."</li>
+      <li>"How does the lot recommendation system work?" It can read this site's own source code to answer.</li>
+    </ul>
+  </div></div></div>
+</div>
+<p>It can do anything your account can do, and nothing more.</p>
+
+<h2 class="h5 mt-4" id="connect">Connecting</h2>
+<p>You don't copy any passwords. You give the assistant this site's address, and it sends you here to sign in and say what it may do.</p>
+<div class="input-group input-group-sm mb-3 help-table">
+  <input type="text" class="form-control" id="mcp-url" value="{{ mcp_address }}" readonly aria-label="Connector address">
+  <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url"><i class="bi bi-clipboard"></i> Copy</button>
+</div>
+<div class="row g-3 mb-3">
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-stars"></i> Claude</h3>
+    <p class="small text-muted mb-2">Works with a free account, on the web, desktop and phone.</p>
+    <ol class="small mb-0 ps-3">
+      <li>Open <a href="https://claude.ai/new?modal=add-custom-connector#settings/customize-connectors/" target="_blank" rel="noopener">Add a custom connector</a> in Claude. In the apps it's Settings, Connectors, Add custom connector.</li>
+      <li>Paste the address.</li>
+      <li>Sign in here when Claude sends you, and say yes.</li>
+    </ol>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-chat-dots"></i> ChatGPT</h3>
+    <p class="small text-muted mb-2">Needs a paid plan, with developer mode switched on.</p>
+    <ol class="small mb-0 ps-3">
+      <li>In ChatGPT's settings, turn on <strong>developer mode</strong> and add an app for a remote MCP server. OpenAI move these menus around; <a href="https://developers.openai.com/api/docs/guides/developer-mode" target="_blank" rel="noopener">their guide</a> has the current path.</li>
+      <li>Paste the address, and choose <strong>OAuth</strong>.</li>
+      <li>Sign in here, then turn the app on from the <strong>+</strong> menu in a chat.</li>
+    </ol>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-robot"></i> Grok</h3>
+    <p class="small text-muted mb-2">Web and apps.</p>
+    <ol class="small mb-0 ps-3">
+      <li>Open <a href="https://grok.com/connectors" target="_blank" rel="noopener">Connectors</a> in Grok, then <strong>New connector</strong>, <strong>Custom</strong>. On a business account, an admin adds it first.</li>
+      <li>Paste the address.</li>
+      <li>Sign in here when Grok sends you, and say yes.</li>
+    </ol>
+  </div></div></div>
+</div>
+<p>Anything else that speaks the Model Context Protocol connects the same way.</p>
+{% tip %}Connect once. Two connections means everything happens twice, lots included. Remove extras under <a href="#connected">What's connected</a>.{% endtip %}
+
+<h2 class="h5 mt-4" id="connected">What's connected</h2>
+<p>Everything you've connected is listed here, with a <strong>Disconnect</strong> button. Disconnecting stops it straight away.</p>
+{% ai_connections "apps" %}
+
+<h2 class="h5 mt-4" id="keys">Keys, for scripts</h2>
+<p>You don't need a key for Claude, ChatGPT or Grok. A key is for a script, a cron job, or a connector your organisation's administrator adds once for everybody. Anyone with the key is you, so treat it like a password.</p>
+{% ai_connections "keys" %}
+<p>Send it as a bearer token on every request:</p>
+<pre class="bg-dark text-white p-2 rounded small" style="overflow-x:auto"><code>curl -X POST {{ mcp_address }} \
+  -H "Authorization: Bearer ak_your_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+
+<h2 class="h5 mt-4" id="no-ai">No AI account?</h2>
+<p>Click the site's name at the top left of any page and type what you want to do. It finds the page, and can do a lot of the same things.</p>
+<script>
+  document.querySelectorAll('.copy-button').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var field = document.getElementById(button.getAttribute('data-copy-target'));
+      if (!field) { return; }
+      field.select();
+      var done = function () {
+        button.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied';
+        setTimeout(function () { button.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(field.value).then(done, function () {});
+      }
+    });
+  });
+</script>

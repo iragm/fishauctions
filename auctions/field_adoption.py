@@ -13,6 +13,9 @@ real. A field changed and changed back reads as untouched, so this under-counts 
 undone changes, and knows nothing from before the field shipped. Both zero is a deletion candidate;
 a high ``off_default`` is load-bearing; ``edits`` much higher than ``off_default`` is a field people
 struggle with, which belongs in the friction report rather than behind *Advanced*.
+
+The numbers are published as :attr:`FieldAdoption.usage`, a badge beside each setting in the help's
+rules guide (``help_tags.rule``), where an organizer deciding whether to touch a setting sees them.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from django.db.models import Count, Q
 
 logger = logging.getLogger(__name__)
 
-CACHE_KEY = "auction_field_adoption_v1"
+CACHE_KEY = "auction_field_adoption_v2"
 CACHE_SECONDS = 60 * 60
 # A field on this many auctions or fewer, with no edits behind it, is unused. Not zero: one auction
 # off-default is as likely a test row or an import as a decision.
@@ -56,6 +59,22 @@ class FieldAdoption:
     @property
     def percent(self) -> float:
         return round(self.fraction * 100, 1)
+
+    @property
+    def usage(self) -> str:
+        """How many auctions use this, in words, for the help's rules guide; blank when it can't be said.
+
+        "Use" depends on the default: moving a checkbox that starts on means turning it off.
+        """
+        if not self.default_known or not self.total:
+            return ""
+        percent = round(self.percent)
+        amount = f"{percent}%" if percent or not self.off_default else "under 1%"
+        if self.default is True:
+            return f"{amount} of auctions turn this off"
+        if self.default in (False, 0, None, "", "disable", "off"):
+            return f"Used by {amount} of auctions"
+        return f"{amount} of auctions change this"
 
     @property
     def verdict(self) -> str:
@@ -133,13 +152,15 @@ def history_edit_counts(history_model, owner_field):
 
 
 def field_adoption(model, form_class, history_model, owner_field, queryset=None, sections=None):
-    """The adoption table for one form: a :class:`FieldAdoption` per model-backed field.
+    """The adoption table for one form, or a tuple of forms: a :class:`FieldAdoption` per model-backed field.
 
     One aggregate query for every field -- 40 conditional counts in a single scan -- plus one pass over
     the changelog.
     """
     queryset = model.objects.all() if queryset is None else queryset
-    names = [name for name in form_field_names(form_class) if model_field_default(model, name)[1] is not None]
+    form_classes = form_class if isinstance(form_class, tuple) else (form_class,)
+    names = [name for form in form_classes for name in form_field_names(form)]
+    names = [name for name in dict.fromkeys(names) if model_field_default(model, name)[1] is not None]
     defaults = {name: model_field_default(model, name) for name in names}
     measurable = [name for name in names if defaults[name][1]]
     total = queryset.count()
@@ -186,10 +207,10 @@ def _verbose_name(model, name):
 
 
 def auction_field_adoption(use_cache=True):
-    """:func:`field_adoption` for ``AuctionEditForm``, cached for an hour: it is two full scans of the two
-    biggest tables, and the answer moves on the scale of weeks.
+    """:func:`field_adoption` for both auction rules pages, cached for an hour: it is two full scans of the
+    two biggest tables, and the answer moves on the scale of weeks.
     """
-    from auctions.forms import AuctionEditForm
+    from auctions.forms import AuctionCustomFieldsForm, AuctionEditForm
     from auctions.models import Auction, AuctionHistory
 
     if use_cache:
@@ -198,7 +219,7 @@ def auction_field_adoption(use_cache=True):
             return cached
     results = field_adoption(
         Auction,
-        AuctionEditForm,
+        (AuctionEditForm, AuctionCustomFieldsForm),
         AuctionHistory,
         "auction_id",
         queryset=Auction.objects.filter(is_deleted=False),

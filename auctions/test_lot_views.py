@@ -336,7 +336,9 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
         assert response.status_code == 200
         self.assertContains(response, "You'll get a notification when bidding starts on this lot")
-        self.assertContains(response, "More information")
+        # "How it works" is the help, not a pop-up of its own.
+        self.assertContains(response, f"/help/in-person-auctions/?auction={self.in_person_auction.slug}#coming-up")
+        self.assertNotContains(response, "notification-help")
         self.assertNotContains(response, 'id="test-notification"')
 
     def test_anonymous_user_does_not_see_test_notification_controls(self):

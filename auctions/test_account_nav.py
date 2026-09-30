@@ -60,6 +60,8 @@ class SidebarReachTests(TestCase):
                 continue  # a redirect to userpage, covered by the row above
             elif name in ("paypal_seller", "square_seller"):
                 continue  # gated; PaymentRowTests covers both halves
+            elif name == "user_api_keys":
+                continue  # redirects into the help, which draws the help menu
             else:
                 url = reverse(name)
             with self.subTest(page=name):

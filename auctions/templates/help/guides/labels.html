@@ -1,9 +1,102 @@
 {% load help_tags %}
-{% comment %}Outline only -- see HELP.md.{% endcomment %}
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This guide is still being written.</div></div>
+{% comment %}See HELP.md for the voice. For sellers printing their own and admins printing everybody's. What a label prints is LabelPrintFieldsForm plus printing.plan_label: the seller's name only while a lot is unsold, the winner's (and destination, with several locations) once it's sold.{% endcomment %}
+<p>A label on each bag says which lot it is, so nobody has to look it up.</p>
+<div class="row g-3 mb-3">
+  <div class="col-md-6"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-people"></i> In person</h3>
+    <p class="card-text small mb-0">Labels go on <strong>before</strong> the auction, so the auctioneer can call the lot.</p>
+  </div></div></div>
+  <div class="col-md-6"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-laptop"></i> Online</h3>
+    <p class="card-text small mb-0">Labels go on <strong>after</strong> bidding ends, and say who won the lot.</p>
+  </div></div></div>
+</div>
+
 <h2 class="h5 mt-4" id="why">What labels are for</h2>
+<p>Labels are optional; a lot number in marker works too. But printed labels are faster at the desk, easier to read across a room, and carry a QR code. Scan it with any phone camera and the lot's page opens, with the seller, the winner and the price.</p>
+{% if help.stats.qr_scans %}{% helptip "graph-up" %}People scanned the labels on {{ help.stats.qr_scans }} lots in {{ help.stats_auction.title }}.{% endhelptip %}{% endif %}
+{% tip %}Labels come as a PDF. Print at <strong>Actual size</strong>, not <strong>Fit to page</strong>, unless your printer cuts off an edge.{% endtip %}
+
 <h2 class="h5 mt-4" id="print-your-own">Printing labels for your own lots</h2>
+<h3 class="h6 mt-3">In person: before you come</h3>
+<ol>
+  <li>Add all your lots first, so they fit on as few sheets as possible.</li>
+  <li>On the auction's page, click {% page "print_my_labels" "Print Labels" %}. You get a PDF, one label per lot.</li>
+  <li>Tape each label to its bag with clear packing tape.</li>
+</ol>
+<p>A label got wet or went missing? Open the lot and click {% page "single_lot_label" "Print label" %}. If a lot sells early at its buy now price, you'll get an email with a link that {% page "print_my_unprinted_labels" "prints only the labels that need printing" %}.</p>
+<h3 class="h6 mt-3">Online: after bidding ends</h3>
+<p>Only lots that sold need one. Click <strong>Print labels for your lots</strong> on your invoice. You'll get an email when it's time.</p>
+{% tip %}"You don't have permission" when you print? You're signed in with a different account from the one your lots are under, often on a second device. Sign out and back in.{% endtip %}
+
 <h2 class="h5 mt-4" id="print-for-everyone">Printing everybody's labels</h2>
+<p>If you run the auction, you can print anybody's:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>One person</th><td><strong>Print labels</strong> next to their name on the {% page "auction_tos_list" "Users" %} tab. {% page "print_labels_by_bidder_number" "That page" %} prints all their labels; there's a {% page "print_unprinted_labels_by_bidder_number" "version for just the unprinted ones" %}. Quickest at the desk, as each seller arrives.</td></tr>
+    <tr><th>A few, or everyone</th><td>{% page "auction_printing" "Print labels" %} under <strong>More</strong>. Tick the people and click print. You get {% page "auction_printing_pdf" "one PDF" %}.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The site remembers which labels have been printed, by anyone. Leave <strong>Only print labels that haven't been printed yet</strong> ticked and nothing prints twice. To print everything again, untick it.</p>
+<p>One PDF holds up to 100 labels on a thermal printer, or 500 on sheets. More than that? Print again with "only unprinted" ticked for the next batch.</p>
+{% mike %}Mike printed all 400 labels on the morning of the auction. Then three sellers added lots, so he printed all 400 again.{% endmike %}
+{% tip %}Get sellers to print their own. It saves you paper and an hour at the desk.{% endtip %}
+
 <h2 class="h5 mt-4" id="printers">Sheets, thermal printers and the phone app</h2>
+<p>What you print on is your own setting, on {% page "printing" "Label printing" %}. One admin can use a thermal printer and another a laser printer on the same night.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <thead><tr><th>Setting</th><th>Good for</th></tr></thead>
+  <tbody>
+    <tr><td>Plain paper</td><td>Any printer. Cut them out and tape them on. Fine for a few lots.</td></tr>
+    <tr><td>Large (Avery 18262)</td><td>Sheet labels on a laser printer. Inkjet ink runs when the bag gets wet.</td></tr>
+    <tr><td>Small (Avery 5160)</td><td>Cheap and easy to find, but hard to read. Not recommended.</td></tr>
+    <tr><td>Thermal 3"x2"</td><td>The one to buy if you're buying a printer: fast, no ink, and it takes water. Any thermal printer that takes 3"x2" labels works.</td></tr>
+    <tr><td>Thermal 1⅛" x 3½" (Dymo 30252)</td><td>Dymo LabelWriters.</td></tr>
+    <tr><td>Custom</td><td>Your own page and label sizes. Test a few first: problems show up on the fifth label, not the first.</td></tr>
+  </tbody>
+</table>
+</div>
+<ul>
+  <li><strong>A half-used sheet?</strong> Set <strong>Empty labels</strong> to the number already gone. Set it back to 0 for a fresh sheet.</li>
+  <li><strong>A Bluetooth thermal printer</strong> prints straight from the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a>, no computer. Pick it on Label printing in the app, and every print button sends labels to it.</li>
+  <li><strong>Trying a setting?</strong> Reprint labels from an old auction you sold in.</li>
+</ul>
+
 <h2 class="h5 mt-4" id="whats-on-a-label">What goes on a label</h2>
+<p>The people running an auction choose, at {% page "auction_label_config" "Set what gets printed on labels" %} (on the Print labels page). It applies to every label printed for that auction, sellers' own included.</p>
+{% if help.label_fields %}{% helptip %}Labels in {{ help.auction.title }} print: {{ help.label_fields|join:", " }}.{% endhelptip %}{% endif %}
+<div class="table-responsive">
+<table class="table table-sm">
+  <thead><tr><th>Choice</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Lot number</td><td>Always.</td></tr>
+    <tr><td>Lot name, QR Code</td><td>On by default. The QR code opens the lot's page.</td></tr>
+    <tr><td>Seller's name</td><td>On by default, while the lot is unsold.</td></tr>
+    <tr><td>Minimum bid, Buy now price</td><td>Only on lots that have one, so the auctioneer notices.</td></tr>
+    <tr><td>Scientific name, Quantity, Donation, Breeder points</td><td>On by default, where the lot has one.</td></tr>
+    <tr><td>Your custom fields</td><td>A table number, "CARES", which club brought it.</td></tr>
+    <tr><td>Category, Auction date</td><td>Off by default. The date helps people remember when they bought a fish.</td></tr>
+    <tr><td>Seller's email, Description</td><td>Off, and best left off. Descriptions are long, and the club should sort out problems, not the buyer and seller.</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Once a lot is sold</strong>, its label shows the winner's name instead of the seller's, and no prices. With more than one pickup location, it also says where the lot is going.</p>
+<p>Long lot names get cut short. Put the detail in the description or a custom field: "Aphyosemion australe" in the name, the collection code in a custom field.</p>
+
 <h2 class="h5 mt-4" id="problems">When labels come out wrong</h2>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>On the wrong part of the sheet</th><td>Most sheets have different margins top and bottom. Turn the sheet around.</td></tr>
+    <tr><th>An edge cut off</th><td>Try <strong>Fit to page</strong> instead of <strong>Actual size</strong> in the print dialog, or the other way round.</td></tr>
+    <tr><th>Labels creep, skip, or come out page-sized</th><td>Set the printer to the label size, not Letter or A4, and recalibrate. Still skipping? Try another roll; cheap rolls are the usual cause.</td></tr>
+    <tr><th>Faint lines across thermal labels</th><td>Clean the print head. If the lines are in the PDF on screen too, tell us.</td></tr>
+    <tr><th>Tiny, or the wrong size</th><td>Check {% page "printing" "Label printing" %} matches the paper, on the account you're signed in with.</td></tr>
+    <tr><th>The page times out on a big batch</th><td>Print per person from the Users tab.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>{% page "lot_by_pk_qr" "The QR code" %} on a label always opens that lot, even years later.</p>

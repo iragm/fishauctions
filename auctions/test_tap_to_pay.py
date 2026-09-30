@@ -317,22 +317,21 @@ class SquareOnboardingInAppTests(StandardTestCase):
         self.url = reverse("square_seller")
 
     def test_connect_link_renders_in_the_app(self):
-        html = self.client.get(self.url, HTTP_USER_AGENT=IOS_UA).content.decode()
+        html = self.client.get(self.url, HTTP_USER_AGENT=IOS_UA, follow=True).content.decode()
         self.assertIn(reverse("square_connect"), html)
 
     def test_no_open_this_on_the_website_banner(self):
-        html = self.client.get(self.url, HTTP_USER_AGENT=IOS_UA).content.decode()
+        html = self.client.get(self.url, HTTP_USER_AGENT=IOS_UA, follow=True).content.decode()
         self.assertNotIn("isn't available in the app", html)
 
     def test_paypal_page_matches(self):
-        html = self.client.get(reverse("paypal_seller"), HTTP_USER_AGENT=IOS_UA).content.decode()
-        self.assertIn(reverse("paypal_connect"), html)
+        html = self.client.get(reverse("paypal_seller"), HTTP_USER_AGENT=IOS_UA, follow=True).content.decode()
         self.assertNotIn("isn't available in the app", html)
 
     def test_reconnect_prompt_is_actionable_in_the_app(self):
         # A legacy account needs reconnecting, from the device that hit the problem.
         SquareSeller.objects.create(user=self.user, square_merchant_id="MID", access_token="t", scopes="")
-        html = self.client.get(self.url, HTTP_USER_AGENT=IOS_UA).content.decode()
+        html = self.client.get(self.url, HTTP_USER_AGENT=IOS_UA, follow=True).content.decode()
         self.assertIn("Reconnect required for Tap to Pay", html)
         self.assertIn(reverse("square_connect"), html)
 
@@ -349,7 +348,7 @@ class SquareAccessGateDisclosureTests(StandardTestCase):
         self.url = reverse("square_seller")
 
     def _html(self, user_agent=IOS_UA):
-        return self.client.get(self.url, HTTP_USER_AGENT=user_agent).content.decode()
+        return self.client.get(self.url, HTTP_USER_AGENT=user_agent, follow=True).content.decode()
 
     def test_the_page_says_accounts_are_reviewed(self):
         self.assertIn("reviewed before they're switched on", self._html())
@@ -366,8 +365,8 @@ class SquareAccessGateDisclosureTests(StandardTestCase):
     def test_reaching_connect_directly_lands_on_the_explanation(self):
         """Reaching connect directly redirects to square_seller's explanation."""
         response = self.client.get(reverse("square_connect"))
-        self.assertRedirects(response, reverse("square_seller"))
-        self.assertContains(self.client.get(reverse("square_seller")), "request access", status_code=200)
+        self.assertRedirects(response, reverse("square_seller"), fetch_redirect_response=False)
+        self.assertContains(self.client.get(reverse("square_seller"), follow=True), "request access", status_code=200)
 
     def test_an_enabled_account_still_gets_the_connect_button(self):
         self.user.userdata.square_enabled = True

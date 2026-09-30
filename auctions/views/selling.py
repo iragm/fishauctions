@@ -846,6 +846,30 @@ def add_lot_to_queue(auction, lot, user):
     return None
 
 
+def reorder_queue(auction, ordered_ids):
+    """Persist a new order given a list of entry ids (top first). Passed entries stay in front, and
+    entries not mentioned keep their relative order after the ones that are.
+    """
+    entries = LotQueueEntry.objects.filter(auction=auction).order_by("order")
+    passed = [entry for entry in entries if entry.passed_at]
+    to_come = {entry.pk: entry for entry in entries if not entry.passed_at}
+    moved = []
+    for raw in ordered_ids:
+        try:
+            pk = int(raw)
+        except (ValueError, TypeError):
+            continue
+        entry = to_come.pop(pk, None)
+        if entry:
+            moved.append(entry)
+    rest = sorted(to_come.values(), key=lambda e: e.order)
+    for order, entry in enumerate(passed + moved + rest, start=1):
+        if entry.order != order:
+            entry.order = order
+            entry.save(update_fields=["order"])
+    process_queue_notifications(auction)
+
+
 class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
     """Helpers for the in-person lot queue (LotQueueEntry), built by scanning or typing lots."""
 
@@ -897,26 +921,7 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
         return add_lot_to_queue(self.auction, lot, self.request.user)
 
     def apply_reorder(self, ordered_ids):
-        """Persist a new order given a list of entry ids (top first). Passed entries stay in front."""
-        entries = LotQueueEntry.objects.filter(auction=self.auction).order_by("order")
-        passed = [entry for entry in entries if entry.passed_at]
-        to_come = {entry.pk: entry for entry in entries if not entry.passed_at}
-        moved = []
-        for raw in ordered_ids:
-            try:
-                pk = int(raw)
-            except (ValueError, TypeError):
-                continue
-            entry = to_come.pop(pk, None)
-            if entry:
-                moved.append(entry)
-        # Unmentioned entries keep their relative order after.
-        rest = sorted(to_come.values(), key=lambda e: e.order)
-        for order, entry in enumerate(passed + moved + rest, start=1):
-            if entry.order != order:
-                entry.order = order
-                entry.save(update_fields=["order"])
-        process_queue_notifications(self.auction)
+        reorder_queue(self.auction, ordered_ids)
 
     def render_list(self, error=None):
         return render(self.request, "auctions/lot_queue_list.html", {**self.queue_context(), "error": error})

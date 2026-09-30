@@ -18,6 +18,7 @@ from auctions.models import (
     AuctionDropdown,
     AuctionHistory,
     Club,
+    Lot,
     PayPalSeller,
 )
 from auctions.tests import StandardTestCase, give_contact_info
@@ -120,8 +121,8 @@ class AuctionEditViewTests(StandardTestCase):
             "alternative_split_label": self.online_auction.alternative_split_label or "",
             "tax": str(self.online_auction.tax or "0"),
             "online_bidding": self.online_auction.online_bidding,
-            "date_start": self.online_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
-            "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_start": timezone.localtime(self.online_auction.date_start).strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": timezone.localtime(self.online_auction.date_end).strftime("%Y-%m-%d %H:%M:%S"),
             "invoice_rounding": str(self.online_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
             "minimum_bid": str(self.online_auction.minimum_bid),
@@ -158,8 +159,8 @@ class AuctionEditViewTests(StandardTestCase):
             "alternative_split_label": self.online_auction.alternative_split_label or "",
             "tax": str(self.online_auction.tax or "0"),
             "online_bidding": self.online_auction.online_bidding,
-            "date_start": self.online_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
-            "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_start": timezone.localtime(self.online_auction.date_start).strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": timezone.localtime(self.online_auction.date_end).strftime("%Y-%m-%d %H:%M:%S"),
             "invoice_rounding": str(self.online_auction.invoice_rounding),
             "only_whole_dollar_bids": "",
             "minimum_bid": str(self.online_auction.minimum_bid),
@@ -715,3 +716,61 @@ class AuctionUsersViewTests(StandardTestCase):
         assert response.status_code == 200
         assert ("<i class='bi bi-cash-coin'></i> Can bid", "can_bid") not in response.context["possible_filters"]
         assert ("<i class='bi bi-cash-coin'></i> Can't bid", "no_bid") not in response.context["possible_filters"]
+
+
+class MovingAnOnlineAuctionsEndTests(StandardTestCase):
+    """A lot takes the auction's end when it's added, so moving the auction's end moves its unsold lots."""
+
+    def setUp(self):
+        super().setUp()
+        end = timezone.now() + datetime.timedelta(days=2)
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_end=end)
+        self.online_auction.refresh_from_db()
+        self.open_lot = Lot.objects.create(
+            lot_name="Open lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=end,
+        )
+
+    def test_moving_the_end_moves_open_lots(self):
+        new_end = self.online_auction.date_end + datetime.timedelta(days=1)
+        self.online_auction.date_end = new_end
+        self.online_auction.save()
+        self.open_lot.refresh_from_db()
+        self.assertEqual(self.open_lot.date_end, new_end)
+
+    def test_sold_lots_stay_put(self):
+        sold_end = self.lot.date_end
+        self.online_auction.date_end = self.online_auction.date_end + datetime.timedelta(days=1)
+        self.online_auction.save()
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.date_end, sold_end)
+
+    def test_not_in_the_last_hour(self):
+        """By then late bids may have pushed some lots' ends out, and those are theirs to keep."""
+        soon = timezone.now() + datetime.timedelta(minutes=30)
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_end=soon)
+        Lot.objects.filter(pk=self.open_lot.pk).update(date_end=soon)
+        self.online_auction.refresh_from_db()
+        self.online_auction.date_end = soon + datetime.timedelta(days=1)
+        self.online_auction.save()
+        self.open_lot.refresh_from_db()
+        self.assertEqual(self.open_lot.date_end, soon)
+
+    def form_with_end(self, date_end):
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        form.cleaned_data = {"date_end": date_end}
+        form.__dict__["changed_data"] = ["date_end"]
+        return form
+
+    def test_the_rules_page_refuses_an_end_less_than_an_hour_away(self):
+        with self.assertRaises(forms.ValidationError):
+            self.form_with_end(timezone.now() + datetime.timedelta(minutes=30)).clean_date_end()
+
+    def test_an_end_further_out_is_fine(self):
+        later = timezone.now() + datetime.timedelta(days=3)
+        self.assertEqual(self.form_with_end(later).clean_date_end(), later)

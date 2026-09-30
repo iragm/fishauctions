@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, cached_property
 from pathlib import Path
 
 from django.template.loader import get_template
@@ -89,6 +89,20 @@ GROUPS = (
                 audience=ADMIN,
             ),
             Guide(
+                "payments",
+                "Card payments",
+                "bi-credit-card",
+                "Taking cards with Square, or PayPal for the clubs that have it: pay buttons, checkout QR codes, Tap to Pay.",
+                audience=ADMIN,
+            ),
+            Guide(
+                "scanning",
+                "Barcodes and scanners",
+                "bi-upc-scan",
+                "Scanning membership cards, paddles and lot labels with a phone camera or a USB scanner.",
+                audience=ADMIN,
+            ),
+            Guide(
                 "labels",
                 "Lot labels",
                 "bi-tag",
@@ -113,6 +127,12 @@ GROUPS = (
                 "What to expect at an in-person club auction, whether you're bringing fish or buying them.",
                 kind=IN_PERSON,
             ),
+            Guide(
+                "bagging-fish",
+                "Bagging fish",
+                "bi-droplet",
+                "Bagging fish so they arrive healthy, and settling new ones into your tank.",
+            ),
         ),
     ),
     Group(
@@ -134,6 +154,18 @@ GROUPS = (
                 "Your account",
                 "bi-person-gear",
                 "Preferences, notifications, getting paid, and the rest of your account settings.",
+            ),
+            Guide(
+                "ai-agents",
+                "AI agents",
+                "bi-robot",
+                "Connect Claude, ChatGPT or Grok, and have it add lots, check invoices, or read these guides for you.",
+            ),
+            Guide(
+                "mobile-app",
+                "The phone app",
+                "bi-phone",
+                "What the app does that the website can't: Tap to Pay, Bluetooth labels, lot scanning and offline mode.",
             ),
         ),
     ),
@@ -167,16 +199,111 @@ def guide_for_auction(auction, is_admin: bool) -> Guide:
 
 @dataclass
 class HelpContext:
-    """Who is reading and which auction they mean. Every field may be empty; the guides still read."""
+    """Who is reading and which auction they mean. Every field may be empty; the guides still read.
+
+    The cached properties are what the guides quote back at the reader. Each is empty for a signed-out
+    reader (or ``HelpContext()``, which is how search renders a guide), so a guide reads the same
+    with every personal line gone.
+    """
 
     auction: object = None
     is_admin: bool = False
     club: object = None
     is_club_admin: bool = False
+    user: object = None
 
     @property
     def kind(self) -> str:
         return auction_kind(self.auction) if self.auction else ""
+
+    @property
+    def signed_in(self) -> bool:
+        return bool(self.user and self.user.is_authenticated)
+
+    @cached_property
+    def site(self) -> dict:
+        """Facts from every auction on the site (``help_stats.site_stats``)."""
+        from auctions.help_stats import site_stats
+
+        return site_stats()
+
+    @cached_property
+    def photos(self) -> dict:
+        """Photo prices at big in-person auctions (``help_stats.in_person_photos``)."""
+        from auctions.help_stats import in_person_photos
+
+        return in_person_photos()
+
+    @cached_property
+    def stats_auction(self):
+        """The auction whose numbers the guides quote: this one if the reader ran it, else their latest."""
+        from auctions.help_stats import stats_auction
+
+        return stats_auction(self.user, self.auction, self.is_admin)
+
+    @cached_property
+    def stats(self) -> dict:
+        from auctions.help_stats import auction_facts
+
+        return auction_facts(self.stats_auction) if self.stats_auction else {}
+
+    @cached_property
+    def has_ai_agent(self) -> bool:
+        """Whether the reader has connected an AI agent: a live key, or a sign-in from one."""
+        if not self.signed_in:
+            return False
+        from auctions.models import UserAPIKey
+
+        if UserAPIKey.objects.filter(user=self.user, is_active=True).exists():
+            return True
+        from auctions.mcp import auth as mcp_auth
+
+        if not mcp_auth.oauth_enabled():
+            return False
+        from oauth2_provider.models import get_refresh_token_model
+
+        return get_refresh_token_model().objects.filter(user=self.user, revoked__isnull=True).exists()
+
+    @cached_property
+    def label_fields(self) -> list[str]:
+        """What the auction's labels print, in the words its label settings page uses."""
+        if not self.auction:
+            return []
+        from auctions.forms import LabelPrintFieldsForm
+
+        chosen = set((self.auction.label_print_fields or "").split(","))
+        form = LabelPrintFieldsForm(auction=self.auction)
+        # A field the auction has turned off prints nothing, and its tooltip says so.
+        return ["Lot number"] + [
+            field["description"]
+            for field in form.available_fields
+            if field["value"] in chosen and "disabled in this auction" not in field["tooltip"]
+        ]
+
+    @cached_property
+    def account(self) -> dict:
+        """The reader's account, as far as the account guide cares: what's missing and what's set up."""
+        if not self.signed_in:
+            return {}
+        from allauth.account.models import EmailAddress
+
+        from auctions.models import AuctionTOS, ClubMember, MobileDevice, Watch
+
+        user = self.user
+        userdata = getattr(user, "userdata", None)
+        return {
+            "verified": EmailAddress.objects.filter(user=user, verified=True).exists(),
+            "address": bool(userdata and (userdata.address or "").strip()),
+            "phone": bool(userdata and (userdata.phone_number or "").strip()),
+            "auctions": AuctionTOS.objects.filter(user=user).values("auction").distinct().count(),
+            "clubs": ClubMember.objects.filter(user=user, is_deleted=False).count(),
+            "watching": Watch.objects.filter(user=user).count(),
+            "app": MobileDevice.objects.filter(user=user).exists(),
+            "app_push": bool(userdata and userdata.has_app_push),
+            "username_visible": bool(userdata and userdata.username_visible),
+            "lot_alerts": bool(userdata and userdata.push_notifications_when_lots_sell),
+            "push_instead_of_email": bool(userdata and userdata.push_notifications_instead_of_email),
+        }
 
 
 def help_context(request) -> HelpContext:
@@ -203,7 +330,7 @@ def help_context(request) -> HelpContext:
         from auctions.views.base import check_club_permission
 
         is_club_admin = bool(check_club_permission(user, club, "permission_admin"))
-    return HelpContext(auction=auction, is_admin=is_admin, club=club, is_club_admin=is_club_admin)
+    return HelpContext(auction=auction, is_admin=is_admin, club=club, is_club_admin=is_club_admin, user=user)
 
 
 def tips_for(guide: Guide, ctx: HelpContext) -> list[dict]:
@@ -287,253 +414,31 @@ NOT_IN_HELP: dict[str, str] = {
     "admin_club_health": "Site operator only.",
     "admin_unlinked_auctions": "Site operator only.",
     "admin_lifecycle": "Site operator only.",
+    "admin_early_adds": "Site operator only.",
     "admin_session_replay": "Site operator only.",
     "admin_user_map": "Site operator only.",
     "admin_user_signups": "Site operator only.",
     "admin_error": "Site operator only.",
     "all_my_users": "Site operator only.",
     "help": "This is the help.",
+    "leaderboard": "No link on the site leads to it any more.",
+    "auction_disable_bidding": "Unfinished: its button was taken off the users page (see the view's TODO).",
+    "bulk_add_lots": "The older add-lots form; only the command palette opens it. The guides describe the grid every button opens.",
+    "bulk_add_lots_for_myself": "The older add-lots form; only the command palette opens it. The guides describe the grid every button opens.",
+    "user_api_keys": "Redirects into the AI agents guide, and takes that guide's forms.",
+    "paypal_seller": "Redirects into the Card payments guide.",
+    "square_seller": "Redirects into the Card payments guide.",
+    "square_connect": "The connect button in the Card payments guide is drawn by help_tags.square_account, only for someone Square will take.",
+    "paypal_connect": "PayPal is set up for a few clubs with their own credentials; the guides don't offer the older connect-your-own-account flow.",
+    "my_labels_by_username": "One person's labels by username; nothing links it. print_labels_by_bidder_number is the same page.",
 }
 
-#: Pages no guide covers yet. Only ever shrinks -- see the module docstring.
-NOT_YET_DOCUMENTED = frozenset(
-    {
-        # Browsing
-        "allLots",
-        "auctions",
-        "all_auctions",
-        "clubs",
-        "leaderboard",
-        "my_last_auction_lots",
-        "user_lots",
-        "userpage",
-        "speaker_list",
-        "speaker_detail",
-        "speaker_add",
-        "feedback",
-        "add_to_calendar",
-        # My stuff
-        "selling",
-        "watched",
-        "won_lots",
-        "my_bids",
-        "my_invoices",
-        "invoice_by_pk",
-        "new_lot",
-        "messages",
-        "my_lot_report",
-        "my_won_lot_csv",
-        "lot_by_pk",
-        "report_lot",
-        "edit_lot",
-        "delete_lot",
-        "add_image",
-        "single_lot_label",
-        "lot_by_pk_qr",
-        # Account
-        "account",
-        "account_setup",
-        "preferences",
-        "notification_preferences",
-        "contact_info",
-        "change_username",
-        "ignore_categories",
-        "printing",
-        "user_api_keys",
-        "account_data_export",
-        "account_delete",
-        "paypal_seller",
-        "paypal_connect",
-        "paypal_seller_delete",
-        "square_seller",
-        "square_connect",
-        "square_seller_delete",
-        # Auction
-        "auction_main",
-        "auction_lot_list",
-        "my_auction_invoice",
-        "auction_chat",
-        "auction_stats",
-        "auction_lot_map",
-        "auction_volunteers",
-        "auction_door_prizes",
-        "auction_self_check_in",
-        "print_my_labels",
-        "print_my_unprinted_labels",
-        "bulk_add_lots_for_myself",
-        "bulk_add_lots_auto_for_myself",
-        "auction_confirm",
-        "lot_list",
-        # Running an auction
-        "create_auction",
-        "edit_auction",
-        "edit_auction_custom_fields",
-        "auction_tos_list",
-        "auction_invoices",
-        "auction_lot_winners_dynamic",
-        "auction_quick_checkout",
-        "auction_quick_check_in",
-        "auction_lot_queue",
-        "auction_lot_queue_current_lot",
-        "auction_printing",
-        "auction_printable_lot_list",
-        "auction_printing_pdf",
-        "auction_label_config",
-        "bulk_add_users",
-        "import_from_google_drive",
-        "sync_google_drive",
-        "import_lots_from_csv",
-        "compose_email_to_users",
-        "auction_add_users_to_club",
-        "user_list",
-        "auction_history",
-        "auction_pickup_location",
-        "create_auction_pickup_location",
-        "auction_disable_bidding",
-        "auction_lot_map_clear",
-        "auction_voice_command_log",
-        "auction_delete",
-        "bulk_add_lots",
-        "bulk_add_lots_auto",
-        "bulk_add_image",
-        "print_labels_by_bidder_number",
-        "print_unprinted_labels_by_bidder_number",
-        "auction_no_show",
-        "my_labels_by_username",
-        # Pickup locations
-        "edit_pickup",
-        "delete_pickup",
-        "location_incoming",
-        "location_outgoing",
-        # Club
-        "club_detail",
-        "club_detail_tab",
-        "club_membership_pay",
-        "club_events_ical",
-        "club_events_embed",
-        "club_past_events_embed",
-        "bap_embed",
-        "club_announcements_embed",
-        "club_auction_embed",
-        # Club admin
-        "club_admin",
-        "club_setup",
-        "club_announcements",
-        "club_website_integration",
-        "club_edit",
-        "club_membership_settings",
-        "club_email_settings",
-        "club_donation_vendors",
-        "club_donation_settings",
-        "club_link_payment_account",
-        "club_paypal_credentials",
-        "club_history",
-        "club_stats",
-        "club_member_map",
-        "club_member_import",
-        "club_member_export",
-        "club_treasurer_report",
-        "club_treasurer_report_export",
-        "club_money_add",
-        "club_money_balance",
-        "club_bap",
-        "club_bap_lots",
-        "club_bap_settings",
-        "club_bap_import",
-        "club_barcode_labels",
-        "club_barcode_labels_pdf",
-        "club_event_add",
-        "club_api_keys",
-        "club_api_key_create",
-        "club_mailchimp_config",
-        "mailchimp_connect",
-        "mailchimp_select_audience",
-        "mailchimp_sync_now",
-        "mailchimp_disconnect",
-        "club_brevo_config",
-        "brevo_connect",
-        "brevo_select_list",
-        "brevo_sync_now",
-        "brevo_disconnect",
-        "club_google_calendar_config",
-        "google_calendar_connect",
-        "google_calendar_sync_now",
-        "google_calendar_disconnect",
-        "club_discord_config",
-        "club_discord_fetch_roles",
-        "club_discord_send_join_message",
-        "club_member_renew_page",
-        "club_member_merge",
-    }
-)
+#: Pages no guide covers yet. Only ever shrinks -- see the module docstring. Empty since every page was
+#: written up; a new page goes in a guide or in NOT_IN_HELP, not here.
+NOT_YET_DOCUMENTED: frozenset[str] = frozenset()
 
-#: Auction rules no guide explains yet. Only ever shrinks.
-RULES_NOT_YET_DOCUMENTED = frozenset(
-    {
-        "summernote_description",
-        "lot_entry_fee",
-        "registration_fee",
-        "unsold_lot_fee",
-        "winning_bid_percent_to_club",
-        "date_start",
-        "date_end",
-        "lot_submission_start_date",
-        "lot_submission_end_date",
-        "promote_this_auction",
-        "max_lots_per_user",
-        "allow_additional_lots_as_donation",
-        "email_users_when_invoices_ready",
-        "add_membership_fee_to_invoices_for_expired_members",
-        "pre_register_lot_discount_percent",
-        "only_approved_sellers",
-        "only_approved_bidders",
-        "invoice_payment_instructions",
-        "invoice_rounding",
-        "only_whole_dollar_bids",
-        "minimum_bid",
-        "winning_bid_percent_to_club_for_club_members",
-        "lot_entry_fee_for_club_members",
-        "registration_fee_for_club_members",
-        "club_member_discount",
-        "force_donation_threshold",
-        "require_phone_number",
-        "tax",
-        "online_bidding",
-        "date_online_bidding_ends",
-        "date_online_bidding_starts",
-        "allow_deleting_bids",
-        "auto_add_images",
-        "message_users_when_lots_sell",
-        "copy_users_when_copying_this_auction",
-        "use_seller_dash_lot_numbering",
-        "enable_online_payments",
-        "enable_square_payments",
-        "club",
-        "manage_users_through_club",
-        "allow_self_checkin",
-        "user_cut",
-        "club_member_cut",
-        # The extra-fields page
-        "allow_bulk_adding_lots",
-        "reserve_price",
-        "buy_now",
-        "use_categories",
-        "use_scientific_name",
-        "use_quantity_field",
-        "use_donation_field",
-        "use_i_bred_this_fish_field",
-        "use_reference_link",
-        "use_description",
-        "custom_field_1",
-        "custom_field_1_name",
-        "use_custom_checkbox_field",
-        "custom_checkbox_name",
-        "use_custom_dropdown_field",
-        "custom_dropdown_name",
-        "use_custom_random_field",
-        "custom_random_name",
-    }
-)
+#: Auction rules no guide explains yet. Only ever shrinks, and is empty for the same reason.
+RULES_NOT_YET_DOCUMENTED: frozenset[str] = frozenset()
 
 
 # --- search -------------------------------------------------------------------

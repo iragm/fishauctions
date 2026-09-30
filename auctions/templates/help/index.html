@@ -3,6 +3,7 @@
 {% block meta_description %}Step-by-step guides for running and taking part in fish club auctions, online and in person.{% endblock %}
 {% block extra_head %}<link rel="canonical" href="{{ request.scheme }}://{{ request.get_host }}{% url 'help' %}">{% endblock %}
 {% block content %}
+{% include "help/ai_tip.html" %}
 {% if your_guide %}
 <div class="help-note help-tip"><i class="bi bi-person-check"></i><div>You were last in {{ help.auction.title }}. <a href="{{ your_guide.url }}?auction={{ help.auction.slug }}">{{ your_guide.title }}</a> is the guide for it.</div></div>
 {% endif %}

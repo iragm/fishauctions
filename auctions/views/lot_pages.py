@@ -1309,9 +1309,9 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                 record_species_choice(obj.lot_name, species, first_save=False, changed=True, user=self.request.user)
             if species_changed and species and obj.lot_name:
                 remember_species(obj.lot_name, species, source="user", user=self.request.user)
-            # add message if the winner changed
+            # add message if the winner or price changed
             if obj.auctiontos_winner:
-                if self.lot_initial_winner != obj.auctiontos_winner:
+                if self.lot_initial_winner != obj.auctiontos_winner or "winning_price" in form.changed_data:
                     try:
                         obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
                     except Exception:

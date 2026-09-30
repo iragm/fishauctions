@@ -42,6 +42,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from auctions.client_ip import client_ip
+from auctions.crawlers import is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -416,7 +417,7 @@ class PageViewCreate(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        if beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
+        if is_crawler(request) or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
             return HttpResponse(status=204)
         data = request.POST
         auction = beacon_subject(Auction, data.get("auction"))
@@ -461,23 +462,22 @@ class PageViewCreate(APIView):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            if "Googlebot" not in user_agent and "Baiduspider" not in user_agent:
-                PageView.objects.create(
-                    lot_number=lot_number,
-                    url=url,
-                    auction=auction,
-                    session_id=session_id,
-                    user=user,
-                    user_agent=user_agent,
-                    ip_address=ip[:100],
-                    platform=parsed_ua.os.family,
-                    os=os,
-                    referrer=referrer[:600],
-                    title=data.get("title", "")[:600],
-                    source=source,
-                )
-                if user:
-                    UserData.objects.filter(user=user).update(last_activity=timezone.now())
+            PageView.objects.create(
+                lot_number=lot_number,
+                url=url,
+                auction=auction,
+                session_id=session_id,
+                user=user,
+                user_agent=user_agent,
+                ip_address=ip[:100],
+                platform=parsed_ua.os.family,
+                os=os,
+                referrer=referrer[:600],
+                title=data.get("title", "")[:600],
+                source=source,
+            )
+            if user:
+                UserData.objects.filter(user=user).update(last_activity=timezone.now())
             if user and lot_number and lot_number.species_category:
                 # create/increment interest in this category for this view
                 UserInterestCategory.add_interest(user, lot_number.species_category, settings.VIEW_WEIGHT)

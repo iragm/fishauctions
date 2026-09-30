@@ -12,6 +12,7 @@ from django.conf import settings  # import the settings file
 
 from auctions import dmca
 from auctions.client_ip import client_ip
+from auctions.crawlers import is_crawler
 from auctions.helper_functions import cookie_coordinates
 
 DEFAULT_USER_TIMEZONE = "America/New_York"
@@ -28,7 +29,6 @@ ONE_TAP_ALWAYS_SHOWN_ON = frozenset({"account_login", "account_signup"})
 # Pages the prompt is never drawn on: it covers something it can't share the screen with. Keyed on
 # the view, so a second path to the same page is covered.
 ONE_TAP_NEVER_SHOWN_ON = frozenset({"AllAuctions", "AllLots", "ClubFinderView", "FAQ", "PromoSite", "UserAgreement"})
-CRAWLER_USER_AGENTS = ("Googlebot", "Baiduspider")
 
 
 def once_per_request(processor):
@@ -106,8 +106,7 @@ def _is_page_load(request):
     """A whole page the visitor asked for, rather than an HTMx fragment."""
     if request.method != "GET" or getattr(request, "htmx", False):
         return False
-    user_agent = request.META.get("HTTP_USER_AGENT", "")
-    return not any(crawler in user_agent for crawler in CRAWLER_USER_AGENTS)
+    return not is_crawler(request)
 
 
 @once_per_request

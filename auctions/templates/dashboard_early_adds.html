@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Early lots and gross{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <h3>Early lots and gross</h3>
+  <form method="get" class="d-flex align-items-center gap-2">
+    <label for="days" class="text-nowrap">Early means more than</label>
+    <input type="number" class="form-control form-control-sm" style="width: 5em;" name="days" id="days" min="0" max="60" value="{{ days }}">
+    <span class="text-nowrap">days before</span>
+    <button type="submit" class="btn btn-sm btn-primary">Show</button>
+  </form>
+</div>
+<p class="text-muted small">Promoted in-person auctions with {{ min_lots }}+ lots, {{ points|length }} of them. Gross grows with the number of lots, so compare gross per lot too. Club-managed auctions have no people point. Click a point for that auction's stats.</p>
+
+{% for chart in charts %}
+<h4 class="mt-4">Share of {{ chart.label }} added early</h4>
+{% if chart.summary %}
+<div class="table-responsive">
+<table class="table table-sm" style="max-width: 44em;">
+  <thead><tr><th></th><th>Auctions</th><th>Median gross</th><th>Median lots</th><th>Median gross per lot</th></tr></thead>
+  <tbody>
+    <tr><td>More than {{ chart.summary.median|floatformat:0 }}% early</td><td>{{ chart.summary.above.auctions }}</td><td>{{ chart.summary.above.gross|floatformat:0 }}</td><td>{{ chart.summary.above.lots|floatformat:0 }}</td><td>{{ chart.summary.above.gross_per_lot|floatformat:2 }}</td></tr>
+    <tr><td>{{ chart.summary.median|floatformat:0 }}% or less</td><td>{{ chart.summary.below.auctions }}</td><td>{{ chart.summary.below.gross|floatformat:0 }}</td><td>{{ chart.summary.below.lots|floatformat:0 }}</td><td>{{ chart.summary.below.gross_per_lot|floatformat:2 }}</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Correlation with gross: r = {{ chart.summary.r|floatformat:2|default:"n/a" }}; with gross per lot: r = {{ chart.summary.r_per_lot|floatformat:2|default:"n/a" }} ({{ chart.summary.n }} auctions).</p>
+{% else %}
+<p class="text-muted">Not enough auctions.</p>
+{% endif %}
+<canvas id="chart_{{ chart.key }}" width="500" height="300"></canvas>
+{% endfor %}
+
+{{ points_data|json_script:"early-adds-points" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<script type="text/javascript">
+  (function() {
+    var points = JSON.parse(document.getElementById("early-adds-points").textContent);
+    ["early_lots_pct", "early_people_pct"].forEach(function(key) {
+      var shown = points.filter(function(p) { return p[key] !== null; });
+      new Chart(document.getElementById("chart_" + key).getContext("2d"), {
+        type: "scatter",
+        data: {datasets: [{
+          label: "Auctions",
+          data: shown.map(function(p) { return {x: p[key], y: p.gross}; }),
+          backgroundColor: "rgba(47, 164, 231, 0.6)",
+          pointRadius: 5,
+          pointHoverRadius: 7
+        }]},
+        options: {
+          legend: {display: false},
+          scales: {
+            xAxes: [{scaleLabel: {display: true, labelString: "% added more than {{ days }} days before"}, ticks: {min: 0, max: 100}}],
+            yAxes: [{scaleLabel: {display: true, labelString: "Gross"}, ticks: {beginAtZero: true}}]
+          },
+          tooltips: {callbacks: {label: function(item) {
+            var p = shown[item.index];
+            return p.title + ": " + p[key] + "% early, " + p.lots + " lots, gross " + p.gross;
+          }}},
+          onClick: function(event, elements) {
+            if (elements.length) { window.location.href = shown[elements[0]._index].url; }
+          }
+        }
+      });
+    });
+  })();
+</script>
+{% endblock %}

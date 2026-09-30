@@ -4,6 +4,8 @@ Custom middleware for the auctions application.
 
 from django.conf import settings
 
+from auctions.crawlers import is_crawler
+
 
 class ContentSecurityPolicyMiddleware:
     """Send ``settings.CONTENT_SECURITY_POLICY`` on every response that doesn't already have one.
@@ -63,6 +65,24 @@ class ShortAnonymousSessionMiddleware:
         short = getattr(settings, "ANONYMOUS_SESSION_COOKIE_AGE", None)
         if short and session.get_expiry_age() > short:
             session.set_expiry(short)
+        return response
+
+
+class CrawlerSessionMiddleware:
+    """Never store a session for a crawler.
+
+    Every page render writes the session (``add_location``), and a crawler sends no cookie, so each
+    hit was a new ``django_session`` row plus two Redis round trips -- and a Redis stall 500'd them.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        session = getattr(request, "session", None)
+        if session is not None and session.modified and is_crawler(request):
+            session.modified = False
         return response
 
 

@@ -183,6 +183,8 @@ services:
       # The official redis image persists to /data; the old /bitnami/redis/data mount was a
       # leftover, so the volume was never written and the broker queue was wiped on every recreate.
       # AOF (appendfsync everysec) keeps the queue across restarts, losing at most a second.
+      # The latency monitor records any stall over 100ms: `redis-cli LATENCY LATEST` names its cause.
+      # volatile-lru evicts only keys with an expiry -- cache and sessions, never the Celery queue.
       - redis_data:/data
     restart: always
     command: >
@@ -190,6 +192,9 @@ services:
       --requirepass ${REDIS_PASSWORD-unsecure}
       --appendonly yes
       --appendfsync everysec
+      --latency-monitor-threshold 100
+      --maxmemory 1gb
+      --maxmemory-policy volatile-lru
 
   nginx:
     container_name: nginx

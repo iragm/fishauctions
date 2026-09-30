@@ -1,9 +1,98 @@
 {% load help_tags %}
-{% comment %}Outline only -- see HELP.md.{% endcomment %}
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This guide is still being written.</div></div>
+{% comment %}See HELP.md for the voice. Everything under Account, plus the things people get stuck on before they have one. The checklist at the top is help.account (help_guides.HelpContext.account): only what the reader could do something about.{% endcomment %}
+<p>One account does everything: bidding and selling in any club's auction, running your own, and your club memberships. Use the same one for every club. Your account pages are under {% page "account_setup" "Account" %}, in the menu under your name.</p>
+{% if help.signed_in %}{% helptip %}
+<div class="mb-1"><strong>Yay, you already signed up!</strong></div>
+<ul class="list-unstyled mb-0">
+  {% if not help.account.verified %}<li><i class="bi bi-envelope-exclamation text-warning"></i> Your email isn't confirmed yet. Look for the link we sent you.</li>{% endif %}
+  {% if not help.account.address %}<li><i class="bi bi-house-exclamation text-warning"></i> Looks like your address isn't filled out yet. If you sell, that's where your check goes: <a href="{% url 'contact_info' %}">Contact info</a>.</li>{% endif %}
+  {% if not help.account.auctions %}<li><i class="bi bi-calendar-x text-warning"></i> You still haven't joined any auctions. <a href="{% url 'auctions' %}">Find one near you</a>.</li>{% else %}<li><i class="bi bi-check-circle text-success"></i> You've been in {{ help.account.auctions }} auction{{ help.account.auctions|pluralize }}.</li>{% endif %}
+  {% if help.account.clubs %}<li><i class="bi bi-check-circle text-success"></i> You're in {{ help.account.clubs }} club{{ help.account.clubs|pluralize }}.</li>{% endif %}
+  {% if help.account.app %}<li><i class="bi bi-check-circle text-success"></i> You have the phone app.</li>{% endif %}
+  {% if help.has_ai_agent %}<li><i class="bi bi-check-circle text-success"></i> You've connected an AI agent.</li>{% endif %}
+</ul>
+{% endhelptip %}{% endif %}
+
 <h2 class="h5 mt-4" id="signing-in">Signing in</h2>
+<p><strong>Sign in with Google</strong> or <strong>Sign in with Apple</strong> is quickest: one click, no password. Otherwise click <strong>Create account</strong> and use your email.</p>
+<p>After you sign up, the site emails you a link. Click it: that proves the email is yours. Replying "yes, that's me" doesn't do anything.</p>
+<h3 class="h6 mt-3">If the link doesn't work</h3>
+<ul>
+  <li>Check your spam folder, and that you typed your email right.</li>
+  <li>Paste the link into your browser's address bar, not a search box.</li>
+  <li>Links only last a few hours. Sign in, and the site sends a fresh one.</li>
+  <li>Try another browser or device.</li>
+</ul>
+<p><strong>"An account already exists with this email"</strong> means you've signed up before. Sign in, or click <strong>Forgot your password?</strong>. The reset goes to the email on the account, which may not be the one you check most.</p>
+<p><strong>Watched lots missing, can't print labels, invoice won't open?</strong> Check the name at the top right. You're probably signed in with a different account on this device.</p>
+<p><strong>Want Google or Apple sign-in on an existing account?</strong> Sign in the usual way, then use <strong>Connect Google/Apple account</strong> in your account pages. Signing in with Google under a different email makes a second account instead.</p>
+{% mike %}Mike has three accounts: one from his first auction, one from signing in with Google, and one his club made for him. He gets three of every email.{% endmike %}
+<p>Ended up with two anyway? <a href="{% url 'support' %}">Get in touch</a> and we'll merge them.</p>
+
 <h2 class="h5 mt-4" id="contact-info">Your name, address and phone</h2>
-<h2 class="h5 mt-4" id="preferences">Preferences and notifications</h2>
-<h2 class="h5 mt-4" id="getting-paid">Getting paid: PayPal and Square</h2>
+<p>{% page "contact_info" "Contact info" %} holds your real name, phone and mailing address.</p>
+<ul>
+  <li><strong>Your name</strong> goes on your invoices. Only the people running auctions you join see it.</li>
+  <li><strong>Your address</strong> is where clubs mail your check when you sell. Keep it up to date.</li>
+  <li><strong>The map pin</strong> is how the site knows what's near you.</li>
+  <li><strong>Change it once</strong> and it changes in every club and auction you're in.</li>
+</ul>
+<p>Your <strong>username</strong> is public: it's on your lots, bids and chat messages, for anyone to see. Don't use your email or full name. {% page "change_username" "Change username" %} changes it. You can sign in with either your username or your email.</p>
+<p>To use a different email, go to <strong>Change email</strong>. Only you can change it. It doesn't need to match your PayPal: any card can pay any invoice.</p>
+
+<h2 class="h5 mt-4" id="preferences">Preferences</h2>
+<p>{% page "preferences" "Preferences" %} is what the site shows you:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>Username visible</th><td>Untick to bid anonymously. The people running an auction still see who you are.{% if help.signed_in %} <span class="badge bg-primary fw-normal">Yours: {% if help.account.username_visible %}On{% else %}Off{% endif %}</span>{% endif %}</td></tr>
+    <tr><th>Email visible</th><td>Your email on your public page, for signed-in people. For sellers who want buyers to reach them.</td></tr>
+    <tr><th>Only show nearby auctions, Distance unit, Preferred currency</th><td>The currency is for auctions you create.</td></tr>
+    <tr><th>Lot photos</th><td>Whether your photos can be reused on other lots with the same name, and whether yours get one automatically.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>{% page "ignore_categories" "Ignore categories" %} hides whole categories from lot lists. No saltwater tank? Hide corals.</p>
+
+<h2 class="h5 mt-4" id="notifications">Notifications</h2>
+<p>{% page "notification_preferences" "Notifications" %} is when the site may contact you:</p>
+<ul>
+  <li><strong>Auctions near you</strong>, online and in person: one message per auction, only if you haven't been on the site for a few days. Set how far "near" is.</li>
+  <li><strong>Questions on your lots</strong>, and replies to yours.</li>
+  <li><strong>A reminder</strong> when you look at an auction but don't join.</li>
+  <li><strong>Push notifications when lots sell</strong>: at an in-person auction, a notification when a lot you're watching comes up. Works in the phone app, or in a web browser after you click <strong>Subscribe to Push Messaging</strong> on that device. <a href="{% url 'help_guide' slug='in-person-auctions' %}#coming-up">How they work</a>.</li>
+  <li><strong>With the phone app:</strong> notifications instead of emails, and a running total of what you've bought.</li>
+</ul>
+{% if help.signed_in %}{% helptip %}You have lot notifications turned {% if help.account.lot_alerts %}on{% else %}off{% endif %}{% if help.account.app %}, and {% if help.account.push_instead_of_email %}get notifications instead of emails{% else %}get emails, not notifications{% endif %}{% endif %}.{% endhelptip %}{% endif %}
+<p>Every email has a one-click unsubscribe link at the bottom. {% page "messages" "Chat notification setup" %} picks which lots' questions you hear about.</p>
+
+<h2 class="h5 mt-4" id="emails">Emails from auctions</h2>
+<p>When you join an auction, add lots, or your invoice is ready, the site emails you on behalf of the people running it.</p>
+{% tip %}Reply to any of those emails and your reply goes to them: the club, or whoever set the auction up. It's the quickest way to ask about drop-off, pickup, or a lot with a problem.{% endtip %}
+<p>Questions about the website itself go to <a href="{% url 'support' %}">the contact page</a>.</p>
+
+<h2 class="h5 mt-4" id="privacy">What other people can see</h2>
+<div class="table-responsive">
+<table class="table table-sm">
+  <thead><tr><th>Who</th><th>Sees</th></tr></thead>
+  <tbody>
+    <tr><td>Anyone</td><td>Lots, sale prices and usernames.</td></tr>
+    <tr><td>People running auctions and clubs you join</td><td>Your real name, email, phone and address.</td></tr>
+    <tr><td>Signed-in people</td><td>Your email, only if you tick <strong>Email visible</strong>.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>{% page "userpage" "Your public page" %} shows your username, your lots for sale, and the feedback people left you.</p>
+
+<h2 class="h5 mt-4" id="getting-paid">Taking card payments</h2>
+<p>Running an auction without a club? Connect Square and your invoices get a pay button. <a href="{% url 'help_guide' slug='payments' %}">Card payments</a> has how. Sellers don't need any of this; the club pays sellers.</p>
+
 <h2 class="h5 mt-4" id="ai">AI agents</h2>
+<p>Claude, ChatGPT or Grok can use the site for you, as you. <a href="{% url 'help_guide' slug='ai-agents' %}">AI agents</a> has how to connect one, and what's connected now.</p>
+
 <h2 class="h5 mt-4" id="your-data">Your data, and deleting your account</h2>
+<ul>
+  <li>{% page "account_data_export" "Download my data" %}: one file with everything the site holds about you.</li>
+  <li>{% page "account_delete" "Delete account" %}: says exactly what goes and what stays. Your sign-in and profile go; auction results stay, without your name, so other people's invoices still add up. It happens 30 days later, and signing in before then cancels it.</li>
+  <li>{% page "account" "My account" %}: your public page as you see it, with links to all of the above.</li>
+</ul>

@@ -1,16 +1,224 @@
 {% load help_tags %}
-{% comment %}Outline only -- see HELP.md for the plan, the voice, and the source material. Step by step, one example per feature, Mike where it helps.{% endcomment %}
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This guide is still being written. The video below covers the whole thing in twenty minutes.</div></div>
+{% comment %}See HELP.md for the voice. Step by step, one example per feature, Mike where it helps. Numbers from the reader's own last auction come from help.stats (help_stats.auction_facts), only when that auction was online.{% endcomment %}
+<p>You create the auction and a place to meet. Members add lots and bid on the site for about a week. Then invoices build themselves, people pay, and everybody meets once to swap bags.</p>
 {% if enable_help %}{% include 'youtube_embed.html' with videoId=online_tutorial chapters=online_tutorial_chapters %}{% endif %}
+{% if help.stats_auction.is_online and help.stats.lots %}{% helptip "graph-up" %}Last time, {{ help.stats_auction.title }} had {{ help.stats.lots }} lots{% if help.stats.gross %} and sold {{ help.stats.currency }}{{ help.stats.gross }}{% endif %}{% if help.stats.people %}, with {{ help.stats.people }} people buying or selling{% endif %}.{% if help.stats.first_timers %} {{ help.stats.first_timers }} of them had never been to one of your auctions.{% endif %}{% endhelptip %}{% endif %}
+
 <h2 class="h5 mt-4" id="big-picture">The big picture</h2>
+<div class="row g-3 mb-3">
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-person-check"></i> You need</h3>
+    <ul class="small mb-0 ps-3">
+      <li>a place and time to hand over lots, a day or two after bidding ends</li>
+      <li>three or four members who'll list good lots early</li>
+      <li>somebody to take the money</li>
+    </ul>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-gear"></i> The site does</h3>
+    <ul class="small mb-0 ps-3">
+      <li>the bids, and ending each lot</li>
+      <li>who owes whom</li>
+      <li>emailing everyone their invoice</li>
+    </ul>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h3 class="h6 card-title"><i class="bi bi-x-circle"></i> You don't need</h3>
+    <ul class="small mb-0 ps-3">
+      <li>a hall</li>
+      <li>an auctioneer</li>
+      <li>to do anything while bidding is open</li>
+    </ul>
+  </div></div></div>
+</div>
+{% tip %}Try it first. Make a test auction, leave it unpromoted, set it to end tomorrow, and have two board members join and add a few lots. Nobody can find it without the link, and it works exactly like the real thing. You need a second account to bid on your own lots.{% endtip %}
+
 <h2 class="h5 mt-4" id="create">1. Create the auction</h2>
+<ol>
+  <li>Click <strong>Auctions</strong> at the top of the page, then {% page "auction_confirm" "Create a new auction" %}, then {% page "create_auction" "Create a club auction" %}.</li>
+  <li>Pick the date bidding starts, and a name. The name becomes the link and can't be changed, so get the year right.</li>
+  <li>Click <strong>Create online auction</strong>. Ran one before? <strong>Copy</strong> it instead: same rules and locations, new dates.</li>
+</ol>
+<p>The <strong>Finish setting up</strong> box at the top of your auction page lists what's left, and ticks things off as you go.</p>
+<ul>
+  <li><strong>Pick your club</strong> under <strong>Club</strong> in the rules. Payments go to the club's account, and anyone who manages the club's auctions can run it and copy it next year.</li>
+  <li><strong>No club?</strong> Payments go to whoever created the auction. Create it from the account that will run next year's too.</li>
+  <li><strong>First auction?</strong> We have to OK you before you can promote it, take card payments, or have invoices emailed. Click <strong>Contact us and request access</strong> on your auction page and send your club's website.</li>
+</ul>
+
 <h2 class="h5 mt-4" id="pickup">2. Set where lots change hands</h2>
+<p>Under <strong>More</strong>, click {% page "auction_pickup_location" "Location" %}, then {% page "create_auction_pickup_location" "Add pickup location" %}.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>Name and Description</th><td>Exactly where. "Park-and-ride off exit 12, far corner by the bus shelter" beats "the mall".</td></tr>
+    <tr><th>Map</th><td>Type the address, then drag the pin to the exact spot. Phones navigate to the pin.</td></tr>
+    <tr><th>Pickup time</th><td>When to show up. Most people arrive right at the start.</td></tr>
+    <tr><th>Contact person</th><td>One of your admins. Everyone at this location sees their phone and email, so a buyer stuck in traffic knows who to call.</td></tr>
+    <tr><th>Users must coordinate pickup</th><td>For tiny auctions where people arrange a time with you. Usually off.</td></tr>
+    <tr><th>Pickup by mail</th><td>A "location" that means lots are posted. People who pick it give an address; add postage to their invoices yourself.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>{% page "edit_pickup" "Edit" %} a location any time. You can {% page "delete_pickup" "delete" %} one until somebody picks it, as long as it isn't the only one.</p>
+{% mike %}Mike's pickup location said "the mall". Forty people circled the parking lot for an hour looking for a crowd of fish people.{% endmike %}
+
 <h2 class="h5 mt-4" id="rules">3. Set the rules</h2>
+<p>Click {% page "edit_auction" "Rules" %} under <strong>More</strong>. <a href="{% url 'help_guide' slug='auction-rules' %}">What the auction rules do</a> has every setting. For a first online auction, get these right:</p>
+<ol>
+  <li><strong>The rules text</strong>: how to pay, and what can't be sold.</li>
+  <li><strong>The dates.</strong> About a week of bidding is plenty.</li>
+  <li><strong>The fees.</strong> "$1 unsold lot fee, 20% club cut" is a good start.</li>
+  <li><strong>Payment instructions</strong>: what people should do when their invoice arrives.</li>
+  <li><strong>Promote this auction</strong>, once you're ready for strangers to see it.</li>
+</ol>
+{% tip %}End bidding at 9 PM on a weeknight. People bid in the last evening, and they're at home then.{% endtip %}
+<p>The <strong>unsold lot fee</strong> is charged on every lot that doesn't sell. Online, a lot either gets a bid or it doesn't, so there's nothing for you to decide.</p>
+<p>Then join your own auction, like everyone else: scroll to the bottom of the auction page, tick <strong>Yes, I will be at this auction</strong>, pick your pickup location, and click <strong>Join auction</strong>. The site warns you about mistakes it can spot, like a pickup time before bidding ends.</p>
+
 <h2 class="h5 mt-4" id="invite">4. Get people to join</h2>
+<p>Nobody can bid or add lots until they join, and joining is the step people miss. Every invite should say:</p>
+<blockquote class="blockquote fs-6 border-start ps-3">Make an account, open the auction, scroll to the bottom and click <strong>Join auction</strong>.</blockquote>
+<ul>
+  <li><strong>Share the link.</strong> The <strong>Copy</strong> button at the bottom of the auction page copies it.</li>
+  <li><strong>A QR code on your flyer.</strong> Check it scans before you print 200.</li>
+  <li><strong>Promote it.</strong> Promoted auctions are listed publicly, and nearby people who asked to hear about auctions get told once.</li>
+  <li><strong>Reminders happen by themselves.</strong> People who look at your auction without joining get a nudge a day later.</li>
+  <li><strong>Facebook.</strong> Post it on your club's page and in local groups. Advertising an auction is fine; selling fish on Facebook is what gets posts taken down. A few dollars of local ads brings in real new members.</li>
+</ul>
+<p>A lot sells for what it's worth when at least two people really want it. One interested bidder means a $2 sale, and a few of those drag down the whole auction. So you want more people, and more lots worth fighting over:</p>
+<ul>
+  <li>Ask every vendor you know for a donation, and list those first.</li>
+  <li>Get three or four serious breeders to list on day one.</li>
+  <li>A few must-have lots with low opening bids bring people in, and then they bid on everything else.</li>
+</ul>
+<p>Replies to the site's emails about your auction come to you, or, for a club auction, to whoever your club picked to get auction email. A seller who replies to their "thanks for joining" email to ask about drop-off reaches you.</p>
+
 <h2 class="h5 mt-4" id="lots">5. Lots come in</h2>
+<p>Members add their own. <a href="{% url 'help_guide' slug='online-auctions' %}#sell">Taking part in an online auction</a> walks them through it; send them the link.</p>
+<ul>
+  <li><strong>Adding lots for somebody:</strong> on the {% page "auction_tos_list" "Users" %} tab, click <strong>Add lots</strong> next to their name. Admins aren't held to the lot limit or the dates, so this is how you add the club's donations early.</li>
+  <li><strong>Everything, in one list:</strong> the {% page "auction_lot_list" "Lots" %} tab.</li>
+  <li><strong>A lot that breaks your rules:</strong> its menu has <strong>Remove or refund</strong>. Tick remove, give a reason, and the lot and its bids are gone.</li>
+  <li><strong>What people are asking:</strong> {% page "auction_chat" "Chat messages" %}, under <strong>More</strong>, shows every question on every lot. Delete anything nasty.</li>
+</ul>
+<p>A seller can edit or delete their own lot until someone bids or lot submission ends. After that it's yours to deal with.</p>
+<p>Photos matter.{% if help.site.photo_sell_rate %} On this site, {{ help.site.photo_sell_rate }}% of lots with a photo sell, against {{ help.site.no_photo_sell_rate }}% of lots without one.{% else %} A lot with no photo is much less likely to sell: people skip what they can't see.{% endif %} Nag your sellers.</p>
+{% tip %}<a href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI agent</a> and ask it to find every lot in your auction without a picture, and add one to each.{% endtip %}
+{% mike %}Mike listed ten bags of the same guppies and nothing else. Nobody wanted ten bags of the same guppies. A lot limit, and a quiet word, fixes this.{% endmike %}
+
 <h2 class="h5 mt-4" id="bidding">6. Bidding, and the last few minutes</h2>
+<p>You don't have to do anything while bidding is open. Bidders get an email when they're outbid, and one before lots they're watching end.</p>
+<p>Most bids come in on the last day. A bid in the last 15 minutes pushes that lot's end back 15 minutes, up to an hour past the auction's end, so there's no point sniping.{% if help.site.online_extended %} About {{ help.site.online_extended }}% of sold lots on this site end late because of it.{% endif %}</p>
+{% tip %}Tell your members to put in the most they'd pay, early, and go to bed. The site bids for them, a step at a time.{% endtip %}
+<p>{% page "auction_stats" "Stats" %}, under <strong>More</strong>, shows views, bids and new lots as they happen. Views flat halfway through? Post the link again.</p>
+
 <h2 class="h5 mt-4" id="invoices">7. Invoices and getting paid</h2>
+<p>Everyone who bought or sold gets one invoice, and it nets out. A seller who sold $135 and bought $20 is owed $115. They're all on the {% page "auction_tos_list" "Users" %} tab (the {% page "auction_invoices" "invoices page" %} is the same list). Click a name to open one.</p>
+<div class="table-responsive">
+<table class="table table-sm help-table">
+  <thead><tr><th>Status</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge bg-secondary">Open</span></td><td>You can still change it. Everything starts here.</td></tr>
+    <tr><td><span class="badge bg-primary">Ready</span></td><td>Done, waiting for payment. The person gets an email with a link.</td></tr>
+    <tr><td><span class="badge bg-success text-dark">Paid</span></td><td>Settled. If it wasn't ready first, the same email goes out as a receipt.</td></tr>
+  </tbody>
+</table>
+</div>
+<ol>
+  <li>After bidding ends, look over the invoices.</li>
+  <li>Add anything extra: open an invoice, <strong>Adjustments</strong>, then <strong>Charge extra</strong> or <strong>Discount</strong>, with a note. $8 for postage, $20 for a membership, $30 off for the volunteer who drove.</li>
+  <li>Click <strong>Set open invoices to ready</strong> at the top of the Users tab. Do it soon: people need time to pay before pickup day.</li>
+</ol>
+{% if help.stats_auction.is_online and help.stats.viewed_invoice_pct %}{% helptip "graph-up" %}{{ help.stats.viewed_invoice_pct }}% of people in {{ help.stats_auction.title }} opened their invoice.{% endhelptip %}{% endif %}
+<h3 class="h6 mt-3">How people pay</h3>
+<div class="row g-3 mb-3">
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h4 class="h6 card-title">A pay button</h4>
+    <p class="card-text small mb-0">Connect Square and turn on payments in the rules. People pay by card, and the invoice marks itself paid. The least work by far. See <a href="{% url 'help_guide' slug='payments' %}">Card payments</a>.</p>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h4 class="h6 card-title">PayPal invoices</h4>
+    <p class="card-text small mb-0">Export a file of everyone who owes and upload it to PayPal. You mark people paid yourself. <a href="{% url 'help_guide' slug='payments' %}#paypal-invoices">How it works</a>.</p>
+  </div></div></div>
+  <div class="col-md-4"><div class="card h-100"><div class="card-body">
+    <h4 class="h6 card-title">Cash or check</h4>
+    <p class="card-text small mb-0">At pickup. Take the money, click <strong>Paid</strong>, and write "cash" or "check #1041" in the invoice's <strong>Memo</strong> box. Only admins see it.</p>
+  </div></div></div>
+</div>
+{% tip %}Pick one. Clubs that send PayPal invoices <em>and</em> have a pay button get people paying twice.{% endtip %}
+<p><strong>Who hasn't paid?</strong> Filter the Users tab by <strong>Owes the club</strong> and <strong>Ready</strong>. {% page "compose_email_to_users" "Email all users" %} writes to whoever the filter shows.</p>
+<p><strong>Paying sellers:</strong> most clubs mail a check, to the address on the seller's invoice, within a week or two of pickup. Waiting a few days means a dead fish can be refunded out of the seller's share, not the club's.</p>
+
 <h2 class="h5 mt-4" id="exchange">8. Pickup day</h2>
+<ol>
+  <li><strong>The day before</strong>, check every buyer picked the right location. One 200 miles from home is probably a misclick. Email them.</li>
+  <li><strong>Print the invoices</strong> for your location. They say what each person bought, sold, and whether they've paid.</li>
+  <li><strong>Remind sellers to label their bags</strong>: lot number, winner, and where it's going. No printer? Marker on the bag.</li>
+  <li><strong>Bring coolers labelled by lot number</strong>: 1&ndash;99, 100&ndash;199 and so on. Sellers drop bags in, buyers take theirs out. Twenty minutes, and nobody hunts for bag 347.</li>
+  <li><strong>Mark people paid</strong> as they settle up.</li>
+</ol>
+<p>A bag with only a lot number on it? Open the lot on your phone to see who won it. Someone else can pick up for a buyer; they need the name on the invoice.</p>
+
 <h2 class="h5 mt-4" id="no-shows">When somebody doesn't pay or doesn't show</h2>
+<p>Usually one or two people an auction. On the Users tab, open the person's <strong>Actions</strong> menu and click {% page "auction_no_show" "Problems" %}. It lists everything they bought and sold, and one button refunds their lots, leaves negative feedback, and bans them from your future auctions.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <thead><tr><th>What happened</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td>A buyer didn't show</td><td>The seller takes the fish home. Refund the buyer's lots so the seller's invoice shows them unsold, or let the seller keep the price if you're kind.</td></tr>
+    <tr><td>A winner backed out</td><td>Open the lot, <strong>Admin actions</strong>, <strong>Manage this lot</strong>, and make the runner-up the winner at their own bid. Ask them first. The lot, the labels and both invoices follow.</td></tr>
+    <tr><td>A lot died, or came up short</td><td><strong>Remove or refund</strong> on the lot, with a percentage: 20% for one dead fish out of five. If both invoices are open, it sorts itself out. If they're paid, the dialog says who to pay back.</td></tr>
+    <tr><td>Somebody you don't want</td><td>Ban them from the Problems page. Their bids and lots in this auction go, and they're kept out of your future auctions. After bidding ends, this changes sellers' invoices too, so compare before and after.</td></tr>
+  </tbody>
+</table>
+</div>
+{% tip %}Never let a buyer and seller settle it between themselves. The club still has the sale on its books, and the seller pays the club's cut on money they gave back.{% endtip %}
+{% mike %}Mike found a dead fish in his bag and asked the seller for $5 back by PayPal. The seller sent it. Then the club refunded him too. Mike did well that day.{% endmike %}
+
 <h2 class="h5 mt-4" id="multi-location">More than one pickup location</h2>
+<p>Neighbouring clubs can run one big auction together, each with its own pickup location. More lots and more buyers mean better prices than any of them would get alone.</p>
+<ol>
+  <li><strong>Each location gets a coordinator:</strong> one of your admins, set as its contact person.</li>
+  <li><strong>Morning:</strong> sellers drop off at their location. Each coordinator checks every bag is labelled and drives them to a central spot, like a park-and-ride.</li>
+  <li><strong>Sort</strong> the lots by where they're going, away from buyers and sellers. Each coordinator drives their location's lots home.</li>
+  <li><strong>Evening:</strong> buyers pick up at their own location.</li>
+</ol>
+<p>Set each location's <strong>Pickup time</strong> to the morning drop-off and <strong>Second pickup time</strong> to the evening. The auction page lists each location's {% page "location_incoming" "Incoming lot list" %} and {% page "location_outgoing" "Outgoing lot list" %}. Print both for every coordinator: they're the checklist.</p>
+<ul>
+  <li>Give yourself an hour's slack between locations. Somebody is always late.</li>
+  <li>Two locations with the same pickup time can't send lots to each other.</li>
+  <li>Take payment before pickup, so a no-show isn't holding a bag that drove 100 miles.</li>
+  <li>Leave tanks and other bulky things out. They don't fit in a coordinator's car.</li>
+</ul>
+
+<h2 class="h5 mt-4" id="reports">Reports, and who changed what</h2>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% page "user_list" "Users CSV" %}</th><td>Under <strong>Export</strong> on the Users tab. Everyone, with contact details, what they bought and sold, and what they owe. Follows the filter.</td></tr>
+    <tr><th>{% page "lot_list" "Export lot CSV" %}</th><td>On the Lots tab. Every sold lot, seller, buyer and destination. Sort by category to see what each brought in.</td></tr>
+    <tr><th>{% page "auction_stats" "Stats" %}</th><td>How much the auction made, how many people came, and when lots went in. Lots added early sell for more.</td></tr>
+    <tr><th>{% page "auction_history" "Admin history" %}</th><td>Every change to rules, users and lots, and who made it. Check here first when a setting looks wrong.</td></tr>
+    <tr><th>{% page "auction_add_users_to_club" "Add all users to your club" %}</th><td>Puts everyone from the auction on your club's member list.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Only you and your other admins can see these.</p>
+
+<h2 class="h5 mt-4" id="helpers">Other admins</h2>
+<p>An admin can do everything you can, including marking invoices paid. Pickup coordinators and the treasurer usually need it.</p>
+<ol>
+  <li>They join the auction.</li>
+  <li>Find them on the Users tab and click their name.</li>
+  <li>Tick <strong>Grant admin permissions to help run this auction</strong>.</li>
+</ol>
+
 <h2 class="h5 mt-4" id="next-year">Next year's auction</h2>
+<p>Open this year's auction, click <strong>More</strong>, then <strong>Copy to new auction</strong>. Rules, fees, locations and custom fields come along; lots never do. People only come if {% rule "copy_users_when_copying_this_auction" %} is on. Then:</p>
+<ol>
+  <li>Set the new dates.</li>
+  <li>Check each pickup location's time.</li>
+  <li>Tick <strong>Promote this auction</strong>. Copies are never promoted.</li>
+</ol>
+<p>A test auction you're done with: remove its lots, then {% page "auction_delete" "Delete auction" %} under <strong>More</strong>. An auction with lots in it can't be deleted.</p>

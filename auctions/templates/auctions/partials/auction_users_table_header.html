@@ -109,7 +109,7 @@
           {% else %}
             <a href="https://www.paypal.com/invoice/batch" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Batch Invoice Upload</a>
           {% endif %}
-          <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
+          <a href="{% url 'help_guide' slug='payments' %}#paypal-invoices" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
         {% endif %}
       {% endif %}
     </div>

@@ -1,13 +1,17 @@
 """The usability dashboards: measurements, the buyer funnel, and club outreach.
 
-:class:`AdminUsability` shows reach, failures, adoption and the buyer funnel side by side. Queries
-live in :mod:`auctions.usability_report` and :mod:`auctions.field_adoption`.
+:class:`AdminUsability` shows reach, failures and the buyer funnel side by side, from
+:mod:`auctions.usability_report`. Setting adoption (:mod:`auctions.field_adoption`) is on the help's
+rules guide instead, beside each setting.
 
 :class:`AdminClubHealth` is the outreach worklist from :mod:`auctions.club_health`; marking a club
 contacted writes ``Club.date_contacted``.
 
 :class:`UnlinkedAuctions` proposes club links for auctions with none (:mod:`auctions.club_matching`),
 since only about a fifth of auctions have a club.
+
+:class:`AdminEarlyAdds` plots promoted in-person auctions' gross against how early their lots and people
+were added (:mod:`auctions.early_adds`).
 """
 
 import logging
@@ -21,8 +25,7 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
-from auctions import club_health, club_matching, lifecycle, usability_report
-from auctions.field_adoption import auction_field_adoption
+from auctions import club_health, club_matching, early_adds, lifecycle, usability_report
 from auctions.models import Auction, Club, ClubHealth
 from auctions.services import link_auction_to_club
 
@@ -50,10 +53,6 @@ class AdminUsability(AdminOnlyViewMixin, TemplateView):
         # Not windowed: a funnel spans a whole auction.
         context["funnel"] = usability_report.buyer_funnel()
         context["friction"] = usability_report.friction_by_form(days=days)
-        adoption = auction_field_adoption()
-        context["adoption"] = sorted(adoption, key=lambda row: (row.off_default, row.edits))
-        context["adoption_unused"] = [row for row in adoption if row.verdict == "unused"]
-        context["adoption_total"] = adoption[0].total if adoption else 0
         return context
 
 
@@ -240,6 +239,40 @@ class AdminLifecycle(AdminOnlyViewMixin, TemplateView):
         context["auction"] = auction
         context["median"] = lifecycle.median_member_story(auction) if auction else None
         context["unreached"] = lifecycle.unreached_share(auction) if auction else None
+        return context
+
+
+class AdminEarlyAdds(AdminOnlyViewMixin, TemplateView):
+    """Gross against the share of lots, and of people, added more than ``?days=`` before the auction."""
+
+    template_name = "dashboard_early_adds.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        try:
+            days = int(self.request.GET.get("days", 5))
+        except (TypeError, ValueError):
+            days = 5
+        days = max(0, min(days, 60))
+        points = early_adds.early_adds(days)
+        context["days"] = days
+        context["points"] = points
+        context["charts"] = [
+            {"key": key, "label": label, "summary": early_adds.summarize(points, key)}
+            for key, label in (("early_lots_pct", "lots"), ("early_people_pct", "people"))
+        ]
+        context["min_lots"] = early_adds.MIN_LOTS
+        context["points_data"] = [
+            {
+                "title": point.title,
+                "url": reverse("auction_stats", kwargs={"slug": point.slug}),
+                "gross": round(point.gross),
+                "lots": point.lots,
+                "early_lots_pct": point.early_lots_pct,
+                "early_people_pct": point.early_people_pct,
+            }
+            for point in points
+        ]
         return context
 
 

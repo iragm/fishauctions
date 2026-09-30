@@ -215,23 +215,18 @@ class DistanceUnitTests(StandardTestCase):
 
 
 class PayPalInfoViewTests(TestCase):
-    """Test that the PayPal info page works for both logged in and non-logged in users"""
+    """/paypal/ is the PayPal section of the Card payments guide, signed in or not."""
 
     def test_paypal_info_non_logged_in_user(self):
-        """Test that non-logged-in users can access the PayPal info page"""
-        url = reverse("paypal_seller")
-        response = self.client.get(url)
+        response = self.client.get(reverse("paypal_seller"), follow=True)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Accept payments with PayPal")
+        self.assertContains(response, 'id="paypal"')
 
     def test_paypal_info_logged_in_user(self):
-        """Test that logged-in users can access the PayPal info page"""
         User.objects.create_user(username="testuser", password="testpassword")
         self.client.login(username="testuser", password="testpassword")
-        url = reverse("paypal_seller")
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Accept payments with PayPal")
+        response = self.client.get(reverse("paypal_seller"))
+        self.assertRedirects(response, "/help/payments/#paypal", fetch_redirect_response=False)
 
 
 class UserExportTests(StandardTestCase):

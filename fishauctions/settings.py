@@ -266,6 +266,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    # Before ShortAnonymousSessionMiddleware, so it has the last word on the way out.
+    "auctions.middleware.CrawlerSessionMiddleware",
     # After AuthenticationMiddleware: it needs request.user to tell a visitor from a member.
     "auctions.middleware.ShortAnonymousSessionMiddleware",
 ]
@@ -420,8 +422,8 @@ SESSION_COOKIE_AGE = 60 * 60 * 24 * 365
 ANONYMOUS_SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
 
 # Redis-cached sessions with the database behind them: no session query per request, and a Redis
-# restart loses nobody.
-SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
+# restart loses nobody. auctions.session_store also reads the row when Redis doesn't answer.
+SESSION_ENGINE = "auctions.session_store"
 
 # The mobile WebView handoff relies on these server-set cookie flags. Secure outside DEBUG only, since
 # dev runs plain http.

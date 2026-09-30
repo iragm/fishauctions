@@ -1,0 +1,6 @@
+{% comment %}The reader's own PayPal connection, on the payments guide (help_tags.paypal_account). This used to be the /paypal/ page, which now redirects here. PayPal is set up per club with credentials (club_paypal_credentials); this only lets someone who connected an account the old way see and disconnect it.{% endcomment %}
+{% if seller %}
+<div class="help-note help-tip"><i class="bi bi-person-check"></i><div>You have a PayPal account connected{% if seller.club %}, linked to {{ seller.club.name }}{% endif %}.</div></div>
+{% url 'paypal_seller_delete' as disconnect_url %}
+{% include "auctions/_payment_seller_card.html" with provider_label="PayPal" merchant_id=seller.paypal_merchant_id disconnect_url=disconnect_url %}
+{% endif %}

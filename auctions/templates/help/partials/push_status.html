@@ -1,0 +1,31 @@
+{% comment %}help_tags.push_status: whether lot notifications reach the reader. #help-push-device is filled in by the script below: the app says whether this phone allows them, a browser whether it's subscribed. In a browser, an account with the app gets them in the app only (selling.notify_watchers_lot_selling_soon), so the browser isn't asked.{% endcomment %}
+{% if show %}<div class="help-note help-tip"><i class="bi bi-bell"></i><div>You have lot notifications turned {% if lot_alerts %}on{% else %}off{% endif %}. <span id="help-push-device">{% if not in_app and app_push %}They go to the app on your phone, not this browser.{% endif %}</span></div></div>
+{% if in_app or not app_push %}<script>
+(function () {
+  var area = document.getElementById('help-push-device');
+  function say(text) { area.textContent = text; }
+  {% if in_app %}
+  var bridge = window.flutter_inappwebview;
+  if (!bridge || !bridge.callHandler) { return; }
+  bridge.callHandler('pushGetState').then(function (state) {
+    if (!state || !state.supported) { return; }
+    if (state.permitted) { say('This phone gets them.'); return; }
+    area.innerHTML = 'This phone doesn\'t allow them. <a href="{% url "notification_preferences" %}">Notifications</a> has the switch.';
+  }).catch(function () {});
+  {% else %}
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    say("This browser can't get them. On an iPhone, use the app.");
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    say("This browser blocks them. Allow notifications for this site in its settings.");
+    return;
+  }
+  navigator.serviceWorker.getRegistrations().then(function (registrations) {
+    return Promise.all(registrations.map(function (registration) { return registration.pushManager.getSubscription(); }));
+  }).then(function (subscriptions) {
+    say(subscriptions.some(Boolean) ? 'This browser gets them.' : "This browser isn't subscribed. Watch a lot, and click Subscribe to Push Messaging under it.");
+  }).catch(function () {});
+  {% endif %}
+})();
+</script>{% endif %}{% endif %}

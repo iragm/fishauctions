@@ -909,7 +909,7 @@ class OptInTests(StandardTestCase):
 
 
 class ConnectPageTests(StandardTestCase):
-    """The page that explains how to connect. Open to everybody signed in."""
+    """/ai/, which explains how to connect: the AI agents help guide, with the reader's keys on it."""
 
     url = "/ai/"
 
@@ -917,7 +917,7 @@ class ConnectPageTests(StandardTestCase):
         self.user.userdata.use_llm_search = False
         self.user.userdata.save()
         self.client.force_login(self.user)
-        response = self.client.get(self.url)
+        response = self.client.get(self.url, follow=True)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
         self.assertIn("Create key", body)
@@ -930,14 +930,18 @@ class ConnectPageTests(StandardTestCase):
         self.client.post(self.url, {"name": "no-flag-needed"})
         self.assertTrue(UserAPIKey.objects.filter(user=self.user, name="no-flag-needed").exists())
 
-    def test_signing_in_is_still_required(self):
-        self.assertNotEqual(self.client.get(self.url).status_code, 200)
+    def test_signed_out_the_steps_show_but_not_the_key_form(self):
+        body = self.client.get(self.url, follow=True).content.decode()
+        self.assertIn("Add a custom connector", body)
+        self.assertNotIn("Create key", body)
+        self.client.post(self.url, {"name": "anonymous"})
+        self.assertFalse(UserAPIKey.objects.filter(name="anonymous").exists())
 
     def test_it_renders_the_connection_instructions(self):
         self.user.userdata.use_llm_search = True
         self.user.userdata.save()
         self.client.force_login(self.user)
-        response = self.client.get(self.url)
+        response = self.client.get(self.url, follow=True)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
         # The address, and the two assistants the steps are written for.
@@ -953,11 +957,11 @@ class ConnectPageTests(StandardTestCase):
         self.client.post(self.url, {"name": "My script"})
         key = UserAPIKey.objects.get(name="My script")
         self.assertFalse(key.allow_writes, "a new key is read-only unless asked otherwise")
-        first = self.client.get(self.url).content.decode()
+        first = self.client.get(self.url, follow=True).content.decode()
         self.assertIn(key.prefix, first)
         self.assertIn("only time it will ever be shown", first)
         # Reloading must not put the secret back on screen.
-        self.assertNotIn("only time it will ever be shown", self.client.get(self.url).content.decode())
+        self.assertNotIn("only time it will ever be shown", self.client.get(self.url, follow=True).content.decode())
 
     def test_revoking_a_key(self):
         self.user.userdata.use_llm_search = True
@@ -1065,7 +1069,7 @@ class ConnectedAppsTests(StandardTestCase):
 
     def test_a_connected_assistant_is_listed(self):
         self.token_for(self.user)
-        body = self.client.get(self.url).content.decode()
+        body = self.client.get(self.url, follow=True).content.decode()
         self.assertIn("Claude", body)
         self.assertIn("Disconnect", body)
 

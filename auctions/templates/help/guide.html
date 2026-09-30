@@ -5,6 +5,7 @@
 {% block extra_head %}<link rel="canonical" href="{{ request.scheme }}://{{ request.get_host }}{{ guide.url }}">{% endblock %}
 {% block content %}
 <h1 class="h4 mb-3">{{ guide.title }}</h1>
+{% include "help/ai_tip.html" %}
 {% for tip in tips %}
 <div class="help-note help-tip"><i class="bi bi-person-check"></i><div>{{ tip.text }} <a href="{{ tip.guide.url }}?auction={{ help.auction.slug }}">{{ tip.guide.title }}</a> is probably the one you want.</div></div>
 {% endfor %}

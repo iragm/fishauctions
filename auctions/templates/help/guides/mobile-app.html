@@ -1,0 +1,41 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. What the app adds to the website, for bidders first and organizers second. The app is https://github.com/iragm/fishauctions-app; it's the website plus the phone's hardware. Replace the pre-release note with where to get it once it's in the stores.{% endcomment %}
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>The app isn't in the App Store or on Google Play yet. It's being tested now, and this page describes what it will do.</div></div>
+<p>The app is this website on your phone, plus what a website can't do: take a card, talk to a Bluetooth printer, read labels with the camera, and keep going when the hall's wifi doesn't.</p>
+<p>You don't need it to buy or sell. If you run an in-person auction, you probably want it. It will be free, for iPhone and Android, and you sign in with the same account you use here.</p>
+{% if help.signed_in %}{% helptip "phone" %}{% if request.is_mobile_app %}You're reading this in the app.{% elif help.account.app %}You've signed in to the app on a phone{% if not help.account.app_push %}, but it can't send you notifications yet{% endif %}.{% else %}You haven't signed in to the app on a phone yet.{% endif %}{% endhelptip %}{% endif %}
+{% if help.stats.app_pct %}{% helptip "graph-up" %}{{ help.stats.app_pct }}% of the people in {{ help.stats_auction.title }} had the app.{% endhelptip %}{% endif %}
+
+<h2 class="h5 mt-4" id="bidders">For bidders and sellers</h2>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th><i class="bi bi-bell"></i> Notifications instead of email</th><td>Outbid, invoice ready, a watched lot about to end. Turn it on in {% page "notification_preferences" "Notifications" %}.</td></tr>
+    <tr><th><i class="bi bi-megaphone"></i> "Your lot is coming up"</th><td>At an in-person auction, watch the lots you want and your phone tells you when each is about to be sold. Go get a coffee.</td></tr>
+    <tr><th><i class="bi bi-calculator"></i> A running total</th><td>What you've bought so far, as the auction goes.</td></tr>
+    <tr><th><i class="bi bi-door-open"></i> Checking in</th><td>At some auctions, the app checks you in as you walk through the door and shows your bidder number.</td></tr>
+    <tr><th><i class="bi bi-camera"></i> Scan lots</th><td>Point the camera at a table of bags. It reads the labels: what each one is, and which is the one you're after.</td></tr>
+    <tr><th><i class="bi bi-printer"></i> Labels with no computer</th><td>Pair a Bluetooth thermal printer in {% page "printing" "Label printing" %}, and every print button sends labels to it.</td></tr>
+  </tbody>
+</table>
+</div>
+{% push_status %}
+<p>{% page "my_last_auction_lots" "Lots in my most recent auction" %} is a shortcut on the app's home screen.</p>
+
+<h2 class="h5 mt-4" id="organizers">For the people running an auction</h2>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th><i class="bi bi-credit-card"></i> Tap to Pay</th><td>With Square connected, checkout has a Tap to Pay button. The buyer taps their card or phone on yours, and the invoice is paid. No card reader. See <a href="{% url 'help_guide' slug='payments' %}#tap-to-pay">Card payments</a>.</td></tr>
+    <tr><th><i class="bi bi-wifi-off"></i> No internet? Keep going.</th><td>The Users, add lots and Set lot winners pages keep working for your most recent auction, and sync when you're back online. If somebody else changed the same thing meanwhile, their change wins and the app tells you which of yours didn't go in.</td></tr>
+    <tr><th><i class="bi bi-mic"></i> Voice</th><td>On Set lot winners, tap <strong>Listen</strong> and say "lot 12, 15 dollars, bidder 104, sold". Keep the phone near the auctioneer. {% page "auction_voice_command_log" "The voice log" %} shows what it heard.</td></tr>
+    <tr><th><i class="bi bi-printer"></i> Printing at the desk</th><td>A Bluetooth thermal printer paired to a phone prints labels as fast as you add lots. A computer on the same account can send labels to it while the app is open.</td></tr>
+    <tr><th><i class="bi bi-person-raised-hand"></i> Recruit volunteers</th><td>{% page "auction_volunteers" "Recruit volunteers" %}, under <strong>More</strong>, asks people at the auction to help: carrying bags, running lots, the desk. First come, first served. With check-in on, it only asks people in the room.</td></tr>
+    <tr><th><i class="bi bi-geo-alt"></i> Where's lot 212?</th><td>As people scan lots with the app, the site builds a {% page "auction_lot_map" "Lot map" %} of where each unsold lot is on the tables. Sold lots drop off. {% page "auction_lot_map_clear" "Clear all locations" %} starts fresh if the tables move.</td></tr>
+  </tbody>
+</table>
+</div>
+{% mike %}Mike ran checkout on a laptop tethered to his phone. The phone died at lot 180. Offline mode would have kept him going. So would a charger.{% endmike %}
+
+<h2 class="h5 mt-4" id="not-in-the-app">What's the same</h2>
+<p>Everything else is the website, with the same buttons in the same places, so these guides apply as written. Delete your account from the app the same way: {% page "account_delete" "Delete account" %} in your account pages.</p>

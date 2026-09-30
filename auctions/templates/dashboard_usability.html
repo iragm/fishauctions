@@ -85,53 +85,11 @@
   </table>
 </div>
 
-<h4 class="mt-4">Adoption &mdash; auction settings nobody has ever changed</h4>
+<h4 class="mt-4">Adoption</h4>
 <p class="text-muted small">
-  Over all {{ adoption_total }} auctions on the site. <strong>Off default</strong> counts auctions
-  whose stored value differs from the model's default: retroactive, covers everything, and blind to
-  a change somebody made and undid. <strong>Edits</strong> counts auctions with a changelog row
-  naming the field: exact, sees the undone ones, and knows nothing from before that column shipped.
-  A field with zeroes in both is a candidate for deletion; one with a low number is a candidate for
-  the Advanced section on the auction settings form.
-  {% if adoption_unused %}<strong>{{ adoption_unused|length }}</strong> of {{ adoption|length }}
-  fields currently read as unused.{% endif %}
+  How many auctions use each setting is on <a href="{% url 'help_guide' slug='auction-rules' %}">the rules guide</a>,
+  as a badge beside the setting, where organizers deciding whether to change it can see it too.
 </p>
-<div class="table-responsive">
-  <table class="table table-sm">
-    <thead>
-      <tr>
-        <th>Field</th>
-        <th>Label</th>
-        <th class="text-end">Off default</th>
-        <th class="text-end">%</th>
-        <th class="text-end">Edits</th>
-        <th>Verdict</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in adoption %}
-      <tr>
-        <td><code>{{ row.name }}</code></td>
-        <td>{{ row.label }}</td>
-        <td class="text-end">{{ row.off_default }}</td>
-        <td class="text-end">{{ row.percent }}</td>
-        <td class="text-end">{{ row.edits }}</td>
-        <td>
-          {% if row.verdict == "unused" %}
-            <span class="badge text-bg-warning text-dark">unused</span>
-          {% elif row.verdict == "rare" %}
-            <span class="badge bg-secondary">rare</span>
-          {% elif row.verdict == "unmeasured" %}
-            <span class="badge bg-secondary">no default to compare</span>
-          {% else %}
-            <span class="badge text-bg-success text-dark">used</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
 
 <h4 class="mt-4">Buyers &mdash; how far people get</h4>
 <p class="text-muted small">

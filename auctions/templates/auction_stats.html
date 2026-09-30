@@ -768,6 +768,15 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
         <td>{% if not compare_auction.is_online %}{{ compare_auction.number_of_lots_added_to_queue }}{% else %}N/A{% endif %}</td>
         {% endif %}
       </tr>
+      {% if auction.bid_recorder_accuracy %}
+      <tr>
+        <td>Bid recorder accuracy<br><small class="text-muted">Sold lots given one winner, with the winner and price never edited</small></td>
+        <td>{{ auction.bid_recorder_accuracy.percent }}% ({{ auction.bid_recorder_accuracy.unchanged }} of {{ auction.bid_recorder_accuracy.lots }})</td>
+        {% if compare_auction %}
+        <td>{% if compare_auction.bid_recorder_accuracy %}{{ compare_auction.bid_recorder_accuracy.percent }}% ({{ compare_auction.bid_recorder_accuracy.unchanged }} of {{ compare_auction.bid_recorder_accuracy.lots }}){% else %}N/A{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endif %}
       {% endif %}
       {% if not auction.is_online and auction.lots_sold_per_minute %}
       <tr>
@@ -845,16 +854,6 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
 </script>
 <div>This graph shows the time since the last lot sold, graphed against the minutes into the auction.  Faster auctioneers will tend to be lower down on the Y axis.  If more than 3 minutes elapsed since the last lot, that data point is skipped.  If you changed auctioneers mid-way though the auction, see if you can spot that location on this chart.  Faster isn't always better, but the speed of your auctioneer makes a huge difference on attrition, especially in larger auctions.  And of course, this is based on the lot sell time, so if you're recording bids on paper and tallying them up later, you may not get a perfect representation of your auctioneer's speed.
 </div>{% endif %}
-<p></p>
-<h4>The importance of images on sell price</h4>
-<canvas id="pictures" width="500" height="400"></canvas>
-<script type="text/javascript">
-  var mainData = {{ stats_images_json|safe }};
-  var compareData = {% if compare_auction and compare_stats_images_json %}{{ compare_stats_images_json|safe }}{% else %}null{% endif %};
-  createBarChart('pictures', mainData, null, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
-</script>
-Generally, having an image makes a lot sell for more money, but more images don't help.  Remember that you can click on the legend to show/hide the number of lots or median value.  Does having a picture make a difference in your auction?
-{% if compare_auction %}<small>This graph gets really cluttered when comparing auctions and it's really mostly about seeing how worthwhile it is to add images, which doesn't change between auctions.</small>{% endif %}
 <p></p>
 <h4>How far users travel to get to your auction</h4>
 <canvas id="distances_traveled" width="500" height="400"></canvas>

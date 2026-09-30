@@ -3911,16 +3911,6 @@ class Auction(CachedPropertiesMixin, models.Model):
     alternative_split_label.help_text = (
         "Label used for people getting alternate fees.  For example, club member, vendor, etc."
     )
-    SET_LOT_WINNER_URLS = (
-        ("", "Standard, bidder number/lot number only"),
-        ("presentation", "Show a picture of the lot"),
-        ("autocomplete", "Autocomplete, search by name or bidder number"),
-    )
-    set_lot_winners_url = models.CharField(
-        max_length=20, choices=SET_LOT_WINNER_URLS, blank=True, default="presentation"
-    )
-    set_lot_winners_url.verbose_name = "Set lot winners"
-
     BUY_NOW_CHOICES = (
         ("disable", "Don't allow"),
         ("allow", "Allow"),
@@ -5035,6 +5025,20 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"sellers": counts["sellers"], "admins": counts["total"] - counts["sellers"]}
 
     @cached_property
+    def bid_recorder_accuracy(self):
+        """In person: of the sold lots with a recorded sale, how many were recorded once and never edited.
+        ``{"lots", "unchanged", "percent"}``, or None with nothing counted (online, or sold before counting).
+        """
+        if self.is_online:
+            return None
+        counts = self.lots_qs.filter(
+            banned=False, winning_price__isnull=False, auctiontos_winner__isnull=False, sales_recorded__gte=1
+        ).aggregate(lots=Count("pk"), unchanged=Count("pk", filter=Q(sales_recorded=1)))
+        if not counts["lots"]:
+            return None
+        return {**counts, "percent": round(100 * counts["unchanged"] / counts["lots"])}
+
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # Lots ever queued (sticky Lot.added_to_queue).
         return self.lots_qs.filter(added_to_queue=True).count()
@@ -5669,44 +5673,6 @@ class Auction(CachedPropertiesMixin, models.Model):
         }
 
     @property
-    def get_stat_images(self):
-        """Get images chart data from cached stats"""
-        if self.cached_stats and "images" in self.cached_stats:
-            return self.cached_stats["images"]
-        return {"labels": [], "providers": [], "data": []}
-
-    def set_stat_images(self):
-        """Calculate and return images chart data"""
-        from django.db.models import Avg
-
-        # Exclude banned lots, as the other money stats.
-        lots = (
-            self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).annotate(num_images=Count("lotimage"))
-        )
-        lots_with_no_images = lots.filter(num_images=0)
-        lots_with_one_image = lots.filter(num_images=1)
-        lots_with_one_or_more_images = lots.filter(num_images__gt=1)
-        medians = []
-        averages = []
-        counts = []
-        for lots_subset in [
-            lots_with_no_images,
-            lots_with_one_image,
-            lots_with_one_or_more_images,
-        ]:
-            try:
-                medians.append(median_value(lots_subset, "winning_price"))
-            except Exception:
-                medians.append(0)
-            averages.append(lots_subset.aggregate(avg_value=Avg("winning_price"))["avg_value"])
-            counts.append(lots_subset.count())
-        return {
-            "labels": ["No images", "One image", "More than one image"],
-            "providers": ["Median sell price", "Average sell price", "Number of lots"],
-            "data": [medians, averages, counts],
-        }
-
-    @property
     def get_stat_travel_distance(self):
         """Get travel distance chart data from cached stats"""
         if self.cached_stats and "travel_distance" in self.cached_stats:
@@ -6007,6 +5973,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             "reminder_email_click_rate": reminder_email_click_rate,
             "reminder_email_join_rate": reminder_email_join_rate,
             "number_of_lots_with_scanned_qr": qr_scans,
+            "bid_recorder_accuracy": self.bid_recorder_accuracy,
             "club_stats": {
                 "gross": self.gross,
                 "total_lots": self.total_lots,
@@ -6034,7 +6001,6 @@ class Auction(CachedPropertiesMixin, models.Model):
         stats["auctioneer_speed"] = self.set_stat_auctioneer_speed()
         stats["lot_sell_prices"] = self.set_stat_lot_sell_prices()
         stats["referrers"] = self.set_stat_referrers()
-        stats["images"] = self.set_stat_images()
         stats["travel_distance"] = self.set_stat_travel_distance()
         stats["previous_auctions"] = self.set_stat_previous_auctions()
         stats["lots_submitted"] = self.set_stat_lots_submitted()
@@ -7541,6 +7507,10 @@ class Lot(CachedPropertiesMixin, models.Model):
     # In-person auctions charge unsold_lot_fee only for these: a lot that never came in is just
     # deactivated at wind-down, and costs its seller nothing. Cleared by _do_save on a sale or reopen.
     ended_unsold = models.BooleanField(default=False)
+    # Counted by add_winner_message; above 1 means the sale was corrected. Lots sold before this was
+    # counted were backfilled from their history by ``manage.py backfill_sales_recorded``.
+    sales_recorded = models.PositiveSmallIntegerField(default=0)
+    sales_recorded.help_text = "How many times a winner or sell price was recorded for this lot"
     refunded = models.BooleanField(default=False)
     refunded.help_text = "Don't charge the winner or pay the seller for this lot."
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
@@ -7905,6 +7875,10 @@ class Lot(CachedPropertiesMixin, models.Model):
         message = (
             f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
         )
+        if self.pk:
+            Lot.objects.filter(pk=self.pk).update(sales_recorded=F("sales_recorded") + 1)
+            # A later full save() must not write the old count back.
+            self.sales_recorded = (self.sales_recorded or 0) + 1
         try:
             LotHistory.objects.create(
                 lot=self,
@@ -8051,6 +8025,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.active = True
         self.winner = None
         self.winning_price = None
+        self.sales_recorded = 0
         self.seller_invoice = None
         self.buyer_invoice = None
         self.buy_now_used = False

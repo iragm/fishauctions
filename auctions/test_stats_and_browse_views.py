@@ -35,7 +35,6 @@ LINE_CHARTS = {
     "auction_stats_auctioneer": "auctioneer_speed",
 }
 BAR_CHARTS = {
-    "auction_stats_pictures": "images",
     "auction_stats_distance_traveled": "travel_distance",
     "auction_stats_previous_auctions": "previous_auctions",
     "auction_stats_lots_submitted": "lots_submitted",
@@ -158,9 +157,9 @@ class AuctionStatsChartTests(StandardTestCase):
 
     def test_compare_with_unknown_slug_is_ignored(self):
         self.client.force_login(self.user)
-        response = self.client.get(self.url("auction_stats_pictures", compare="does-not-exist"))
+        response = self.client.get(self.url("auction_stats_location_volume", compare="does-not-exist"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.json()["datasets"]), 3)
+        self.assertEqual(len(response.json()["datasets"]), 2)
 
     def test_cached_stats_are_served_instead_of_recomputed(self):
         Auction.objects.filter(pk=self.online_auction.pk).update(cached_stats=fake_cached_stats("CACHED"))

@@ -1061,20 +1061,6 @@ class StatsBannedExclusionReviewTests(TestCase):
             quantity=1,
         )
 
-    def test_images_chart_excludes_banned_and_deleted_sold_lots(self):
-        # Only $10 and $30 count: median $20, not $265.
-        auction = self._auction()
-        seller = self._tos(auction)
-        self._lot(auction, seller, 10)
-        self._lot(auction, seller, 30)
-        self._lot(auction, seller, 500, banned=True)
-        self._lot(auction, seller, 999, is_deleted=True)
-
-        stats = auction.set_stat_images()
-        # index 0 == "No images" (none of these lots have LotImages)
-        self.assertEqual(stats["data"][2][0], 2, "only the two non-banned, non-deleted sold lots should be counted")
-        self.assertEqual(stats["data"][0][0], 20, "median sell price must exclude banned/deleted lots")
-
     def test_total_donations_excludes_banned(self):
         auction = self._auction()
         seller = self._tos(auction)

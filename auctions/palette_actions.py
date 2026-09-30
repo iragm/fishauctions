@@ -10240,7 +10240,8 @@ def remove_lot(request, params: dict[str, Any]) -> dict[str, Any]:
 
 # --- the lot queue -----------------------------------------------------------
 #
-# Add and remove are one row each. Reordering writes every row, so it isn't a tool.
+# Add and remove are one row each; moving a lot and stepping the room along are what the queue page's
+# drag and Next/Back buttons do.
 
 
 def _queue_auction_or_problem(request, params: dict[str, Any]):
@@ -10348,6 +10349,91 @@ def unqueue_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         **_lot_echo(lot),
         queue_length=remaining,
         followups=[{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}],
+    )
+
+
+def _upcoming_queue(auction):
+    """The queue from the lot on the block onwards: position 1 is the lot being sold now."""
+    from .views import queue_entries, queue_split
+
+    _passed, on_the_block, to_come = queue_split(queue_entries(auction))
+    return ([on_the_block] if on_the_block else []) + to_come
+
+
+def move_queued_lot(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Move a lot to a place in an in-person auction's queue, queueing it first if it isn't. Admins only.
+
+    Positions count as ``lot_queue`` does, 1 being the lot on the block. With no position the lot goes
+    next, straight after the lot being sold now: a bump.
+    """
+    from .views import add_lot_to_queue, reorder_queue
+
+    auction, problem = _queue_auction_or_problem(request, params)
+    if problem:
+        return problem
+    lot, problem = _queued_lot_or_problem(request, auction, params)
+    if problem:
+        return problem
+    if lot.sold:
+        return _error(f"Lot {lot.lot_number_display} has already been sold, so it can't be queued.")
+    if not _queue_position(auction, lot):
+        error = add_lot_to_queue(auction, lot, request.user)
+        if error:
+            return _error(error)
+    upcoming = _upcoming_queue(auction)
+    entry = next(e for e in upcoming if e.lot_id == lot.pk)
+    others = [e for e in upcoming if e.pk != entry.pk]
+    position = _int(params, "position")
+    if position is None:
+        # Next up: behind the lot on the block, unless this is the lot on the block.
+        position = 1 if upcoming[0].pk == entry.pk else 2
+    position = max(1, min(position, len(upcoming)))
+    others.insert(position - 1, entry)
+    reorder_queue(auction, [e.pk for e in others])
+    position = _queue_position(auction, lot)
+    after = "It's being sold now." if position == 1 else f"It's number {position}, "
+    if position == 2:
+        after += "next up."
+    elif position > 2:
+        after += f"with {position - 1} lots ahead of it."
+    return _ok(
+        f"Moved lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, in {auction.title}'s queue. {after}",
+        **_lot_echo(lot),
+        position=position,
+        queue_length=len(upcoming),
+        followups=[{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}],
+    )
+
+
+def step_queue(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Move an in-person auction's queue on to the next lot, or back to the last one: the queue page's
+    Next and Back. Admins only.
+    """
+    from .views import advance_queue, rewind_queue
+
+    auction, problem = _queue_auction_or_problem(request, params)
+    if problem:
+        return problem
+    direction = (_str(params, "direction") or "next").lower()
+    if direction not in ("next", "back"):
+        return _need(
+            "Next or back?", [{"label": "Next lot", "value": "next"}, {"label": "Back one lot", "value": "back"}]
+        )
+    moved = advance_queue(auction) if direction == "next" else rewind_queue(auction)
+    upcoming = _upcoming_queue(auction)
+    followups = [{"label": "Lot queue", "url": reverse("auction_lot_queue", kwargs={"slug": auction.slug})}]
+    if not moved:
+        if direction == "next":
+            return _error(f"That was the last lot in {auction.title}'s queue.")
+        return _error(f"The lot being sold now is the first in {auction.title}'s queue.")
+    if not upcoming:
+        return _ok(f"{auction.title}'s queue is finished: every lot in it has been passed.", followups=followups)
+    lot = upcoming[0].lot
+    return _ok(
+        f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is on the block in {auction.title} now.",
+        **_lot_echo(lot),
+        queue_length=len(upcoming),
+        followups=followups,
     )
 
 
@@ -13916,8 +14002,8 @@ register(
         description=(
             "Put one lot on the end of an in-person auction's running order, so the auctioneer gets "
             "to it next. Auction admins only. 'queue up lot 40', 'add 12 to the queue'. Use "
-            "lot_queue to read the running order and unqueue_lot to take one back off. There is no "
-            "way to reorder the queue from here — that is the queue page."
+            "lot_queue to read the running order, move_queued_lot to change a lot's place, and "
+            "unqueue_lot to take one back off."
         ),
         params={
             "lot": "string, required. The lot number, as printed on the label.",
@@ -13952,6 +14038,56 @@ register(
         confirm_template="Take a lot out of the queue",
         needs=NEEDS_AUCTION_ADMIN,
         examples=["drop lot 42 from the queue", "take 7 out of the running order"],
+    )
+)
+
+register(
+    Action(
+        name="move_queued_lot",
+        description=(
+            "Move one lot to a different place in an in-person auction's running order, queueing it "
+            "first if it isn't queued. Auction admins only. With no position the lot goes next, right "
+            "after the lot being sold now: 'bump lot 5', 'sell 12 next', 'move lot 40 to number 3'. "
+            "A bump fee is a separate add_invoice_adjustment on the buyer's invoice."
+        ),
+        params={
+            "lot": "string, required. The lot number, as printed on the label.",
+            "position": (
+                "integer, optional. Where it goes, counted as lot_queue counts: 1 is the lot being sold "
+                "now, 2 is next. Default 2."
+            ),
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=move_queued_lot,
+        aliases={"name", "query", "lot_id"},
+        idempotent=True,
+        confirm_template="Move a lot in the queue",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["bump lot 5 to the top of the queue", "sell lot 12 next", "move lot 40 to number 3 in the queue"],
+    )
+)
+
+register(
+    Action(
+        name="step_queue",
+        description=(
+            "Move an in-person auction's running order on to the next lot, or back to the previous one, "
+            "like the queue page's Next and Back buttons. Auction admins only. Recording a sale already "
+            "moves it on; this is for a lot that was skipped or passed by mistake."
+        ),
+        params={
+            "direction": "string, optional. 'next' (default) or 'back'.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=step_queue,
+        idempotent=False,
+        confirm_template="Move the queue",
+        needs=NEEDS_AUCTION_ADMIN,
+        mcp_only=True,
+        examples=["next lot in the queue", "go back one lot in the queue", "skip this lot"],
     )
 )
 
@@ -14439,6 +14575,11 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "remove_lot": _PRECISE_TARGET,
     "queue_lot": _PRECISE_TARGET,
     "unqueue_lot": _PRECISE_TARGET,
+    "move_queued_lot": _PRECISE_TARGET,
+    "step_queue": (
+        "The queue page's Next and Back, for the admin at the laptop. An agent needs it for a bump, or a "
+        "lot the room skipped; the palette user is looking at the page's own buttons."
+    ),
     "remove_bid": _PRECISE_TARGET,
     "remove_award": _PRECISE_TARGET,
     "set_member_active": _PRECISE_TARGET,
@@ -14624,7 +14765,7 @@ SKILLS: dict[str, str] = {
     "ClubMemberReactivateView": "set_member_active",
     # The adjustment formset's delete half.
     "InvoiceView": "remove_invoice_adjustment",
-    # Add and remove; reordering isn't covered (writes every row).
+    # Add, remove, move and Next/Back are queue_lot, unqueue_lot, move_queued_lot and step_queue.
     "LotQueueView": "queue_lot",
     "ClubBapGenusOverrideSaveView": "set_point_rule",
     "ClubBapCategoryOverrideSaveView": "set_point_rule",

@@ -2280,6 +2280,18 @@ class CreateAuctionForm(forms.ModelForm):
 class AuctionEditForm(forms.ModelForm):
     """Make changes to an auction"""
 
+    #: Labels the rules page shows in place of the model's verbose names. The help guides name rules by
+    #: these (``help_tags.rule``), so a rename here is a rename there.
+    LABELS = {
+        "winning_bid_percent_to_club": "Club cut",
+        "winning_bid_percent_to_club_for_club_members": "Alternate club cut",
+        "date_start": "Bidding opens",
+        "date_end": "Bidding ends",
+        "email_users_when_invoices_ready": "Invoice notifications",
+        "user_cut": "User cut",
+        "club": "Club",
+    }
+
     user_cut = forms.IntegerField(required=False, help_text="This plus the club cut must be 100%")
     club_member_cut = forms.IntegerField(
         required=False,
@@ -2356,11 +2368,8 @@ class AuctionEditForm(forms.ModelForm):
         timezone.activate(kwargs.pop("user_timezone"))
         super().__init__(*args, **kwargs)
         # self.fields["summernote_description"].widget.attrs = {"rows": 10}
-        self.fields["winning_bid_percent_to_club"].label = "Club cut"
-        self.fields["winning_bid_percent_to_club_for_club_members"].label = "Alternate club cut"
-        self.fields["date_start"].label = "Bidding opens"
-        self.fields["date_end"].label = "Bidding ends"
-        self.fields["email_users_when_invoices_ready"].label = "Invoice notifications"
+        for name, label in self.LABELS.items():
+            self.fields[name].label = label
         self.fields[
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
@@ -2484,7 +2493,6 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
-            # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
             self.fields["date_online_bidding_starts"].widget = forms.HiddenInput()
             self.fields["date_online_bidding_ends"].widget = forms.HiddenInput()
         else:
@@ -2612,6 +2620,19 @@ class AuctionEditForm(forms.ModelForm):
                 "Associate this auction with a club before enabling membership fees.",
             )
         return cleaned_data
+
+    def clean_date_end(self):
+        """Less than an hour away gives bidders no warning, and lots only follow a move made before then."""
+        date_end = self.cleaned_data.get("date_end")
+        if (
+            date_end
+            and "date_end" in self.changed_data
+            and self.instance.is_online
+            and date_end < timezone.now() + datetime.timedelta(hours=1)
+        ):
+            msg = "Bidding has to end at least an hour from now."
+            raise forms.ValidationError(msg)
+        return date_end
 
     def clean_manage_users_through_club(self):
         target = self.cleaned_data.get("manage_users_through_club") or ""
@@ -2821,6 +2842,9 @@ class AuctionEditForm(forms.ModelForm):
 
 
 class AuctionCustomFieldsForm(forms.ModelForm):
+    #: As ``AuctionEditForm.LABELS``.
+    LABELS = {"custom_field_1": "Use custom text field"}
+
     class Meta:
         model = Auction
         fields = [
@@ -2851,7 +2875,8 @@ class AuctionCustomFieldsForm(forms.ModelForm):
         self.helper.form_id = "auction-custom-fields-form"
         self.helper.form_class = "form"
         self.helper.form_tag = True
-        self.fields["custom_field_1"].label = "Use custom text field"
+        for name, label in self.LABELS.items():
+            self.fields[name].label = label
         self.helper.layout = Layout(
             HTML("""<h4>Custom fields</h4>Control what information your users can enter about lots.
                 <span class='text-warning'>For advanced users only!</span>
