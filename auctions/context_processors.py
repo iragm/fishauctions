@@ -228,6 +228,7 @@ def site_config(request):
         "show_footer_icon": settings.SHOW_FOOTER_ICON,
         "enable_club_finder": settings.ENABLE_CLUB_FINDER,
         "enable_help": settings.ENABLE_HELP,
+        "allow_search_indexing": settings.ALLOW_SEARCH_INDEXING,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,
         "recaptcha_enabled": getattr(settings, "RECAPTCHA_ENABLED", False),
         # Hides the footer and menu links, since /dmca/ 404s without one -- see auctions/dmca.py.

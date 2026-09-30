@@ -380,7 +380,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                         {% if has_push_subscription %}
                         <button id="test-notification" class='btn btn-primary btn-sm ms-1'>Test notification</button>
                         {% endif %}
-                        <a class='btn btn-primary btn-sm ms-1' href="{% url 'help_guide' slug='in-person-auctions' %}?auction={{ lot.auction.slug }}#coming-up"><i class="bi bi-question-circle"></i> How it works</a>
+                        <a class='btn btn-primary btn-sm ms-1' href="{% url 'help_guide' slug='in-person-auctions' %}?auction={{ lot.auction.slug }}#coming-up" target="_blank" rel="noopener"><i class="bi bi-question-circle"></i> How it works</a>
                         {% if has_push_subscription %}
                         <span class='text-success d-none' id='test-notification-status'></span>
                         {% endif %}
@@ -390,7 +390,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <span id='subscribe_message_area' class='d-none'>
                         Get a notification on this device when bidding starts on this lot:
                         {% webpush_button with_class="btn btn-primary btn-sm ms-1" %}
-                        <a class='btn btn-primary btn-sm ms-1' href="{% url 'help_guide' slug='in-person-auctions' %}?auction={{ lot.auction.slug }}#coming-up"><i class="bi bi-question-circle"></i> How it works</a>
+                        <a class='btn btn-primary btn-sm ms-1' href="{% url 'help_guide' slug='in-person-auctions' %}?auction={{ lot.auction.slug }}#coming-up" target="_blank" rel="noopener"><i class="bi bi-question-circle"></i> How it works</a>
                     </span>
                     {% endif %}
                     {% if has_app_push and not request.user.userdata.push_notifications_when_lots_sell %}
@@ -398,7 +398,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <span id='app_push_opt_in'>
                         <button id="enable-app-notifications" class='btn btn-primary btn-sm'>Notify me when bidding starts</button>
                         <span class='text-muted'><small>Sent to the app on your phone</small></span>
-                        <a class='btn btn-primary btn-sm ms-1' href="{% url 'help_guide' slug='in-person-auctions' %}?auction={{ lot.auction.slug }}#coming-up"><i class="bi bi-question-circle"></i> How it works</a>
+                        <a class='btn btn-primary btn-sm ms-1' href="{% url 'help_guide' slug='in-person-auctions' %}?auction={{ lot.auction.slug }}#coming-up" target="_blank" rel="noopener"><i class="bi bi-question-circle"></i> How it works</a>
                     </span>
                     {% endif %}
                     </div>

@@ -171,6 +171,7 @@ def build_layout(form, currency_symbol):
         Div(
             col("require_phone_number"),
             col("email_users_when_invoices_ready"),
+            col("post_auction_survey"),
             col("add_membership_fee_to_invoices_for_expired_members"),
             col("invoice_rounding"),
             col("only_whole_dollar_bids"),

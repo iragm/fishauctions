@@ -15,7 +15,8 @@ a high ``off_default`` is load-bearing; ``edits`` much higher than ``off_default
 struggle with, which belongs in the friction report rather than behind *Advanced*.
 
 The numbers are published as :attr:`FieldAdoption.usage`, a badge beside each setting in the help's
-rules guide (``help_tags.rule``), where an organizer deciding whether to touch a setting sees them.
+rules guide (``help_tags.rule``), where an organizer deciding whether to touch a setting sees them. That
+page only reads the cache; ``help_stats.refresh`` fills it daily.
 """
 
 from __future__ import annotations

@@ -721,6 +721,12 @@ UNTRUSTED_MESSAGE = os.environ.get(
 ENABLE_PROMO_PAGE = parse_bool_env(os.environ.get("ENABLE_PROMO_PAGE") or None, default=False)
 ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None, default=True)
 ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=False)
+# False on a staging or test copy of a public site: every page says noindex, robots.txt names no sitemap,
+# and the sitemap is empty, so search engines don't list the copy beside the real one.
+ALLOW_SEARCH_INDEXING = parse_bool_env(os.environ.get("ALLOW_SEARCH_INDEXING") or None, default=True)
+# The phone app's store pages. The help's app guide says the app isn't out yet until one is set.
+APP_STORE_URL = os.environ.get("APP_STORE_URL", "")
+PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "")
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 
 # --- DMCA designated agent ---------------------------------------------------------------------
@@ -948,6 +954,9 @@ CACHES = {
         + "@"
         + os.environ.get("REDIS_HOST", "redis")
         + ":6379/3",
+        # redis-py waits forever by default. A stalled Redis has to raise, or auctions.session_store's fall
+        # back to the database never happens and the request hangs instead.
+        "OPTIONS": {"socket_connect_timeout": 2, "socket_timeout": 2},
     }
 }
 

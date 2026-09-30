@@ -103,8 +103,8 @@ class CommandPaletteTests(StandardTestCase):
         self.online_auction.save()
         self.assertTrue(self.online_auction.pretty_much_over)
 
-    def test_default_items_pretty_much_over_shows_only_invoice(self):
-        # Once pretty_much_over, only the invoice is surfaced.
+    def test_default_items_pretty_much_over_shows_only_invoice_and_survey(self):
+        # Once pretty_much_over, only the invoice and the survey (test_auction_survey) are surfaced.
         self.invoice.status = "UNPAID"
         self.invoice.save()
         self.user.userdata.last_auction_used = self.online_auction

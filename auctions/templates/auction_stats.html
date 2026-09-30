@@ -559,6 +559,13 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
                     {% endif %}
                   </tr>
                   <tr>
+                    <td>Users who gave feedback</td>
+                    <td>{{ auction.survey_stats.answered }} ({{ auction.survey_stats.great }} great, {{ auction.survey_stats.not_fun }} not so fun)</td>
+                    {% if compare_auction %}
+                    <td>{{ compare_auction.survey_stats.answered }} ({{ compare_auction.survey_stats.great }} great, {{ compare_auction.survey_stats.not_fun }} not so fun)</td>
+                    {% endif %}
+                  </tr>
+                  <tr>
                     <td>Total unique views</td>
                     <td>{% if auction.cached_stats.misc.total_unique_views %}{{ auction.cached_stats.misc.total_unique_views }}{% else %}N/A{% endif %}</td>
                     {% if compare_auction %}

@@ -139,6 +139,7 @@
           {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_lot_queue' slug=auction.slug %}"><i class="bi bi-list-ol"></i> Lot queue</a>{% endif %}
           {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_volunteers' slug=auction.slug %}"><i class="bi bi-people"></i> Recruit volunteers</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_chat' slug=auction.slug %}"><i class="bi bi-chat-fill"></i> Chat messages</a>
+          <a class="dropdown-item" href="{% url 'auction_survey_results' slug=auction.slug %}"><i class="bi bi-emoji-smile"></i> Feedback</a>
           <a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help</a>
           {% if auction.use_check_in_mode and can_manage_check_in %}
           <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>

@@ -2,7 +2,9 @@
 
 ``site_stats`` is counted once a day, from real sales, so "a lot with a photo sells more often" comes with
 this site's own percentage. ``in_person_photos`` is what a photo is worth at the big in-person auctions,
-also daily. ``auction_facts`` reads an auction's ``cached_stats`` (see
+also daily. Both are counted by the ``refresh_help_stats`` task (:func:`refresh`), never by a page: the
+guides are public and crawled, and these are scans of the lots table. A page that finds nothing counted
+asks for a count and reads the words meanwhile. ``auction_facts`` reads an auction's ``cached_stats`` (see
 ``Auction.recalculate_stats``), so a guide never waits on a count. All return ``{}``, or leave a key out,
 when there isn't enough to say, and the guides fall back to words.
 """
@@ -13,13 +15,18 @@ import datetime
 import logging
 
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Avg, BooleanField, Case, Count, Exists, F, OuterRef, Q, Sum, Value, When
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 SITE_CACHE_KEY = "help_site_stats_v1"
-SITE_CACHE_SECONDS = 60 * 60 * 24
+#: Counted daily, kept for three: a missed run leaves the last count up rather than the words alone.
+SITE_CACHE_SECONDS = 60 * 60 * 24 * 3
+#: Held while a count asked for by a page is queued, so a crawl asks once.
+REFRESH_QUEUED_KEY = "help_stats_refresh_queued"
+REFRESH_QUEUED_SECONDS = 60 * 15
 #: The fewest lots a site-wide percentage is quoted from.
 MIN_LOTS = 200
 #: The fewest lots, and people, an auction's own percentages are quoted from.
@@ -40,12 +47,54 @@ def _pct(part, whole):
 
 
 def site_stats() -> dict:
-    """Site-wide facts, cached for a day. A failure to count leaves the guides readable, not broken."""
+    """Site-wide facts, as last counted by :func:`refresh`."""
+    return _counted(SITE_CACHE_KEY)
+
+
+def _counted(key) -> dict:
+    """What :func:`refresh` last stored under ``key``, or ``{}`` (asking for a count) when there's nothing."""
     try:
-        return cache.get_or_set(SITE_CACHE_KEY, _site_stats, SITE_CACHE_SECONDS)
-    except Exception:
-        logger.exception("help site stats failed")
+        value = cache.get(key)
+    except Exception as e:
+        logger.warning("help stats unreadable: %r", e)
         return {}
+    if value is None:
+        request_refresh()
+        return {}
+    return value
+
+
+def request_refresh():
+    """Queue :func:`refresh` unless one is queued already."""
+    try:
+        if not cache.add(REFRESH_QUEUED_KEY, True, REFRESH_QUEUED_SECONDS):
+            return
+    except Exception:
+        return
+    from auctions.tasks import refresh_help_stats
+
+    transaction.on_commit(refresh_help_stats.delay)
+
+
+def _run(label, step):
+    step()
+
+
+def refresh(run=_run):
+    """Count everything the guides quote: :func:`site_stats`, :func:`in_person_photos` and the rules guide's
+    usage badges (``field_adoption``). ``run(label, step)`` runs each count, so one failing can leave the others.
+    """
+    from auctions import field_adoption
+
+    run("site stats", lambda: cache.set(SITE_CACHE_KEY, _site_stats(), SITE_CACHE_SECONDS))
+    run("in-person photos", lambda: cache.set(PHOTO_CACHE_KEY, _in_person_photos(), SITE_CACHE_SECONDS))
+    run(
+        "field adoption",
+        lambda: cache.set(
+            field_adoption.CACHE_KEY, field_adoption.auction_field_adoption(use_cache=False), SITE_CACHE_SECONDS
+        ),
+    )
+    cache.delete(REFRESH_QUEUED_KEY)
 
 
 def _site_stats(min_lots: int = MIN_LOTS) -> dict:
@@ -134,12 +183,8 @@ def _site_stats(min_lots: int = MIN_LOTS) -> dict:
 
 
 def in_person_photos() -> dict:
-    """What a photo is worth at a big in-person auction, cached for a day. ``{}`` when there isn't enough."""
-    try:
-        return cache.get_or_set(PHOTO_CACHE_KEY, _in_person_photos, SITE_CACHE_SECONDS)
-    except Exception:
-        logger.exception("help photo stats failed")
-        return {}
+    """What a photo is worth at a big in-person auction, as last counted by :func:`refresh`."""
+    return _counted(PHOTO_CACHE_KEY)
 
 
 def _in_person_photos(min_gross: int = PHOTO_MIN_GROSS, min_lots: int = PHOTO_MIN_LOTS) -> dict:

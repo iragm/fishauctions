@@ -1,7 +1,8 @@
 """Tags for writing help guides (``auctions/templates/help/guides/``).
 
 ``{% page "url_name" %}`` and ``{% rule "field" %}`` are also how ``help_guides`` finds out what a
-guide covers, so use them rather than hand-typing a page's name or a rule's label.
+guide covers, so use them rather than hand-typing a page's name or a rule's label. ``{% ui "Button" %}``
+names a button, menu or label on the site, and ``test_help`` fails when the site no longer has it.
 
 Inside ``{% with rule_usage=True %}`` a rule also says how many auctions use it
 (:mod:`auctions.field_adoption`). The rules guide turns that on; the other guides name rules in passing.
@@ -10,6 +11,7 @@ Inside ``{% with rule_usage=True %}`` a rule also says how many auctions use it
 from decimal import Decimal
 
 from django import template
+from django.core.cache import cache
 from django.templatetags.static import static
 from django.urls import NoReverseMatch, reverse
 from django.utils import formats, timezone
@@ -68,6 +70,17 @@ def page(context, url_name, text=""):
     return format_html('<strong class="help-page">{}</strong>', label)
 
 
+@register.simple_tag
+def ui(label):
+    """A button, menu, tab or label as the site words it: ``{% ui "Copy to new auction" %}``.
+
+    Checked against the site's own templates, code and form labels (``help_guides.missing_ui_labels``), so
+    renaming the button fails the build until the guide says the new name. For somebody else's screens
+    (the browser's print dialog, ChatGPT's settings) use plain ``<strong>``.
+    """
+    return format_html('<strong class="help-ui">{}</strong>', label)
+
+
 def _rule_label(name):
     """The label the rules page shows for ``name``, or None when neither rules form has the field."""
     from auctions.forms import AuctionCustomFieldsForm, AuctionEditForm
@@ -91,16 +104,25 @@ NO_USAGE = frozenset(
 )
 
 
-def _usage(name):
-    """The usage badge's text, or blank. A failure to count leaves the guide readable, not broken."""
+def _usage(context, name):
+    """The usage badge's text, or blank. Counted by ``help_stats.refresh``, never here: this page is public,
+    and the count is two full table scans. Read once per page, not once per rule.
+    """
     if name in NO_USAGE:
         return ""
-    from auctions.field_adoption import auction_field_adoption
+    rows = context.render_context.get("help_rule_usage")
+    if rows is None:
+        from auctions.field_adoption import CACHE_KEY
+        from auctions.help_stats import request_refresh
 
-    try:
-        rows = {row.name: row for row in auction_field_adoption()}
-    except Exception:
-        return ""
+        try:
+            counted = cache.get(CACHE_KEY)
+        except Exception:
+            counted = []
+        if counted is None:
+            request_refresh()
+        rows = {row.name: row for row in counted or []}
+        context.render_context["help_rule_usage"] = rows
     row = rows.get(name)
     return row.usage if row else ""
 
@@ -172,7 +194,7 @@ def rule(context, name, text=""):
     html = format_html('<strong class="help-rule" id="rule-{}">{}</strong>', name, text or label)
     if not context.get("rule_usage"):
         return html
-    usage = _usage(name)
+    usage = _usage(context, name)
     if usage:
         html = format_html('{} <span class="badge bg-secondary fw-normal">{}</span>', html, usage)
     ctx = _help(context)

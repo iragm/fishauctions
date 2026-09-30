@@ -1158,6 +1158,22 @@ def auction_emails(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def refresh_help_stats(self):
+    """Count the numbers the help guides quote (``help_stats.refresh``). Daily, or when a guide finds none."""
+    from auctions import help_stats
+
+    help_stats.refresh(run=_safely)
+
+
+@shared_task(bind=True, ignore_result=True)
+def send_auction_surveys(self):
+    """Email "How was <auction>?" to everyone with an invoice, for auctions asking separately. Hourly."""
+    from auctions.auction_survey import send_survey_emails
+
+    send_survey_emails()
+
+
+@shared_task(bind=True, ignore_result=True)
 def email_unseen_chats(self):
     """Send notifications about unread chat messages."""
     call_command("email_unseen_chats")

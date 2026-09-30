@@ -6,7 +6,7 @@
 <h2 class="h5 mt-4" id="join">1. Join the auction</h2>
 <p>Signing up for the site and joining an auction are two different things. You need both. Without joining, there's no bid button and no way to add lots.</p>
 <ol>
-  <li><strong>Sign in.</strong> <strong>Sign in with Google</strong> or <strong>Sign in with Apple</strong> is one click. Confirmation email not arriving? See <a href="{% url 'help_guide' slug='your-account' %}#signing-in">Your account</a>.</li>
+  <li><strong>Sign in.</strong> {% ui "Sign in with Google" %} or {% ui "Sign in with Apple" %} is one click. Confirmation email not arriving? See <a href="{% url 'help_guide' slug='your-account' %}#signing-in">Your account</a>.</li>
   <li><strong>Open {% page "auction_main" "the auction's page" %}.</strong> Your club's link goes straight there, or find it under {% page "auctions" "Auctions" %} at the top of the page.</li>
   <li><strong>Read the rules</strong>, then scroll right to the bottom.</li>
   <li><strong>Tick <em>Yes, I will be at this auction</em></strong> and pick your pickup location.</li>
@@ -14,23 +14,23 @@
 </ol>
 <p>The pickup location is where you collect what you win, and drop off what you sell. You can change it at the bottom of the auction page until bidding ends.</p>
 {% mike %}Mike read the rules, didn't scroll down, and emailed the club to say the site was broken because there was no bid button. There's always a bid button. It's at the bottom.{% endmike %}
-<p>The list of auctions shows the ones near you first; click <strong>Starts</strong> to sort by date. {% page "all_auctions" "Every auction" %}, past ones too, is there as well.</p>
+<p>The list of auctions shows the ones near you first; click {% ui "Starts" %} to sort by date. {% page "all_auctions" "Every auction" %}, past ones too, is there as well.</p>
 
 <h2 class="h5 mt-4" id="sell">2. Add your lots</h2>
 <ol>
-  <li>On the auction page, click <strong>Add Lot</strong>. (It's also {% page "new_lot" "Create new lot" %} on the {% page "selling" "Selling" %} page.)</li>
+  <li>On the auction page, click {% ui "Add Lot" %}. (It's also {% page "new_lot" "Create new lot" %} on the {% page "selling" "Selling" %} page.)</li>
   <li>The first time, the site asks for your name, address and phone. The address is where the club mails your check.</li>
   <li><strong>Name it</strong>: short, and say what it is. "Pair of Apistogramma cacatuoides". Leave numbers out; the lot number is added for you.</li>
   <li><strong>Pick the species</strong> from the list if it's alive. The category fills itself in.</li>
-  <li><strong>The rest is optional</strong>: quantity, description, a minimum price, a buy now price, <strong>I bred this</strong>.</li>
+  <li><strong>The rest is optional</strong>: quantity, description, a minimum price, a buy now price, {% ui "I bred this" %}.</li>
   <li><strong>Save.</strong> A green banner says the lot was created.</li>
-  <li><strong>Add photos</strong>: {% page "add_image" "Add image" %} on the lot's page, straight from your phone.</li>
+  <li>{% ui "Add photos" %}: {% page "add_image" "Add image" %} on the lot's page, straight from your phone.</li>
 </ol>
 {% if help.auction.is_online %}{% helptip %}{{ help.auction.title }} keeps {{ help.auction.winning_bid_percent_to_club }}% of each sale{% if help.auction.lot_entry_fee %} plus {{ help.auction.currency_symbol }}{{ help.auction.lot_entry_fee }} a lot{% endif %}{% if help.auction.unsold_lot_fee %}, and charges {{ help.auction.currency_symbol }}{{ help.auction.unsold_lot_fee }} for each lot that doesn't sell{% endif %}.{% endhelptip %}{% endif %}
 <p>If the auction charges an <strong>unsold lot fee</strong>, you pay it on every lot of yours that gets no bids. Price your lots to sell.</p>
 <p><strong>Photos sell lots.</strong>{% if help.site.photo_sell_rate %} On this site, {{ help.site.photo_sell_rate }}% of lots with a photo sell, and {{ help.site.no_photo_sell_rate }}% of lots without one.{% else %} People skip lots they can't see.{% endif %} A clear photo of your actual fish beats a perfect one off the internet.</p>
 {% tip %}No time for photos? <a href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI agent</a> and ask it to find your lots in this auction that have no picture, and add one to each.{% endtip %}
-{% tip %}Selling the same thing again? Open an old lot and click <strong>Copy to new lot</strong>. It fills in everything, photos included.{% endtip %}
+{% tip %}Selling the same thing again? Open an old lot and click {% ui "Copy to new lot" %}. It fills in everything, photos included.{% endtip %}
 <h3 class="h6 mt-3">What sellers ask</h3>
 <div class="table-responsive">
 <table class="table table-sm">
@@ -47,7 +47,7 @@
 <p>The {% page "selling" "Selling" %} page lists your lots, with views, bids and unread questions. {% page "my_lot_report" "Export my sold lots CSV" %} downloads them. {% page "messages" "Chat notification setup" %} picks which lots email you when somebody asks a question.</p>
 
 <h2 class="h5 mt-4" id="bid">3. Bid</h2>
-<p>Open {% page "lot_by_pk" "a lot" %}, type the most you'd pay, click <strong>Place bid</strong>, and confirm. You don't pay what you typed. You pay just enough to beat the next person.</p>
+<p>Open {% page "lot_by_pk" "a lot" %}, type the most you'd pay, click {% ui "Place bid" %}, and confirm. You don't pay what you typed. You pay just enough to beat the next person.</p>
 <div class="table-responsive">
 <table class="table table-sm help-table">
   <thead><tr><th>A bag of guppies opens at $2</th><th class="text-end">Price shows</th><th>Winning</th></tr></thead>
@@ -65,16 +65,16 @@
   <li>Only you can see your maximum.</li>
   <li>A price typed in the lot's chat isn't a bid.</li>
 </ul>
-<p>Click <strong>Watch</strong>, or the star in the lot list, on anything you like. You get an email two hours before it ends. The {% page "watched" "Buying" %} page lists what you're {% page "watched" "watching" %}, {% page "my_bids" "bidding on" %} and {% page "won_lots" "have won" %}. {% page "my_won_lot_csv" "Export CSV" %} downloads it.</p>
+<p>Click {% ui "Watch" %}, or the star in the lot list, on anything you like. You get an email two hours before it ends. The {% page "watched" "Buying" %} page lists what you're {% page "watched" "watching" %}, {% page "my_bids" "bidding on" %} and {% page "won_lots" "have won" %}. {% page "my_won_lot_csv" "Export CSV" %} downloads it.</p>
 <h3 class="h6 mt-3">Finding lots</h3>
 <ul>
-  <li><strong>View Lots</strong> on the auction page shows this auction. {% page "allLots" "Lots" %} at the top of the page shows every auction, which is why you'll see other clubs' lots there.</li>
-  <li>Sold lots are hidden unless you pick <strong>Open/ended</strong>. Your lot didn't vanish; it sold.</li>
-  <li><strong>Least popular</strong>, or <strong>Only unviewed</strong>, finds the lots nobody's looked at.</li>
+  <li>{% ui "View Lots" %} on the auction page shows this auction. {% page "allLots" "Lots" %} at the top of the page shows every auction, which is why you'll see other clubs' lots there.</li>
+  <li>Sold lots are hidden unless you pick {% ui "Open/ended" %}. Your lot didn't vanish; it sold.</li>
+  <li>{% ui "Least popular" %}, or {% ui "Only unviewed" %}, finds the lots nobody's looked at.</li>
   <li>{% page "user_lots" "All lots from" %} a seller, on any lot page, shows what else they're selling.</li>
   <li>Something that shouldn't be for sale? {% page "report_lot" "Report" %} it.</li>
 </ul>
-<p>Don't want your name next to your bids? Untick <strong>Username visible</strong> in your preferences. The people running the auction still see who you are.</p>
+<p>Don't want your name next to your bids? Untick {% ui "Username visible" %} in your preferences. The people running the auction still see who you are.</p>
 
 <h2 class="h5 mt-4" id="ending">4. How an auction ends</h2>
 <p>Each lot ends at the auction's end time, unless somebody bids in the last 15 minutes. Then that lot runs 15 more minutes from the bid, and again for each late bid, up to an hour past the end.{% if help.site.online_extended %} About {{ help.site.online_extended }}% of sold lots on this site end late that way.{% endif %}</p>
@@ -95,7 +95,7 @@
 <p>When your invoice is paid, you get an email thanking you for being part of the auction. It's your receipt, not a bill. {% page "invoice_by_pk" "Print invoice" %}, on the invoice, prints it.</p>
 
 <h2 class="h5 mt-4" id="pickup">6. Pickup day</h2>
-<p>Your invoice has everything: the location, the time, a <strong>Get directions</strong> button, and who to call if you're late. {% page "add_to_calendar" "Add to calendar" %}, on the auction page, puts it in your calendar.</p>
+<p>Your invoice has everything: the location, the time, a {% ui "Get directions" %} button, and who to call if you're late. {% page "add_to_calendar" "Add to calendar" %}, on the auction page, puts it in your calendar.</p>
 <ul>
   <li><strong>Be on time.</strong> Fish sit in bags while everyone waits.</li>
   <li><strong>Somebody else can pick up for you.</strong> Give them the name on your invoice, and make sure it's paid.</li>
@@ -104,15 +104,15 @@
 <p>Two times on your invoice? Lots are being driven between locations. The first time is for lots from sellers at your own location, the second for lots from the others.</p>
 <h3 class="h6 mt-3">If you sold lots</h3>
 <ol>
-  <li><strong>Label each bag</strong>: lot number, winner, and where it's going. <strong>Print labels for your lots</strong> on your invoice does it. No printer? Marker. <a href="{% url 'help_guide' slug='labels' %}#print-your-own">Lot labels</a> has more.</li>
-  <li><strong>Bag them properly.</strong> <a href="{% url 'help_guide' slug='bagging-fish' %}">Bagging fish</a> has the details.</li>
+  <li><strong>Label each bag</strong>: lot number, winner, and where it's going. {% ui "Print labels for your lots" %} on your invoice does it. No printer? Marker. <a href="{% url 'help_guide' slug='labels' %}#print-your-own">Lot labels</a> has more.</li>
+  {% if help.fish_site %}<li><strong>Bag them properly.</strong> <a href="{% url 'help_guide' slug='bagging-fish' %}">Bagging fish</a> has the details.</li>{% endif %}
   <li><strong>Bring them</strong> to your location at the first pickup time, in a cooler.</li>
 </ol>
 <p>The club pays you after pickup, usually by check to the address on your account, within a week or two.</p>
 
 <h2 class="h5 mt-4" id="problems">When something's wrong with a lot</h2>
-<p>Dead on arrival, short, not as described, or it never turned up: tell the people running the auction, not the seller. Reply to any email you got about the auction, or use the <strong>Email</strong> button on the auction page. Send the lot number.</p>
+<p>Dead on arrival, short, not as described, or it never turned up: tell the people running the auction, not the seller. Reply to any email you got about the auction, or use the {% ui "Email" %} button on the auction page. Send the lot number.</p>
 <p>They'll refund some or all of it through the invoices. It comes off the seller's payment, and the club gives up its cut too.</p>
 {% tip %}Don't sort out money with the seller yourselves. A seller who sends you $5 for a dead fish still pays the club's cut on the sale, and the club may refund you as well.{% endtip %}
 <p>After the auction, {% page "feedback" "Feedback" %} (in the menu under your name) lists the lots you bought and sold in the last three months. Rate each one +1 or &minus;1, or leave it, and add a comment. Sellers rate buyers too.</p>
-<p>Want to reach a seller about a lot you missed? Search {% page "allLots" "Lots" %} with <strong>Open/ended</strong> picked and ask in the lot's chat. Some sellers show their email on {% page "userpage" "their user page" %}.</p>
+<p>Want to reach a seller about a lot you missed? Search {% page "allLots" "Lots" %} with {% ui "Open/ended" %} picked and ask in the lot's chat. Some sellers show their email on {% page "userpage" "their user page" %}.</p>

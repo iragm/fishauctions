@@ -12,7 +12,7 @@
   </tbody>
 </table>
 </div>
-{% tip %}The first time you run an auction, we have to OK you before it can take payments. Your auction page has a <strong>Contact us and request access</strong> button.{% endtip %}
+{% tip %}The first time you run an auction, we have to OK you before it can take payments. Your auction page has a {% ui "Contact us and request access" %} button.{% endtip %}
 
 <h2 class="h5 mt-4" id="square">Square</h2>
 {% square_account %}
@@ -22,20 +22,20 @@
     <h4 class="h6 card-title">For a club</h4>
     <ol class="small mb-0 ps-3">
       <li>Open the club's {% page "club_membership_settings" "Membership and payments" %}.</li>
-      <li>Click <strong>Connect a Square account for this club</strong> and sign in to Square.</li>
+      <li>Click {% ui "Connect a Square account for this club" %} and sign in to Square.</li>
     </ol>
     <p class="card-text small mt-2 mb-0">It uses the Square account of whoever clicks, so the treasurer should do it. Dues and every club auction then use it.</p>
   </div></div></div>
   <div class="col-md-6"><div class="card h-100"><div class="card-body">
     <h4 class="h6 card-title">For an auction with no club</h4>
     <ol class="small mb-0 ps-3">
-      <li>Sign in here, and click <strong>Connect your Square account</strong> at the top of this section.</li>
+      <li>Sign in here, and click {% ui "Connect your Square account" %} at the top of this section.</li>
       <li>Sign in to Square.</li>
     </ol>
     <p class="card-text small mt-2 mb-0">Your auctions take payments into your own account.</p>
   </div></div></div>
 </div>
-<p>Then tick <strong>Square payments</strong> in your auction's rules. It only shows once an account is connected. A club auction uses the club's account, or the account of whoever created the auction if the club hasn't connected one.</p>
+<p>Then tick {% ui "Square payments" %} in your auction's rules. It only shows once an account is connected. A club auction uses the club's account, or the account of whoever created the auction if the club hasn't connected one.</p>
 <p>Square works in the US and Canada. You can have one Square account connected at a time. {% page "square_seller_delete" "Disconnect" %} it any time.</p>
 
 <h3 class="h6 mt-3">When people pay</h3>
@@ -44,7 +44,7 @@
     <h4 class="h6 card-title"><i class="bi bi-laptop"></i> Online auctions</h4>
     <ul class="small mb-0 ps-3">
       <li>The pay button appears an hour after bidding ends, once late bids have finished.</li>
-      <li>Set invoices to <strong>Ready</strong> to email everyone a link.</li>
+      <li>Set invoices to {% ui "Ready" %} to email everyone a link.</li>
       <li>Paid invoices mark themselves paid.</li>
     </ul>
   </div></div></div>
@@ -58,13 +58,13 @@
   </div></div></div>
 </div>
 <ul>
-  <li><strong>Refunds</strong> you make in Square show on the invoice by themselves.</li>
-  <li><strong>Somebody paid cash instead?</strong> Mark the invoice paid yourself, and write "cash" in its <strong>Memo</strong>.</li>
+  <li>{% ui "Refunds" %} you make in Square show on the invoice by themselves.</li>
+  <li><strong>Somebody paid cash instead?</strong> Mark the invoice paid yourself, and write "cash" in its {% ui "Memo" %}.</li>
   <li><strong>Long lines?</strong> Several admins can run checkout at once, on different phones.</li>
 </ul>
 
 <h3 class="h6 mt-3" id="tap-to-pay">Tap to Pay</h3>
-<p>With the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a> and Square connected, checkout has a <strong>Tap to Pay</strong> button. The buyer taps their card or phone on yours, and the invoice is paid. No card reader. On an iPhone it's called Tap to Pay on iPhone.</p>
+<p>With the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a> and Square connected, checkout has a {% ui "Tap to Pay" %} button. The buyer taps their card or phone on yours, and the invoice is paid. No card reader. On an iPhone it's called Tap to Pay on iPhone.</p>
 <p>Connected Square before Tap to Pay existed? Reconnect it once to turn it on. Your settings stay as they are.</p>
 
 <h2 class="h5 mt-4" id="paypal">PayPal</h2>
@@ -75,9 +75,9 @@
 <h2 class="h5 mt-4" id="paypal-invoices">Sending PayPal invoices yourself</h2>
 <p>No pay button? You can still bill everyone through PayPal after an online auction, from any PayPal account:</p>
 <ol>
-  <li>On the auction's Users tab, fix up any invoices, then click <strong>Set open invoices to ready</strong>.</li>
-  <li>Click <strong>Export</strong>, then <strong>PayPal Invoice CSV</strong>. You get a file of everyone who owes money.</li>
-  <li>Click <strong>PayPal Batch Invoice Upload</strong> in the same menu and sign in to PayPal.</li>
+  <li>On the auction's Users tab, fix up any invoices, then click {% ui "Set open invoices to ready" %}.</li>
+  <li>Click {% ui "Export" %}, then {% ui "PayPal Invoice CSV" %}. You get a file of everyone who owes money.</li>
+  <li>Click {% ui "PayPal Batch Invoice Upload" %} in the same menu and sign in to PayPal.</li>
   <li>Upload the file, check the invoices, and send them.</li>
   <li>PayPal doesn't tell this site who paid. Mark people paid yourself.</li>
 </ol>
@@ -85,7 +85,7 @@
 <table class="table table-sm">
   <thead><tr><th>If</th><th>Then</th></tr></thead>
   <tbody>
-    <tr><td>The menu says <strong>No PayPal invoices</strong></td><td>Only <strong>Ready</strong> invoices are exported. Did you do step 1? Or has everyone paid?</td></tr>
+    <tr><td>The menu says {% ui "No PayPal invoices" %}</td><td>Only {% ui "Ready" %} invoices are exported. Did you do step 1? Or has everyone paid?</td></tr>
     <tr><td>It says the export isn't available</td><td>The auction has a pay button already. Exporting as well would bill people twice.</td></tr>
     <tr><td>There's more than one CSV</td><td>PayPal takes 150 invoices at a time. Upload each file.</td></tr>
     <tr><td>Somebody's missing</td><td>People the club owes money aren't billed. Pay them by check.</td></tr>
@@ -94,10 +94,10 @@
   </tbody>
 </table>
 </div>
-{% tip %}Sending PayPal invoices? Consider turning off <strong>Invoice notifications</strong> in the rules, so people only get PayPal's email and not two.{% endtip %}
+{% tip %}Sending PayPal invoices? Consider turning off {% ui "Invoice notifications" %} in the rules, so people only get PayPal's email and not two.{% endtip %}
 
 <h2 class="h5 mt-4" id="chasing">Who hasn't paid?</h2>
-<p>On the Users tab, filter by <strong>Owes the club</strong> and <strong>Ready</strong>. There are filters for who has and hasn't opened their invoice, too.</p>
+<p>On the Users tab, filter by {% ui "Owes the club" %} and {% ui "Ready" %}. There are filters for who has and hasn't opened their invoice, too.</p>
 {% if help.is_admin %}{% helptip %}<a href="{% url 'auction_tos_list' slug=help.auction.slug %}?query=+open+owes+club">People in {{ help.auction.title }} with an open invoice who owe the club</a>.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="seller-payouts">Paying sellers</h2>
@@ -107,5 +107,5 @@
   <li>A payout button would let any of them send the club's money anywhere: add a user, add a lot for them, mark it sold for $1,000, pay out.</li>
   <li>Sellers can't take or ask for their payout here either.</li>
 </ul>
-<p>Pay them from the <strong>Users CSV</strong>, under <strong>Export</strong> on the Users tab. Filter the tab by <strong>Club owes</strong> first and the file has only the people the club owes, with the amount in <strong>Invoice total due</strong>. It imports into PayPal, QuickBooks, or whatever your treasurer uses.</p>
+<p>Pay them from the {% ui "Users CSV" %}, under {% ui "Export" %} on the Users tab. Filter the tab by {% ui "Club owes" %} first and the file has only the people the club owes, with the amount in {% ui "Invoice total due" %}. It imports into PayPal, QuickBooks, or whatever your treasurer uses.</p>
 {% if help.is_admin %}{% helptip %}<a href="{% url 'auction_tos_list' slug=help.auction.slug %}?query=+club+owes">People in {{ help.auction.title }} the club owes</a>.{% endhelptip %}{% endif %}

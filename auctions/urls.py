@@ -593,6 +593,8 @@ urlpatterns = [
         name="auction_lot_list",
     ),
     path("auctions/<slug:slug>/stats/", views.AuctionStats.as_view(), name="auction_stats"),
+    path("auctions/<slug:slug>/survey/", views.AuctionSurvey.as_view(), name="auction_survey"),
+    path("auctions/<slug:slug>/survey/results/", views.AuctionSurveyResults.as_view(), name="auction_survey_results"),
     path("auctions/<slug:slug>/lot-map/", views.AuctionLotMap.as_view(), name="auction_lot_map"),
     path("auctions/<slug:slug>/lot-map/data/", views.AuctionLotMapData.as_view(), name="auction_lot_map_data"),
     path("auctions/<slug:slug>/lot-map/clear/", views.AuctionLotMapClear.as_view(), name="auction_lot_map_clear"),

@@ -85,6 +85,16 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auction_promos",
         "schedule": 3600.0,  # Run every hour
     },
+    # The site-wide numbers the help guides quote, which no page counts itself
+    "refresh_help_stats": {
+        "task": "auctions.tasks.refresh_help_stats",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
+    # The post-auction survey, for auctions that ask by separate email
+    "send_auction_surveys": {
+        "task": "auctions.tasks.send_auction_surveys",
+        "schedule": 3600.0,  # Run every hour
+    },
     # Set user locations - every 2 hours
     "set_user_location": {
         "task": "auctions.tasks.set_user_location",

@@ -195,6 +195,8 @@ def export(user):
                 "is_admin": row.is_admin,
                 "checked_in": _plain(row.checked_in),
                 "added_by_an_admin_at_the_door": row.manually_added,
+                "how_was_it": row.get_survey_answer_display(),
+                "feedback_on_the_auction": row.survey_comments,
             }
             for row in AuctionTOS.objects.filter(user=user).select_related("auction", "pickup_location")
         ],

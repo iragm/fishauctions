@@ -14847,6 +14847,12 @@ NOT_A_SKILL: dict[str, str] = {
         "creator or making them their club's admin, a judgement about a stranger made while reading "
         "the auction they just created."
     ),
+    "AuctionSurvey": (
+        "The organizers asking the people who came how it went, answered once each in that person's "
+        "own words. An assistant writing the answer would be composing the review it exists to "
+        "collect. The palette offers the page to everybody who hasn't answered once the auction is "
+        "over, and the answer itself is one of two buttons."
+    ),
     "InvoiceCreateView": (
         "Makes an empty invoice for somebody who has bought and sold nothing yet, and checks them in "
         "on the way. Every sale already makes the invoice it needs, so this only exists for the "

@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import redirect_to_login
 from django.contrib.sites.models import Site
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -30,6 +31,7 @@ from django.views.generic.edit import (
     FormMixin,
 )
 
+from auctions import auction_survey
 from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     AuctionJoin,
@@ -1022,3 +1024,47 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         else:
             logger.debug(form.cleaned_data)
             return self.form_invalid(form)
+
+
+class AuctionSurvey(TemplateView):
+    """ "How was <auction>?" for one participant, signed in or holding their invoice's link.
+
+    An emailed button opens this with ``?answer=``, and the page posts it from JavaScript: a GET never
+    records, since mail scanners open every link in a message (``auctions.auction_survey``).
+    """
+
+    template_name = "auction_survey.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.token = (request.POST.get("uuid") or request.GET.get("uuid") or "").strip()
+        self.tos = auction_survey.participant(self.auction, request.user, self.token)
+        if self.tos is None:
+            if not self.token and not request.user.is_authenticated:
+                return redirect_to_login(request.get_full_path())
+            raise Http404
+        if self.auction.post_auction_survey == Auction.SURVEY_NONE:
+            return redirect(self.auction.get_absolute_url())
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        if "answer" in request.POST:
+            if auction_survey.record_answer(self.tos, request.POST["answer"]):
+                if self.token:
+                    auction_survey.verify_email(self.tos)
+                messages.success(request, "Thanks, got it.")
+        if "comments" in request.POST:
+            auction_survey.record_comments(self.tos, request.POST["comments"])
+            messages.success(request, "Thanks for the feedback!")
+        return redirect(auction_survey.survey_url(self.auction, token=self.token))
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["tos"] = self.tos
+        context["token"] = self.token
+        answer = self.request.GET.get("answer", "")
+        context["pending_answer"] = answer if answer in auction_survey.ANSWERS else ""
+        context["answers"] = AuctionTOS.SURVEY_ANSWERS
+        context["max_length"] = auction_survey.COMMENTS_MAX_LENGTH
+        return context

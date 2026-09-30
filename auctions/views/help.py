@@ -40,7 +40,7 @@ class HelpIndexView(_HelpPage):
         query = (self.request.GET.get("q") or "").strip()
         context["query"] = query
         context["results"] = help_guides.search(query) if query else []
-        context["groups"] = help_guides.GROUPS
+        context["groups"] = help_guides.shown_groups()
         ctx = context["help"]
         if ctx.auction:
             context["your_guide"] = help_guides.guide_for_auction(ctx.auction, ctx.is_admin)
@@ -53,7 +53,7 @@ class HelpGuideView(_HelpPage):
     def get_context_data(self, **kwargs):
         self.active_guide = kwargs["slug"]
         guide = help_guides.GUIDES.get(self.active_guide)
-        if guide is None:
+        if guide is None or not guide.shown:
             raise Http404
         context = super().get_context_data(**kwargs)
         context["guide"] = guide
@@ -85,6 +85,8 @@ class SitemapView(View):
 
     def get(self, request):
         base = request.build_absolute_uri("/").rstrip("/")
-        paths = ["/help/", *(guide.url for guide in help_guides.GUIDES.values())]
+        paths = ["/help/", *(guide.url for guide in help_guides.GUIDES.values() if guide.shown)]
+        if not settings.ALLOW_SEARCH_INDEXING:
+            paths = []
         body = render_to_string("sitemap.xml", {"urls": [base + path for path in paths]})
         return HttpResponse(body, content_type="application/xml")

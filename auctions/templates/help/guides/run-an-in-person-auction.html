@@ -51,19 +51,19 @@
 
 <h2 class="h5 mt-4" id="create">1. Create the auction</h2>
 <ol>
-  <li>Click <strong>Auctions</strong> at the top of the page, then {% page "auction_confirm" "Create a new auction" %}, then {% page "create_auction" "Create a club auction" %}.</li>
+  <li>Click {% ui "Auctions" %} at the top of the page, then {% page "auction_confirm" "Create a new auction" %}, then {% page "create_auction" "Create a club auction" %}.</li>
   <li>Pick the date and start time, and a name. The name becomes the link and can't be changed, so get the year right.</li>
-  <li>Click <strong>Create in-person auction</strong>. Done this before? <strong>Copy</strong> your last auction instead: same rules and location, new date.</li>
-  <li>Under <strong>More</strong>, click {% page "auction_pickup_location" "Location" %} and put the hall on the map. Add parking and which door to use to the description.</li>
+  <li>Click {% ui "Create in-person auction" %}. Done this before? {% ui "Copy" %} your last auction instead: same rules and location, new date.</li>
+  <li>Under {% ui "More" %}, click {% page "auction_pickup_location" "Location" %} and put the hall on the map. Add parking and which door to use to the description.</li>
 </ol>
-<p>The <strong>Finish setting up</strong> box on your auction page ticks off what's done. First auction? Click <strong>Contact us and request access</strong> there before you can promote it or have invoices emailed.</p>
+<p>The {% ui "Finish setting up" %} box on your auction page ticks off what's done. First auction? Click {% ui "Contact us and request access" %} there before you can promote it or have invoices emailed.</p>
 {% tip %}Put the auction's link on your flyer as a QR code. Check it scans before you print.{% endtip %}
 
 <h2 class="h5 mt-4" id="rules">2. Set the rules</h2>
-<p>Click {% page "edit_auction" "Rules" %} under <strong>More</strong>. <a href="{% url 'help_guide' slug='auction-rules' %}">What the auction rules do</a> covers every setting. The ones that matter most in person:</p>
+<p>Click {% page "edit_auction" "Rules" %} under {% ui "More" %}. <a href="{% url 'help_guide' slug='auction-rules' %}">What the auction rules do</a> covers every setting. The ones that matter most in person:</p>
 <ul>
-  <li><strong>Bidding opens</strong> is the time on your flyer. Doors at 9, bidding at 11? Put 11 here.</li>
-  <li><strong>Lot submission ends</strong>: an hour or two before the start, so nobody's typing in lots while you set up. You can still add lots for people after it closes.</li>
+  <li>{% ui "Bidding opens" %} is the time on your flyer. Doors at 9, bidding at 11? Put 11 here.</li>
+  <li>{% ui "Lot submission ends" %}: an hour or two before the start, so nobody's typing in lots while you set up. You can still add lots for people after it closes.</li>
   <li><strong>The fees.</strong> "$1 + 30%" is common. A 10% pre-registration discount gets sellers doing their own typing.</li>
   <li><strong>Charging members less?</strong> Set up the alternate split.</li>
 </ul>
@@ -73,16 +73,16 @@
 <p>Everyone who buys or sells needs to be on the {% page "auction_tos_list" "Users" %} tab. People who join through the site add themselves. Everyone else, you add.</p>
 <ol>
   <li>Type their name in the search box on the Users tab. Already there? You're done.</li>
-  <li>If not, click <strong>Create user</strong> under the empty search. It fills in the name you typed.</li>
+  <li>If not, click {% ui "Create user" %} under the empty search. It fills in the name you typed.</li>
   <li>As you type, the site offers the email, phone and address from your past auctions. Check it's the right person.</li>
   <li>Only a name is required. An email is worth having: it's how they get their invoice.</li>
 </ol>
 {% tip %}Always search first. It's what stops the same person ending up in the auction twice, with two bidder numbers and two invoices.{% endtip %}
 <h3 class="h6 mt-3">Adding lots of people at once</h3>
-<p>Open the menu next to <strong>Add user</strong>:</p>
+<p>Open the menu next to {% ui "Add user" %}:</p>
 <ul>
-  <li>{% page "bulk_add_users" "Bulk add users" %}: type them in, one per row. <strong>Import from old auctions</strong> brings last year's people, with the same bidder numbers.</li>
-  <li><strong>Import from CSV</strong>: a spreadsheet with columns named Email, Name, Bidder number, Phone, Address, Club member, Allow bidding, Memo and Admin. Only the ones you have. Importing again updates people; nobody is deleted.</li>
+  <li>{% page "bulk_add_users" "Bulk add users" %}: type them in, one per row. {% ui "Import from old auctions" %} brings last year's people, with the same bidder numbers.</li>
+  <li>{% ui "Import from CSV" %}: a spreadsheet with columns named Email, Name, Bidder number, Phone, Address, Club member, Allow bidding, Memo and Admin. Only the ones you have. Importing again updates people; nobody is deleted.</li>
   <li>{% page "import_from_google_drive" "Set up Google Drive sync" %}: the same columns in a Google Sheet shared as "anyone with the link can view". {% page "sync_google_drive" "Sync" %} pulls in changes whenever you like.</li>
 </ul>
 <h3 class="h6 mt-3">Bidder numbers</h3>
@@ -94,25 +94,25 @@
   <li><strong>Keep them three digits.</strong> A recorder who types 819 dollars into the bidder box won't hit a real bidder.</li>
   <li>The list sorts numbers as text, so 10 comes before 9.</li>
 </ul>
-<p>Duplicates happen anyway. Type "duplicate" in the search box. Keep the one with the invoice, and use <strong>Merge with...</strong> in the other one's <strong>Actions</strong> menu.</p>
+<p>Duplicates happen anyway. Type "duplicate" in the search box. Keep the one with the invoice, and use <strong>Merge with...</strong> in the other one's {% ui "Actions" %} menu.</p>
 {% mike %}Mike registered online in the morning with his Gmail, then gave his work email at the door. He went home with two bidder numbers, two invoices, and a membership fee on each.{% endmike %}
 
 <h2 class="h5 mt-4" id="helpers">4. Helpers and auction admins</h2>
 <ol>
-  <li>Your helper makes an account and joins the auction: <strong>Join auction</strong> at the bottom of the auction page.</li>
-  <li>On the Users tab, click their name and tick <strong>Grant admin permissions to help run this auction</strong>.</li>
+  <li>Your helper makes an account and joins the auction: {% ui "Join auction" %} at the bottom of the auction page.</li>
+  <li>On the Users tab, click their name and tick {% ui "Grant admin permissions to help run this auction" %}.</li>
 </ol>
-<p>Admins can do everything you can, all at once on their own devices. Your club can give people narrower jobs instead; see <a href="{% url 'help_guide' slug='clubs' %}#permissions">Clubs</a>. {% page "auction_history" "Admin history" %}, under <strong>More</strong>, shows who changed what.</p>
+<p>Admins can do everything you can, all at once on their own devices. Your club can give people narrower jobs instead; see <a href="{% url 'help_guide' slug='clubs' %}#permissions">Clubs</a>. {% page "auction_history" "Admin history" %}, under {% ui "More" %}, shows who changed what.</p>
 
 <h2 class="h5 mt-4" id="lots">5. Getting lots in</h2>
 <p>The best lots are the ones sellers add themselves before the day. They get the pre-registration discount, the labels are already on the bags, and people browse them at home{% if help.site.self_added_premium %}. On this site they sell for about {{ help.site.self_added_premium }}% more than lots typed in at the desk{% endif %}. Send sellers <a href="{% url 'help_guide' slug='in-person-auctions' %}#before">Taking part in an in-person auction</a>.</p>
-<p>For everyone else, you add their lots: <strong>Add lots</strong> next to their name on the Users tab. {% page "bulk_add_lots_auto" "The add lots page" %} is a grid, one lot per row, that saves as you type. Type the name, press Tab, move on. A good typist does ten lots a minute.</p>
+<p>For everyone else, you add their lots: {% ui "Add lots" %} next to their name on the Users tab. {% page "bulk_add_lots_auto" "The add lots page" %} is a grid, one lot per row, that saves as you type. Type the name, press Tab, move on. A good typist does ten lots a minute.</p>
 <ul>
   <li><strong>Check the name at the top</strong> before you start. Lots can't be moved to a different person afterwards.</li>
   <li><strong>Donations and vendor lots:</strong> a user for each vendor ("Main Street Pets donation"), with no email, so you know what each gave.</li>
-  <li><strong>Need a description or quantity?</strong> <strong>Full editor</strong> on a row opens the whole lot.</li>
+  <li><strong>Need a description or quantity?</strong> {% ui "Full editor" %} on a row opens the whole lot.</li>
   <li><strong>A spreadsheet of lots?</strong> {% page "import_lots_from_csv" "Import lots from CSV" %}, on the Lots tab: Name, Email, Lot Name, Description, Quantity, Reserve Price, Buy Now Price, Category, Breeder Points and Donation.</li>
-  <li><strong>Photos:</strong> <strong>Quick add images</strong> in a person's <strong>Actions</strong> menu goes through {% page "bulk_add_image" "their lots without a photo" %}, one after another.</li>
+  <li><strong>Photos:</strong> {% ui "Quick add images" %} in a person's {% ui "Actions" %} menu goes through {% page "bulk_add_image" "their lots without a photo" %}, one after another.</li>
 </ul>
 <p>Don't put numbers in lot names. "3 Apistos" is fine; "Lot 12 Apistos" breaks searching by lot number.</p>
 {% mike %}Mike walks in at 11:59 with twenty leaking bags and wants them all in the auction. This is what the pre-registration discount, and the lot submission deadline, are for.{% endmike %}
@@ -121,10 +121,10 @@
 <p>A printed label on every bag saves more time than anything else here. <a href="{% url 'help_guide' slug='labels' %}">Lot labels</a> covers printers and paper. In short:</p>
 <ul>
   <li>Sellers who pre-register print their own.</li>
-  <li>You print the rest from {% page "auction_printing" "Print labels" %} under <strong>More</strong>, or per person from <strong>Print labels</strong> on the Users tab.</li>
-  <li>Leave <strong>Only print labels that haven't been printed yet</strong> ticked, and nothing prints twice.</li>
+  <li>You print the rest from {% page "auction_printing" "Print labels" %} under {% ui "More" %}, or per person from {% ui "Print labels" %} on the Users tab.</li>
+  <li>Leave {% ui "Only print labels that haven't been printed yet" %} ticked, and nothing prints twice.</li>
 </ul>
-<p>{% page "auction_printable_lot_list" "Printable lot list" %}, under <strong>More</strong>, is every lot on one page. Handy as a paper backup.</p>
+<p>{% page "auction_printable_lot_list" "Printable lot list" %}, under {% ui "More" %}, is every lot on one page. Handy as a paper backup.</p>
 
 <h2 class="h5 mt-4" id="check-in">7. Check-in at the door</h2>
 <p>Run two lines: people who registered, who just need their number, and walk-ins, who need adding. Big auctions add a third for sellers with lots to add.</p>
@@ -132,29 +132,29 @@
 <p>If your club runs the auction's people from its member list, there's a check-in step, and nobody can bid until they're checked in:</p>
 <ul>
   <li>{% page "auction_quick_check_in" "Checkin" %}: scan a member's card with a phone camera or a USB scanner.</li>
-  <li>{% page "auction_self_check_in" "Self-checkin" %}, under <strong>More</strong>: a laptop and scanner by the door, and members scan their own card.</li>
+  <li>{% page "auction_self_check_in" "Self-checkin" %}, under {% ui "More" %}: a laptop and scanner by the door, and members scan their own card.</li>
   <li>People with the phone app can check themselves in as they arrive, if the rules allow it.</li>
   <li>A guest with no card: add them as a new user, which checks them in.</li>
 </ul>
 <p><a href="{% url 'help_guide' slug='scanning' %}">Barcodes and scanners</a> has which scanners work and what else they can do. With check-in on, {% page "auction_door_prizes" "Door prizes" %} picks a random checked-in person for each prize.</p>
 
 <h2 class="h5 mt-4" id="selling">8. Selling: the auctioneer's table</h2>
-<p>Your recorder sits next to the auctioneer with {% page "auction_lot_winners_dynamic" "Set lot winners" %} open (under <strong>More</strong>). For every lot:</p>
+<p>Your recorder sits next to the auctioneer with {% page "auction_lot_winners_dynamic" "Set lot winners" %} open (under {% ui "More" %}). For every lot:</p>
 <ol>
   <li>Type the lot number. The photo and name come up, so you know it's the right bag.</li>
   <li>Type the price.</li>
   <li>Type the winner's bidder number.</li>
   <li>Press Enter.</li>
 </ol>
-<p>Tab moves between boxes: three to five seconds a lot. The page catches the usual mistakes before they reach an invoice, like a lot number that doesn't exist or a bidder nobody has. <strong>Undo</strong> takes back the last one.</p>
+<p>Tab moves between boxes: three to five seconds a lot. The page catches the usual mistakes before they reach an invoice, like a lot number that doesn't exist or a bidder nobody has. {% ui "Undo" %} takes back the last one.</p>
 <div class="table-responsive">
 <table class="table table-sm">
   <thead><tr><th>When</th><th>Do this</th></tr></thead>
   <tbody>
-    <tr><td>Nobody bid</td><td>The arrow next to <strong>Save</strong>, then <strong>End lot unsold</strong>.</td></tr>
-    <tr><td>The seller OK'd a price under their minimum</td><td><strong>Ignore errors and save</strong>, from the same arrow.</td></tr>
+    <tr><td>Nobody bid</td><td>The arrow next to {% ui "Save" %}, then {% ui "End lot unsold" %}.</td></tr>
+    <tr><td>The seller OK'd a price under their minimum</td><td>{% ui "Ignore errors and save" %}, from the same arrow.</td></tr>
     <tr><td>Somebody bought it at the buy now price at the desk</td><td>Record it here at that price, like any sale.</td></tr>
-    <tr><td>The wrong winner went in</td><td>Type the lot again with the right bidder number, and <strong>Ignore errors and save</strong>.</td></tr>
+    <tr><td>The wrong winner went in</td><td>Type the lot again with the right bidder number, and {% ui "Ignore errors and save" %}.</td></tr>
   </tbody>
 </table>
 </div>
@@ -164,10 +164,10 @@
 <p>With the phone app, the recorder can use voice: "lot 12, 15 dollars, bidder 104, sold". {% page "auction_voice_command_log" "The voice log" %} shows what the phone heard.</p>
 
 <h3 class="h6 mt-3" id="queue">The lot queue</h3>
-<p>{% page "auction_lot_queue" "Lot queue" %}, under <strong>More</strong>, is the running order. A runner adds each bag as it comes to the table: a USB scanner on the lot's QR code, <strong>Scan with camera</strong> on a phone, or the lot number and <strong>Add</strong>.</p>
-<p>The lot marked <strong>Selling now</strong> is on the block. The queue moves on by itself:</p>
+<p>{% page "auction_lot_queue" "Lot queue" %}, under {% ui "More" %}, is the running order. A runner adds each bag as it comes to the table: a USB scanner on the lot's QR code, {% ui "Scan with camera" %} on a phone, or the lot number and {% ui "Add" %}.</p>
+<p>The lot marked {% ui "Selling now" %} is on the block. The queue moves on by itself:</p>
 <ul>
-  <li><strong>Record that lot</strong> on Set lot winners, sold or <strong>End lot unsold</strong>, and the next lot moves up, skipping any after it that are already recorded.</li>
+  <li><strong>Record that lot</strong> on Set lot winners, sold or {% ui "End lot unsold" %}, and the next lot moves up, skipping any after it that are already recorded.</li>
   <li><strong>Set lot winners fills in the next lot number for you.</strong> Each recorder works down the queue at their own pace, so a second recorder, or one catching up from paper slips, never loses their place.</li>
   <li><strong>A lot sold out of turn</strong> is recorded as usual, and the queue stays where the room is.</li>
 </ul>
@@ -198,13 +198,13 @@
 {% if help.photos.premium %}<p>A lot with a photo sells for about {{ help.photos.premium }}% more.</p>{% endif %}{% else %}<p>A lot with a photo sells for more.</p>{% endif %}
 <ol>
   <li>Plug a laptop into the projector or a TV, and sign in as an auction admin.</li>
-  <li>Open the {% page "auction_lot_queue" "Lot queue" %} and click {% page "auction_lot_queue_current_lot" "Fullscreen current lot" %}, then <strong>Go fullscreen</strong>.</li>
+  <li>Open the {% page "auction_lot_queue" "Lot queue" %} and click {% page "auction_lot_queue_current_lot" "Fullscreen current lot" %}, then {% ui "Go fullscreen" %}.</li>
   <li>That's it. The screen follows the queue, whoever moves it and from whichever device.</li>
 </ol>
-<p><strong>Fullscreen queue</strong>, on the queue page, shows the lot selling now and the next few, for a room that likes to know what's coming.</p>
+<p>{% ui "Fullscreen queue" %}, on the queue page, shows the lot selling now and the next few, for a room that likes to know what's coming.</p>
 <ul>
-  <li><strong>Before the day:</strong> <strong>Quick add images</strong>, in a person's <strong>Actions</strong> menu, goes through their lots without one.</li>
-  <li><strong>Lots typed in at the door</strong> rarely have one. Somebody with a phone and <strong>Add image</strong> on each lot's page catches up while the bags are on the table.</li>
+  <li><strong>Before the day:</strong> {% ui "Quick add images" %}, in a person's {% ui "Actions" %} menu, goes through their lots without one.</li>
+  <li><strong>Lots typed in at the door</strong> rarely have one. Somebody with a phone and {% ui "Add image" %} on each lot's page catches up while the bags are on the table.</li>
 </ul>
 {% tip %}<a href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI agent</a> and ask it to find every lot in your auction without a picture, and add one to each.{% endtip %}
 
@@ -224,16 +224,16 @@
 </ul>
 
 <h2 class="h5 mt-4" id="checkout">9. Checkout and payment</h2>
-<p>Open {% page "auction_quick_checkout" "Checkout" %} under <strong>More</strong>. Type a bidder number or name. Their total comes up: what they owe, or what the club owes them, and how many unsold lots they're taking home. Take the money, click <strong>Paid</strong>, next.</p>
+<p>Open {% page "auction_quick_checkout" "Checkout" %} under {% ui "More" %}. Type a bidder number or name. Their total comes up: what they owe, or what the club owes them, and how many unsold lots they're taking home. Take the money, click {% ui "Paid" %}, next.</p>
 <ul>
-  <li><strong>Card payments:</strong> with Square connected, the screen shows a QR code. The buyer pays on their own phone and the invoice marks itself paid. With the phone app, <strong>Tap to Pay</strong> takes the card on yours. See <a href="{% url 'help_guide' slug='payments' %}">Card payments</a>.</li>
-  <li><strong>Cash or check:</strong> type "cash" or "check #1041" in the invoice's <strong>Memo</strong> box. Only admins see it.</li>
-  <li><strong>T-shirts, raffle tickets, memberships:</strong> open the invoice, <strong>Adjustments</strong>, <strong>Charge extra</strong>. Or scan a barcode for them.</li>
-  <li><strong>No invoice yet?</strong> <strong>Create invoice</strong> next to their name on the Users tab.</li>
+  <li><strong>Card payments:</strong> with Square connected, the screen shows a QR code. The buyer pays on their own phone and the invoice marks itself paid. With the phone app, {% ui "Tap to Pay" %} takes the card on yours. See <a href="{% url 'help_guide' slug='payments' %}">Card payments</a>.</li>
+  <li><strong>Cash or check:</strong> type "cash" or "check #1041" in the invoice's {% ui "Memo" %} box. Only admins see it.</li>
+  <li><strong>T-shirts, raffle tickets, memberships:</strong> open the invoice, {% ui "Adjustments" %}, {% ui "Charge extra" %}. Or scan a barcode for them.</li>
+  <li><strong>No invoice yet?</strong> {% ui "Create invoice" %} next to their name on the Users tab.</li>
 </ul>
-{% tip %}<strong>Paid</strong> is the button you want. <strong>Ready</strong> means "please pay", and marking someone ready who already paid sends them an email that reads like a bill.{% endtip %}
+{% tip %}{% ui "Paid" %} is the button you want. {% ui "Ready" %} means "please pay", and marking someone ready who already paid sends them an email that reads like a bill.{% endtip %}
 <p>Clicking Paid emails the person their invoice as a receipt, if they have an email.</p>
-<p><strong>A seller who wants to leave early:</strong> take what they owe for what they bought, add a <strong>Discount</strong> for that amount ("paid before leaving"), and leave the invoice open. When their lots sell, it shows what the club owes them.</p>
+<p><strong>A seller who wants to leave early:</strong> take what they owe for what they bought, add a {% ui "Discount" %} for that amount ("paid before leaving"), and leave the invoice open. When their lots sell, it shows what the club owes them.</p>
 <p><strong>Don't put every walk-in under one "cash buyer".</strong> A shared invoice means doing the sums by hand.</p>
 
 <h2 class="h5 mt-4" id="online-bidding">Letting people bid online too</h2>
@@ -242,7 +242,7 @@
 {% if help.is_admin and not help.auction.is_online %}{% helptip %}{{ help.auction.title }}: {{ help.auction.get_online_bidding_display }}.{% endhelptip %}{% endif %}
 <p>Where it does work:</p>
 <ul>
-  <li><strong>A silent auction for dry goods.</strong> Put them on a table with labels. People scan a label's QR code and bid on their phones. At the end, search the Lots tab for them and click <strong>Sell lots to online high bidder</strong>. A custom checkbox called "Silent auction" makes them easy to find.</li>
+  <li><strong>A silent auction for dry goods.</strong> Put them on a table with labels. People scan a label's QR code and bid on their phones. At the end, search the Lots tab for them and click {% ui "Sell lots to online high bidder" %}. A custom checkbox called "Silent auction" makes them easy to find.</li>
   <li><strong>Pre-sales.</strong> Set online bidding to buy now only, and require a buy now price. People buy before the day, and those lots never reach the auctioneer.</li>
 </ul>
 <p>Set lot winners shows the online high bidder as you type each lot number. On the Lots tab, "hasbids" in the search box finds lots with online bids, and "qrviewed" finds lots whose winner scanned the label.</p>
@@ -252,27 +252,27 @@
 <table class="table table-sm">
   <tbody>
     <tr><th>The internet</th><td>Hall wifi is often bad. A phone hotspot runs a laptop or two. The phone app keeps the Users, add lots and Set lot winners pages working with no connection. Keep a paper tally sheet anyway.</td></tr>
-    <tr><th>A lot sold to the wrong person</th><td>Type it again on Set lot winners with <strong>Ignore errors and save</strong>.</td></tr>
-    <tr><th>A lot sold, then turned out dead or wrong</th><td>On the lot, <strong>Admin actions</strong>, <strong>Remove or refund</strong>, with a percentage.</td></tr>
+    <tr><th>A lot sold to the wrong person</th><td>Type it again on Set lot winners with {% ui "Ignore errors and save" %}.</td></tr>
+    <tr><th>A lot sold, then turned out dead or wrong</th><td>On the lot, {% ui "Admin actions" %}, {% ui "Remove or refund" %}, with a percentage.</td></tr>
     <tr><th>A seller brought back labels for lots that died</th><td>Remove those lots, so they aren't charged the unsold fee.</td></tr>
     <tr><th>An invoice has lots somebody didn't buy</th><td>Almost always a mistyped bidder number. Search the Lots tab for "winner:" and their number.</td></tr>
-    <tr><th>A shipment of donated lots never arrived</th><td>If each shipment is under its own user, <strong>Problems</strong> in that user's <strong>Actions</strong> menu finds every lot and buyer to refund.</td></tr>
+    <tr><th>A shipment of donated lots never arrived</th><td>If each shipment is under its own user, {% ui "Problems" %} in that user's {% ui "Actions" %} menu finds every lot and buyer to refund.</td></tr>
   </tbody>
 </table>
 </div>
 
 <h2 class="h5 mt-4" id="after">After the auction</h2>
-<p><strong>Pay the sellers.</strong> Most clubs mail a check within a week or two, to the address on the seller's invoice. Filter the Users tab by <strong>Club owes</strong>. No address? Ask before you write the check. <a href="{% url 'help_guide' slug='payments' %}#seller-payouts">Why there's no payout button</a>.</p>
+<p><strong>Pay the sellers.</strong> Most clubs mail a check within a week or two, to the address on the seller's invoice. Filter the Users tab by {% ui "Club owes" %}. No address? Ask before you write the check. <a href="{% url 'help_guide' slug='payments' %}#seller-payouts">Why there's no payout button</a>.</p>
 <p>{% page "auction_stats" "Stats" %} shows how the day went: what the club made, how prices held up hour by hour, and how many people were there for the first time. If your stats disagree with the invoices, open the invoices page once; stats catch up after.</p>
 <p>About {% if help.site.in_person_unsold %}{{ help.site.in_person_unsold }}{% else %}10&ndash;12{% endif %}% of lots going unsold is normal at an in-person auction here.</p>
 {% if help.stats_auction and not help.stats_auction.is_online and help.stats.unsold_pct is not None %}{% helptip "graph-up" %}{{ help.stats.unsold_pct }}% of the lots in {{ help.stats_auction.title }} went unsold.{% endhelptip %}{% endif %}
-<p>The <strong>Users CSV</strong> (under <strong>Export</strong> on the Users tab) and <strong>Export lot CSV</strong> (on the Lots tab) have everything, for the treasurer or your breeder award program.</p>
+<p>The {% ui "Users CSV" %} (under {% ui "Export" %} on the Users tab) and {% ui "Export lot CSV" %} (on the Lots tab) have everything, for the treasurer or your breeder award program.</p>
 
 <h2 class="h5 mt-4" id="next-year">Next year's auction</h2>
-<p>Open this year's auction, click <strong>More</strong>, then <strong>Copy to new auction</strong>. Rules, fees, location and custom fields come along; lots never do. Then:</p>
+<p>Open this year's auction, click {% ui "More" %}, then {% ui "Copy to new auction" %}. Rules, fees, location and custom fields come along; lots never do. Then:</p>
 <ol>
   <li>Set the new date, and check the location's details.</li>
-  <li>Bring people over: {% page "bulk_add_users" "Bulk add users" %}, then <strong>Import from old auctions</strong>. They keep their bidder numbers.</li>
-  <li>Tick <strong>Promote this auction</strong>. Copies are never promoted.</li>
+  <li>Bring people over: {% page "bulk_add_users" "Bulk add users" %}, then {% ui "Import from old auctions" %}. They keep their bidder numbers.</li>
+  <li>Tick {% ui "Promote this auction" %}. Copies are never promoted.</li>
 </ol>
-{% tip %}Emailing last year's sellers to say pre-registration is open is the best advertising you'll do. Use <strong>Email all users</strong> on last year's Users tab.{% endtip %}
+{% tip %}Emailing last year's sellers to say pre-registration is open is the best advertising you'll do. Use {% ui "Email all users" %} on last year's Users tab.{% endtip %}

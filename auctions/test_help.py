@@ -4,7 +4,7 @@ import datetime
 import uuid
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import escape
@@ -12,6 +12,7 @@ from django.utils.html import escape
 from auctions import help_guides, palette_actions, palette_routes
 from auctions.field_adoption import FieldAdoption
 from auctions.models import Lot, LotImage, MobileDevice
+from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
 
@@ -69,6 +70,14 @@ class HelpCoverageTests(SimpleTestCase):
         self.assertEqual(sorted(documented & help_guides.RULES_NOT_YET_DOCUMENTED), [])
         self.assertEqual(sorted(help_guides.RULES_NOT_YET_DOCUMENTED - set(help_guides.rule_fields())), [])
 
+    def test_every_button_a_guide_names_is_on_the_site(self):
+        self.assertEqual(
+            help_guides.missing_ui_labels(),
+            {},
+            'These {% ui "..." %} labels are in a guide but nowhere on the site: the button was renamed or '
+            "removed. Say what the site says now.",
+        )
+
     def test_every_guide_has_a_template(self):
         for slug in help_guides.GUIDES:
             with self.subTest(slug=slug):
@@ -103,6 +112,7 @@ class RuleUsageWordingTests(SimpleTestCase):
         self.assertEqual(self.usage(None, known=False), "")
 
 
+@override_settings(WEBSITE_FOCUS="fish", ALLOW_SEARCH_INDEXING=True)
 class HelpPagesArePublicTests(StandardTestCase):
     def test_the_index_and_every_guide_open_signed_out(self):
         self.assertEqual(self.client.get(reverse("help")).status_code, 200)
@@ -122,6 +132,25 @@ class HelpPagesArePublicTests(StandardTestCase):
 
     def test_robots_points_at_the_sitemap(self):
         self.assertContains(self.client.get("/robots.txt"), "/sitemap.xml")
+        self.assertNotContains(self.client.get(reverse("help")), "noindex")
+
+    @override_settings(ALLOW_SEARCH_INDEXING=False)
+    def test_a_copy_that_is_not_indexed_says_so_everywhere(self):
+        robots = self.client.get("/robots.txt")
+        self.assertNotContains(robots, "sitemap")
+        # Not Disallow: a crawler has to fetch a page to read its noindex and drop it.
+        self.assertNotContains(robots, "Disallow")
+        self.assertNotContains(self.client.get("/sitemap.xml"), "/help/")
+        self.assertContains(self.client.get(reverse("help")), '<meta name="robots" content="noindex, nofollow" />')
+
+    @override_settings(WEBSITE_FOCUS="birds")
+    def test_the_fish_guide_is_only_on_a_fish_site(self):
+        guide = help_guides.GUIDES["bagging-fish"]
+        self.assertEqual(self.client.get(guide.url).status_code, 404)
+        self.assertNotContains(self.client.get("/sitemap.xml"), guide.url)
+        self.assertNotContains(self.client.get(reverse("help")), guide.url)
+        self.assertNotContains(self.client.get(help_guides.GUIDES["online-auctions"].url), guide.url)
+        self.assertNotIn(guide.title, [result["guide"] for result in help_guides.search("airstone")])
 
     def test_the_footer_links_the_help(self):
         self.assertContains(self.client.get(reverse("tos")), f'href="{reverse("help")}"')
@@ -132,9 +161,27 @@ class HelpPagesArePublicTests(StandardTestCase):
         self.assertContains(response, f'class="nav-link active" href="{help_guides.GUIDES["labels"].url}"')
 
     def test_the_rules_guide_says_how_many_auctions_use_each_rule(self):
-        response = self.client.get(help_guides.GUIDES["auction-rules"].url)
+        with isolated_cache("help-rule-usage"):
+            from auctions import help_stats
+
+            help_stats.refresh()
+            response = self.client.get(help_guides.GUIDES["auction-rules"].url)
         self.assertContains(response, 'id="rule-winning_bid_percent_to_club">Club cut</strong> <span class="badge')
         self.assertContains(response, "of auctions")
+
+    def test_a_page_never_counts_it_asks_for_a_count(self):
+        with (
+            isolated_cache("help-uncounted"),
+            patch("auctions.field_adoption.field_adoption") as count,
+            patch("auctions.help_stats._site_stats") as site,
+            patch("auctions.help_stats.request_refresh") as ask,
+        ):
+            response = self.client.get(help_guides.GUIDES["auction-rules"].url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "of auctions</span>")
+        count.assert_not_called()
+        site.assert_not_called()
+        ask.assert_called()
 
     def test_other_guides_name_rules_without_the_badge(self):
         response = self.client.get(help_guides.GUIDES["run-an-online-auction"].url)
@@ -247,6 +294,19 @@ class HelpFormattingTests(StandardTestCase):
         UserAPIKey.objects.create(user=self.user, name="mine", prefix=prefix, key_hash=key_hash)
         self.client.force_login(self.user)
         self.assertNotContains(self.client.get(reverse("help")), "ain't reading all that")
+
+
+class HelpKnowsTheAppStoresTests(StandardTestCase):
+    def test_before_release_it_says_the_app_is_not_out(self):
+        response = self.client.get(help_guides.GUIDES["mobile-app"].url)
+        self.assertContains(response, "isn't in the App Store or on Google Play yet")
+
+    @override_settings(APP_STORE_URL="https://apps.apple.com/app/x", PLAY_STORE_URL="")
+    def test_a_store_link_replaces_the_note(self):
+        response = self.client.get(help_guides.GUIDES["mobile-app"].url)
+        self.assertNotContains(response, "isn't in the App Store")
+        self.assertContains(response, 'href="https://apps.apple.com/app/x"')
+        self.assertNotContains(response, "Google Play</a>")
 
 
 class HelpUsesYourAuctionTests(StandardTestCase):

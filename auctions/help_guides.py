@@ -2,9 +2,10 @@
 
 A guide is a template in ``auctions/templates/help/guides/<slug>.html``. What it documents is read
 out of that template, not listed here: ``{% page "url_name" %}`` names a page (and links it into the
-reader's own auction when it can), ``{% rule "field" %}`` names an auction rule. So there is no second
-list to drift, and ``test_help`` can fail the build when a page or a rule is documented nowhere --
-the same way ``palette_routes`` fails it for a URL nobody catalogued.
+reader's own auction when it can), ``{% rule "field" %}`` names an auction rule, ``{% ui "Button" %}``
+names a button or label. So there is no second list to drift, and ``test_help`` can fail the build when
+a page or a rule is documented nowhere, or a button a guide names is gone -- the same way
+``palette_routes`` fails it for a URL nobody catalogued.
 
 ``NOT_YET_DOCUMENTED`` and ``RULES_NOT_YET_DOCUMENTED`` are the backlog. They only shrink: a name
 there that a guide now covers fails the test until it is taken off, and a new page or rule has to be
@@ -19,11 +20,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import cache, cached_property
+from functools import cached_property, lru_cache
 from pathlib import Path
 
+from django.conf import settings
 from django.template.loader import get_template
 from django.urls import NoReverseMatch, reverse
+from django.utils import timezone
 from django.utils.html import strip_tags
 
 ADMIN = "admin"
@@ -37,7 +40,9 @@ TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "help" / "guides"
 
 @dataclass(frozen=True)
 class Guide:
-    """One guide. ``kind`` is the auction type it is written for, blank for both."""
+    """One guide. ``kind`` is the auction type it is written for, blank for both. A ``fish_only`` guide is
+    only on a site whose ``WEBSITE_FOCUS`` is fish, the way the invoice's fish tips are.
+    """
 
     slug: str
     title: str
@@ -45,6 +50,11 @@ class Guide:
     summary: str
     audience: str = EVERYONE
     kind: str = ""
+    fish_only: bool = False
+
+    @property
+    def shown(self) -> bool:
+        return not self.fish_only or is_fish_site()
 
     @property
     def template_name(self) -> str:
@@ -132,6 +142,7 @@ GROUPS = (
                 "Bagging fish",
                 "bi-droplet",
                 "Bagging fish so they arrive healthy, and settling new ones into your tank.",
+                fish_only=True,
             ),
         ),
     ),
@@ -172,6 +183,16 @@ GROUPS = (
 )
 
 GUIDES: dict[str, Guide] = {guide.slug: guide for group in GROUPS for guide in group.guides}
+
+
+def is_fish_site() -> bool:
+    return settings.WEBSITE_FOCUS == "fish"
+
+
+def shown_groups() -> list[Group]:
+    """``GROUPS`` without the guides this site doesn't show, and without any group left empty."""
+    groups = [Group(group.title, tuple(guide for guide in group.guides if guide.shown)) for group in GROUPS]
+    return [group for group in groups if group.guides]
 
 
 # --- what each auction type's reader should be reading ------------------------
@@ -215,6 +236,20 @@ class HelpContext:
     @property
     def kind(self) -> str:
         return auction_kind(self.auction) if self.auction else ""
+
+    @property
+    def fish_site(self) -> bool:
+        """For a link to a ``fish_only`` guide from another one."""
+        return is_fish_site()
+
+    @property
+    def app_stores(self) -> list[dict]:
+        """Where to get the phone app, from ``APP_STORE_URL`` and ``PLAY_STORE_URL``; empty before it's out."""
+        stores = (
+            ("App Store", settings.APP_STORE_URL, "bi-apple"),
+            ("Google Play", settings.PLAY_STORE_URL, "bi-google-play"),
+        )
+        return [{"name": name, "url": url, "icon": icon} for name, url, icon in stores if url]
 
     @property
     def signed_in(self) -> bool:
@@ -356,6 +391,7 @@ def tips_for(guide: Guide, ctx: HelpContext) -> list[dict]:
 
 _PAGE_TAG = re.compile(r"""\{%\s*page\s+["']([\w:.-]+)["']""")
 _RULE_TAG = re.compile(r"""\{%\s*rule\s+["']([\w]+)["']""")
+_UI_TAG = re.compile(r"""\{%\s*ui\s+"([^"]+)"\s*%\}""")
 
 
 def _sources() -> dict[str, str]:
@@ -380,6 +416,57 @@ def documented_rules() -> dict[str, set[str]]:
     return found
 
 
+def documented_ui() -> dict[str, set[str]]:
+    """Button or label -> the guides that name it with ``{% ui %}``."""
+    found: dict[str, set[str]] = {}
+    for slug, source in _sources().items():
+        for label in _UI_TAG.findall(source):
+            found.setdefault(label, set()).add(slug)
+    return found
+
+
+def _site_wording() -> str:
+    """Everything the site says outside the help: templates, code and scripts, plus every model field's and
+    form field's label, which Django makes from names that appear nowhere as written.
+    """
+    import inspect
+
+    from django import forms
+    from django.apps import apps
+    from django.utils.text import capfirst
+
+    from auctions import forms as auction_forms
+
+    app_dir = Path(__file__).resolve().parent
+    parts = []
+    for path in app_dir.rglob("*"):
+        relative = path.relative_to(app_dir).as_posix()
+        if (
+            path.suffix not in (".html", ".py", ".js", ".txt")
+            or relative.startswith(("templates/help/", "migrations/"))
+            or "/vendor/" in relative
+            or path.name.startswith("test")
+            or ".min." in path.name
+        ):
+            continue
+        parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+    for model in apps.get_app_config("auctions").get_models():
+        parts.extend(
+            str(capfirst(field.verbose_name)) for field in model._meta.get_fields() if hasattr(field, "verbose_name")
+        )
+    for _name, form in inspect.getmembers(auction_forms, inspect.isclass):
+        if issubclass(form, forms.BaseForm):
+            parts.extend(str(field.label) for field in form.base_fields.values() if field.label)
+            parts.extend(str(label) for label in getattr(form, "LABELS", {}).values())
+    return "\n".join(parts)
+
+
+def missing_ui_labels() -> dict[str, set[str]]:
+    """``{% ui %}`` labels the site no longer has anywhere, with the guides still naming them."""
+    wording = _site_wording()
+    return {label: slugs for label, slugs in documented_ui().items() if label not in wording}
+
+
 def rule_fields() -> list[str]:
     """Every setting on an auction's rules pages, in form order."""
     from auctions.forms import AuctionCustomFieldsForm, AuctionEditForm
@@ -400,6 +487,7 @@ NOT_IN_HELP: dict[str, str] = {
     "support": "The contact page is where help ends, not a topic.",
     "faq": "Being replaced by these guides.",
     "auction_help": "Redirects into these guides.",
+    "auction_survey": "One question, reached from its buttons in an email; the question is the whole page.",
     "blog_post": "Posts are announcements, read on their own.",
     "admin_dashboard": "Site operator only.",
     "admin_setup_checklist": "Site operator only.",
@@ -445,13 +533,6 @@ RULES_NOT_YET_DOCUMENTED: frozenset[str] = frozenset()
 # --- search -------------------------------------------------------------------
 
 
-@cache
-def guide_text(slug: str) -> str:
-    """A guide as plain text, rendered for nobody in particular: no tips, no links into an auction."""
-    html = get_template(GUIDES[slug].template_name).render({"help": HelpContext(), "guide": GUIDES[slug]})
-    return re.sub(r"\s+", " ", strip_tags(html)).strip()
-
-
 def _sections(slug: str) -> list[tuple[str, str, str]]:
     """``(anchor, heading, text)`` for each ``<h2 id=...>`` section of a guide, rendered for nobody."""
     html = get_template(GUIDES[slug].template_name).render({"help": HelpContext(), "guide": GUIDES[slug]})
@@ -462,9 +543,15 @@ def _sections(slug: str) -> list[tuple[str, str, str]]:
     return [(anchor, heading, re.sub(r"\s+", " ", strip_tags(body)).strip()) for anchor, heading, body in sections]
 
 
-@cache
 def all_sections() -> tuple[tuple[str, str, str, str], ...]:
-    """``(slug, anchor, heading, text)`` for every section of every guide."""
+    """``(slug, anchor, heading, text)`` for every section of every guide. Rendered once a day in each process,
+    since the guides quote numbers that are counted daily (``help_stats``).
+    """
+    return _all_sections(timezone.localdate())
+
+
+@lru_cache(maxsize=1)
+def _all_sections(_day) -> tuple[tuple[str, str, str, str], ...]:
     return tuple((slug, anchor, heading, text) for slug in GUIDES for anchor, heading, text in _sections(slug))
 
 
@@ -478,6 +565,8 @@ def search(query: str, limit: int = 8) -> list[dict]:
         return []
     scored = []
     for slug, anchor, heading, text in all_sections():
+        if not GUIDES[slug].shown:
+            continue
         lowered_heading, lowered_text = heading.lower(), text.lower()
         score = sum(3 * lowered_heading.count(w) + lowered_text.count(w) for w in words)
         if not score or not text:
@@ -518,7 +607,7 @@ def groups_for(active: str = "") -> list[dict]:
             "rows": [{"label": "All help", "icon": "bi-life-preserver", "url": reverse("help"), "active": not active}],
         }
     ]
-    for group in GROUPS:
+    for group in shown_groups():
         drawn.append(
             {
                 "title": group.title,

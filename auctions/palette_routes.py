@@ -253,6 +253,13 @@ ROUTE_LIST: list[Route] = [
     _r("auction_help", "Auction help and rules", "Auction", scope=SCOPE_AUCTION, keywords=["rules", "how it works"]),
     _r("auction_chat", "Auction chat", "Auction", scope=SCOPE_AUCTION, keywords=["chat", "questions", "messages"]),
     _r("auction_stats", "Auction statistics", "Auction", scope=SCOPE_AUCTION, keywords=["stats", "numbers", "charts"]),
+    _r(
+        "auction_survey",
+        "Say how an auction went",
+        "Auction",
+        scope=SCOPE_AUCTION,
+        keywords=["survey", "feedback on the auction", "how was it", "rate the auction"],
+    ),
     _r("auction_lot_map", "Map of where lots are", "Auction", scope=SCOPE_AUCTION, keywords=["map", "tables", "where"]),
     _r("auction_volunteers", "Volunteer for a job", "Auction", scope=SCOPE_AUCTION, keywords=["volunteer", "help out"]),
     _r("auction_door_prizes", "Door prizes", "Auction", scope=SCOPE_AUCTION, keywords=["raffle", "prizes", "giveaway"]),
@@ -298,6 +305,14 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
         keywords=["settings", "edit auction", "configure", "change the date", "rules"],
+    ),
+    _r(
+        "auction_survey_results",
+        "What people said about an auction",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["survey results", "auction feedback", "reviews", "what did people think"],
     ),
     _r(
         "edit_auction_custom_fields",

@@ -1,7 +1,7 @@
 {% load help_tags %}
 {% comment %}One section per rule or small family of rules, each with an example of when you'd change it. Use {% rule %} for every setting so help_guides knows it's covered. rule_usage puts "used by N% of auctions" next to each rule, from auctions.field_adoption, and to the auction's admins a "Yours:" badge with how their auction has it set.{% endcomment %}
 {% with rule_usage=True %}
-<p>Every auction has two settings pages, both under <strong>More</strong> in the auction's menu:</p>
+<p>Every auction has two settings pages, both under {% ui "More" %} in the auction's menu:</p>
 <ul>
   <li>{% page "edit_auction" "Rules" %}: dates, fees, and who can take part.</li>
   <li>{% page "edit_auction_custom_fields" "Custom fields" %}: what sellers fill in when they add a lot.</li>
@@ -11,7 +11,7 @@
   <span><span class="badge bg-secondary fw-normal">Grey</span> how many auctions on this site use a setting</span>
   {% if help.is_admin %}<span><span class="badge bg-primary fw-normal">Blue</span> how {{ help.auction.title }} has it set</span>{% endif %}
 </div>
-{% tip %}The rules page shows the settings most auctions change. The rest are under <strong>Advanced settings</strong>, which opens by itself once you've changed something in there.{% endtip %}
+{% tip %}The rules page shows the settings most auctions change. The rest are under {% ui "Advanced settings" %}, which opens by itself once you've changed something in there.{% endtip %}
 
 <h2 class="h5 mt-4" id="rules-text">The rules text</h2>
 <p>{% rule "summernote_description" %} is the text at the top of your auction page. Put in it what people ask about:</p>
@@ -80,7 +80,7 @@
   </div></div></div>
 </div>
 <p>The lower fees are {% rule "winning_bid_percent_to_club_for_club_members" %} (or {% rule "club_member_cut" %}, its other half), {% rule "lot_entry_fee_for_club_members" %} and {% rule "registration_fee_for_club_members" %}. Set both club cuts: an alternate club cut left at 0% means members keep every penny.</p>
-{% tip %}Run the auction's people from your club's member list (<a href="#rule-manage_users_through_club">Manage users through club</a>, below) and pick <strong>Club member discount</strong>. Paid members then get the discount automatically, and renewing at the door gets it too.{% endtip %}
+{% tip %}Run the auction's people from your club's member list (<a href="#rule-manage_users_through_club">Manage users through club</a>, below) and pick {% ui "Club member discount" %}. Paid members then get the discount automatically, and renewing at the door gets it too.{% endtip %}
 <p>{% rule "alternative_split_label" %} is what those people are called on invoices and the Users tab.</p>
 {% mike %}Mike set his club's label to “Friends of Mike”. It was on every invoice for a year.{% endmike %}
 <p>The alternate fees aren't in the summary at the top of your auction page, on purpose: most clubs don't want to publish a vendor's rate. To tell members, put it in the rules text.</p>
@@ -147,6 +147,7 @@
 <ul>
   <li>{% rule "invoice_payment_instructions" %}: shown on every invoice and in the invoice email. "Bring cash or a check to pickup." Leave old instructions here and new people will follow them.</li>
   <li>{% rule "email_users_when_invoices_ready" %}: emails people their invoice when you mark it ready or paid. Leave it on. It's also how the site finds out an address doesn't work.</li>
+  <li>{% rule "post_auction_survey" %}: asks people "How was it?" with two buttons, in the invoice email or in an email of its own a day after the auction. Online auctions always ask in an email of their own, a day after pickup: their invoices go out before anyone has picked anything up. What they said is under {% ui "More" %}, {% page "auction_survey_results" "Feedback" %}.</li>
   <li>{% rule "invoice_rounding" %}: rounds each invoice to a whole dollar, always in the person's favour. It saves making change.</li>
   <li>{% rule "enable_online_payments" %} and {% rule "enable_square_payments" %}: a pay button on every invoice. You only see these once an account is connected. <a href="{% url 'help_guide' slug='payments' %}">Card payments</a> has the details.</li>
   <li>{% rule "add_membership_fee_to_invoices_for_expired_members" %}: in club-managed auctions, adds your membership fee to the invoice of anyone whose membership has lapsed, and renews them when they pay. You can take it off any one invoice.</li>
@@ -155,7 +156,7 @@
 <h2 class="h5 mt-4" id="club">The club</h2>
 <ul>
   <li>{% rule "club" %}: which club runs this auction. Only clubs where you're an admin, or can manage auctions, are in the list.</li>
-  <li>{% rule "manage_users_through_club" %}: your club's member list is the auction's list of people, with their club bidder numbers. <strong>Automatically add, but require check-in</strong> also makes people check in at the door before they can bid. Only changeable while the auction has no lots and no invoices.</li>
+  <li>{% rule "manage_users_through_club" %}: your club's member list is the auction's list of people, with their club bidder numbers. {% ui "Automatically add, but require check-in" %} also makes people check in at the door before they can bid. Only changeable while the auction has no lots and no invoices.</li>
   <li>{% rule "allow_self_checkin" %}: people with the phone app can check themselves in when they arrive. Turn it off if you hand out bidder numbers at the door.</li>
 </ul>
 
@@ -188,7 +189,7 @@
 
 <h2 class="h5 mt-4" id="cant-change">Things there's no setting for</h2>
 <ul>
-  <li><strong>Renaming an auction.</strong> The name is the auction's link. Copy it (<strong>More</strong>, then <strong>Copy to new auction</strong>) with the right name, then delete the old one.</li>
+  <li><strong>Renaming an auction.</strong> The name is the auction's link. Copy it ({% ui "More" %}, then {% ui "Copy to new auction" %}) with the right name, then delete the old one.</li>
   <li><strong>A percentage off for buyers.</strong> Add a discount to the invoice.</li>
   <li><strong>Bid steps by price.</strong> Every bid is 5% over the last, at least $1.</li>
   <li><strong>Raffles.</strong> Gambling law differs everywhere. Run it on paper and add the tickets to invoices.</li>

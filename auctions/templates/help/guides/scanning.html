@@ -17,7 +17,7 @@
 <p>Membership cards, paddles and items are for club auctions, where the club has member barcodes turned on. Lot QR codes work everywhere.</p>
 
 <h2 class="h5 mt-4" id="camera">With a phone camera</h2>
-<p>These pages have an <strong>Activate camera</strong> button:</p>
+<p>These pages have an {% ui "Activate camera" %} button:</p>
 <ul>
   <li>{% page "auction_quick_check_in" "Checkin" %}: scan membership cards at the door.</li>
   <li>{% page "auction_quick_checkout" "Checkout" %}: scan a card to pull up that person's invoice.</li>
@@ -31,7 +31,7 @@
 <p>Any cheap "keyboard wedge" scanner works, if you can set it to send <strong>F9</strong> before each scan and <strong>Enter</strong> after. The F9 is how the site tells a scan from somebody typing. The scanner's manual has setup barcodes for both.</p>
 <ol>
   <li>Open {% page "club_barcode_labels" "Print Barcodes" %} in your club's menu.</li>
-  <li>Click <strong>Test scanner</strong> and scan the test barcode. It says whether the F9 and Enter are set up right.</li>
+  <li>Click {% ui "Test scanner" %} and scan the test barcode. It says whether the F9 and Enter are set up right.</li>
 </ol>
 <p>Every scan beeps, with a message on screen: two high beeps when it worked, one when it's waiting for the next scan (a paddle, say, waiting for its person), and a low one when it didn't work.</p>
 
@@ -52,11 +52,11 @@
 <p>Charges only go on an open invoice. Somebody who's already paid gets a message instead.</p>
 
 <h2 class="h5 mt-4" id="self-check-in">A self check-in kiosk</h2>
-<p>{% page "auction_self_check_in" "Self-checkin" %}, under <strong>More</strong>, turns a laptop with a scanner into a kiosk. Members scan their own card and get a welcome on the screen. It only takes membership cards, so nobody can scan a T-shirt onto their own invoice.</p>
+<p>{% page "auction_self_check_in" "Self-checkin" %}, under {% ui "More" %}, turns a laptop with a scanner into a kiosk. Members scan their own card and get a welcome on the screen. It only takes membership cards, so nobody can scan a T-shirt onto their own invoice.</p>
 
 <h2 class="h5 mt-4" id="app">With the phone app</h2>
 <ul>
-  <li><strong>Scan lots</strong> reads a whole table of labels at once: what each bag is, and which one somebody's after.</li>
+  <li>{% ui "Scan lots" %} reads a whole table of labels at once: what each bag is, and which one somebody's after.</li>
   <li>As people scan, the site builds a {% page "auction_lot_map" "Lot map" %} of where each unsold lot is sitting.</li>
   <li>People can check themselves in as they arrive.</li>
 </ul>

@@ -811,6 +811,7 @@ AUCTION_FIELDS_TO_CLONE = [
     "only_approved_sellers",
     "only_approved_bidders",
     "email_users_when_invoices_ready",
+    "post_auction_survey",
     "invoice_payment_instructions",
     "minimum_bid",
     "winning_bid_percent_to_club_for_club_members",

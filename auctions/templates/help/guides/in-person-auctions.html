@@ -18,19 +18,19 @@
     <p class="card-text small mb-0">Go to checkout. Your invoice says what you owe, or what the club owes you.</p>
   </div></div></div>
 </div>
-<p>The auction page has the address, a map and the time. That time is when bidding starts; doors usually open earlier. If the flyer and the site disagree, ask the club: reply to any email you've had about the auction, or use the <strong>Email</strong> button on its page.</p>
+<p>The auction page has the address, a map and the time. That time is when bidding starts; doors usually open earlier. If the flyer and the site disagree, ask the club: reply to any email you've had about the auction, or use the {% ui "Email" %} button on its page.</p>
 {% tip %}First time? Bring cash or a card, a cooler for what you buy, and a pen to note the lots you want.{% endtip %}
 
 <h2 class="h5 mt-4" id="before">Before the day: adding your lots</h2>
 <p>Bringing fish to sell? Add them on the site first. You skip the line at the door, your bags arrive labelled, and you usually pay the club a smaller cut{% if help.site.self_added_premium %}. Lots sellers add themselves also sell for about {{ help.site.self_added_premium }}% more here{% endif %}.</p>
 <ol>
-  <li><strong>Sign in.</strong> <strong>Sign in with Google</strong> or <strong>Apple</strong> is one click.</li>
+  <li><strong>Sign in.</strong> {% ui "Sign in with Google" %} or <strong>Apple</strong> is one click.</li>
   <li><strong>Open the auction's page</strong> from your club's link or flyer.</li>
-  <li><strong>Join:</strong> scroll to the bottom, tick <strong>Yes, I will be at this auction</strong>, and click <strong>Join auction</strong>.</li>
+  <li><strong>Join:</strong> scroll to the bottom, tick {% ui "Yes, I will be at this auction" %}, and click {% ui "Join auction" %}.</li>
   <li><strong>Click {% page "bulk_add_lots_auto_for_myself" "Add Lots" %}</strong> near the top of the page.</li>
   <li><strong>One lot per row</strong>: what it is and how many ("3 Corydoras sterbai"). Each row saves itself and gets a lot number.</li>
-  <li><strong>Photos help.</strong> <strong>Add image</strong> or <strong>Full editor</strong> on a row. Many clubs put each lot's photo on a screen as it sells{% if help.photos.premium %}, and at the biggest in-person auctions here, a lot with a photo sells for about {{ help.photos.premium }}% more{% endif %}.</li>
-  <li><strong>Print labels:</strong> <strong>Print Labels</strong> on the auction page, once everything's in. You'll get a reminder email the day before.</li>
+  <li><strong>Photos help.</strong> {% ui "Add image" %} or {% ui "Full editor" %} on a row. Many clubs put each lot's photo on a screen as it sells{% if help.photos.premium %}, and at the biggest in-person auctions here, a lot with a photo sells for about {{ help.photos.premium }}% more{% endif %}.</li>
+  <li><strong>Print labels:</strong> {% ui "Print Labels" %} on the auction page, once everything's in. You'll get a reminder email the day before.</li>
   <li><strong>Tape a label to each bag</strong> with clear packing tape, right over the label so it stays dry.</li>
 </ol>
 {% if help.auction and not help.auction.is_online and help.auction.pre_register_lot_discount_percent %}{% helptip %}{{ help.auction.title }} takes {{ help.auction.pre_register_lot_discount_percent }}% less of the price on lots you add yourself.{% endhelptip %}{% endif %}
@@ -41,7 +41,7 @@
   <li><strong>Can't manage any of this?</strong> Ask the club. They can add your lots for you.</li>
 </ul>
 {% tip %}No time for photos? <a href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI agent</a> and ask it to find your lots in this auction that have no picture, and add one to each.{% endtip %}
-<p>Bagging tips: <a href="{% url 'help_guide' slug='bagging-fish' %}">Bagging fish for an auction</a>.</p>
+{% if help.fish_site %}<p>Bagging tips: <a href="{% url 'help_guide' slug='bagging-fish' %}">Bagging fish for an auction</a>.</p>{% endif %}
 {% mike %}Mike labelled his bags at home, in the kitchen, with the tap running. The labels were on the right bags until they got wet. Clear tape over the whole label.{% endmike %}
 
 <h2 class="h5 mt-4" id="check-in">At the door: your bidder number</h2>
@@ -58,15 +58,15 @@
 <ul>
   <li>A lot with a buy now price on its label can be bought before its turn. Take it and your number to the desk.</li>
   <li>Keep your card safe. A bid recorded against the wrong number ends up on somebody else's invoice.</li>
-  <li>With the phone app, <strong>Scan lots</strong> on the auction page turns your camera on a table of bags: point it at the labels and it tells you what's what, or finds the one you're after.</li>
+  <li>With the phone app, {% ui "Scan lots" %} on the auction page turns your camera on a table of bags: point it at the labels and it tells you what's what, or finds the one you're after.</li>
 </ul>
 
 <h2 class="h5 mt-4" id="coming-up">"Your lot is coming up"</h2>
 <p>Watch a lot on the site, and your phone tells you when it's about to be sold. Go get a coffee in between.</p>
 <ol>
-  <li>Click <strong>Watch</strong> on the lots you want.</li>
-  <li>A bell appears under the lot. Click the button next to it: <strong>Subscribe to Push Messaging</strong> in a browser, or <strong>Notify me when bidding starts</strong> in the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a>. That covers every lot you watch, from then on.</li>
-  <li>Click <strong>Test notification</strong> there. If nothing arrives, nothing will on the day either.</li>
+  <li>Click {% ui "Watch" %} on the lots you want.</li>
+  <li>A bell appears under the lot. Click the button next to it: {% ui "Subscribe to Push Messaging" %} in a browser, or {% ui "Notify me when bidding starts" %} in the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a>. That covers every lot you watch, from then on.</li>
+  <li>Click {% ui "Test notification" %} there. If nothing arrives, nothing will on the day either.</li>
 </ol>
 {% if help.auction and not help.auction.is_online %}{% helptip %}{% if help.auction.message_users_when_lots_sell %}{{ help.auction.title }} sends these.{% else %}{{ help.auction.title }} has these turned off.{% endif %}{% endhelptip %}{% endif %}
 {% push_status %}
@@ -85,7 +85,7 @@
   <li><strong>On an iPhone</strong>, use the app. Safari only sends notifications from a site you've added to your home screen.</li>
   <li><strong>Set your phone to vibrate.</strong> You'll feel it, and nobody else hears it.</li>
   <li><strong>Got one after the lot sold?</strong> The club typed the lot in after it sold. Tell them; the lot queue fixes it.</li>
-  <li><strong>Turning them off:</strong> untick <strong>Push notifications when lots sell</strong> on {% page "notification_preferences" "Notifications" %}. Unwatching a lot stops that one.</li>
+  <li><strong>Turning them off:</strong> untick {% ui "Push notifications when lots sell" %} on {% page "notification_preferences" "Notifications" %}. Unwatching a lot stops that one.</li>
 </ul>
 <p>With the app, you can also get a running total of what you've bought, as you win each lot.</p>
 
@@ -114,5 +114,5 @@
   <li><strong>Your invoice nets it out.</strong> Sold more than you bought? The club pays you the difference, usually by check within a week or two, to the address on your account.</li>
   <li><strong>A star on your invoice</strong> marks lots you added yourself before the day. They got the pre-registration discount, if the club has one.</li>
   <li><strong>Leaving early?</strong> Pay for what you've bought so far at checkout. The club pays you for your lots when they sell.</li>
-  <li><strong>Unsold lots</strong> come back to you at checkout. Can't find one? The invoice lists every lot you brought and whether it sold.</li>
+  <li>{% ui "Unsold lots" %} come back to you at checkout. Can't find one? The invoice lists every lot you brought and whether it sold.</li>
 </ul>

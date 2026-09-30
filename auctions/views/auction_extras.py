@@ -715,3 +715,20 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
             return close_modal_response("reload-page")
         else:
             return self.form_invalid(form)
+
+
+class AuctionSurveyResults(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """What people said in the post-auction survey (``auctions.auction_survey``), for the auction's admins."""
+
+    template_name = "auction_survey_results.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["responses"] = (
+            AuctionTOS.objects.filter(auction=self.auction)
+            .filter(~Q(survey_answer="") | ~Q(survey_comments=""))
+            .order_by("-survey_answered_on")
+        )
+        context["stats"] = self.auction.survey_stats
+        return context

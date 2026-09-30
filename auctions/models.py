@@ -3861,6 +3861,19 @@ class Auction(CachedPropertiesMixin, models.Model):
     exact_location_set = models.BooleanField(default=False)
     exact_location_set.help_text = "The location was pinned from a phone at the venue (or confirmed exact)."
     email_users_when_invoices_ready = models.BooleanField(default=True)
+    SURVEY_NONE = "none"
+    SURVEY_IN_INVOICE = "invoice"
+    SURVEY_SEPARATE = "separate"
+    POST_AUCTION_SURVEY_CHOICES = (
+        (SURVEY_NONE, "No feedback"),
+        (SURVEY_IN_INVOICE, "Feedback included in invoice email"),
+        (SURVEY_SEPARATE, "Feedback as separate email"),
+    )
+    post_auction_survey = models.CharField(
+        max_length=20, choices=POST_AUCTION_SURVEY_CHOICES, default=SURVEY_IN_INVOICE
+    )
+    post_auction_survey.help_text = "Ask people how the auction went"
+    survey_emails_sent = models.BooleanField(default=False)
     invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
     invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
     invoice_rounding = models.BooleanField(default=True)
@@ -5183,6 +5196,17 @@ class Auction(CachedPropertiesMixin, models.Model):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
     @cached_property
+    def survey_stats(self):
+        """How many people answered the post-auction survey, and how."""
+        answers = AuctionTOS.objects.filter(auction=self.pk).filter(~Q(survey_answer="") | ~Q(survey_comments=""))
+        return answers.aggregate(
+            answered=Count("pk"),
+            great=Count("pk", filter=Q(survey_answer=AuctionTOS.SURVEY_GREAT)),
+            not_fun=Count("pk", filter=Q(survey_answer=AuctionTOS.SURVEY_NOT_FUN)),
+            comments=Count("pk", filter=~Q(survey_comments="")),
+        )
+
+    @cached_property
     def campaigns_qs(self):
         """Join reminders: one row per signed-in user who looked at this auction."""
         return AuctionCampaign.objects.filter(auction=self.pk, kind=AuctionCampaign.KIND_VIEW).order_by("-timestamp")
@@ -6335,6 +6359,15 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         related_name="auction_tos_records",
         help_text="When the auction is managed through its club, links this record to the ClubMember that owns the bidder_number and permissions.",
     )
+    SURVEY_GREAT = "great"
+    SURVEY_NOT_FUN = "not_fun"
+    SURVEY_ANSWERS = (
+        (SURVEY_GREAT, "Great!"),
+        (SURVEY_NOT_FUN, "Not so fun"),
+    )
+    survey_answer = models.CharField(max_length=10, choices=SURVEY_ANSWERS, blank=True, default="")
+    survey_comments = models.TextField(blank=True, default="")
+    survey_answered_on = models.DateTimeField(blank=True, null=True)
 
     @property
     def phone_as_string(self):

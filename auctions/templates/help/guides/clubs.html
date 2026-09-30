@@ -4,9 +4,9 @@
 {% if help.club and help.is_club_admin %}{% helptip %}You're an admin of {{ help.club.name }}. Its settings are all on {% page "club_setup" "Setup" %}.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="members">Being a member</h2>
-<p>{% page "clubs" "Find a club" %}, under <strong>Clubs</strong> at the top of the page, shows clubs on a map and in a list. Filter for ones with something coming up, or taking new members.</p>
-<p>Each club has a {% page "club_detail" "page" %} with its next events, its latest announcement, and links to its website, Facebook and Discord. If it takes members through the site, there's a <strong>Join</strong> button.</p>
-<p>Once you're a member, <strong>Membership</strong> on the club page shows:</p>
+<p>{% page "clubs" "Find a club" %}, under {% ui "Clubs" %} at the top of the page, shows clubs on a map and in a list. Filter for ones with something coming up, or taking new members.</p>
+<p>Each club has a {% page "club_detail" "page" %} with its next events, its latest announcement, and links to its website, Facebook and Discord. If it takes members through the site, there's a {% ui "Join" %} button.</p>
+<p>Once you're a member, {% ui "Membership" %} on the club page shows:</p>
 <ul>
   <li>your membership number and its barcode, for scanning at the door,</li>
   <li>when your membership runs out, and a button to {% page "club_membership_pay" "pay or renew" %} if the club takes dues here,</li>
@@ -30,7 +30,7 @@
 <table class="table table-sm">
   <tbody>
     <tr><th>View members</th><td>See the member list.</td></tr>
-    <tr><th>Manage membership</th><td>Add, edit and renew members. <strong>CSV import/export</strong> is separate.</td></tr>
+    <tr><th>Manage membership</th><td>Add, edit and renew members. {% ui "CSV import/export" %} is separate.</td></tr>
     <tr><th>Manage membership and payments</th><td>Dues, the club's card payments, and the treasurer's report.</td></tr>
     <tr><th>Manage auctions</th><td>Run the club's auctions.</td></tr>
     <tr><th>Award points</th><td>The breeder award program.</td></tr>
@@ -46,7 +46,7 @@
 <h2 class="h5 mt-4" id="membership">Members and dues</h2>
 <p>{% page "club_admin" "Members" %} is your member list. Search it, filter it, click a member to edit them.</p>
 <ul>
-  <li><strong>One person:</strong> <strong>Add member</strong>.</li>
+  <li><strong>One person:</strong> {% ui "Add member" %}.</li>
   <li><strong>A spreadsheet:</strong> {% page "club_member_import" "Import members" %}. Only Email is required; First Name, Last Name, Phone, Address, Memo, Membership Last Paid and Membership Expiration Date are useful. Members already there are matched by email and updated.</li>
   <li><strong>Download:</strong> {% page "club_member_export" "Export current view" %} saves whatever the list shows.</li>
   <li><strong>Two entries for one person:</strong> open one and {% page "club_member_merge" "merge" %} it into the other.</li>
@@ -58,7 +58,7 @@
 <ol>
   <li>Pick when memberships run out: every January 1st, a year after each person pays, or no fees at all.</li>
   <li>Set the yearly fee.</li>
-  <li>Tick <strong>Show member barcodes</strong> to give members a card to scan at the door and keep in their phone's wallet.</li>
+  <li>Tick {% ui "Show member barcodes" %} to give members a card to scan at the door and keep in their phone's wallet.</li>
   <li>Connect Square, so members can pay their own dues on the club page. Your club's auctions use the same account. See <a href="{% url 'help_guide' slug='payments' %}">Card payments</a>.</li>
 </ol>
 <p>A member's number is their barcode, made by the site; you can't bring your own numbering. A member without a phone can have their card printed from {% page "club_barcode_labels" "Print Barcodes" %}: add a row for them and click {% page "club_barcode_labels_pdf" "Download PDF" %}.</p>
@@ -67,8 +67,8 @@
 <p>Your own membership form, on your website or Google Forms, doesn't make someone a paid member here. Mark them paid yourself, or connect the form with an API key; see <a href="#website">your club's website</a>.</p>
 
 <h2 class="h5 mt-4" id="auctions">Club auctions</h2>
-<p>An auction belongs to the club when you pick the club in its rules. Anyone with <strong>Manage auctions</strong> can run it, and it takes payments into the club's account.</p>
-<p>Set <strong>Manage users through club</strong> in the rules and the auction's people <em>are</em> your member list:</p>
+<p>An auction belongs to the club when you pick the club in its rules. Anyone with {% ui "Manage auctions" %} can run it, and it takes payments into the club's account.</p>
+<p>Set {% ui "Manage users through club" %} in the rules and the auction's people <em>are</em> your member list:</p>
 <ul>
   <li>Members keep their club bidder number at every auction.</li>
   <li>A new person at the door becomes a club member.</li>
@@ -76,7 +76,7 @@
   <li>With check-in on, nobody can bid until they've been checked in.</li>
   <li>The rules can add your membership fee to the invoice of anyone whose membership has lapsed, and renew them when they pay.</li>
 </ul>
-<p>The club's menu has shortcuts for auction day, <strong>Add user</strong>, <strong>Set lot winners</strong>, <strong>Checkin</strong>, <strong>Checkout</strong> and <strong>Print labels</strong>, for the auction you've pinned as current. <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}">Running an in-person auction</a> explains each one.</p>
+<p>The club's menu has shortcuts for auction day, {% ui "Add user" %}, {% ui "Set lot winners" %}, {% ui "Checkin" %}, {% ui "Checkout" %} and {% ui "Print labels" %}, for the auction you've pinned as current. <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}">Running an in-person auction</a> explains each one.</p>
 <p>{% page "club_barcode_labels" "Print Barcodes" %} also prints barcodes for things you sell at the desk. Scan the T-shirt, then the person's card, and it's on their invoice. <a href="{% url 'help_guide' slug='scanning' %}">Barcodes and scanners</a> has the rest.</p>
 <p>After an auction, {% page "auction_add_users_to_club" "Add all users to your club" %} on the Users tab puts everyone from it on your member list.</p>
 
@@ -87,7 +87,7 @@
   <li>Click {% page "google_calendar_connect" "Connect Google Calendar" %} and sign in with the club's Google account.</li>
   <li>Google's permission screen has a box for calendars that's easy to miss. Tick it.</li>
   <li>The site makes a new calendar, "Your Club events", and can only see that one.</li>
-  <li>To let anyone subscribe, open that calendar's settings in Google and tick <strong>Make available to public</strong>.</li>
+  <li>To let anyone subscribe, open that calendar's settings in Google and tick {% ui "Make available to public" %}.</li>
 </ol>
 <p>{% page "google_calendar_sync_now" "Sync now" %} and {% page "google_calendar_disconnect" "Disconnect" %} are on the same page. Without Google, your club page still has a {% page "club_events_ical" "calendar feed" %} for any calendar app.</p>
 
@@ -117,7 +117,7 @@
 {% tip %}You don't have to write the code yourself. An AI assistant can write it from the key's instructions.{% endtip %}
 
 <h2 class="h5 mt-4" id="bap">Breeder award points</h2>
-<p>Turn it on with <strong>Enable breeder award program</strong> in {% page "club_edit" "General" %}. Then it runs itself: a member sells a fish they bred in a club auction, ticks <strong>I bred this</strong>, and gets points.</p>
+<p>Turn it on with {% ui "Enable breeder award program" %} in {% page "club_edit" "General" %}. Then it runs itself: a member sells a fish they bred in a club auction, ticks {% ui "I bred this" %}, and gets points.</p>
 <p>{% page "club_bap_settings" "BAP settings" %} decides how:</p>
 <ul>
   <li>points per lot, or per category, plus bonus points for your custom checkbox (CARES species, say),</li>
@@ -129,7 +129,7 @@
 <p>Points go back to the site's first auctions, so a member may see points for lots they sold years ago.</p>
 
 <h2 class="h5 mt-4" id="money">Money and the treasurer's report</h2>
-<p>{% page "club_treasurer_report" "Treasurer's Report" %} (needs <strong>Manage membership and payments</strong>) adds up a date range: dues, donations, auction sales, seller payouts, the club's cut, and sales tax you're holding. Auction and membership money is in it already.</p>
+<p>{% page "club_treasurer_report" "Treasurer's Report" %} (needs {% ui "Manage membership and payments" %}) adds up a date range: dues, donations, auction sales, seller payouts, the club's cut, and sales tax you're holding. Auction and membership money is in it already.</p>
 <ul>
   <li>{% page "club_money_add" "Add record" %}: everything else. Hall rent, a speaker's fee, a raffle.</li>
   <li>{% page "club_money_balance" "Balance books" %}: once, to match your bank balance when you start. Needing it twice means something's being missed.</li>

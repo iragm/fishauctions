@@ -26,7 +26,7 @@
 </ol>
 <p>A label got wet or went missing? Open the lot and click {% page "single_lot_label" "Print label" %}. If a lot sells early at its buy now price, you'll get an email with a link that {% page "print_my_unprinted_labels" "prints only the labels that need printing" %}.</p>
 <h3 class="h6 mt-3">Online: after bidding ends</h3>
-<p>Only lots that sold need one. Click <strong>Print labels for your lots</strong> on your invoice. You'll get an email when it's time.</p>
+<p>Only lots that sold need one. Click {% ui "Print labels for your lots" %} on your invoice. You'll get an email when it's time.</p>
 {% tip %}"You don't have permission" when you print? You're signed in with a different account from the one your lots are under, often on a second device. Sign out and back in.{% endtip %}
 
 <h2 class="h5 mt-4" id="print-for-everyone">Printing everybody's labels</h2>
@@ -34,12 +34,12 @@
 <div class="table-responsive">
 <table class="table table-sm">
   <tbody>
-    <tr><th>One person</th><td><strong>Print labels</strong> next to their name on the {% page "auction_tos_list" "Users" %} tab. {% page "print_labels_by_bidder_number" "That page" %} prints all their labels; there's a {% page "print_unprinted_labels_by_bidder_number" "version for just the unprinted ones" %}. Quickest at the desk, as each seller arrives.</td></tr>
-    <tr><th>A few, or everyone</th><td>{% page "auction_printing" "Print labels" %} under <strong>More</strong>. Tick the people and click print. You get {% page "auction_printing_pdf" "one PDF" %}.</td></tr>
+    <tr><th>One person</th><td>{% ui "Print labels" %} next to their name on the {% page "auction_tos_list" "Users" %} tab. {% page "print_labels_by_bidder_number" "That page" %} prints all their labels; there's a {% page "print_unprinted_labels_by_bidder_number" "version for just the unprinted ones" %}. Quickest at the desk, as each seller arrives.</td></tr>
+    <tr><th>A few, or everyone</th><td>{% page "auction_printing" "Print labels" %} under {% ui "More" %}. Tick the people and click print. You get {% page "auction_printing_pdf" "one PDF" %}.</td></tr>
   </tbody>
 </table>
 </div>
-<p>The site remembers which labels have been printed, by anyone. Leave <strong>Only print labels that haven't been printed yet</strong> ticked and nothing prints twice. To print everything again, untick it.</p>
+<p>The site remembers which labels have been printed, by anyone. Leave {% ui "Only print labels that haven't been printed yet" %} ticked and nothing prints twice. To print everything again, untick it.</p>
 <p>One PDF holds up to 100 labels on a thermal printer, or 500 on sheets. More than that? Print again with "only unprinted" ticked for the next batch.</p>
 {% mike %}Mike printed all 400 labels on the morning of the auction. Then three sellers added lots, so he printed all 400 again.{% endmike %}
 {% tip %}Get sellers to print their own. It saves you paper and an hour at the desk.{% endtip %}
@@ -60,7 +60,7 @@
 </table>
 </div>
 <ul>
-  <li><strong>A half-used sheet?</strong> Set <strong>Empty labels</strong> to the number already gone. Set it back to 0 for a fresh sheet.</li>
+  <li><strong>A half-used sheet?</strong> Set {% ui "Empty labels" %} to the number already gone. Set it back to 0 for a fresh sheet.</li>
   <li><strong>A Bluetooth thermal printer</strong> prints straight from the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a>, no computer. Pick it on Label printing in the app, and every print button sends labels to it.</li>
   <li><strong>Trying a setting?</strong> Reprint labels from an old auction you sold in.</li>
 </ul>

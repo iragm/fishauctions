@@ -14,7 +14,7 @@
 {% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="signing-in">Signing in</h2>
-<p><strong>Sign in with Google</strong> or <strong>Sign in with Apple</strong> is quickest: one click, no password. Otherwise click <strong>Create account</strong> and use your email.</p>
+<p>{% ui "Sign in with Google" %} or {% ui "Sign in with Apple" %} is quickest: one click, no password. Otherwise click {% ui "Create account" %} and use your email.</p>
 <p>After you sign up, the site emails you a link. Click it: that proves the email is yours. Replying "yes, that's me" doesn't do anything.</p>
 <h3 class="h6 mt-3">If the link doesn't work</h3>
 <ul>
@@ -25,20 +25,20 @@
 </ul>
 <p><strong>"An account already exists with this email"</strong> means you've signed up before. Sign in, or click <strong>Forgot your password?</strong>. The reset goes to the email on the account, which may not be the one you check most.</p>
 <p><strong>Watched lots missing, can't print labels, invoice won't open?</strong> Check the name at the top right. You're probably signed in with a different account on this device.</p>
-<p><strong>Want Google or Apple sign-in on an existing account?</strong> Sign in the usual way, then use <strong>Connect Google/Apple account</strong> in your account pages. Signing in with Google under a different email makes a second account instead.</p>
+<p><strong>Want Google or Apple sign-in on an existing account?</strong> Sign in the usual way, then use {% ui "Connect Google/Apple account" %} in your account pages. Signing in with Google under a different email makes a second account instead.</p>
 {% mike %}Mike has three accounts: one from his first auction, one from signing in with Google, and one his club made for him. He gets three of every email.{% endmike %}
 <p>Ended up with two anyway? <a href="{% url 'support' %}">Get in touch</a> and we'll merge them.</p>
 
 <h2 class="h5 mt-4" id="contact-info">Your name, address and phone</h2>
 <p>{% page "contact_info" "Contact info" %} holds your real name, phone and mailing address.</p>
 <ul>
-  <li><strong>Your name</strong> goes on your invoices. Only the people running auctions you join see it.</li>
-  <li><strong>Your address</strong> is where clubs mail your check when you sell. Keep it up to date.</li>
+  <li>{% ui "Your name" %} goes on your invoices. Only the people running auctions you join see it.</li>
+  <li>{% ui "Your address" %} is where clubs mail your check when you sell. Keep it up to date.</li>
   <li><strong>The map pin</strong> is how the site knows what's near you.</li>
   <li><strong>Change it once</strong> and it changes in every club and auction you're in.</li>
 </ul>
-<p>Your <strong>username</strong> is public: it's on your lots, bids and chat messages, for anyone to see. Don't use your email or full name. {% page "change_username" "Change username" %} changes it. You can sign in with either your username or your email.</p>
-<p>To use a different email, go to <strong>Change email</strong>. Only you can change it. It doesn't need to match your PayPal: any card can pay any invoice.</p>
+<p>Your {% ui "username" %} is public: it's on your lots, bids and chat messages, for anyone to see. Don't use your email or full name. {% page "change_username" "Change username" %} changes it. You can sign in with either your username or your email.</p>
+<p>To use a different email, go to {% ui "Change email" %}. Only you can change it. It doesn't need to match your PayPal: any card can pay any invoice.</p>
 
 <h2 class="h5 mt-4" id="preferences">Preferences</h2>
 <p>{% page "preferences" "Preferences" %} is what the site shows you:</p>
@@ -57,10 +57,10 @@
 <h2 class="h5 mt-4" id="notifications">Notifications</h2>
 <p>{% page "notification_preferences" "Notifications" %} is when the site may contact you:</p>
 <ul>
-  <li><strong>Auctions near you</strong>, online and in person: one message per auction, only if you haven't been on the site for a few days. Set how far "near" is.</li>
+  <li>{% ui "Auctions near you" %}, online and in person: one message per auction, only if you haven't been on the site for a few days. Set how far "near" is.</li>
   <li><strong>Questions on your lots</strong>, and replies to yours.</li>
   <li><strong>A reminder</strong> when you look at an auction but don't join.</li>
-  <li><strong>Push notifications when lots sell</strong>: at an in-person auction, a notification when a lot you're watching comes up. Works in the phone app, or in a web browser after you click <strong>Subscribe to Push Messaging</strong> on that device. <a href="{% url 'help_guide' slug='in-person-auctions' %}#coming-up">How they work</a>.</li>
+  <li>{% ui "Push notifications when lots sell" %}: at an in-person auction, a notification when a lot you're watching comes up. Works in the phone app, or in a web browser after you click {% ui "Subscribe to Push Messaging" %} on that device. <a href="{% url 'help_guide' slug='in-person-auctions' %}#coming-up">How they work</a>.</li>
   <li><strong>With the phone app:</strong> notifications instead of emails, and a running total of what you've bought.</li>
 </ul>
 {% if help.signed_in %}{% helptip %}You have lot notifications turned {% if help.account.lot_alerts %}on{% else %}off{% endif %}{% if help.account.app %}, and {% if help.account.push_instead_of_email %}get notifications instead of emails{% else %}get emails, not notifications{% endif %}{% endif %}.{% endhelptip %}{% endif %}
@@ -78,7 +78,7 @@
   <tbody>
     <tr><td>Anyone</td><td>Lots, sale prices and usernames.</td></tr>
     <tr><td>People running auctions and clubs you join</td><td>Your real name, email, phone and address.</td></tr>
-    <tr><td>Signed-in people</td><td>Your email, only if you tick <strong>Email visible</strong>.</td></tr>
+    <tr><td>Signed-in people</td><td>Your email, only if you tick {% ui "Email visible" %}.</td></tr>
   </tbody>
 </table>
 </div>

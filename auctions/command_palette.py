@@ -19,6 +19,7 @@ from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
 
+from .auction_survey import survey_url, wants_answer
 from .models import (
     Auction,
     AuctionTOS,
@@ -1211,8 +1212,9 @@ def _auction_member_items(user, auction, tos):
 
 def _auction_default_items(request, user, auction):
     """Defaults for the user's most recent auction, ordered by role and state."""
-    # Pretty much over: only the invoice is worth offering.
+    # Pretty much over: only the invoice and the survey are worth offering.
     if auction.pretty_much_over:
+        items = []
         invoice = (
             _ready_invoice(user, auction)
             or Invoice.objects.filter(auctiontos_user__user=user, auctiontos_user__auction=auction)
@@ -1220,8 +1222,12 @@ def _auction_default_items(request, user, auction):
             .first()
         )
         if invoice:
-            return [_invoice_item(invoice, auction, "bi-bag", _invoice_status_label(invoice))]
-        return []
+            items.append(_invoice_item(invoice, auction, "bi-bag", _invoice_status_label(invoice)))
+        if wants_answer(_user_tos(user, auction)):
+            items.append(
+                _item("auction", f"How was {auction.title}?", survey_url(auction), "bi-emoji-smile", "Leave feedback")
+            )
+        return items
 
     items = []
     is_admin = auction.permission_check(user)
