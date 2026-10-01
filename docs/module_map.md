@@ -465,7 +465,7 @@ this only quotes its opening sentence.
 - **`test_mcp_widgets.py`** (197 lines)
   Tests for the MCP-app widgets: the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
-- **`test_membership_flow.py`** (1689 lines)
+- **`test_membership_flow.py`** (1702 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`, `CarriedMembershipTests`, `WelcomeLetterTests`
 - **`test_mobile_features.py`** (2718 lines)
@@ -900,7 +900,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`bulk_add_lots.py`** (943 lines)
   Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
-- **`club_admin.py`** (1096 lines)
+- **`club_admin.py`** (1099 lines)
   Setting a club up: its details, membership settings, payment accounts, email.
 - **`club_api.py`** (1183 lines)
   The club REST API: ``/api/v1/clubs/<slug>/…``.

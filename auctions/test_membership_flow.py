@@ -1601,6 +1601,19 @@ class WelcomeLetterTests(StandardTestCase):
         self.assertTrue(john.send_welcome_email)
         self.assertFalse(john.welcome_email_sent)
 
+    def test_a_first_expiration_date_set_by_hand_sends_the_held_letter(self):
+        ClubMember.objects.create(
+            club=self.club, user=self.admin_user, name="Club Admin", permission_view=True, permission_add_edit=True
+        )
+        member = ClubMember.objects.create(club=self.club, name="Held", send_welcome_email=False)
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.client.post(
+            reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": member.pk}),
+            {"membership_expiration_date": (timezone.localdate() + datetime.timedelta(days=200)).isoformat()},
+        )
+        member.refresh_from_db()
+        self.assertEqual((member.send_welcome_email, member.welcome_email_sent), (True, False))
+
     def test_a_letter_already_sent_is_not_sent_again(self):
         from auctions.views.club_members import renew_club_member
 

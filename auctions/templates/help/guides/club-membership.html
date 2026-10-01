@@ -93,7 +93,7 @@
 <ul>
   <li><strong>By card:</strong> connect Square on the same page, and members pay on your club page. They're renewed when the payment goes through, and it's in the treasurer's report. See <a href="{% url 'help_guide' slug='club-money' %}#payment-accounts">Club money</a>.</li>
   <li><strong>Cash or check:</strong> {% ui "Renew" %} in the member's menu. It adds one membership period by your club's rules, records the dues in the treasurer's report, and sends the renewal email if you've turned it on.</li>
-  <li><strong>Fixing a date:</strong> {% page "club_member_renew_page" "Set expiration date" %} changes the date and nothing else. No money is recorded.</li>
+  <li><strong>Fixing a date:</strong> {% page "club_member_renew_page" "Set expiration date" %} changes the date and records no money. For somebody who has never paid, it also sends any welcome letter held back for them.</li>
   <li><strong>At an auction:</strong> with {% rule "add_membership_fee_to_invoices_for_expired_members" %} in an auction's rules, a lapsed member's invoice includes the fee, and paying it renews them.</li>
 </ul>
 {% tip %}Took money? {% ui "Renew" %}. Just correcting a mistake? {% ui "Set expiration date" %}. Using the wrong one either counts dues nobody paid, or loses dues somebody did.{% endtip %}

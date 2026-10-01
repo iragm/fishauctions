@@ -459,6 +459,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
                 error_redirect += "?" + urlencode({"next": next_url})
             return redirect(error_redirect)
         old_expiration = member.membership_expiration_date
+        had_paid = member.has_ever_paid
         member.membership_expiration_date = new_expiration
         member._preserve_membership_email_schedule = True
         member.save(
@@ -468,6 +469,8 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
                 "membership_expiration_reminder_due",
             ]
         )
+        # A first date for somebody who never paid makes them a member: a held letter goes now.
+        member.welcome_after_first_payment(had_paid)
         old_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
         new_str = new_expiration.strftime("%-m/%-d/%Y")
         ClubHistory.objects.create(
