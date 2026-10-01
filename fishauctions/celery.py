@@ -20,6 +20,20 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 # Load task modules from all registered Django apps.
 app.autodiscover_tasks()
 
+# The library reads files on its own worker (the celery_documents service): parsing a big upload can
+# take an hour and a lot of memory, and must never hold up endauctions or take the main worker down.
+DOCUMENTS_QUEUE = "documents"
+app.conf.task_routes = {
+    "auctions.tasks.index_document": {"queue": DOCUMENTS_QUEUE},
+    "auctions.tasks.process_document_batch": {"queue": DOCUMENTS_QUEUE},
+}
+
+
+def _is_documents_worker():
+    """The documents worker skips the bootstrapping below; the main worker does it once."""
+    return os.environ.get("CELERY_WORKER_QUEUES") == DOCUMENTS_QUEUE
+
+
 # Configure Celery Beat schedule for periodic tasks
 app.conf.beat_schedule = {
     # End auctions and declare winners - every minute
@@ -191,12 +205,24 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.ensure_auction_stats_task_scheduled",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Library documents whose index_document was never queued (redis down at commit) or whose worker died.
+    "requeue_stuck_documents": {
+        "task": "auctions.tasks.requeue_stuck_documents",
+        "schedule": 900.0,  # Run every 15 minutes
+    },
+    # Library documents read or filed by an older model, or with an older parser, re-done a few at a time.
+    "tidy_library": {
+        "task": "auctions.tasks.tidy_library",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
 }
 
 
 @worker_ready.connect
 def start_auction_stats_task(sender, **kwargs):
     """Start the self-scheduling auction stats task once the worker is ready; it reschedules itself."""
+    if _is_documents_worker():
+        return
     # Schedule the task to run shortly after worker is fully ready
     from datetime import timedelta
 
@@ -210,6 +236,8 @@ def start_auction_stats_task(sender, **kwargs):
 @worker_ready.connect
 def start_bap_recalculation_tasks(sender, **kwargs):
     """Bootstrap the self-scheduling BAP recalculation tasks when the worker is ready."""
+    if _is_documents_worker():
+        return
     from datetime import timedelta
 
     from django.utils import timezone

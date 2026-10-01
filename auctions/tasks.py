@@ -1843,3 +1843,48 @@ def summarize_donation_email(email_pk):
     email_row = DonationEmail.objects.select_related("vendor__club").filter(pk=email_pk).first()
     if email_row and not email_row.summary:
         donations.summarize_incoming(email_row)
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=3600, time_limit=3660, max_retries=None)
+def index_document(self, document_pk):
+    """Read, chunk, embed and tag one library document. Routed to the ``documents`` queue (celery.py),
+    with an hour's limit: a scanned newsletter is one vision call per page. While another run holds the
+    document, waits for it rather than dropping a change saved in the meantime.
+    """
+    from auctions.documents.index import index_document as run
+
+    if not run(document_pk):
+        raise self.retry(countdown=60)
+
+
+@shared_task(bind=True, ignore_result=True)
+def requeue_stuck_documents(self):
+    """Re-queue library documents nobody is reading. See :func:`auctions.documents.index.requeue_stuck`."""
+    from auctions.documents import index, stitch
+
+    index.requeue_stuck()
+    stitch.requeue_stuck()
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=3600, time_limit=3660, max_retries=None)
+def process_document_batch(self, batch_pk):
+    """Read and stitch a batch of library pages, a slice at a time (``auctions.documents.stitch``), queueing
+    the next slice behind whatever else the documents worker has waiting.
+    """
+    from auctions.documents import stitch
+
+    outcome = stitch.process(batch_pk)
+    if outcome == stitch.LOCKED:
+        raise self.retry(countdown=60)
+    if outcome == stitch.MORE:
+        stitch._send(batch_pk)
+
+
+@shared_task(bind=True, ignore_result=True)
+def tidy_library(self):
+    """Nightly: bring a bounded number of library documents up to date with today's models. See
+    :func:`auctions.documents.index.tidy`.
+    """
+    from auctions.documents.index import tidy
+
+    tidy()

@@ -37,6 +37,7 @@ from .club_members import *  # noqa: F403
 from .club_pages import *  # noqa: F403
 from .club_reports import *  # noqa: F403
 from .discord import *  # noqa: F403
+from .documents import *  # noqa: F403
 from .embeds import *  # noqa: F403
 from .exports import *  # noqa: F403
 from .help import *  # noqa: F403

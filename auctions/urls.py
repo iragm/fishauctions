@@ -744,6 +744,17 @@ urlpatterns = [
     # Copyright Office. /dmca/ 404s on a deployment with no agent -- see auctions/dmca.py.
     path("dmca/", views.DmcaPolicyView.as_view(), name="dmca"),
     path("dmca/notice/", views.CopyrightNoticeCreate.as_view(), name="dmca_notice"),
+    # The library (auctions/documents/).
+    path("library/", views.LibraryView.as_view(), name="library"),
+    path("library/answer/", views.DocumentAnswerView.as_view(), name="library_answer"),
+    path("library/batch/<int:pk>/", views.DocumentBatchView.as_view(), name="document_batch"),
+    path("library/page/<int:pk>/", views.BatchPageView.as_view(), name="batch_page"),
+    path("library/<int:pk>/", views.DocumentDetailView.as_view(), name="document_detail"),
+    path("library/<int:pk>/file/", views.DocumentFileView.as_view(), name="document_file"),
+    path("library/<int:pk>/edit/", views.DocumentEditView.as_view(), name="document_edit"),
+    path("library/<int:pk>/read-again/", views.DocumentReindexView.as_view(), name="document_reindex"),
+    path("library/<int:pk>/delete/", views.DocumentDeleteView.as_view(), name="document_delete"),
+    path("library/<int:pk>/report/", views.DocumentFeedbackView.as_view(), name="document_feedback"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
     path("unsubscribe/<slug:slug>/", views.UnsubscribeView.as_view()),
     path(

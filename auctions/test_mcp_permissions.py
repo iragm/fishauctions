@@ -31,6 +31,8 @@ from auctions.models import (
     Club,
     ClubEvent,
     ClubMember,
+    Document,
+    DocumentChunk,
     DonationVendor,
     Invoice,
     Lot,
@@ -63,6 +65,8 @@ def secrets() -> tuple[str, ...]:
         f"{SENTINEL}MEMO",
         f"{SENTINEL.lower()}-member@example.invalid",
         f"{SENTINEL.lower()}-bidder@example.invalid",
+        f"{SENTINEL} Spawning Notes",
+        f"{SENTINEL}LIBRARYTEXT",
     )
 
 
@@ -81,6 +85,7 @@ WATCHED = (
     AuctionDropdown,
     VolunteerJob,
     DonationVendor,
+    Document,
 )
 
 
@@ -184,6 +189,25 @@ class CrossTenantTestCase(TestCase):
             created_by=self.their_owner,
             description=f"{SENTINEL} table duty",
             people_needed=2,
+        )
+
+        # A club library document; never saved to disk, since no tool should get as far as the file.
+        self.their_document = Document.objects.create(
+            owner=self.their_owner,
+            club=self.their_club,
+            visibility="club",
+            title=f"{SENTINEL} Spawning Notes",
+            original_name="notes.pdf",
+            file="never-written.pdf",
+            status=Document.READY,
+            text=f"{SENTINEL}LIBRARYTEXT about spawning",
+        )
+        DocumentChunk.objects.create(
+            document=self.their_document,
+            position=0,
+            text=f"{SENTINEL}LIBRARYTEXT about spawning",
+            end=40,
+            content_hash="x",
         )
 
         # --- tenant B: a real administrator, of somewhere else ---------------------------
@@ -359,6 +383,14 @@ class CrossTenantTestCase(TestCase):
             "followup_due": (timezone.now() + datetime.timedelta(days=14)).strftime("%Y-%m-%d"),
             "subject": "Audit subject",
             "body": "Audit body, sent by nobody who should be able to.",
+            # The library.
+            "document": str(self.their_document.pk),
+            "author": "Audit Author",
+            "year": 1990,
+            "topics": ["ponds"],
+            "topic": "breeding",
+            "start": 0,
+            "length": 100,
         }
 
     def _params_for(self, action):
@@ -388,6 +420,7 @@ class CrossTenantTestCase(TestCase):
             "AuctionDropdown": {self.their_dropdown_option.pk},
             "VolunteerJob": {self.their_volunteer_job.pk},
             "DonationVendor": {self.their_vendor.pk, self.their_webform_vendor.pk},
+            "Document": {self.their_document.pk},
         }
 
     def _assert_nothing_of_theirs_moved(self, before, after, where, *, may_create_inside=False):

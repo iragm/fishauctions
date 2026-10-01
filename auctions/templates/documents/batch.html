@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}{{ batch }}{% endblock %}
+{% block content %}
+{% comment %}While pages are being read or put together the page re-fetches itself every few seconds; the attributes go once it is waiting, done or stopped.{% endcomment %}
+<div class="container py-4" id="batch-page"{% if batch.status == "reading" or batch.status == "stitching" %} hx-get="{{ request.path }}" hx-trigger="every 5s" hx-select="#batch-page" hx-target="this" hx-swap="outerHTML"{% endif %}>
+  <h1 class="h4 mb-1">{{ batch }}</h1>
+  <p class="text-muted small mb-3">{{ page_count }} pages &middot; {{ batch.get_visibility_display }}{% if batch.club %} &middot; {{ batch.club.name }}{% endif %}</p>
+
+  {% if batch.status == "waiting" %}
+    <div class="alert alert-secondary">Read {{ pages_read }} of {{ page_count }} pages. Waiting for more pages before putting the articles together.</div>
+  {% elif batch.status == "reading" %}
+    <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> Reading page {{ pages_read }} of {{ page_count }}...</div>
+  {% elif batch.status == "stitching" %}
+    <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> Putting the articles together: page {{ pages_settled }} of {{ page_count }}...</div>
+  {% elif batch.status == "failed" %}
+    <div class="alert alert-danger">{{ batch.error }}</div>
+  {% endif %}
+  {% if batch.notes %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ batch.notes }}</div>{% endif %}
+
+  {% if can_manage %}
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      {% if batch.status == "waiting" or batch.status == "failed" %}
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="finish"><button type="submit" class="btn btn-sm btn-primary">{% if batch.status == "failed" %}Carry on{% else %}Put the articles together now{% endif %}</button></form>
+      {% endif %}
+      {% if batch.status == "done" %}
+        <form method="post" onsubmit="return confirm('This replaces every article this batch made, and any corrections made to them.');">{% csrf_token %}<input type="hidden" name="action" value="again"><button type="submit" class="btn btn-sm btn-secondary">Put them together again</button></form>
+      {% endif %}
+      <form method="post" onsubmit="return confirm('Delete these pages and every article made from them?');">{% csrf_token %}<input type="hidden" name="action" value="delete"><button type="submit" class="btn btn-sm btn-danger">Delete</button></form>
+    </div>
+  {% endif %}
+
+  {% if documents %}
+    <h2 class="h6">Articles</h2>
+    {% for document in documents %}
+      <div class="mb-1"><a href="{% url 'document_detail' document.pk %}">{{ document.display_title }}</a> <span class="text-muted small">{% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %} &middot; {{ document.pages.count }} page{{ document.pages.count|pluralize }}</span></div>
+    {% endfor %}
+  {% endif %}
+
+  {% if can_manage and form and batch.status != "stitching" %}
+    <div class="col-12 col-lg-6 mt-4">
+      <h2 class="h6">Add pages</h2>
+      {% if batch.status == "done" %}<p class="small text-muted">Its articles are rebuilt when you put them together again.</p>{% endif %}
+      <form method="post" enctype="multipart/form-data" data-max-bytes="{{ max_request_bytes }}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        {{ form|crispy }}
+        <button type="submit" class="btn btn-primary">Add</button>
+      </form>
+    </div>
+  {% endif %}
+</div>
+{% include "documents/_size_check.html" %}
+{% endblock %}

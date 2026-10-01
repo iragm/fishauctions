@@ -912,6 +912,45 @@ def on_uploaded_image_deleted(sender, instance, **kwargs):
     transaction.on_commit(delete_files)
 
 
+@receiver(post_delete, sender="auctions.Document")
+def on_document_deleted(sender, instance, **kwargs):
+    """Delete a library document's file once the delete commits -- including when its club goes.
+
+    Never served from ``/media/``, so there is no edge cache to purge.
+    """
+    field_file = instance.file
+    if not field_file or not field_file.name:
+        return
+
+    def delete_file():
+        try:
+            field_file.delete(save=False)
+        except Exception:
+            logger.exception("Could not delete the file for document %s", instance.pk)
+
+    transaction.on_commit(delete_file)
+
+
+@receiver(post_delete, sender="auctions.BatchPage")
+def on_batch_page_deleted(sender, instance, **kwargs):
+    """Delete a scanned page's files once the delete commits. A PDF's pages share its file, so that goes
+    with the last of them.
+    """
+    files = [instance.image] if instance.image else []
+    if instance.file and not sender.objects.filter(file=instance.file.name).exists():
+        files.append(instance.file)
+
+    def delete_files():
+        for field_file in files:
+            try:
+                field_file.delete(save=False)
+            except Exception:
+                logger.exception("Could not delete a file of batch page %s", instance.pk)
+
+    if files:
+        transaction.on_commit(delete_files)
+
+
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")
 def notify_users_their_printer_is_supported(sender, instance, **kwargs):
     """Push to users whose hand-identified printer this profile now matches, so they reconnect. Only

@@ -175,6 +175,9 @@ def _delete_personal_rows(user):
         CommandPaletteSearch,
         ContentReport,
         CopyrightNotice,
+        Document,
+        DocumentBatch,
+        DocumentFeedback,
         LotObservation,
         MobileDevice,
         MobileOfflineOp,
@@ -233,6 +236,12 @@ def _delete_personal_rows(user):
     # delete. Strikes against them stay: this site's repeat-infringer record (17 U.S.C. 512(i)).
     ContentReport.objects.filter(reported_by=user).update(reported_by=None, reporter_email="")
     CopyrightNotice.objects.filter(submitted_by=user).update(submitted_by=None)
+    # Library: their own papers go, files too (signals.on_document_deleted); a club's stay with the club.
+    Document.objects.filter(owner=user, club__isnull=True).delete()
+    Document.objects.filter(owner=user).update(owner=None)
+    DocumentBatch.objects.filter(owner=user, club__isnull=True).delete()
+    DocumentBatch.objects.filter(owner=user).update(owner=None)
+    DocumentFeedback.objects.filter(user=user).update(user=None)
 
 
 def _anonymize_assistant_records(user):

@@ -747,6 +747,18 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 # minimal / low / medium / high, or blank to omit. See llm.DEFAULT_REASONING_EFFORT.
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "minimal")
 
+# The library (auctions/documents/). Vectors for search; blank means keyword search only, which is
+# also what happens with an LLM_BASE_URL endpoint that has no /embeddings. Changing it is a re-index:
+# `manage.py reindex_documents`.
+LLM_EMBEDDING_MODEL = os.environ.get("LLM_EMBEDDING_MODEL", "" if LLM_BASE_URL else "text-embedding-3-small")
+# The library's own model: reads scanned pages and pictures, puts batches of pages back together into
+# articles, files them, and writes the answers on /library/. Cheaper than the palette's job is hard; this
+# is the one place a better model is worth paying for. Defaults to LLM_MODEL behind an LLM_BASE_URL,
+# which won't know OpenAI's model names.
+DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (LLM_MODEL if LLM_BASE_URL else "gpt-5-mini")
+# Uploaded files, outside mediafiles/ because nginx serves all of /media/ to anyone with the URL.
+DOCUMENT_ROOT = os.environ.get("DOCUMENT_ROOT", "/home/app/web/privatefiles/documents/")
+
 # Public repository for the /mcp/ read_source tool. Paths resolve against the repo's own file list,
 # so nothing on this server's disk is reachable. Blank turns the tool off.
 SOURCE_CODE_URL = os.environ.get("SOURCE_CODE_URL", "https://github.com/iragm/fishauctions")

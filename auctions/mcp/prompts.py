@@ -19,6 +19,8 @@ class Argument(NamedTuple):
     required: bool = False
     #: What ``completion/complete`` should offer for it: "auction", "club", or "" for free text.
     completes: str = ""
+    #: What the body says when it isn't given; default "(ask me which <name>)".
+    unsaid: str = ""
 
 
 class Prompt(NamedTuple):
@@ -149,6 +151,118 @@ PROMPTS: tuple[Prompt, ...] = (
         "out after a short delay and that retract_announcement is what stops it. Do not send it "
         "until I have read the draft back.",
     ),
+    Prompt(
+        "digitize_documents",
+        "Digitize old club papers",
+        "Read a folder of scans or photos of old newsletters and breeder reports, and add each article to a club's library.",
+        (
+            Argument(
+                "folder",
+                "Where the pages are: a folder on this computer, or 'attached' for pictures attached to this chat.",
+                True,
+            ),
+            _CLUB,
+            Argument(
+                "about",
+                "What they are, e.g. 'our newsletters, 1975-1982'. Optional.",
+                False,
+                unsaid="I haven't said, so tell me what they look like",
+            ),
+        ),
+        "I have scans or photos of old pages in {folder}. What they are: {about}. I want them in "
+        "{club}'s library on this site, read by you, because you read old print better than the "
+        "site's own model does.\n"
+        "\n"
+        "First call my_context and tell me which club you have landed on. add_document only files "
+        "under a club whose settings I can edit; if it refuses, stop and tell me rather than adding "
+        "them without the club. Ask me once who should be able to read them: everyone on the site "
+        "(the default), only the club's members, or only me.\n"
+        "\n"
+        "1. List every picture and PDF in {folder}, in page order: by file name, or by the date taken "
+        "if the names don't say. Tell me how many there are. If you can't open them, stop and say so.\n"
+        "2. Look at every page once and plan before you transcribe anything. One document per article "
+        "or report: not one per page, and not one per newsletter issue, because someone searching for "
+        "spawning Apistogramma wants the article, and an issue covers a dozen subjects. Put an "
+        "article's pages back in order if they are out of order. Show me the plan as a short list "
+        "(title, which files, author, year) and wait for me to say go.\n"
+        "   In the plan, mark what you would leave out, and why: blank pages and adverts; membership "
+        "lists, or anything else with people's addresses or phone numbers, which never go in the "
+        "library; and articles reprinted from a magazine or a book, which aren't the club's to share. "
+        "A byline is fine.\n"
+        "3. If there are more than about 30 pages, work in batches of about 10, and tell me where you "
+        "are after each one, so a long folder doesn't run out of room halfway through an article.\n"
+        "4. For each document in the plan:\n"
+        "   a. Transcribe every word exactly as printed, as Markdown, in reading order: headings as "
+        "headings, tables as tables, lists as lists. Don't correct spelling, update names or "
+        "summarise. Write [illegible] for a word you can't make out; never fill in a guess. Put "
+        "<!-- page 1 --> on a line of its own before the first page's text, <!-- page 2 --> before "
+        "the second, and so on.\n"
+        "   b. For each photograph or drawing, add a line starting 'Picture:' that says what it shows "
+        "and names any fish or plant you can identify. Don't describe the page itself.\n"
+        "   c. End with a section headed '## Library notes', which is yours and not part of the "
+        "transcription: a 'Source:' line naming the files it came from and the newsletter issue if one "
+        "is printed, and a 'Species:' line listing every species the article names by its current "
+        "scientific name, giving the old one too where it has changed (Cichlasoma nigrofasciatum is now "
+        "Amatitlania nigrofasciata). The library tags species from that line.\n"
+        "   d. search_documents for the title and for one distinctive sentence. If the article is already "
+        "there, read_document it. If what's there is worse than yours, for example garbled or [illegible] "
+        "where you could read it, tell me, and only if I agree, add yours and delete_document the old "
+        "one. Otherwise skip it.\n"
+        "   e. add_document with the text, the title as printed, the author as printed, the club, who "
+        "can read it, and up to four topics from the list add_document gives. Give the year only if the pages show it: a dated "
+        "masthead counts, but the folder name and what I told you above don't. Leave out anything you "
+        "aren't sure of. The library fills in a blank, but it can't correct a wrong answer.\n"
+        "5. At the end, list what you added with links, what you left out and why, and any pages you "
+        "couldn't read well enough, so I can rescan them.\n"
+        "\n"
+        "Don't change documents that are already in the library except as step 4d says. If you notice "
+        "a problem with one, tell me.",
+    ),
+    Prompt(
+        "tidy_the_library",
+        "Tidy a club library",
+        "Fill in missing titles, authors, years and topics across a club's library, and list what needs a person to look at it.",
+        (_CLUB,),
+        "Go through {club}'s library and tidy its catalogue.\n"
+        "\n"
+        "1. list_documents for that club. Keep calling it with the offset it gives you until you have "
+        "all of them, and tell me how many there are.\n"
+        "2. Start with any that readers reported problems with (open_reports), then any whose title is "
+        "just a file name, then any missing an author, a year or topics. read_document each one and "
+        "work out what's missing from the text itself: the printed title, the byline, a date in the "
+        "masthead or the text.\n"
+        "3. update_document with only what you are sure of. Don't guess a year from how old the typing "
+        "looks, and don't replace a title or author somebody has already filled in unless it is plainly "
+        "wrong; if so, tell me why.\n"
+        "4. Don't try to fix the text itself. You can't see the scan it was read from, so you can't tell "
+        "a misreading from what was printed. Instead, list documents whose text looks garbled: runs of "
+        "[illegible], words that aren't words, sentences that stop halfway. Those are worth rescanning "
+        "and adding again with digitize_documents.\n"
+        "5. List likely duplicates, meaning the same article added twice, but don't delete either one. "
+        "Tell me which and I'll decide.\n"
+        "\n"
+        "At the end, give me a table of each document you changed and what you changed, then the "
+        "garbled ones, then the duplicates.",
+    ),
+    Prompt(
+        "ask_the_library",
+        "Ask the library",
+        "Answer a question from a club's old articles and breeder reports, quoting what they actually say.",
+        (_CLUB, Argument("question", "What you want to know, e.g. 'how did members hatch killifish eggs?'.", False)),
+        "Answer this from {club}'s library: {question}\n"
+        "\n"
+        "1. search_documents with the question, and again with the words an article from the 1970s "
+        "would have used: older scientific names, and the hobby terms of the time. Use the species "
+        "filter if the question is about one species.\n"
+        "2. read_document around the best passages, starting where each one starts, so you see what "
+        "comes before and after it.\n"
+        "3. Answer in a few sentences, citing the article, its author and its year for each point, with "
+        "the document's link. Quote where the wording matters.\n"
+        "\n"
+        "These are decades-old club articles, so say plainly where their advice is out of date or where "
+        "two of them disagree. Don't fill gaps from your own knowledge without saying that's what you "
+        "are doing. If the library doesn't answer the question, say so.",
+    ),
 )
 
 BY_NAME = {prompt.name: prompt for prompt in PROMPTS}
@@ -186,7 +300,8 @@ def render(name: str, arguments: dict[str, Any] | None) -> dict[str, Any] | None
         return None
     given = {key: str(value) for key, value in (arguments or {}).items() if value not in (None, "")}
     filled = {
-        argument.name: given.get(argument.name) or f"(ask me which {argument.name})" for argument in prompt.arguments
+        argument.name: given.get(argument.name) or argument.unsaid or f"(ask me which {argument.name})"
+        for argument in prompt.arguments
     }
     return {
         "description": prompt.description,

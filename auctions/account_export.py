@@ -136,6 +136,7 @@ def export(user):
         AuctionTOS,
         Bid,
         ClubMember,
+        Document,
         LotHistory,
         MobileDevice,
         SearchHistory,
@@ -216,6 +217,15 @@ def export(user):
                 "culture_points": row.culture_points,
             }
             for row in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club")
+        ],
+        "library_documents": [
+            {
+                "title": row.display_title,
+                "file_name": row.original_name,
+                "club": _plain(row.club),
+                "uploaded": _plain(row.createdon),
+            }
+            for row in Document.objects.filter(owner=user).select_related("club")
         ],
         "lots_sold": [
             {

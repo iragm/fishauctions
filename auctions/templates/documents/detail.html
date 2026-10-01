@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}{{ document.display_title }}{% endblock %}
+{% block content %}
+{% comment %}While the document is being read, the page re-fetches itself and swaps this container in place; once it is ready or failed the attributes are gone and the polling stops.{% endcomment %}
+<div class="container py-4" id="document-page"{% if document.status == "pending" or document.status == "processing" %} hx-get="{{ request.path }}" hx-trigger="every 5s" hx-select="#document-page" hx-target="this" hx-swap="outerHTML"{% endif %}>
+  <h1 class="h4 mb-1">{{ document.display_title }}</h1>
+  <p class="text-muted small mb-2">
+    {% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %}
+    &middot; {{ document.get_visibility_display }}{% if document.club %} &middot; {{ document.club.name }}{% endif %}
+    {% if document.batch %}&middot; from <a href="{% url 'document_batch' document.batch.pk %}">{{ document.batch }}</a>{% endif %}
+    &middot; {{ document.original_name }}
+  </p>
+
+  {% if document.status == "pending" or document.status == "processing" %}
+    <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> {{ document.get_status_display }}...</div>
+  {% elif document.status == "failed" %}
+    <div class="alert alert-danger">{{ document.error }}</div>
+  {% elif document.error %}
+    <div class="alert alert-warning text-dark">Reading it again didn't work: {{ document.error }}</div>
+  {% endif %}
+  {% if document.notes %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ document.notes }}</div>{% endif %}
+
+  <div class="mb-3">
+    {% for slug, label in topics %}<a class="badge bg-primary text-decoration-none me-1" href="{% url 'library' %}?topic={{ slug }}">{{ label }}</a>{% endfor %}
+    {% for each in species %}<a class="badge bg-secondary text-decoration-none me-1" href="{% url 'library' %}?species={{ each.pk }}"><i>{{ each.scientific_name }}</i></a>{% endfor %}
+  </div>
+
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <a class="btn btn-sm btn-primary" href="{% url 'document_file' document.pk %}" target="_blank" rel="noopener"><i class="bi bi-file-earmark"></i> Original</a>
+    {% if can_manage %}
+      <a class="btn btn-sm btn-secondary" href="{% url 'document_edit' document.pk %}"><i class="bi bi-pencil"></i> Edit</a>
+      <form method="post" action="{% url 'document_reindex' document.pk %}"{% if document.text_edited %} onsubmit="return confirm('Reading it again replaces your corrections to the text.');"{% endif %}>
+        {% csrf_token %}<button type="submit" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-repeat"></i> Read it again</button>
+      </form>
+      <form method="post" action="{% url 'document_delete' document.pk %}" onsubmit="return confirm('Delete this document for everyone?');">
+        {% csrf_token %}<button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-trash"></i> Delete</button>
+      </form>
+    {% endif %}
+    <button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-form" aria-expanded="false"><i class="bi bi-flag"></i> Report a problem</button>
+  </div>
+
+  <div class="collapse mb-3" id="report-form">
+    <div class="card card-body">
+      <form method="post" action="{% url 'document_feedback' document.pk %}">
+        {% csrf_token %}
+        {{ feedback_form|crispy }}
+        <button type="submit" class="btn btn-primary btn-sm">Send</button>
+        <a class="small ms-2" href="{{ dmca_url }}">Copyright problem?</a>
+      </form>
+    </div>
+  </div>
+
+  {% if reports %}
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h6">Reported by readers</h2>
+        {% for report in reports %}
+          <div class="small mb-1"><b>{{ report.get_reason_display }}</b>{% if report.note %}: {{ report.note }}{% endif %} <span class="text-muted">{{ report.user.username|default:"" }} {{ report.createdon|date:"M j, Y" }}</span></div>
+        {% endfor %}
+        <a class="small" href="{% url 'document_edit' document.pk %}">Fix it</a>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if passages %}
+    {% for passage in passages %}
+      {% if passage.page and passage.new_page %}<div class="text-muted small mt-3">{% if passage.scan %}<a href="{% url 'batch_page' passage.scan %}" target="_blank" rel="noopener">Page {{ passage.page }}</a>{% else %}Page {{ passage.page }}{% endif %}</div>{% endif %}
+      <div id="at-{{ passage.start }}" class="document-passage" style="white-space: pre-wrap;">{{ passage.text }}</div>
+    {% endfor %}
+  {% elif document.text %}
+    <div style="white-space: pre-wrap;">{{ document.text }}</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -236,6 +236,12 @@ ROUTE_LIST: list[Route] = [
     _r("ignore_categories", "Categories to hide", "Account", keywords=["ignore", "hide categories", "mute"]),
     _r("printing", "Label printing preferences", "Account", keywords=["printer", "label size", "thermal"]),
     _r(
+        "library",
+        "The library: club articles, breeder reports and documents",
+        "Account",
+        keywords=["documents", "articles", "newsletters", "bap reports", "upload a document", "archive", "scans"],
+    ),
+    _r(
         "user_api_keys",
         "Connect Claude or another AI assistant",
         "Account",
@@ -1185,6 +1191,16 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    # The library: one document's pages. search_documents and read_document answer with its link.
+    "document_detail": "One library document; search_documents and read_document answer with its link.",
+    "document_file": "A document's original file, served to someone who can see it; opened from its page.",
+    "document_edit": "Editing one document is update_document, or one click from its page.",
+    "document_reindex": "A button on one document's page.",
+    "document_delete": "A button on one document's page; delete_document for an agent.",
+    "document_feedback": "The report form on one document's page.",
+    "library_answer": "The written answer the library page loads into itself; not a page on its own.",
+    "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
+    "batch_page": "One scanned page as a picture, opened from the article it is part of.",
     "promo": "The old about page; it redirects to the help, which is in the catalog as help.",
     "help_guide": (
         "One help guide. search_help answers with a link to the section that holds the answer, which "

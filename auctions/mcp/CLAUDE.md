@@ -289,7 +289,8 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   type and CSP are already the shared spelling, and a widget that silently doesn't draw is worth
   more than one key on nine tools.
 - **Prompts** (`auctions/mcp/prompts.py`): `run_check_in`, `chase_unpaid`, `set_up_next_year`,
-  `write_announcement`, `build_an_integration` — the only safe place for a multi-step recipe, because
+  `write_announcement`, `build_an_integration`, and the library's `digitize_documents`,
+  `tidy_the_library`, `ask_the_library` — the only safe place for a multi-step recipe, because
   a person picks it off a menu rather than a model choosing it. Nothing in a prompt body is
   interpolated except its own arguments (`test_mcp_resources` enforces it).
 - **Resources** (`auctions/mcp/resources.py`): `auction://`, `lot://`, `club://` templates,

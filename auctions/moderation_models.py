@@ -127,6 +127,13 @@ class CopyrightNotice(models.Model):
     )
     lot = models.ForeignKey("auctions.Lot", null=True, blank=True, on_delete=models.SET_NULL)
     lot.help_text = "The lot the material was on, when it could be worked out from the URLs given"
+    document = models.ForeignKey(
+        "auctions.Document", null=True, blank=True, on_delete=models.SET_NULL, related_name="copyright_notices"
+    )
+    document.help_text = (
+        "The library document the material was, when it could be worked out from the URLs given. "
+        "Taking it down is ticking Removed on the document."
+    )
 
     status = models.CharField(max_length=10, choices=STATUSES, default="RECEIVED")
     received_on = models.DateTimeField(null=True, blank=True)

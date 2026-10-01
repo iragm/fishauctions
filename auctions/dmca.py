@@ -165,11 +165,14 @@ def record_strike(user, notice=None, reason="", issued_by=None):
 
 
 def take_down(notice, admin=None):
-    """Remove the material a notice complains about, and record a strike; returns how many images went.
+    """Remove the material a notice complains about, and record a strike; returns how many things went.
 
     Deletes every image on the named lot, which is what removes the file, the Cloudflare copy and the
     edge cache (``auctions.signals.on_uploaded_image_deleted``). The lot is left alone: a notice is
     about a photograph, and deleting the listing would remove bids and an auction entry too.
+
+    A library document is hidden from everyone rather than deleted ("remove, or disable access to"):
+    it was never on a public URL, and a counter-notice restores it by unticking ``removed``.
     """
     from auctions.models import LotImage
 
@@ -183,9 +186,26 @@ def take_down(notice, admin=None):
             # The legacy single image on Lot itself, from before LotImage.
             notice.lot.image.delete(save=True)
 
+    if notice.document:
+        notice.document.removed = True
+        notice.document.removed_reason = "Removed after a copyright notice."
+        notice.document.save(update_fields=["removed", "removed_reason"])
+        removed += 1
+
     notice.status = "REMOVED"
     notice.actioned_on = timezone.now()
     notice.save()
+
+    if notice.document and notice.document.owner:
+        record_strike(
+            notice.document.owner,
+            notice=notice,
+            reason=(
+                f"Copyright complaint about library document {notice.document.pk} "
+                f"({notice.document.display_title}). Reported work: {notice.work[:500]}"
+            ),
+            issued_by=admin,
+        )
 
     if notice.lot and notice.lot.user:
         record_strike(

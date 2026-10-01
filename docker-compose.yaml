@@ -91,6 +91,27 @@ services:
       - redis
     restart: always
 
+  # The library's worker: reads uploaded documents (auctions/documents/), one at a time, in its own
+  # process per task, so a file that eats memory can't take the main worker or endauctions with it.
+  celery_documents:
+    build: *app-build
+    image: ${APP_IMAGE-fishauctions-app}
+    container_name: celery_documents
+    logging: *default-logging
+    entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    environment:
+      - LOG_SERVICE_NAME=documents # own log files; see celery_worker
+      - CELERY_WORKER_QUEUES=documents
+    mem_limit: ${DOCUMENTS_WORKER_MEMORY-2g}
+    depends_on:
+      - db
+      - redis
+    restart: always
+
   celery_beat:
     build: *app-build
     image: ${APP_IMAGE-fishauctions-app}

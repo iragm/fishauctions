@@ -68,6 +68,14 @@ from webpush.models import PushInformation
 from . import cloudflare_images, history, printer_programs, voice
 from .club_health import ClubHealth, ClubLadderSnapshot  # noqa: F401
 from .club_matching import derived_abbreviation
+from .documents.models import (  # noqa: F401
+    BatchPage,
+    Document,
+    DocumentBatch,
+    DocumentChunk,
+    DocumentFeedback,
+    DocumentImageText,
+)
 from .email_routing import (
     admin_routing_email,
     build_routed_sender_address,

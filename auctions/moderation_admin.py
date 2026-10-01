@@ -1,4 +1,4 @@
-"""The Django admin for the moderation queue: reports, copyright notices and strikes.
+"""The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
 
 Split out of ``admin.py`` because the moderation queue is its own feature and reads better on its
 own, and imported back into it so the registrations still happen at app load.
@@ -11,7 +11,7 @@ doing its three steps by hand reliably means doing two of them.
 from django.contrib import admin, messages
 from django.utils import timezone
 
-from auctions.models import ContentReport, CopyrightNotice, CopyrightStrike
+from auctions.models import ContentReport, CopyrightNotice, CopyrightStrike, Document, DocumentFeedback
 
 
 @admin.register(ContentReport)
@@ -52,11 +52,11 @@ class CopyrightNoticeAdmin(admin.ModelAdmin):
     one does not start the removal clock under 512(c)(3)(B). It is still usually worth acting on.
     """
 
-    list_display = ("createdon", "name", "on_behalf_of", "status", "notice_is_complete", "lot")
+    list_display = ("createdon", "name", "on_behalf_of", "status", "notice_is_complete", "lot", "document")
     list_filter = ("status", "good_faith", "accurate", "createdon")
-    list_select_related = ("lot", "submitted_by")
+    list_select_related = ("lot", "document", "submitted_by")
     search_fields = ("name", "email", "work", "material", "on_behalf_of")
-    raw_id_fields = ("lot", "submitted_by")
+    raw_id_fields = ("lot", "document", "submitted_by")
     readonly_fields = ("createdon",)
     actions = ["take_down_material", "mark_invalid", "mark_withdrawn"]
 
@@ -69,18 +69,15 @@ class CopyrightNoticeAdmin(admin.ModelAdmin):
         from auctions import dmca
 
         for notice in queryset:
-            if not notice.lot:
+            if not notice.lot and not notice.document:
                 messages.warning(
                     request,
-                    f"Notice from {notice.name} isn't linked to a lot, so there is nothing to "
-                    f"remove automatically. Set the lot on the notice, or remove the material by hand.",
+                    f"Notice from {notice.name} isn't linked to a lot or a library document, so there is "
+                    f"nothing to remove automatically. Set one on the notice, or remove the material by hand.",
                 )
                 continue
-            removed = dmca.take_down(notice, admin=request.user)
-            messages.success(
-                request,
-                f"Removed {removed} image(s) from lot {notice.lot.lot_number} and recorded a strike.",
-            )
+            dmca.take_down(notice, admin=request.user)
+            messages.success(request, f"Took down {notice.lot or notice.document} and recorded a strike.")
 
     @admin.action(description="Reject as not a valid notice")
     def mark_invalid(self, request, queryset):
@@ -137,3 +134,40 @@ class CopyrightStrikeAdmin(admin.ModelAdmin):
     def withdraw_strike(self, request, queryset):
         updated = queryset.update(withdrawn=True)
         messages.success(request, f"{updated} strike(s) withdrawn.")
+
+
+@admin.register(Document)
+class DocumentAdmin(admin.ModelAdmin):
+    """The library, for staff: takedowns (``removed``) and the occasional stuck document. Readers'
+    reports go to whoever manages each document, on its own page, not here.
+    """
+
+    list_display = ("createdon", "__str__", "club", "visibility", "owner", "status", "removed")
+    list_filter = ("status", "removed", "createdon")
+    list_select_related = ("club", "owner")
+    search_fields = ("title", "original_name", "author", "owner__username", "club__name")
+    raw_id_fields = ("owner", "club")
+    fields = (
+        "title",
+        "author",
+        "year",
+        "club",
+        "owner",
+        "original_name",
+        "status",
+        "error",
+        "notes",
+        "removed",
+        "removed_reason",
+    )
+    readonly_fields = ("original_name", "status", "error", "notes")
+
+
+@admin.register(DocumentFeedback)
+class DocumentFeedbackAdmin(admin.ModelAdmin):
+    """Readers' reports, all of them; "offensive" is the one staff may need to act on."""
+
+    list_display = ("createdon", "reason", "document", "user", "resolved")
+    list_filter = ("resolved", "reason", "createdon")
+    list_select_related = ("document", "user")
+    raw_id_fields = ("document", "user")

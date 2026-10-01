@@ -36,6 +36,10 @@ fi
 echo Checking directory permissions...
 check_writable_dir "/home/app/web/mediafiles" \
   "Fix on the host, from the project root: sudo chown -R $(id -u):$(id -g) ./mediafiles"
+# Library uploads (settings.DOCUMENT_ROOT). Created here so a checkout without update.sh still works.
+mkdir -p /home/app/web/privatefiles 2>/dev/null
+check_writable_dir "/home/app/web/privatefiles" \
+  "Fix on the host, from the project root: sudo chown -R $(id -u):$(id -g) ./privatefiles"
 # staticfiles is a named volume (see docker-compose.yaml), NOT a bind mount --
 # chowning something on the host filesystem cannot fix it.
 check_writable_dir "/home/app/web/staticfiles" \

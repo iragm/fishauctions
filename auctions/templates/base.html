@@ -385,6 +385,7 @@ window.onload = function() {
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Clubs</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="{% url 'clubs' %}">Find a club</a>
+                      <a class="dropdown-item" href="{% url 'library' %}">Library</a>
                       <div class="dropdown-divider"></div>
                       {% for club in user_clubs %}
                       <a class="dropdown-item d-flex align-items-center gap-2" href="{% url 'club_detail' club.slug %}">{% if club.icon %}<img src="{{ club.icon_thumbnail_url }}" alt="" width="18" height="18" class="rounded-1 flex-shrink-0" style="object-fit:cover;">{% endif %}{{ club.name }}</a>

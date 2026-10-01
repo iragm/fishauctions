@@ -67,6 +67,10 @@ django-weasyprint
 pypdfium2
 reportlab
 beautifulsoup4
+# Turns an uploaded document of any format into Markdown for the library (auctions/documents/extract.py).
+# Pinned to the minor version: extract.py overrides DocxConverter._image_to_html, a documented hook
+# that a 0.x release could still rename; test_documents fails loudly if it does.
+markitdown[pdf,docx,pptx,xlsx,xls,outlook]~=0.1.8
 django-encrypted-model-fields
 celery
 django-celery-beat
