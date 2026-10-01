@@ -3,6 +3,7 @@
 import datetime
 import json
 import re
+from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, override_settings
@@ -365,6 +366,28 @@ class ClubMemberSkillTests(ClubSkillTestCase):
         self.assertTrue(result.get("ok"), result)
         self.club_member.refresh_from_db()
         self.assertIsNotNone(self.club_member.membership_expiration_date)
+
+    def test_editing_a_member_keeps_their_carried_membership(self):
+        self.club.membership_annual_fee = Decimal(25)
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.club_member.membership_carried_by = self.club_admin
+        self.club_member.save()
+        result = self._run(
+            "update_club_member",
+            {"person": "Renewable Rita", "club": self.club.name, "email": "newrita@example.com"},
+            user=self.admin_user,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.club_member.refresh_from_db()
+        self.assertEqual(self.club_member.membership_carried_by, self.club_admin)
+
+    def test_a_carried_membership_is_not_renewed_on_its_own(self):
+        self.club_member.membership_carried_by = self.club_admin
+        self.club_member.save()
+        result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user)
+        self.assertIn("error", result)
+        self.club_member.refresh_from_db()
+        self.assertIsNone(self.club_member.membership_expiration_date)
 
     def test_a_stranger_cannot_renew_anybody(self):
         result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.userB)
@@ -871,6 +894,7 @@ class MembershipCardTests(ClubSkillTestCase):
     def setUp(self):
         super().setUp()
         self.club.show_member_barcode = True
+        self.club.membership_system = "rolling"
         self.club.membership_annual_fee = 20
         self.club.save()
         self.mine = ClubMember.objects.create(

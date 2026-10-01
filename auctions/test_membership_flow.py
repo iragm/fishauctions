@@ -16,6 +16,7 @@ from auctions.forms import (
     ClubMembershipSettingsForm,
 )
 from auctions.models import (
+    AuctionTOS,
     Club,
     ClubHistory,
     ClubMember,
@@ -1285,3 +1286,404 @@ class QuickCheckoutHTMXTests(StandardTestCase):
         )
         content = self.client.get(url, {"barcode": "1"}).content.decode("utf-8")
         self.assertIn(f"invoice-buttons-{invoice.pk}", content)
+
+
+class CarriedMembershipTests(StandardTestCase):
+    """A membership carried with another member's: its dates follow the carrier's, and nothing offers to
+    renew it on its own.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+        self.club = Club.objects.create(
+            name="Family Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            send_membership_expiration_reminders=True,
+        )
+        payment_user = User.objects.create_user(
+            username="family_payment_user", password="testpass", email="family_payment_user@example.com"
+        )
+        PayPalSeller.objects.create(user=payment_user, club=self.club, paypal_merchant_id="merchant_family")
+        self.online_auction.club = self.club
+        self.online_auction.manage_users_through_club = True
+        self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
+        self.online_auction.save()
+        ClubMember.objects.create(
+            club=self.club, user=self.admin_user, name="Club Admin", permission_view=True, permission_add_edit=True
+        )
+        self.carrier = ClubMember.objects.create(
+            club=self.club,
+            name="Carrier",
+            email="carrier@example.com",
+            membership_last_paid=self.today - datetime.timedelta(days=360),
+            membership_expiration_date=self.today + datetime.timedelta(days=5),
+        )
+        self.carried = ClubMember.objects.create(
+            club=self.club,
+            user=self.online_tos.user,
+            name="Carried",
+            email=self.online_tos.email,
+            membership_carried_by=self.carrier,
+        )
+        self.invoice.refresh_from_db()
+
+    def test_dates_follow_the_carrier(self):
+        from auctions.views.club_members import renew_club_member
+
+        self.assertEqual(self.carried.membership_expiration_date, self.carrier.membership_expiration_date)
+        self.assertIsNone(self.carried.membership_expiration_reminder_due)
+        renew_club_member(self.carrier)
+        self.carried.refresh_from_db()
+        self.assertEqual(self.carried.membership_expiration_date, self.today + datetime.timedelta(days=370))
+        self.assertEqual(self.carried.membership_last_paid, self.today)
+        self.assertIsNone(self.carried.membership_expiration_reminder_due)
+        self.assertIsNone(self.carried.membership_expiration_reminder_30_days_due)
+
+    def test_the_member_is_never_offered_payment(self):
+        from auctions.views.club_pages import _membership_renewal_state
+
+        self.assertFalse(_membership_renewal_state(self.club, self.carried)[2])
+        self.assertTrue(_membership_renewal_state(self.club, self.carrier)[2])
+        self.client.force_login(self.online_tos.user)
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 302)
+        response = self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Your membership comes with Carrier")
+        self.assertIsNone(response.context["membership_invoice"])
+
+    def test_admins_cannot_renew_it(self):
+        from auctions.tables import ClubMemberHTMxTable
+        from auctions.views.club_members import renew_club_member
+
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("club_member_renew", kwargs={"pk": self.carried.pk})
+        response = self.client.get(url)
+        self.assertContains(response, "Carried with Carrier")
+        self.assertNotContains(response, f'hx-post="{url}"')
+        self.assertEqual(self.client.post(url).status_code, 400)
+        response = self.client.get(
+            reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.carried.pk})
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.assertRaises(ValueError):
+            renew_club_member(self.carried)
+        table = ClubMemberHTMxTable([], can_add_edit=True, can_manage_membership=True)
+        self.assertNotIn(url, table.render_actions(None, self.carried))
+        self.assertNotIn(url, table.render_membership_expiration_date(None, self.carried))
+        carrier_url = reverse("club_member_renew", kwargs={"pk": self.carrier.pk})
+        self.assertIn(carrier_url, table.render_actions(None, self.carrier))
+        self.carried.refresh_from_db()
+        self.assertEqual(self.carried.membership_expiration_date, self.carrier.membership_expiration_date)
+
+    def test_auction_invoices_never_add_the_fee(self):
+        from auctions.views.base import _should_mark_invoice_renewal_needed
+
+        self.assertFalse(_should_mark_invoice_renewal_needed(self.invoice))
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoice.pk}), {"renewal_needed": "1"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.invoice.refresh_from_db()
+        self.assertFalse(self.invoice.renewal_needed)
+
+    def test_dues_already_taken_renew_the_carrier(self):
+        invoice = Invoice.objects.create(
+            club=self.club, club_member=self.carried, buyer=self.online_tos.user, status="UNPAID", renewal_needed=True
+        )
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.assertEqual(self.client.post(f"/api/payinvoice/{invoice.pk}/PAID").status_code, 200)
+        self.carrier.refresh_from_db()
+        self.carried.refresh_from_db()
+        self.assertEqual(self.carrier.membership_expiration_date, self.today + datetime.timedelta(days=370))
+        self.assertEqual(self.carried.membership_expiration_date, self.carrier.membership_expiration_date)
+
+    def test_renewal_lists_and_reminders_skip_it(self):
+        from auctions.filters import ClubMemberFilter
+        from auctions.tasks import _run_reminder_pass
+
+        def names(query):
+            qs = ClubMember.objects.filter(club=self.club)
+            return set(ClubMemberFilter({"query": query}, queryset=qs).qs.values_list("name", flat=True))
+
+        self.assertEqual(names("expiring"), {"Carrier"})
+        self.assertNotIn("Carried", names("expired"))
+        self.assertFalse(self.carried.compute_mailchimp_tags()["expiring-soon"])
+        self.assertTrue(self.carrier.compute_mailchimp_tags()["expiring-soon"])
+        due = timezone.now() - datetime.timedelta(hours=1)
+        ClubMember.objects.filter(pk__in=[self.carrier.pk, self.carried.pk]).update(
+            membership_expiration_reminder_due=due
+        )
+        with patch("auctions.tasks._send_one_reminder") as send:
+            _run_reminder_pass(timezone.now(), self.today, "membership_expiration_reminder_due", "", "", "test")
+        self.assertEqual([call.args[0].pk for call in send.call_args_list], [self.carrier.pk])
+
+    def _form(self, member, carrier, **kwargs):
+        from django.forms.models import model_to_dict
+
+        from auctions.forms import ClubMemberAdminForm
+
+        fields = ClubMemberAdminForm(instance=member, club=self.club).fields
+        data = {key: ("" if value is None else value) for key, value in model_to_dict(member, fields=fields).items()}
+        data["membership_carried_by"] = carrier.pk if carrier else ""
+        return ClubMemberAdminForm(data, instance=member, club=self.club, **kwargs)
+
+    def test_the_edit_form_sets_it_one_level_deep(self):
+        from auctions.forms import ClubMemberAdminForm
+
+        other = ClubMember.objects.create(club=self.club, name="Other")
+        form = self._form(other, self.carrier)
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        other.refresh_from_db()
+        self.assertEqual(other.membership_expiration_date, self.carrier.membership_expiration_date)
+        # The carrier already carries others, and a carried member carries nobody.
+        self.assertFalse(self._form(self.carrier, other).is_valid())
+        self.assertFalse(self._form(other, self.carried).is_valid())
+        self.assertNotIn("membership_carried_by", ClubMemberAdminForm(club=self.club).fields)
+        # From a club-managed auction's user list too: some clubs keep their whole list there.
+        self.assertIn(
+            "membership_carried_by",
+            ClubMemberAdminForm(instance=self.carried, club=self.club, auction=self.online_auction).fields,
+        )
+
+    def test_the_edit_modal_and_its_autocomplete(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("clubmember_admin", kwargs={"pk": self.carried.pk}))
+        self.assertContains(response, "Membership carried with")
+        response = self.client.get(
+            reverse("club-member-autocomplete"),
+            {"forward": json.dumps({"club_slug": self.club.slug, "carrier_for": self.carrier.pk})},
+        )
+        names = {result["text"].split(" (")[0] for result in response.json()["results"]}
+        self.assertIn("Club Admin", names)
+        self.assertNotIn("Carrier", names)
+        self.assertNotIn("Carried", names)
+
+    def _merge(self, source, target):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        return self.client.post(
+            reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": source.pk}),
+            {"step": "review", "target": target.pk, "name": target.name, "email": target.email or ""},
+        )
+
+    def test_deactivating_the_carrier_frees_who_it_carried(self):
+        self.carrier.is_deleted = True
+        self.carrier.save(update_fields=["is_deleted"])
+        self.carried.refresh_from_db()
+        self.assertIsNone(self.carried.membership_carried_by)
+        # Its own reminders and renewals are back.
+        self.assertIsNotNone(self.carried.membership_expiration_reminder_due)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="no longer carried").exists())
+
+    def test_merging_a_carried_member_into_its_carrier(self):
+        self.assertEqual(self._merge(self.carried, self.carrier).status_code, 302)
+        self.carrier.refresh_from_db()
+        self.carried.refresh_from_db()
+        self.assertIsNone(self.carrier.membership_carried_by)
+        self.assertTrue(self.carried.is_deleted)
+        self.assertFalse(self.carrier.carried_memberships.filter(is_deleted=False).exists())
+
+    def test_merging_the_carrier_into_a_member_it_carries(self):
+        self.assertEqual(self._merge(self.carrier, self.carried).status_code, 302)
+        self.carried.refresh_from_db()
+        self.assertIsNone(self.carried.membership_carried_by)
+        self.assertEqual(self.carried.membership_expiration_date, self.today + datetime.timedelta(days=5))
+
+    def test_merging_a_carried_member_into_a_new_record_keeps_it_carried(self):
+        target = ClubMember.objects.create(club=self.club, name="Carried Again", email="again@example.com")
+        self.assertEqual(self._merge(self.carried, target).status_code, 302)
+        target.refresh_from_db()
+        self.assertEqual(target.membership_carried_by, self.carrier)
+        self.assertEqual(target.membership_expiration_date, self.carrier.membership_expiration_date)
+
+    def test_merging_into_a_record_with_its_own_later_dues_keeps_them(self):
+        own = self.today + datetime.timedelta(days=300)
+        target = ClubMember.objects.create(
+            club=self.club, name="Paid Myself", email="paid@example.com", membership_expiration_date=own
+        )
+        self._merge(self.carried, target)
+        target.refresh_from_db()
+        self.assertIsNone(target.membership_carried_by)
+        self.assertEqual(target.membership_expiration_date, own)
+
+    def test_a_box_ticked_before_they_were_carried_comes_off(self):
+        from auctions.views.base import _ensure_invoice_renewal_state
+
+        Invoice.objects.filter(pk=self.invoice.pk).update(renewal_needed=True, renewal_manually_set=True)
+        self.invoice.refresh_from_db()
+        _ensure_invoice_renewal_state(self.invoice)
+        self.invoice.refresh_from_db()
+        self.assertFalse(self.invoice.renewal_needed)
+
+    def test_deleting_the_carrier_frees_who_it_carried(self):
+        self.carrier.delete()
+        self.carried.refresh_from_db()
+        self.assertIsNone(self.carried.membership_carried_by)
+        self.assertIsNotNone(self.carried.membership_expiration_reminder_due)
+
+    def test_a_stray_subscription_leaves_the_carriers_own_alone(self):
+        from auctions.views.webhooks import _apply_paypal_subscription_event
+
+        ClubMember.objects.filter(pk=self.carrier.pk).update(paypal_subscription_id="I-CARRIER")
+        ClubMember.objects.filter(pk=self.carried.pk).update(paypal_subscription_id="I-STRAY")
+        _apply_paypal_subscription_event(
+            self.club,
+            {
+                "id": "I-STRAY",
+                "status": "ACTIVE",
+                "billing_info": {"next_billing_time": "2099-01-01T00:00:00Z"},
+            },
+        )
+        self.carrier.refresh_from_db()
+        self.assertEqual(self.carrier.paypal_subscription_id, "I-CARRIER")
+        self.assertEqual(self.carrier.membership_expiration_date, self.today + datetime.timedelta(days=5))
+
+    def test_the_palette_keeps_it_when_editing_an_auction_participant(self):
+        from auctions.palette_actions import _update_through_the_club
+
+        request = self.client.request().wsgi_request
+        request.user = self.admin_user
+        problem = _update_through_the_club(request, self.online_auction, self.carried, {"phone_number": "555-0100"})
+        self.assertIsNone(problem)
+        self.carried.refresh_from_db()
+        self.assertEqual(self.carried.membership_carried_by, self.carrier)
+
+    def test_merging_the_carrier_moves_who_it_carries(self):
+        target = ClubMember.objects.create(club=self.club, name="Target", email="target@example.com")
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(
+            reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.carrier.pk}),
+            {"step": "review", "target": target.pk, "name": "Target", "email": "target@example.com"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.carried.refresh_from_db()
+        self.assertEqual(self.carried.membership_carried_by, target)
+
+
+class WelcomeLetterTests(StandardTestCase):
+    """Who gets the club's welcome letter when they're added, and who gets it when they first pay."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Welcome Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            send_welcome_email_to_new_members=True,
+        )
+        self.in_person_auction.club = self.club
+        self.in_person_auction.manage_users_through_club = "all"
+        self.in_person_auction.save()
+
+    def _participant(self, email="john@example.com"):
+        from auctions.services import ensure_club_member
+
+        member, _created = ensure_club_member(self.in_person_auction, name="John", email=email)
+        return member
+
+    def test_an_auction_welcomes_who_it_adds_by_default(self):
+        self.assertTrue(self.in_person_auction.send_club_welcome_letter)
+        self.assertTrue(self._participant().send_welcome_email)
+
+    def test_an_auction_can_hold_the_letter_until_they_pay(self):
+        from auctions.views.club_members import renew_club_member
+
+        self.in_person_auction.send_club_welcome_letter = False
+        self.in_person_auction.save()
+        john = self._participant()
+        self.assertEqual((john.send_welcome_email, john.welcome_email_sent), (False, False))
+        # Held until he pays at checkout.
+        renew_club_member(john)
+        john.refresh_from_db()
+        self.assertTrue(john.send_welcome_email)
+        self.assertFalse(john.welcome_email_sent)
+
+    def test_a_letter_already_sent_is_not_sent_again(self):
+        from auctions.views.club_members import renew_club_member
+
+        # Welcomed when they joined; an edit since then unticked the box.
+        member = ClubMember.objects.create(
+            club=self.club, name="Welcomed", send_welcome_email=False, welcome_email_sent=True
+        )
+        renew_club_member(member)
+        member.refresh_from_db()
+        self.assertEqual((member.send_welcome_email, member.welcome_email_sent), (False, True))
+
+    def test_a_renewal_is_not_a_first_payment(self):
+        from auctions.views.club_members import renew_club_member
+
+        member = ClubMember.objects.create(
+            club=self.club,
+            name="Old Hand",
+            send_welcome_email=False,
+            welcome_email_sent=True,
+            membership_last_paid=timezone.localdate() - datetime.timedelta(days=400),
+        )
+        renew_club_member(member)
+        member.refresh_from_db()
+        self.assertFalse(member.send_welcome_email)
+        self.assertTrue(member.welcome_email_sent)
+
+    def test_adding_all_participants_sends_no_letters(self):
+        ClubMember.objects.create(
+            club=self.club, user=self.admin_user, name="Club Admin", permission_view=True, permission_add_edit=True
+        )
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="participant@example.com")
+        self.client.post(reverse("auction_add_users_to_club", kwargs={"slug": self.online_auction.slug}))
+        added = ClubMember.objects.filter(club=self.club, source=str(self.online_auction.title)[:200])
+        self.assertTrue(added.exists())
+        self.assertFalse(added.filter(send_welcome_email=True).exists())
+
+    def test_both_fields_say_when_the_letter_goes_and_grey_out_without_one(self):
+        from auctions.forms import AuctionEditForm, ClubMemberAdminForm
+
+        def fields():
+            member_field = ClubMemberAdminForm(club=self.club).fields["send_welcome_email"]
+            auction_field = AuctionEditForm(
+                instance=self.in_person_auction, user=self.admin_user, cloned_from=None, user_timezone="UTC"
+            ).fields["send_club_welcome_letter"]
+            return member_field, auction_field
+
+        for field in fields():
+            self.assertFalse(field.disabled)
+            self.assertIn("first pay dues", field.help_text)
+        self.club.send_welcome_email_to_new_members = False
+        self.club.save()
+        self.in_person_auction.refresh_from_db()
+        for field in fields():
+            self.assertTrue(field.disabled)
+            self.assertIn("doesn't send welcome letters", field.help_text)
+
+    def test_a_csv_row_can_ask_for_the_letter(self):
+        from django.test import RequestFactory
+
+        from auctions.views.club_reports import ClubMemberCSVImportView
+
+        view = ClubMemberCSVImportView()
+        view.club = self.club
+        view.request = RequestFactory().get("/")
+        view.request.user = self.admin_user
+        asked = view._create_member(view._parse_member_row({"Email": "a@example.com", "Send Welcome Letter": "yes"}))
+        quiet = view._create_member(view._parse_member_row({"Email": "b@example.com"}))
+        self.assertEqual((asked.send_welcome_email, asked.welcome_email_sent), (True, False))
+        self.assertEqual((quiet.send_welcome_email, quiet.welcome_email_sent), (False, False))
+
+    def test_the_backfill_marks_unreached_imports_done(self):
+        import importlib
+
+        from django.apps import apps
+
+        migration = importlib.import_module("auctions.migrations.0478_welcome_letter_settings")
+        imported = ClubMember.objects.create(club=self.club, name="Imported", source="csv")
+        joined = ClubMember.objects.create(club=self.club, name="Joined", source="joined")
+        migration.mark_imported_members_welcomed(apps, None)
+        imported.refresh_from_db()
+        joined.refresh_from_db()
+        self.assertEqual((imported.welcome_email_sent, imported.send_welcome_email), (True, False))
+        self.assertEqual((joined.welcome_email_sent, joined.send_welcome_email), (False, True))

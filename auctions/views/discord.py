@@ -620,17 +620,19 @@ class DiscordInteractionsView(View):
         lines = [f"**{club.name}** — Your membership"]
         lines.append(f"Member since: {member.createdon.strftime('%B %d, %Y')}")
 
-        expiry = member.membership_expiration_date
+        expiry = member.effective_expiration_date
+        # A carried membership renews with its carrier's, never on its own.
+        renew_hint = "" if member.membership_carried_by_id else " — please renew your membership"
         if not expiry:
-            if club.membership_annual_fee:
-                lines.append("Status: ❌ Expired — please renew your membership")
+            if club.charges_dues:
+                lines.append("Status: Not paid yet")
         else:
             today = timezone.localdate()
             expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
             if expiry >= today:
                 lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
             else:
-                lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
+                lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D>{renew_hint}")
 
         lines.append(f"\n[View your membership]({member.simple_membership_link})")
 

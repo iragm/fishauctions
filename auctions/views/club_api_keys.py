@@ -317,21 +317,22 @@ class ClubMemberMapView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from django.db.models import BooleanField, Case, Value, When
         from django.utils import timezone
 
+        from auctions.filters import membership_status_q
+
         today = timezone.localdate()
-        expired_whens = [When(membership_expiration_date__lt=today, then=Value(True))]
-        if self.club.membership_annual_fee:
-            expired_whens.append(When(membership_expiration_date__isnull=True, then=Value(True)))
+
+        def flag(status):
+            return Case(
+                When(membership_status_q(status, today), then=Value(True)),
+                default=Value(False),
+                output_field=BooleanField(),
+            )
+
         qs = (
             ClubMember.objects.filter(club=self.club, is_deleted=False, lat__isnull=False, lng__isnull=False)
             .exclude(address="")
-            .annotate(
-                is_expired=Case(
-                    *expired_whens,
-                    default=Value(False),
-                    output_field=BooleanField(),
-                )
-            )
-            .values("pk", "name", "email", "address", "lat", "lng", "is_expired")
+            .annotate(is_expired=flag("lapsed"), never_paid=flag("never_paid"))
+            .values("pk", "name", "email", "address", "lat", "lng", "is_expired", "never_paid")
         )
         context["club"] = self.club
         context["members_json"] = list(qs)

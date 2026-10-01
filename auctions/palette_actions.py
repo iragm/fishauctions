@@ -1663,12 +1663,12 @@ def _update_through_the_club(request, auction, member, changes: dict[str, Any]) 
     from .models import ClubHistory
 
     club = auction.club
-    fields = [name for name in _club_member_form(club, None).fields if name != "send_welcome_email"]
+    fields = [name for name in _club_member_form(club, None, instance=member).fields if name != "send_welcome_email"]
     data = model_to_dict(member, fields=fields)
     data = {key: ("" if value is None else value) for key, value in data.items()}
     data.update({key: value for key, value in changes.items() if key in fields})
-    # Never on an edit: this is a details change, not a welcome.
-    data["send_welcome_email"] = False
+    # As it was: a details change neither welcomes them nor cancels a letter on its way.
+    data["send_welcome_email"] = member.send_welcome_email
     form = _club_member_form(club, data, instance=member)
     if not form.is_valid():
         return _form_problem(form)
@@ -3109,6 +3109,8 @@ def _membership_card(member) -> dict[str, Any]:
     }
     if any(points.values()):
         card["points"] = points
+    if member.membership_carried_by_id:
+        card["carried_with"] = untrusted_short(str(member.membership_carried_by))
     if should_show_payment:
         # A link, not a payment. Relative; mcp.tools makes *_url keys absolute.
         card["renew_url"] = reverse("club_membership_pay", kwargs={"slug": club.slug})
@@ -3282,6 +3284,13 @@ def renew_membership(request, params: dict[str, Any]) -> dict[str, Any]:
     club = member.club
     # The card rides along, so a membership with months left says so instead.
     card = _membership_card(member)
+    if member.membership_carried_by_id:
+        return _ok(
+            f"Your {club.name} membership comes with {untrusted_short(str(member.membership_carried_by))}'s, "
+            "so there's nothing for you to renew.",
+            membership=card,
+            url=card["url"],
+        )
     if not card.get("renew_url"):
         summary = f"Your {club.name} membership doesn't need renewing"
         summary += f" — it runs to {card['expires']}." if card["expires"] else " right now."
@@ -4962,14 +4971,15 @@ def club_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     if not command_palette._can_manage_members(user, club):
         return _error(f"You don't have permission to see {club.name}'s numbers.")
     members = ClubMember.objects.filter(club=club, is_deleted=False)
-    # is_paid_member in Python rather than a second copy in SQL; select_related avoids a query per member.
+    # membership_status in Python rather than a second copy in SQL; select_related avoids a query per member.
     all_members = list(members.select_related("club"))
-    paid_up = sum(1 for member in all_members if member.is_paid_member)
+    statuses = [member.membership_status for member in all_members]
     data: dict[str, Any] = {
         "club": club.name,
         "members": len(all_members),
-        "paid_up": paid_up,
-        "lapsed": len(all_members) - paid_up,
+        "paid_up": statuses.count("paid"),
+        "lapsed": statuses.count("lapsed"),
+        "never_paid": statuses.count("never_paid"),
         "expiring_within_30_days": sum(1 for member in all_members if member.is_expiring_soon),
         "members_with_an_account": members.filter(user__isnull=False).count(),
     }
@@ -4988,6 +4998,7 @@ def club_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
                 ("members", data.get("members")),
                 ("paid up", data.get("paid_up")),
                 ("lapsed", data.get("lapsed")),
+                ("never paid", data.get("never_paid")),
             ]
         )
         + ".",
@@ -5008,9 +5019,15 @@ def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"You don't have permission to see {club.name}'s members.")
     status = (_str(params, "status") or "all").lower().replace(" ", "_").replace("-", "_")
     members = list(ClubMember.objects.filter(club=club, is_deleted=False).select_related("club").order_by("name", "pk"))
-    if status in {"lapsed", "expired", "unpaid", "not_paid", "owing"}:
-        members = [member for member in members if not member.is_paid_member]
+    if status in {"lapsed", "expired"}:
+        members = [member for member in members if member.membership_status == "lapsed"]
         label = "have lapsed"
+    elif status in {"never_paid", "never", "joined_never_paid"}:
+        members = [member for member in members if member.membership_status == "never_paid"]
+        label = "have never paid"
+    elif status in {"unpaid", "not_paid", "owing"}:
+        members = [member for member in members if member.membership_status in ("lapsed", "never_paid")]
+        label = "aren't paid up"
     elif status in {"paid", "paid_up", "current", "active"}:
         members = [member for member in members if member.is_paid_member]
         label = "are paid up"
@@ -5033,6 +5050,7 @@ def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
             if member.membership_expiration_date
             else None,
             "paid_up": bool(member.is_paid_member),
+            "status": member.membership_status,
             "expiring_within_30_days": bool(member.is_expiring_soon),
             # No has_an_account per row; the ``no_account`` status answers that when asked.
         }
@@ -6553,11 +6571,15 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
             f"What should I change about {untrusted_short(member.name)}? I can set their email, phone or address."
         )
     data = model_to_dict(
-        member, fields=[field for field in _club_member_form(club, None).fields if field != "send_welcome_email"]
+        member,
+        fields=[
+            field for field in _club_member_form(club, None, instance=member).fields if field != "send_welcome_email"
+        ],
     )
     data = {key: ("" if value is None else value) for key, value in data.items()}
     data.update(changes)
-    data["send_welcome_email"] = False
+    # As it was: a details change neither welcomes them nor cancels a letter on its way.
+    data["send_welcome_email"] = member.send_welcome_email
     form = _club_member_form(club, data, instance=member)
     if not form.is_valid():
         return _form_problem(form)
@@ -6589,6 +6611,11 @@ def renew_member(request, params: dict[str, Any]) -> dict[str, Any]:
     member, problem = _resolve_member(club, _str(params, "person") or _str(params, "name"))
     if problem:
         return problem
+    if member.membership_carried_by_id:
+        carrier = untrusted_short(str(member.membership_carried_by))
+        return _error(
+            f"{untrusted_short(member.name)}'s membership is carried with {carrier}'s, so it renews when {carrier}'s does."
+        )
     renew_club_member(member, acting_user=user)
     expires = member.membership_expiration_date
     when = expires.strftime("%B %-d %Y") if expires else "an unknown date"
@@ -10848,6 +10875,11 @@ def set_invoice_renewal(request, params: dict[str, Any]) -> dict[str, Any]:
         wanted = _preference_boolean(params.get("value"))
     if wanted is None:
         wanted = True
+    if wanted and invoice.member_membership_carried_by:
+        return _error(
+            f"{untrusted_short(tos.name)}'s membership is carried with "
+            f"{untrusted_short(str(invoice.member_membership_carried_by))}'s, so it can't be renewed on its own."
+        )
     invoice.renewal_needed = wanted
     invoice.renewal_manually_set = True
     invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
@@ -13617,7 +13649,10 @@ register(
             "update_club_member and award_points take. Club staff only."
         ),
         params={
-            "status": ("string, optional, default all. One of: all, paid, lapsed, expiring, no_account."),
+            "status": (
+                "string, optional, default all. One of: all, paid, lapsed (paid once, not now), never_paid, "
+                "unpaid (lapsed or never paid), expiring, no_account."
+            ),
             "club": "string, optional. Club name. See my_context.",
             "limit": "integer, optional, default 15. How many rows to return, up to 100.",
             "offset": "integer, optional, default 0. Skip this many rows — how you get the rest of a long list.",

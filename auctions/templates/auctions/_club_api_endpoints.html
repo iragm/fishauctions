@@ -10,6 +10,7 @@
   <div class="mb-3">
     <div><strong>Add a club member</strong> &mdash; <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.url_key }}/members/</code></div>
     <div class="ms-3 text-muted">Body: <code>{"name":"Mike","email":"mike@example.com"}</code></div>
+    <div class="ms-3 text-muted">Add <code>"send_welcome_email":false</code> to hold the club's welcome letter until they first pay dues.</div>
   </div>
   {% endif %}
   {% if api_key.can_read_club_member_list %}

@@ -163,7 +163,7 @@ class WalletStatusTextTests(TestCase):
             name="Status club never paid", membership_system="rolling", membership_annual_fee=Decimal(25)
         )
         member = ClubMember.objects.create(club=club, name="M")
-        self.assertEqual(member.wallet_status_text, "Unpaid/expired")
+        self.assertEqual(member.wallet_status_text, "Not paid yet")
 
     def test_club_without_memberships_has_no_status(self):
         self.assertIsNone(self._member(membership_system="none").wallet_status_text)
@@ -623,10 +623,39 @@ class ClubMemberMembershipStatusFilterTests(TestCase):
         self.assertIn(self.paid_without_expiration.name, self._names("current"))
 
     def test_unpaid_is_the_complement_of_paid(self):
-        self.assertEqual(self._names("expired"), {self.expired.name, self.never_paid.name})
+        self.assertEqual(self._names("unpaid"), {self.expired.name, self.never_paid.name})
+
+    def test_never_paid_has_its_own_mailing_tag(self):
+        tags = self.never_paid.compute_mailchimp_tags()
+        self.assertTrue(tags["never-paid"])
+        self.assertFalse(tags["expired"])
+        self.assertTrue(self.expired.compute_mailchimp_tags()["expired"])
+        self.assertFalse(self.expired.compute_mailchimp_tags()["never-paid"])
+
+    def test_expired_is_only_people_who_paid_once(self):
+        self.assertEqual(self._names("expired"), {self.expired.name})
+        self.assertEqual(self._names("lapsed"), {self.expired.name})
+
+    def test_the_sql_statuses_match_the_property(self):
+        from auctions.filters import membership_status_q
+
+        members = list(ClubMember.objects.filter(club=self.club))
+        for status in ("paid", "lapsed", "never_paid", "no_dues"):
+            expected = {member.name for member in members if member.membership_status == status}
+            found = set(
+                ClubMember.objects.filter(club=self.club)
+                .filter(membership_status_q(status, self.today))
+                .values_list("name", flat=True)
+            )
+            self.assertEqual(found, expected, status)
+        self.assertEqual(self.never_paid.membership_status, "never_paid")
+        self.assertEqual(self.expired.membership_status, "lapsed")
 
     def test_never_paid_excludes_members_with_a_last_paid_date(self):
         self.assertEqual(self._names("never"), {self.never_paid.name})
+
+    def test_never_paid_as_the_placeholder_words_it(self):
+        self.assertEqual(self._names("never paid"), {self.never_paid.name})
 
     def test_expiring_soon_uses_the_explicit_expiration(self):
         self.assertEqual(self._names("expiring"), {self.expiring.name})
@@ -921,6 +950,36 @@ class ClubMemberRenewAPITests(TestCase):
         member.refresh_from_db()
         self.assertTrue(member.is_paid_member)
         self.assertEqual(ClubMember.objects.filter(club=self.club).count(), 1)
+
+    def test_it_refuses_a_carried_membership(self):
+        self._enable()
+        carrier = ClubMember.objects.create(club=self.club, name="Carrier", email="carrier@example.com")
+        carried = ClubMember.objects.create(
+            club=self.club, name="Carried", email="carried@example.com", membership_carried_by=carrier
+        )
+        response = self._post({"email": "carried@example.com"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["carried_with"], carrier.pk)
+        carried.refresh_from_db()
+        self.assertIsNone(carried.membership_last_paid)
+
+    def test_a_request_can_hold_the_welcome_letter_until_they_pay(self):
+        members_url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+
+        def add(payload, **kwargs):
+            return self.client.post(members_url, payload, HTTP_X_API_KEY=self.raw_key, **kwargs)
+
+        add({"name": "Unset", "email": "unset@example.com"}, content_type="application/json")
+        add(
+            {"name": "Quiet", "email": "quiet@example.com", "send_welcome_email": False},
+            content_type="application/json",
+        )
+        welcomed = dict(ClubMember.objects.filter(club=self.club).values_list("email", "send_welcome_email"))
+        self.assertEqual(welcomed, {"unset@example.com": True, "quiet@example.com": False})
+        # Renewing creates and pays at once: a first payment, so the letter goes after all.
+        self._enable()
+        self._post({"email": "new@example.com", "send_welcome_email": False})
+        self.assertTrue(ClubMember.objects.get(email="new@example.com").send_welcome_email)
 
     def test_it_creates_the_member_when_the_email_is_new(self):
         self._enable()

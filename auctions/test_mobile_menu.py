@@ -134,14 +134,10 @@ class MenuPayloadTests(TestCase):
         """Query strings survive: `?days=30` on the admin links is load-bearing."""
         self.assertIn(reverse("admin_traffic") + "?days=30", _paths(menu_for(self.superuser)))
 
-    def test_about_site_follows_the_promo_page_setting(self):
-        with override_settings(ENABLE_PROMO_PAGE=True):
-            self.assertIn(reverse("promo"), _paths(menu_for(self.user)))
-        with override_settings(ENABLE_PROMO_PAGE=False):
-            payload = menu_for(self.user)
-            self.assertNotIn(reverse("promo"), _paths(payload))
-            # The rest of the section survives -- only the one row is gated.
-            self.assertIn(reverse("help"), _paths(payload))
+    def test_the_about_section_offers_the_help_not_the_old_about_page(self):
+        paths = _paths(menu_for(self.user))
+        self.assertIn(reverse("help"), paths)
+        self.assertNotIn(reverse("promo"), paths)
 
     def test_the_rows_the_app_owns_are_never_sent(self):
         """The rows the app owns are never sent: each is a native screen with its own gating, and sign out does

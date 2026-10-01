@@ -52,9 +52,9 @@ function initMap() {
     });
   }
 
-  // Member markers (green = active, red = expired)
+  // Member markers (green = active, red = expired, grey = never paid)
   MEMBERS.forEach(function(m) {
-    var pinColor = m.is_expired ? "#dc3545" : "#198754";
+    var pinColor = m.is_expired ? "#dc3545" : (m.never_paid ? "#6c757d" : "#198754");
     var marker = new google.maps.Marker({
       position: {lat: m.lat, lng: m.lng},
       map: map,

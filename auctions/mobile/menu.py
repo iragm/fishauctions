@@ -31,7 +31,6 @@ time -- which makes a bad deploy cheap, but means a row that stops being emitted
 silently, so prefer failing the drift test.
 """
 
-from django.conf import settings
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 
@@ -153,14 +152,10 @@ def _admin_section():
 
 
 def _about_section():
-    """Collapsed, and last. "About site" is gated on ENABLE_PROMO_PAGE and the copyright row on whether a
-    DMCA agent is configured, exactly as the navbar gates them -- a row only one side gates is what
-    ``NavbarDriftTests`` exists to catch.
+    """Collapsed, and last. The copyright row is gated on whether a DMCA agent is configured, exactly as
+    the navbar gates it -- a row only one side gates is what ``NavbarDriftTests`` exists to catch.
     """
-    rows = []
-    if settings.ENABLE_PROMO_PAGE:
-        rows.append(_row("About site", reverse("promo"), "bi-globe"))
-    rows.append(_row("Help", reverse("help"), "bi-question-circle"))
+    rows = [_row("Help", reverse("help"), "bi-question-circle")]
     rows.append(_row("Terms and Conditions", reverse("tos"), "bi-file-text"))
     rows.append(_row("Privacy policy", reverse("privacy_policy"), "bi-shield-lock"))
     if dmca.is_configured():

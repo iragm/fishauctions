@@ -16,6 +16,7 @@ from django.db.models.base import Model as Model
 from django.http import (
     Http404,
     HttpResponse,
+    HttpResponseBadRequest,
     JsonResponse,
 )
 from django.middleware.csrf import get_token
@@ -485,6 +486,16 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                     action=f"Updated member {saved}",
                     applies_to="MEMBERS",
                 )
+            if "membership_carried_by" in form.changed_data:
+                carrier = saved.membership_carried_by
+                ClubHistory.objects.create(
+                    club=member.club,
+                    user=request.user,
+                    action=f"{saved}'s membership is now carried with {carrier}'s"
+                    if carrier
+                    else f"{saved}'s membership is no longer carried with another member's",
+                    applies_to="MEMBERSHIP",
+                )
             messages.success(request, f"{saved} updated.")
             return self._redirect_to_club_admin(member.club)
         return render(
@@ -759,6 +770,8 @@ class ClubMemberCreateView(APIView):
             member.club = club
             member.added_by = request.user
             member.source = str(auction.title)[:200] if auction else "manually_added"
+            if auction:
+                member.send_welcome_email = auction.send_club_welcome_letter
             member.save()
             ClubHistory.objects.create(
                 club=club,
@@ -808,9 +821,14 @@ def renew_club_member(member, *, acting_user=None, actor="", money_description="
     """Extend a membership by one period, record it, and return the member.
 
     Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
-    ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key.
+    ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key. Callers
+    refuse a carried membership first: it renews only through its carrier.
     """
+    if member.membership_carried_by_id:
+        msg = f"{member}'s membership is carried with {member.membership_carried_by}'s"
+        raise ValueError(msg)
     today = timezone.localdate()
+    had_paid = member.has_ever_paid
     member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
     member.membership_last_paid = today
     member.save(
@@ -821,6 +839,7 @@ def renew_club_member(member, *, acting_user=None, actor="", money_description="
             "membership_expiration_reminder_due",
         ]
     )
+    member.welcome_after_first_payment(had_paid)
     member.update_last_club_activity()
     new_exp_str = (
         member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
@@ -832,7 +851,7 @@ def renew_club_member(member, *, acting_user=None, actor="", money_description="
         action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
         applies_to="MEMBERSHIP",
     )
-    if member.club.membership_annual_fee:
+    if member.club.charges_dues:
         ClubMoney.objects.create(
             club=member.club,
             created_by=acting_user,
@@ -880,6 +899,8 @@ class ClubMemberRenewView(APIView):
 
     def post(self, request, pk):
         member = self._get_member(pk, request)
+        if member.membership_carried_by_id:
+            return HttpResponseBadRequest("This membership is carried with another member's.")
         renew_club_member(member, acting_user=request.user, money_description=f"Manual membership renewal for {member}")
         return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 

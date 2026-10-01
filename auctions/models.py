@@ -1443,8 +1443,16 @@ class Club(CloudflareImageMixin, models.Model):
         return self.uses_site_paypal or self.uses_own_paypal_credentials
 
     @property
+    def charges_dues(self):
+        """The club tracks membership on the site. Either field turned off means it doesn't: the settings
+        form requires a fee for a membership system and zeroes it under "No membership fees".
+        ``filters.dues_club_q`` is the same in SQL.
+        """
+        return self.membership_system != "none" and (self.membership_annual_fee or 0) > 0
+
+    @property
     def membership_payment_emails_enabled(self):
-        return bool((self.membership_annual_fee or 0) > 0 and (self.can_accept_paypal or self.can_accept_square))
+        return bool(self.charges_dues and (self.can_accept_paypal or self.can_accept_square))
 
 
 class ClubDiscordRole(models.Model):
@@ -1598,6 +1606,18 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             "and the invoice membership-renewal box is disabled."
         ),
     )
+    membership_carried_by = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="carried_memberships",
+        verbose_name="Membership carried with",
+        help_text=(
+            "A household or family membership: this member's dates are copied from that member's on every "
+            "save, and every way to renew or pay dues is closed to this member. One level deep."
+        ),
+    )
     membership_number = models.BigIntegerField(
         default=_default_membership_number,
         unique=True,
@@ -1606,6 +1626,9 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
     membership_expiration_reminder_30_days_due = models.DateTimeField(null=True, blank=True)
+    # send_welcome_email False with welcome_email_sent False is a letter held until the first payment
+    # (welcome_after_first_payment). welcome_email_sent True means the nightly job is done with the row,
+    # whether or not it sent anything.
     send_welcome_email = models.BooleanField(default=True)
     welcome_email_sent = models.BooleanField(default=False)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
@@ -1772,8 +1795,15 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         return bool(self.paypal_subscription_id)
 
     @property
+    def renews_through(self):
+        """The member whose renewal this membership rides on: its carrier, else itself."""
+        return self.membership_carried_by or self
+
+    @property
     def is_paid_member(self) -> bool:
-        """True when dues are current. The single source of truth for UI gates and wallet passes."""
+        """True when dues are current. The single source of truth for UI gates and wallet passes;
+        ``filters.membership_paid_q`` is the same in SQL.
+        """
         today = timezone.localdate()
         if self.membership_expiration_date:
             return self.membership_expiration_date >= today
@@ -1782,6 +1812,42 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 return self.membership_last_paid >= datetime.date(today.year, 1, 1)
             return self.membership_last_paid >= today - datetime.timedelta(days=365)
         return False
+
+    @property
+    def has_ever_paid(self) -> bool:
+        return bool(self.membership_last_paid or self.membership_expiration_date)
+
+    @property
+    def renew_label(self) -> str:
+        """The admin's renew button: recording somebody's first dues isn't renewing them."""
+        return "Renew" if self.has_ever_paid else "Mark paid"
+
+    @property
+    def membership_status(self) -> str:
+        """``paid``, ``lapsed`` (paid once, not now), ``never_paid``, or ``no_dues`` when the club doesn't
+        track membership, whatever dates the row carries. ``filters.membership_status_q`` is the same in SQL.
+        """
+        if not self.club.charges_dues:
+            return "no_dues"
+        if self.is_paid_member:
+            return "paid"
+        return "lapsed" if self.has_ever_paid else "never_paid"
+
+    def welcome_after_first_payment(self, had_paid_before):
+        """Queue the welcome letter that was held back at creation (an auction participant, an import) now
+        that this member, and so anyone their membership carries, has paid for the first time. The nightly
+        ``send_club_member_welcome_emails`` sends it, if the club sends welcome letters at all.
+        """
+        if had_paid_before:
+            return
+        held_back = type(self).objects.filter(
+            Q(pk=self.pk) | Q(membership_carried_by=self, is_deleted=False),
+            send_welcome_email=False,
+            welcome_email_sent=False,
+        )
+        if held_back.update(send_welcome_email=True, welcome_email_sent=False) and not self.send_welcome_email:
+            self.send_welcome_email = True
+            self.welcome_email_sent = False
 
     @property
     def effective_expiration_date(self):
@@ -1811,7 +1877,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if not self.is_paid_member:
             if expiration:
                 return f"Expired {expiration.strftime('%-d %b %Y')}"
-            return "Unpaid/expired"
+            return "Expired" if self.has_ever_paid else "Not paid yet"
         if expiration:
             return f"Valid through {expiration.strftime('%-d %b %Y')}"
         return "Valid"
@@ -1826,7 +1892,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         """Wallet pass type line: "Active Paid Membership"/"Unpaid Membership" for clubs with dues, else
         "Membership".
         """
-        if self.club.membership_system != "none" and (self.club.membership_annual_fee or 0) > 0:
+        if self.club.charges_dues:
             return "Active Paid Membership" if self.is_paid_member else "Unpaid Membership"
         return "Membership"
 
@@ -1845,19 +1911,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if not roles_qs:
             return None
 
-        today = timezone.localdate()
-        if self.membership_expiration_date:
-            membership_valid = self.membership_expiration_date >= today
-        elif self.membership_last_paid:
-            club = self.club
-            if club.membership_system == "january_first":
-                membership_valid = self.membership_last_paid >= datetime.date(today.year, 1, 1)
-            else:
-                membership_valid = self.membership_last_paid >= today - datetime.timedelta(days=365)
-        else:
-            membership_valid = False
-
-        if not membership_valid:
+        if not self.is_paid_member:
             unpaid_role = next((r for r in roles_qs if r.is_unpaid_role), None)
             if unpaid_role:
                 return unpaid_role
@@ -2051,6 +2105,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     MAILCHIMP_TAGS = (
         "expiring-soon",
         "expired",
+        "never-paid",
         "long-term-member",
         "new-member",
         "admin",
@@ -2078,14 +2133,15 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @property
     def is_expired(self):
-        if self.membership_expiration_date:
-            return self.membership_expiration_date < timezone.localdate()
-        return bool(self.club.membership_annual_fee) and not self.is_paid_member
+        """Paid once and not now. Somebody who never paid hasn't expired; see ``membership_status``."""
+        return self.membership_status == "lapsed"
 
     @property
     def is_expiring_soon(self):
-        """Membership expires within the next 30 days (and is not already expired)."""
-        if not self.membership_expiration_date:
+        """Membership expires within the next 30 days (and is not already expired). Never for a carried
+        membership: this drives renewal reminders, and those go to the carrier.
+        """
+        if not self.membership_expiration_date or self.membership_carried_by_id or not self.club.charges_dues:
             return False
         today = timezone.localdate()
         return today <= self.membership_expiration_date <= today + datetime.timedelta(days=30)
@@ -2149,7 +2205,10 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         """{tag_name: is_active} for every tag, so sync can add and remove."""
         return {
             "expiring-soon": self.is_expiring_soon,
-            "expired": self.is_expired,
+            # The club's renewal letters go by this tag; a carried membership is renewed by its carrier.
+            "expired": self.is_expired and not self.membership_carried_by_id,
+            # Joined, never paid: the people to invite to pay, not to remind to renew.
+            "never-paid": self.membership_status == "never_paid" and not self.membership_carried_by_id,
             "long-term-member": self.is_long_term_member,
             "new-member": self.is_new_member,
             "admin": self.has_any_permission,
@@ -2172,7 +2231,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             if days_before == 30
             else self.club.send_membership_expiration_reminders
         )
-        if not send_reminder or not self.club.membership_payment_emails_enabled:
+        if not send_reminder or not self.club.membership_payment_emails_enabled or self.membership_carried_by_id:
             return None
         expiration_date = self.effective_expiration_date
         if not expiration_date:
@@ -2212,6 +2271,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         previous_email = None
         previous_reminder_due = None
         previous_reminder_30_days_due = None
+        previous_carried_by_id = None
         if self.pk:
             prev = (
                 ClubMember.objects.filter(pk=self.pk)
@@ -2221,20 +2281,47 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                     "email",
                     "membership_expiration_reminder_due",
                     "membership_expiration_reminder_30_days_due",
+                    "membership_carried_by",
                 )
                 .first()
             )
             if prev:
+                previous_carried_by_id = prev["membership_carried_by"]
                 previous_membership_last_paid = prev["membership_last_paid"]
                 previous_expiration_date = prev["membership_expiration_date"]
                 previous_email = prev["email"]
                 previous_reminder_due = prev["membership_expiration_reminder_due"]
                 previous_reminder_30_days_due = prev["membership_expiration_reminder_30_days_due"]
+        if self.membership_carried_by_id:
+            carrier = (
+                ClubMember.objects.filter(pk=self.membership_carried_by_id)
+                .values("membership_last_paid", "membership_expiration_date")
+                .first()
+            )
+            if carrier:
+                self.membership_last_paid = carrier["membership_last_paid"]
+                self.membership_expiration_date = carrier["membership_expiration_date"]
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {
+                    *kwargs["update_fields"],
+                    "membership_last_paid",
+                    "membership_expiration_date",
+                    "membership_expiration_reminder_due",
+                    "membership_expiration_reminder_30_days_due",
+                }
         expiration_changed = (
             self.membership_last_paid != previous_membership_last_paid
             or self.membership_expiration_date != previous_expiration_date
         )
-        if expiration_changed and not getattr(self, "_preserve_membership_email_schedule", False):
+        # No longer carried: its own reminders start again.
+        released = bool(previous_carried_by_id and not self.membership_carried_by_id)
+        if released and kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = {
+                *kwargs["update_fields"],
+                "membership_expiration_reminder_due",
+                "membership_expiration_reminder_30_days_due",
+            }
+        if (expiration_changed or released) and not getattr(self, "_preserve_membership_email_schedule", False):
             new_reminder = self.calculate_membership_expiration_reminder_due(days_before=1)
             new_reminder_30_days = self.calculate_membership_expiration_reminder_due(days_before=30)
             min_reminder = timezone.now() + datetime.timedelta(days=30)
@@ -2246,6 +2333,9 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 new_reminder_30_days = max(new_reminder_30_days, min_reminder)
             self.membership_expiration_reminder_due = new_reminder
             self.membership_expiration_reminder_30_days_due = new_reminder_30_days
+        if self.membership_carried_by_id:
+            self.membership_expiration_reminder_due = None
+            self.membership_expiration_reminder_30_days_due = None
         if self.email and self.email != previous_email:
             self.email_address_status = "UNKNOWN"
         if self.email and self.email_address_status == "UNKNOWN":
@@ -2276,10 +2366,23 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 self.possible_duplicate_id = None
             ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
             super().save(*args, **kwargs)
+            # Whoever this carried could otherwise never renew again: every way to is closed to them.
+            for carried in ClubMember.objects.filter(membership_carried_by=self.pk):
+                carried.membership_carried_by = None
+                carried.save(update_fields=["membership_carried_by"])
+                ClubHistory.objects.create(
+                    club=self.club,
+                    action=f"{carried}'s membership is no longer carried with {self}'s, who was deactivated",
+                    applies_to="MEMBERSHIP",
+                )
             if _discord_changed or (_is_new and self.discord_id):
                 self.maybe_assign_discord_role()
             return
         super().save(*args, **kwargs)
+        if expiration_changed and not _is_new:
+            for carried in self.carried_memberships.filter(is_deleted=False):
+                # Its own save copies the dates just written here.
+                carried.save(update_fields=["membership_last_paid", "membership_expiration_date"])
         if _discord_changed or (_is_new and self.discord_id):
             self.maybe_assign_discord_role()
         if self.name:
@@ -3790,6 +3893,11 @@ class Auction(CachedPropertiesMixin, models.Model):
     add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
         default=False,
         help_text="And create membership if they don't have one.  You can turn this off on each invoice.",
+    )
+    send_club_welcome_letter = models.BooleanField(
+        default=True,
+        verbose_name="Send club welcome letter",
+        help_text="To people this auction adds to the club. Off, they get it when they first pay dues.",
     )
     MANAGE_USERS_CHOICES = [
         ("", "Off"),
@@ -6625,7 +6733,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             club = self.auction.club
             cm = self.clubmember
             result += static_html("<div class='dropdown-divider'></div>")
-            if club.membership_annual_fee:
+            # A carried membership renews only with its carrier's.
+            if club.charges_dues and not cm.membership_carried_by_id:
                 renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
                 set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": club.slug, "pk": cm.pk})
                 result += html.format_html(
@@ -8644,17 +8753,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return "not_club_member"
         seller_user = seller_user or member.user
         if club.only_active_members_can_participate:
-            today = timezone.localdate()
-            if member.membership_expiration_date:
-                valid = member.membership_expiration_date >= today
-            elif member.membership_last_paid:
-                if club.membership_system == "january_first":
-                    valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
-                else:
-                    valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
-            else:
-                valid = False
-            if not valid:
+            if not member.is_paid_member:
                 return "not_active_member"
         return None
 
@@ -10023,6 +10122,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return bool(member and member.paypal_subscription_id)
 
     @cached_property
+    def member_membership_carried_by(self):
+        """The member whose membership this one's is carried with, or None. Disables the renewal checkbox."""
+        member = self.club_member_for_auction
+        return member.membership_carried_by if member and member.membership_carried_by_id else None
+
+    @cached_property
     def treat_as_club_member(self):
         """True when club member benefits apply: membership current, or this invoice renews it."""
         if not self.auction or not self.auction.club:
@@ -10041,9 +10146,9 @@ class Invoice(CachedPropertiesMixin, models.Model):
         member = self.club_member_for_auction
         if not member:
             return "No membership"
-        if not member.membership_last_paid:
-            return "Expired"
-        expiration_date = member.membership_expiration_date
+        if not member.has_ever_paid:
+            return "Not a member"
+        expiration_date = member.effective_expiration_date
         if not expiration_date:
             return "Unknown"
         days_until_expiration = (expiration_date - timezone.localdate()).days

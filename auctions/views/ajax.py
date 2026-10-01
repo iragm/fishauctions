@@ -610,6 +610,8 @@ class InvoiceRenewalNeededToggleView(APIView):
         if invoice.renewal_processed:
             return HttpResponseBadRequest("Renewal already processed for this invoice.")
         renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
+        if renewal_needed and invoice.member_membership_carried_by:
+            return HttpResponseBadRequest("This membership is carried with another member's.")
         invoice.renewal_needed = renewal_needed
         invoice.renewal_manually_set = True
         invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])

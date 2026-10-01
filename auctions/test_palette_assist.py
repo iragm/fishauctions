@@ -3422,7 +3422,9 @@ class ListClubMembersTests(RunActionTestCase):
 
     def setUp(self):
         super().setUp()
-        self.club = Club.objects.create(name="Roster Club", abbreviation="RC")
+        self.club = Club.objects.create(
+            name="Roster Club", abbreviation="RC", membership_system="rolling", membership_annual_fee=20
+        )
         ClubMember.objects.create(
             club=self.club,
             user=self.user,

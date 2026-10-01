@@ -153,7 +153,43 @@ GROUPS = (
                 "clubs",
                 "Clubs",
                 "bi-house-heart",
-                "Members, dues, events, announcements, breeder points and everything else a club can do here.",
+                "Finding a club, setting yours up, who can do what, and the club's auctions.",
+            ),
+            Guide(
+                "club-membership",
+                "Members and dues",
+                "bi-person-vcard",
+                "The member list, membership cards, and taking dues by card or cash.",
+            ),
+            Guide(
+                "club-email",
+                "Club email and announcements",
+                "bi-envelope",
+                "Where members' replies go, membership emails, announcements, Mailchimp, Brevo and Discord.",
+            ),
+            Guide(
+                "club-events",
+                "Events and your website",
+                "bi-calendar-event",
+                "The club calendar, Google Calendar, snippets for your own website, and API keys.",
+            ),
+            Guide(
+                "breeder-award-programs",
+                "Breeder award programs",
+                "bi-award",
+                "BAP, HAP and CAP points: earning them, the rules that award them, and approving them.",
+            ),
+            Guide(
+                "club-donations",
+                "Donations from vendors",
+                "bi-gift",
+                "Asking local businesses to donate, and keeping track of who said yes.",
+            ),
+            Guide(
+                "club-money",
+                "Club money",
+                "bi-cash-coin",
+                "The treasurer's report, recording money in and out, and the club's payment accounts.",
             ),
         ),
     ),
@@ -476,10 +512,45 @@ def rule_fields() -> list[str]:
     return fields
 
 
+def club_setting_labels(club) -> dict[str, str]:
+    """Every setting on a club's settings pages, as ``{field: label}`` in the words that page shows ``club``.
+
+    Many labels are set when the form is built, so the forms are built, not read. A club setting is
+    covered by ``{% ui "Label" %}`` in a guide.
+    """
+    from auctions import forms
+
+    built = (
+        forms.ClubEditForm(instance=club),
+        forms.ClubMembershipSettingsForm(instance=club),
+        forms.ClubEmailSettingsForm(instance=club),
+        forms.ClubEmailSettingsForm(instance=club, show_email_routing=False),
+        forms.ClubBapSettingsForm(instance=club),
+        forms.ClubDonationSettingsForm(instance=club),
+        forms.ClubAnnouncementForm(club=club),
+    )
+    return {
+        name: str(field.label) for form in built for name, field in form.fields.items() if not field.widget.is_hidden
+    }
+
+
+#: Club settings no guide names, and why.
+CLUB_SETTINGS_NOT_IN_HELP: dict[str, str] = dict.fromkeys(
+    (
+        "welcome_opening",
+        "welcome_closing",
+        "renewal_opening",
+        "renewal_closing",
+        "expiring_soon_opening",
+        "expiring_soon_closing",
+    ),
+    "Typed into the email preview, which the guide describes as a whole.",
+)
+
+
 #: Pages that are deliberately in no guide.
 NOT_IN_HELP: dict[str, str] = {
     "home": "The front page is where people start, not something to explain.",
-    "promo": "The about page is itself an explanation of the site.",
     "tos": "Legal text; it says what it says.",
     "privacy_policy": "Legal text; it says what it says.",
     "dmca": "Legal text for rightsholders, linked from the footer.",

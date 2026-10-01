@@ -346,13 +346,17 @@ def _get_or_create_membership_invoice(club, member):
 
 
 def _membership_renewal_state(club, member):
-    """Return (is_expired, expiring_soon, should_show_payment, can_pay)."""
+    """Return (is_expired, expiring_soon, should_show_payment, can_pay). Somebody who never paid isn't
+    expired, but is still offered payment: it's how they join.
+    """
     today = timezone.localdate()
     expiration = member.membership_expiration_date
-    is_expired = bool(expiration and expiration < today) or (not expiration and not member.is_paid_member)
-    expiring_soon = bool(expiration and not is_expired and (expiration - today).days <= 30)
-    can_pay = bool(club.membership_annual_fee and (club.can_accept_paypal or club.can_accept_square))
-    should_show_payment = can_pay and (is_expired or expiring_soon or not member.is_paid_member)
+    is_expired = member.is_expired
+    expiring_soon = bool(club.charges_dues and expiration and 0 <= (expiration - today).days <= 30)
+    can_pay = bool(club.charges_dues and (club.can_accept_paypal or club.can_accept_square))
+    should_show_payment = (
+        can_pay and not member.membership_carried_by_id and (is_expired or expiring_soon or not member.is_paid_member)
+    )
     return is_expired, expiring_soon, should_show_payment, can_pay
 
 
@@ -459,7 +463,10 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         # ClubMemberFilter.filter_queryset hides deactivated members by default. Every row reads its
         # club's membership fee, and prefetch rather than join so the rows share one instance of it.
         return (
-            ClubMember.objects.filter(club=self.club).select_related("user").prefetch_related("club").order_by("name")
+            ClubMember.objects.filter(club=self.club)
+            .select_related("user", "membership_carried_by")
+            .prefetch_related("club")
+            .order_by("name")
         )
 
     def get_context_data(self, **kwargs):
@@ -537,7 +544,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
-        kwargs["club_has_fee"] = bool(self.club.membership_annual_fee)
+        kwargs["club_has_fee"] = self.club.charges_dues
         kwargs["can_manage_discord"] = bool(
             self.club.discord_server_id
             and (
@@ -564,13 +571,13 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         """
         filters = []
         # Membership status only exists when the club charges dues.
-        if self.club.membership_annual_fee:
+        if self.club.charges_dues:
             filters.extend(
                 [
                     ("<small class='text-muted'>Membership:</small>", ""),
-                    ("<i class='bi bi-person-badge'></i> Paid club member", "current"),
-                    ("<i class='bi bi-person'></i> Unpaid", "expired"),
+                    ("<i class='bi bi-person-badge'></i> Paid", "current"),
                     ("<i class='bi bi-hourglass-split'></i> Expiring soon", "expiring"),
+                    ("<i class='bi bi-person'></i> Lapsed", "expired"),
                     ("<i class='bi bi-person-x'></i> Never paid", "never"),
                 ]
             )

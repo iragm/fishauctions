@@ -18,7 +18,7 @@
     {% endif %}
 
     {% if expiration %}
-      {% if is_expired %}
+      {% if not is_paid_member %}
         <div class="alert alert-danger">
           <strong>Expired</strong> on {{ expiration|date:"M j, Y" }}.
         </div>
@@ -27,13 +27,17 @@
           <strong>Active</strong> — expires {{ expiration|date:"M j, Y" }}.
         </div>
       {% endif %}
-    {% elif club.membership_annual_fee and is_expired %}
+    {% elif club.charges_dues and is_expired %}
       <div class="alert alert-danger">Expired</div>
+    {% elif member.membership_status == "never_paid" %}
+      <div class="alert alert-secondary">Not paid yet</div>
     {% endif %}
 
     {% if membership_invoice %}
       {% include "partials/membership_payment_inline.html" %}
-    {% elif club.membership_annual_fee and is_paid_member and not is_expired and not expiring_soon %}
+    {% elif member.membership_carried_by_id %}
+      <p class="text-muted small mt-3">Your membership comes with another member's.</p>
+    {% elif club.charges_dues and is_paid_member and not is_expired and not expiring_soon %}
       <p class="text-muted small mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
     {% endif %}
   </div>

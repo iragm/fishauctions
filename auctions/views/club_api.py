@@ -328,6 +328,14 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
             return Response({"email": ["An email address is required to look up or create the member."]}, status=400)
         data = {key: value for key, value in data.items() if value not in ("", None)}
         member = ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False).order_by("pk").first()
+        if member and member.membership_carried_by_id:
+            return Response(
+                {
+                    "error": "This membership is carried with another member's; renew that member instead.",
+                    "carried_with": member.membership_carried_by_id,
+                },
+                status=409,
+            )
         created = member is None
         serializer = ClubMemberAPIKeySerializer(instance=member, data=data, partial=not created)
         try:

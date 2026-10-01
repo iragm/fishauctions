@@ -1274,7 +1274,6 @@ class ContextProcessorsTestCase(TestCase):
         self.assertIn("show_footer_icon", context)
         self.assertIn("enable_club_finder", context)
         self.assertIn("enable_help", context)
-        self.assertIn("enable_promo_page", context)
         self.assertIn("recaptcha_enabled", context)
 
 

@@ -1,18 +1,11 @@
 {% load help_tags %}
-{% comment %}See HELP.md for the voice. Everything a club can do, members' half first.{% endcomment %}
+{% comment %}See HELP.md for the voice. The club as a whole: finding one, setting one up, who can do what, and its auctions. Each big job (members, email, events, BAP, donations, money) has its own guide in the Clubs group; this one points at them.{% endcomment %}
 <p>A club here has a public page, a member list, and its auctions. It can also take dues, send announcements, keep a calendar, and run a breeder award program. Use as much or as little as you like: plenty of clubs only run auctions.</p>
 {% if help.club and help.is_club_admin %}{% helptip %}You're an admin of {{ help.club.name }}. Its settings are all on {% page "club_setup" "Setup" %}.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="members">Being a member</h2>
 <p>{% page "clubs" "Find a club" %}, under {% ui "Clubs" %} at the top of the page, shows clubs on a map and in a list. Filter for ones with something coming up, or taking new members.</p>
-<p>Each club has a {% page "club_detail" "page" %} with its next events, its latest announcement, and links to its website, Facebook and Discord. If it takes members through the site, there's a {% ui "Join" %} button.</p>
-<p>Once you're a member, {% ui "Membership" %} on the club page shows:</p>
-<ul>
-  <li>your membership number and its barcode, for scanning at the door,</li>
-  <li>when your membership runs out, and a button to {% page "club_membership_pay" "pay or renew" %} if the club takes dues here,</li>
-  <li>buttons to put your card in Apple Wallet or Google Wallet. It updates itself when you renew.</li>
-</ul>
-<p>Clubs with a breeder award program show leaderboards on the club page, and your own points under {% page "club_detail_tab" "My points" %}.</p>
+<p>Each club has a {% page "club_detail" "page" %} with its next events, its latest announcement, and links to its website, Facebook and Discord. If it takes members through the site, there's a {% ui "Join" %} button. Once you're in, {% ui "Membership" %} on that page has your card, and a button to pay your dues. <a href="{% url 'help_guide' slug='club-membership' %}#for-members">Members and dues</a> has the rest.</p>
 {% tip %}Your club isn't listed? Anyone can <a href="{% url 'support' %}">get in touch</a> to have it added.{% endtip %}
 
 <h2 class="h5 mt-4" id="setup">Setting up your club</h2>
@@ -20,12 +13,25 @@
   <li><a href="{% url 'support' %}">Get in touch</a> with the club's name and website, and who should run it here. We add it.</li>
   <li>Open the club's menu: the button with your club's name, on the left.</li>
   <li>{% page "club_setup" "Setup" %} lists every settings page, with a line on what each is for.</li>
-  <li>Start with {% page "club_edit" "General" %}: name, logo, website, a pin on the map, and the club's mailing address. The club can't send email without an address.</li>
+  <li>Start with {% page "club_edit" "General" %}.</li>
 </ol>
-{% tip %}Changing the club's name changes its page's link. Do it early.{% endtip %}
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% ui "Name" %}</th><td>The club's name is also its page's link, so changing it changes the link. Do it early.</td></tr>
+    <tr><th>{% ui "Icon" %}</th><td>Your logo, square. It goes on the club page, your emails and members' wallet cards.</td></tr>
+    <tr><th>{% ui "Homepage" %}, {% ui "Facebook page" %}, {% ui "Discord invite link" %}</th><td>Each one is a button on your club page.</td></tr>
+    <tr><th>{% ui "Allow joining" %}</th><td>Puts a {% ui "Join" %} button on your club page. Anyone signed in can click it and they're on your member list.</td></tr>
+    <tr><th>{% ui "Enable breeder award program" %}</th><td>Turns on points and leaderboards. See <a href="{% url 'help_guide' slug='breeder-award-programs' %}">Breeder award programs</a>.</td></tr>
+    <tr><th>{% ui "About this club" %}</th><td>A paragraph at the top of your club page: when you meet, and why somebody should come.</td></tr>
+    <tr><th>{% ui "Location" %} and {% ui "Map" %}</th><td>Where you meet. Type the address and drag the pin. This is how the club finder and the member map know where you are.</td></tr>
+    <tr><th>{% ui "Mailing address" %}</th><td>The law wants a postal address on every email a club sends, so the club can't send any until this is filled in. It's also where vendors mail donations.</td></tr>
+  </tbody>
+</table>
+</div>
 
 <h2 class="h5 mt-4" id="permissions">Who can do what</h2>
-<p>Everyone who helps run the club is on the member list with their own permissions. Open a member on {% page "club_admin" "Members" %} and tick what they need:</p>
+<p>Everyone who helps run the club is on the member list with their own permissions. On {% page "club_admin" "Members" %}, open the menu at the end of a member's row, click {% ui "Permissions" %}, and tick what they need:</p>
 <div class="table-responsive">
 <table class="table table-sm">
   <tbody>
@@ -41,30 +47,8 @@
   </tbody>
 </table>
 </div>
-<p>So your BAP chair can approve points without touching auctions, and your membership chair can add members without seeing the money. {% page "club_history" "Club history" %} shows who changed what.</p>
-
-<h2 class="h5 mt-4" id="membership">Members and dues</h2>
-<p>{% page "club_admin" "Members" %} is your member list. Search it, filter it, click a member to edit them.</p>
-<ul>
-  <li><strong>One person:</strong> {% ui "Add member" %}.</li>
-  <li><strong>A spreadsheet:</strong> {% page "club_member_import" "Import members" %}. Only Email is required; First Name, Last Name, Phone, Address, Memo, Membership Last Paid and Membership Expiration Date are useful. Members already there are matched by email and updated.</li>
-  <li><strong>Download:</strong> {% page "club_member_export" "Export current view" %} saves whatever the list shows.</li>
-  <li><strong>Two entries for one person:</strong> open one and {% page "club_member_merge" "merge" %} it into the other.</li>
-  <li><strong>Paid in cash:</strong> open them and {% page "club_member_renew_page" "set their expiry date" %}.</li>
-  <li><strong>Where members live:</strong> {% page "club_member_map" "Map" %}. Handy for picking a meeting place.</li>
-</ul>
-<h3 class="h6 mt-3">Dues</h3>
-<p>On {% page "club_membership_settings" "Membership and payments" %}:</p>
-<ol>
-  <li>Pick when memberships run out: every January 1st, a year after each person pays, or no fees at all.</li>
-  <li>Set the yearly fee.</li>
-  <li>Tick {% ui "Show member barcodes" %} to give members a card to scan at the door and keep in their phone's wallet.</li>
-  <li>Connect Square, so members can pay their own dues on the club page. Your club's auctions use the same account. See <a href="{% url 'help_guide' slug='payments' %}">Card payments</a>.</li>
-</ol>
-<p>A member's number is their barcode, made by the site; you can't bring your own numbering. A member without a phone can have their card printed from {% page "club_barcode_labels" "Print Barcodes" %}: add a row for them and click {% page "club_barcode_labels_pdf" "Download PDF" %}.</p>
-<p>{% page "club_email_settings" "Emails" %} sets up the welcome email, the reminders before a membership lapses, and the renewal thank-you. People you import from a spreadsheet don't get the welcome email.</p>
-{% tip %}A new member says the welcome email never came? Nine times out of ten it's in their spam folder.{% endtip %}
-<p>Your own membership form, on your website or Google Forms, doesn't make someone a paid member here. Mark them paid yourself, or connect the form with an API key; see <a href="#website">your club's website</a>.</p>
+<p>So your BAP chair can approve points without touching auctions, and your membership chair can add members without seeing the money.</p>
+{% mike %}Mike was made club admin in 2019, "just for the auction". He still is. Last week he tidied up the member list and deactivated the treasurer. Give people the permission their job needs, and take it back when the job's done.{% endmike %}
 
 <h2 class="h5 mt-4" id="auctions">Club auctions</h2>
 <p>An auction belongs to the club when you pick the club in its rules. Anyone with {% ui "Manage auctions" %} can run it, and it takes payments into the club's account.</p>
@@ -76,86 +60,25 @@
   <li>With check-in on, nobody can bid until they've been checked in.</li>
   <li>The rules can add your membership fee to the invoice of anyone whose membership has lapsed, and renew them when they pay.</li>
 </ul>
-<p>The club's menu has shortcuts for auction day, {% ui "Add user" %}, {% ui "Set lot winners" %}, {% ui "Checkin" %}, {% ui "Checkout" %} and {% ui "Print labels" %}, for the auction you've pinned as current. <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}">Running an in-person auction</a> explains each one.</p>
+<p>Your club page lists your auctions. {% ui "Make current" %} next to one pins it: the club's menu then has shortcuts for auction day, {% ui "Add user" %}, {% ui "Set lot winners" %}, {% ui "Checkin" %}, {% ui "Checkout" %} and {% ui "Print labels" %}, and the auction snippet on your website shows it. <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}">Running an in-person auction</a> explains each one.</p>
 <p>{% page "club_barcode_labels" "Print Barcodes" %} also prints barcodes for things you sell at the desk. Scan the T-shirt, then the person's card, and it's on their invoice. <a href="{% url 'help_guide' slug='scanning' %}">Barcodes and scanners</a> has the rest.</p>
 <p>After an auction, {% page "auction_add_users_to_club" "Add all users to your club" %} on the Users tab puts everyone from it on your member list.</p>
 
-<h2 class="h5 mt-4" id="events">Events and the calendar</h2>
-<p>{% page "club_event_add" "Add event" %}, on the club page, puts a meeting, swap or talk on your club's calendar. Promoted auctions go on by themselves.</p>
-<p><strong>Google Calendar:</strong> {% page "club_google_calendar_config" "Google Calendar" %} keeps a Google calendar and this site in step, both ways.</p>
-<ol>
-  <li>Click {% page "google_calendar_connect" "Connect Google Calendar" %} and sign in with the club's Google account.</li>
-  <li>Google's permission screen has a box for calendars that's easy to miss. Tick it.</li>
-  <li>The site makes a new calendar, "Your Club events", and can only see that one.</li>
-  <li>To let anyone subscribe, open that calendar's settings in Google and tick {% ui "Make available to public" %}.</li>
-</ol>
-<p>{% page "google_calendar_sync_now" "Sync now" %} and {% page "google_calendar_disconnect" "Disconnect" %} are on the same page. Without Google, your club page still has a {% page "club_events_ical" "calendar feed" %} for any calendar app.</p>
+<h2 class="h5 mt-4" id="history">History and stats</h2>
+<ul>
+  <li>{% page "club_history" "Club history" %}: every change to members, settings, points and announcements, and who made it. Look here first when something changed and nobody knows why.</li>
+  <li>{% page "club_stats" "Club stats" %}: your auctions and your membership, charted over the years.</li>
+</ul>
 
-<h2 class="h5 mt-4" id="announcements">Announcements and email</h2>
-<p>{% page "club_announcements" "Announcements" %} sends one message everywhere at once: your Discord server, the phone app, an email to your Mailchimp or Brevo list, and the top of your club page. Tick where it goes. You can schedule one, and take one back.</p>
-{% tip %}Keep announcements to a sentence or two. People read them on a locked phone screen.{% endtip %}
-<p>To email members, connect a mailing list first. Your member list keeps it up to date by itself.</p>
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>Mailchimp</th><td>{% page "club_mailchimp_config" "Mailchimp settings" %}, then {% page "mailchimp_connect" "Connect" %} and {% page "mailchimp_select_audience" "choose an audience" %}. {% page "mailchimp_sync_now" "Sync now" %} and {% page "mailchimp_disconnect" "Disconnect" %} are there too. The free plan got small.</td></tr>
-    <tr><th>Brevo</th><td>{% page "club_brevo_config" "Brevo settings" %}, then {% page "brevo_connect" "Connect" %} with an API key and {% page "brevo_select_list" "choose a list" %}. Also {% page "brevo_sync_now" "Sync now" %} and {% page "brevo_disconnect" "Disconnect" %}. The free plan is decent, with no logo on your emails.</td></tr>
-  </tbody>
-</table>
+<h2 class="h5 mt-4" id="more">Everything else</h2>
+<div class="list-group mb-3">
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-membership' %}"><strong>Members and dues</strong><div class="small text-muted">The member list, membership cards, and taking dues.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-email' %}"><strong>Club email and announcements</strong><div class="small text-muted">Your club's email addresses, membership emails, announcements, mailing lists and Discord.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-events' %}"><strong>Events and your website</strong><div class="small text-muted">The club calendar, Google Calendar, and putting all of it on your own site.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='breeder-award-programs' %}"><strong>Breeder award programs</strong><div class="small text-muted">BAP, HAP and CAP points, from the member's side and the chair's.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-donations' %}"><strong>Donations from vendors</strong><div class="small text-muted">Asking businesses to donate, and keeping track of who said yes.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-money' %}"><strong>Club money</strong><div class="small text-muted">The treasurer's report, and the club's payment accounts.</div></a>
 </div>
-<p>Replies to the site's emails about a club auction go to whoever your club picked to get auction email. Replies to membership emails go to the address on the Emails page.</p>
-
-<h2 class="h5 mt-4" id="website">Your club's website</h2>
-<p>{% page "club_website_integration" "Website integration" %} has snippets to paste into your own site, WordPress, Wix, Squarespace or anything that takes HTML. They update themselves, use your site's fonts and colours, and show nothing about members:</p>
-<ul>
-  <li>{% page "club_events_embed" "Upcoming events" %} and {% page "club_past_events_embed" "past events"  %}</li>
-  <li>{% page "club_auction_embed" "your current auction" %}, which disappears between auctions</li>
-  <li>{% page "club_announcements_embed" "your latest announcement" %}</li>
-  <li>{% page "bap_embed" "the breeder award leaderboard" %}</li>
-</ul>
-<p>For anything more, there's an API. {% page "club_api_keys" "API keys" %} lists your club's keys; {% page "club_api_key_create" "Create new key" %} makes one, with only the permissions you tick, and shows the instructions once. A key can add members from your own sign-up form, show your auction's lots on your site, or read and add breeder award points.</p>
-{% tip %}You don't have to write the code yourself. An AI assistant can write it from the key's instructions.{% endtip %}
-
-<h2 class="h5 mt-4" id="bap">Breeder award points</h2>
-<p>Turn it on with {% ui "Enable breeder award program" %} in {% page "club_edit" "General" %}. Then it runs itself: a member sells a fish they bred in a club auction, ticks {% ui "I bred this" %}, and gets points.</p>
-<p>{% page "club_bap_settings" "BAP settings" %} decides how:</p>
-<ul>
-  <li>points per lot, or per category, plus bonus points for your custom checkbox (CARES species, say),</li>
-  <li>automatic when a lot sells, or waiting for approval,</li>
-  <li>rules against gaming it: minimum quantity, days between points for the same species, members only, sold lots only,</li>
-  <li>separate programs for plants (HAP) and live food cultures (CAP).</li>
-</ul>
-<p>{% page "club_bap_lots" "Lots waiting for points" %} lists lots that need a decision: set the points, change the program by clicking its label, or reject with a reason the member sees. {% page "club_bap" "BAP" %} shows points already awarded. Coming from a spreadsheet? {% page "club_bap_import" "Import" %} it; importing only adds, never changes or deletes.</p>
-<p>Points go back to the site's first auctions, so a member may see points for lots they sold years ago.</p>
-
-<h2 class="h5 mt-4" id="money">Money and the treasurer's report</h2>
-<p>{% page "club_treasurer_report" "Treasurer's Report" %} (needs {% ui "Manage membership and payments" %}) adds up a date range: dues, donations, auction sales, seller payouts, the club's cut, and sales tax you're holding. Auction and membership money is in it already.</p>
-<ul>
-  <li>{% page "club_money_add" "Add record" %}: everything else. Hall rent, a speaker's fee, a raffle.</li>
-  <li>{% page "club_money_balance" "Balance books" %}: once, to match your bank balance when you start. Needing it twice means something's being missed.</li>
-  <li>{% page "club_treasurer_report_export" "Export CSV" %}: for QuickBooks or your accountant.</li>
-</ul>
-<p>It's a record, not accounting software. Check it against the bank.</p>
-<h3 class="h6 mt-3">Card payments for the club</h3>
-<ul>
-  <li><strong>Square</strong>, for any club: connect it on {% page "club_membership_settings" "Membership and payments" %}. {% page "club_link_payment_account" "Linking" %} uses the Square account of the person clicking, so the treasurer should do it.</li>
-  <li><strong>PayPal</strong>, for a few clubs we've set up: the club enters its own {% page "club_paypal_credentials" "PayPal credentials" %} on the same page.</li>
-</ul>
-<p><a href="{% url 'help_guide' slug='payments' %}">Card payments</a> has the details. {% page "club_stats" "Club stats" %} charts your auctions and membership over the years.</p>
-
-<h2 class="h5 mt-4" id="donations">Donations</h2>
-<p>{% page "club_donation_vendors" "Donation Tracking" %} keeps your list of vendors and sponsors, and who's said yes. Email them from the site; their replies are filed against them. Turn it on, and choose how emails go out, in {% page "club_donation_settings" "Donation tracking settings" %}.</p>
-{% tip %}The clubs with the best auctions ask every vendor, every year, and follow up. Most won't answer. A few will send a box.{% endtip %}
-
-<h2 class="h5 mt-4" id="integrations">Discord</h2>
-<p>{% page "club_discord_config" "Discord" %} links your club to its Discord server:</p>
-<ol>
-  <li>Add the site's bot to your server. Type <code>/connect</code> there and paste the code from the Discord page.</li>
-  <li>{% page "club_discord_send_join_message" "Post the join button" %}. Members click it and type their email to get their member role.</li>
-  <li>{% page "club_discord_fetch_roles" "Fetch roles from Discord" %}, then match roles to membership: paid members, breeder award levels. Give the bot a role above the ones it manages.</li>
-  <li>Type <code>/auctions_here</code> in the channel for auction news, and <code>/announcements_here</code> in the one for announcements.</li>
-</ol>
-<p>The join button trusts the email people type, so don't put anything private behind a paid-member role.</p>
 
 <h2 class="h5 mt-4" id="speakers">Speakers</h2>
 <p>Some regional councils share a {% page "speaker_list" "speaker directory" %}: who gives talks, on what, and how far they'll travel. Each speaker has {% page "speaker_detail" "a page" %} to send your program chair. Anyone who can see the directory can {% page "speaker_add" "add a speaker" %}, themselves included.</p>

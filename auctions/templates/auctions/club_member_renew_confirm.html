@@ -4,9 +4,12 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-calendar-check me-1"></i>Renew membership — {{ member }}</h5>
+        <h5 class="modal-title"><i class="bi bi-calendar-check me-1"></i>{{ member.renew_label }} — {{ member }}</h5>
       </div>
       <div class="modal-body">
+        {% if member.membership_carried_by_id %}
+        <p class="mb-0">Carried with {{ member.membership_carried_by }}'s membership. Renew them instead.</p>
+        {% else %}
         {% if member.membership_last_paid %}
         <p class="small mb-1">Last paid: {{ member.membership_last_paid|date:"M j, Y" }}</p>
         <p class="small mb-3">Current expiration: {{ member.membership_expiration_date|date:"M j, Y" }}</p>
@@ -17,14 +20,17 @@
         {% if send_renewal_confirmation and member.email %}
         <p class="small mt-2 mb-0"><i class="bi bi-envelope"></i> This will send a renewal confirmation email</p>
         {% endif %}
+        {% endif %}
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-modal-close-action="none">Cancel</button>
+        {% if not member.membership_carried_by_id %}
         <button type="button" class="btn btn-primary"
           hx-post="{{ renew_url }}"
           hx-target="#modals-here">
-          <i class="bi bi-check-lg me-1"></i>Renew
+          <i class="bi bi-check-lg me-1"></i>{{ member.renew_label }}
         </button>
+        {% endif %}
       </div>
     </div>
   </div>

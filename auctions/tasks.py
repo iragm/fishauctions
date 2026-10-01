@@ -420,7 +420,7 @@ def send_membership_card_email(member):
     """Email a member a link to their membership card. True when queued."""
     expiration_text = ""
     expiration = member.effective_expiration_date
-    if expiration and member.club.membership_annual_fee:
+    if expiration and member.club.charges_dues:
         if member.is_paid_member:
             expiration_text = f"  Your membership is paid through {expiration.strftime('%B %-d, %Y')}."
         else:
@@ -1002,6 +1002,8 @@ def send_club_member_welcome_emails(self):
     members = ClubMember.objects.filter(
         is_deleted=False,
         welcome_email_sent=False,
+        # Unticked is held, not done: welcome_email_sent stays False until their first payment.
+        send_welcome_email=True,
         createdon__lte=timezone.now() - datetime.timedelta(hours=24),
     ).select_related("club")
     for member in members:
@@ -1011,16 +1013,9 @@ def send_club_member_welcome_emails(self):
 def _send_one_welcome(member):
     from auctions.models import ClubHistory
 
-    update_fields = ["welcome_email_sent"]
     member.welcome_email_sent = True
-    if member.source == "csv":
-        if member.send_welcome_email:
-            member.send_welcome_email = False
-            update_fields.append("send_welcome_email")
-        member.save(update_fields=update_fields)
-        return
     # Marked first: if anything after the send raises, the member is not welcomed again every night.
-    member.save(update_fields=update_fields)
+    member.save(update_fields=["welcome_email_sent"])
     if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
         sent = send_club_member_email(
             member,
@@ -1076,6 +1071,7 @@ def _run_reminder_pass(now, today, due_field, subject, message, label):
         membership_expiration_date__gte=today,
         # PayPal subscribers auto-renew; their due timestamp stays, so reminders resume if cancelled.
         paypal_subscription_id="",
+        membership_carried_by__isnull=True,
         **{f"{due_field}__lte": now},
     ).select_related("club")
     for member in members:

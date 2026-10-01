@@ -30,7 +30,7 @@ from bootstrap_datepicker_plus.widgets import (
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText, PrependedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
-from dal import autocomplete
+from dal import autocomplete, forward
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -2323,6 +2323,7 @@ class AuctionEditForm(forms.ModelForm):
             "email_users_when_invoices_ready",
             "post_auction_survey",
             "add_membership_fee_to_invoices_for_expired_members",
+            "send_club_welcome_letter",
             "pre_register_lot_discount_percent",
             "only_approved_sellers",
             "only_approved_bidders",
@@ -2484,6 +2485,14 @@ class AuctionEditForm(forms.ModelForm):
         else:
             # Membership fee only applies when club-managed mode is enabled
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        # Only a club-managed auction adds people to the club; shown and hidden by JS with that choice.
+        self.fields["send_club_welcome_letter"].required = False
+        self.fields["send_club_welcome_letter"].help_text = welcome_letter_help(
+            self.instance.club if self.instance.club_id else None,
+            self.fields["send_club_welcome_letter"],
+            "Off",
+            prefix="To people this auction adds to the club.",
+        )
         # clean_manage_users_through_club rejects enabling on non-empty auctions.
         if self.instance.is_online and not self.single_club_mode:
             # Check-in mode is in-person only, except single-club mode, which defaults to it.
@@ -5371,6 +5380,19 @@ class BapAwardForm(forms.ModelForm):
         self.helper.layout = Layout(*layout_fields, *([] if footer is None else [footer]))
 
 
+def welcome_letter_help(club, field, unset_word, prefix=""):
+    """Help text for a field that decides whether somebody gets the club's welcome letter, and greys the
+    field out when the club sends none. Unset, they get it when they first pay dues
+    (``ClubMember.welcome_after_first_payment``), which only happens in a club that takes dues.
+    """
+    if club and not club.send_welcome_email_to_new_members:
+        field.disabled = True
+        return f"{prefix} {club.name} doesn't send welcome letters. Turn them on from its Emails page.".strip()
+    if club is None or club.charges_dues:
+        return f"{prefix} {unset_word}, they get it when they first pay dues.".strip()
+    return prefix
+
+
 class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Club admin edit form for a member. With ``auctiontos``, adds auction fields (pickup location,
     is_club_member) and hides club-wide ones (contact status, Discord).
@@ -5393,6 +5415,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             "bidder_number",
             "bidding_allowed",
             "selling_allowed",
+            "membership_carried_by",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Name"}),
@@ -5465,6 +5488,29 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             self.fields["send_welcome_email"].required = False
             if not (self.instance and self.instance.pk):
                 self.fields["send_welcome_email"].initial = True
+            letter_club = club or (self.instance.club if self.instance and self.instance.pk else None)
+            self.fields["send_welcome_email"].help_text = welcome_letter_help(
+                letter_club, self.fields["send_welcome_email"], "Unticked"
+            )
+
+        # Editing only, here and from a club-managed auction's user list, where some clubs keep their whole
+        # member list. Dropped rather than hidden, so a form without it never clears it.
+        member = self.instance if self.instance and self.instance.pk else None
+        club_for_member = club or (member.club if member else None)
+        show_carried = bool(member and club_for_member.charges_dues)
+        if show_carried:
+            field = self.fields["membership_carried_by"]
+            field.widget = autocomplete.ModelSelect2(
+                url="club-member-autocomplete",
+                forward=[forward.Const(club_for_member.slug, "club_slug"), forward.Const(member.pk, "carrier_for")],
+                attrs={"data-placeholder": "Nobody: pays their own", "data-html": True, "style": "width: 100%"},
+            )
+            # After the widget: setting the queryset is what hands the widget its choices.
+            field.queryset = ClubMember.objects.filter(
+                club=club_for_member, is_deleted=False, membership_carried_by__isnull=True
+            ).exclude(pk=member.pk)
+        else:
+            del self.fields["membership_carried_by"]
 
         # Hide unused permission fields; not required so hidden values validate.
         if in_auction_context and auction:
@@ -5513,6 +5559,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             ),
             "address",
             *contact_status_fields,
+            *(["membership_carried_by"] if show_carried else []),
             "send_welcome_email",
             bidding_selling_row,
             *alt_fees_field,
@@ -5563,6 +5610,19 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         # No check against the club's auctions: saving takes the number from its holder
         # (services.set_member_bidder_number); the live validation names them first.
         return bidder_number
+
+    def clean_membership_carried_by(self):
+        carrier = self.cleaned_data.get("membership_carried_by")
+        if not carrier:
+            return carrier
+        carried = self.instance.carried_memberships.filter(is_deleted=False).first()
+        if carried:
+            msg = f"{self.instance} already carries {carried}'s membership."
+            raise forms.ValidationError(msg)
+        if self.instance.paypal_subscription_id:
+            msg = f"{self.instance} renews automatically through PayPal. Cancel that subscription first."
+            raise forms.ValidationError(msg)
+        return carrier
 
 
 class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):

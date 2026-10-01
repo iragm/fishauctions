@@ -309,6 +309,16 @@ def remove_event_from_calendars(sender, instance, **kwargs):
         logger.exception("Could not remove calendar event %s from Google and Discord", instance.pk)
 
 
+@receiver(pre_delete, sender="auctions.ClubMember")
+def release_carried_memberships(sender, instance, **kwargs):
+    """Free whoever this member carries before the row goes, through save(), so their own reminders
+    restart. on_delete=SET_NULL alone is a bare UPDATE. Deactivating is handled in ClubMember.save.
+    """
+    for carried in instance.carried_memberships.all():
+        carried.membership_carried_by = None
+        carried.save(update_fields=["membership_carried_by"])
+
+
 @receiver(pre_save, sender="auctions.ClubMember")
 def stash_previous_clubmember_state(sender, instance, **kwargs):
     """Snapshot auction-permission and wallet-relevant fields for the post_save handlers."""

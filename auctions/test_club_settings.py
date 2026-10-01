@@ -308,8 +308,9 @@ class ClubSettingsViewTests(TestCase):
     def test_email_settings_save_updates_fields_and_creates_history(self):
         self.client.login(username="club_settings_editor", password="testpass")
         editor_member = ClubMember.objects.get(club=self.club, user=self.editor)
+        self.club.membership_system = "rolling"
         self.club.membership_annual_fee = Decimal("20.00")
-        self.club.save(update_fields=["membership_annual_fee"])
+        self.club.save(update_fields=["membership_system", "membership_annual_fee"])
         payment_user = User.objects.create_user(
             username="club_settings_payment_user",
             password="testpass",

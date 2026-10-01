@@ -587,6 +587,10 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
             "membership_last_paid": iso(self.extract_csv_field(row, self.MEMBERSHIP_LAST_PAID_FIELD_NAMES)),
             "membership_expiration_date": iso(self.extract_csv_field(row, self.MEMBERSHIP_EXPIRATION_FIELD_NAMES)),
             "date_joined": iso(self.extract_csv_field(row, self.DATE_JOINED_FIELD_NAMES)),
+            # Off unless the row says yes: an imported roster is mostly people who joined long ago.
+            "send_welcome_letter": bool(
+                self.parse_csv_boolean(self.extract_csv_field(row, self.SEND_WELCOME_LETTER_FIELD_NAMES))
+            ),
         }
 
     def plan_row(self, row):
@@ -634,8 +638,8 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
             contact_status=fields.get("contact_status") or "contact",
             membership_last_paid=self._to_date(fields.get("membership_last_paid")),
             membership_expiration_date=self._to_date(fields.get("membership_expiration_date")),
-            send_welcome_email=False,
-            welcome_email_sent=True,
+            # Unticked is held until they first pay, like any other member added without one.
+            send_welcome_email=fields.get("send_welcome_letter", False),
             source="csv",
             added_by=self.request.user,
             is_deleted=fields.get("mark_deleted", False),

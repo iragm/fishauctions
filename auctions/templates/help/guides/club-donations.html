@@ -1,0 +1,66 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. Donation tracking: asking local businesses to donate, and keeping track of who said what. The machinery is auctions/donations.py; the terms the club accepts are the modal on the settings page.{% endcomment %}
+<p>The clubs with the best auctions ask every vendor they know, every year, and follow up. Donation tracking is a list of those vendors: who you've asked, what they said, and who's due a nudge. It can write the emails for you, and file the replies against each vendor.</p>
+{% tip %}Most vendors won't answer. A few will send a box. The ones who said yes last year are the first ones to ask this year.{% endtip %}
+
+<h2 class="h5 mt-4" id="setup">Turning it on</h2>
+<ol>
+  <li>Make sure the club has a {% ui "Mailing address" %} in its {% page "club_edit" "General" %} settings. It goes at the bottom of every donation email, and it's where vendors mail things.</li>
+  <li>Open {% page "club_donation_settings" "Donation tracking settings" %}, under Setup. Read the terms, then tick {% ui "Enable donation tracking" %}.</li>
+  <li>Give whoever does the asking the {% ui "Manage donations" %} permission. It sends mail in the club's name, so it isn't part of any other permission.</li>
+</ol>
+<p>Asking businesses for donations is regulated, and the rules vary by state. Some want a club to be a registered non-profit before it asks. That's your club's job to check.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% ui "How to send donation emails" %}</th><td>{% ui "Send mail from this site" %}: the email comes from an address that files the vendor's reply against them. {% ui "Copy/paste to my email" %}: you send it yourself, and record replies by hand.</td></tr>
+    <tr><th>{% ui "Follow up after" %}</th><td>How long before a vendor who hasn't answered is due a nudge. A week is about right.</td></tr>
+    <tr><th>{% ui "Club information for donation emails" %}</th><td>What every email should know about you: "We're a non-profit club of 120 members. Our spring auction raises money for our speaker program." Written once, used in every email.</td></tr>
+  </tbody>
+</table>
+</div>
+<h3 class="h6 mt-3">Your details, for their form</h3>
+<p>Big businesses only take requests through a form on their own site, and every form asks the same things. Fill these in once: {% ui "Legal name" %}, {% ui "Tax ID" %}, {% ui "Tax status" %} ("501(c)(3) public charity"), {% ui "Contact name" %}, {% ui "Phone" %}, {% ui "Website" %} and {% ui "Expected attendance" %}. When you contact one of those vendors, they're laid out with a copy button each.</p>
+
+<h2 class="h5 mt-4" id="vendors">Your vendor list</h2>
+<p>{% page "club_donation_vendors" "Donation Tracking" %}, in the club's menu. {% ui "Add vendor" %} for each one. There's no importing a list, on purpose: this is for businesses you know, not a mailing list.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% ui "Contact them by" %}</th><td>{% ui "Email" %}, {% ui "Their donation request form" %}, {% ui "Phone" %} or {% ui "In person" %}. The local fish store is in person; the big pet chain is a form.</td></tr>
+    <tr><th>{% ui "Context" %}</th><td>What they sell, and what they gave last time. "Gave two $25 gift cards in 2025. Owner is a killifish nut." The email uses it.</td></tr>
+    <tr><th>{% ui "Status" %}</th><td>Where it's got to: {% ui "Initial request sent" %}, {% ui "Interested" %}, {% ui "Donation promised" %}, {% ui "Donation received" %}, {% ui "Not interested" %}.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Search the list, or pick a status from the menu. The banner at the top counts vendors due for a follow-up; click it to see them.</p>
+
+<h2 class="h5 mt-4" id="asking">Asking</h2>
+<p>Click {% ui "Contact" %} on a vendor's row.</p>
+<h3 class="h6 mt-3">By email</h3>
+<ol>
+  <li>Add anything this email should mention, and paste in their last message if you've been emailing them somewhere else.</li>
+  <li>Click {% ui "Next" %}, and the email is written for you. (On a site without automatic writing, you write it.)</li>
+  <li>Read it, and change anything. What you send is what you approved, not what was written for you.</li>
+  <li>{% ui "Send" %}, or <strong>Copy &amp; record</strong> if you send them yourself: it copies the email to paste into your own mail, and records that you asked.</li>
+</ol>
+<p>Your club's name, address and an unsubscribe link are added to the bottom of every one. A vendor who unsubscribes can never be emailed from this site again, by any club.</p>
+<h3 class="h6 mt-3">By their form, phone or in person</h3>
+<p>The {% ui "Contact" %} button opens your details with a copy button each, and a link to their form. Give them the email address it shows rather than your own, and their reply is filed here. Say {% ui "What did you ask for?" %}, "a gift card for the spring raffle", and click {% ui "Mark contacted" %}.</p>
+<p>There's a daily limit on donation emails, shown at the top of the page. Having one written counts, even if you don't send it.</p>
+
+<h2 class="h5 mt-4" id="replies">Replies</h2>
+<p>With {% ui "Send mail from this site" %}, a vendor's reply lands on their row, with a one-line summary, and their status changes to match when it's clear: interested, promised, or not interested. Their follow-up date becomes today, so they're at the top of the list of vendors waiting on you.</p>
+<p>Nothing tells you a reply came in. Check the page.</p>
+<ul>
+  <li>{% ui "Donation received" %} is always set by a person. The summary can be wrong; the vendor's own message is kept, and it's the one that counts.</li>
+  <li>Leave {% ui "Donation replies" %} blank on the club's {% page "club_email_settings" "Emails" %} page. Set it only if somebody really needs a copy in their inbox.</li>
+</ul>
+{% mike %}Mike had vendor replies copied to his Gmail and answered them from there. The site never saw his answers, so every vendor he'd talked to came up as due for a follow-up, and got a second, slightly confused email from the club.{% endmike %}
+
+<h2 class="h5 mt-4" id="auction">When the donations arrive</h2>
+<ul>
+  <li><strong>Lots for the auction:</strong> add a user for each vendor, "Main Street Pets donation", with no email, and put their lots under it. Afterwards you know what each one gave, and can thank them with numbers. See <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}#lots">Getting lots in</a>.</li>
+  <li><strong>Money:</strong> record it with {% page "club_money_add" "Add record" %} on the treasurer's report, as a donation. See <a href="{% url 'help_guide' slug='club-money' %}">Club money</a>.</li>
+  <li><strong>Mark them</strong> {% ui "Donation received" %}, so next year's asker knows who to start with.</li>
+</ul>

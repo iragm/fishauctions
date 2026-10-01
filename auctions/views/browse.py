@@ -317,7 +317,9 @@ class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
 
 
 class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
-    """Autocomplete for ClubMember — scoped to a forwarded club slug, BAP admins only."""
+    """Autocomplete for ClubMember — scoped to a forwarded club slug, BAP admins only. With ``carrier_for``
+    (a member pk), the members who could carry that one's membership, for whoever can edit members.
+    """
 
     def get_result_label(self, result):
         email = f" ({result.email})" if result.email else ""
@@ -328,9 +330,14 @@ class ClubMemberAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         if not slug:
             return ClubMember.objects.none()
         club = club_from_url(slug)
-        if not club or not check_club_permission(self.request.user, club, "permission_manage_bap"):
+        carrier_for = self.forwarded.get("carrier_for")
+        permission = "permission_add_edit" if carrier_for else "permission_manage_bap"
+        if not club or not check_club_permission(self.request.user, club, permission):
             return ClubMember.objects.none()
         qs = ClubMember.objects.filter(club=club, is_deleted=False).order_by("name")
+        if carrier_for:
+            # One level deep, as the form checks.
+            qs = qs.filter(membership_carried_by__isnull=True).exclude(pk=carrier_for)
         if self.forwarded.get("require_membership_number"):
             qs = qs.filter(membership_number__isnull=False)
         if self.q:

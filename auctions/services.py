@@ -185,6 +185,8 @@ def ensure_club_member(
             source=str(auction.title)[:200],
             added_by=user,
             admin_edited=admin_edited,
+            # Held back from a participant until they first pay (ClubMember.welcome_after_first_payment).
+            send_welcome_email=auction.send_club_welcome_letter,
         )
         # A vetted auction must not grant selling through the back door.
         if auction.only_approved_sellers:
@@ -850,6 +852,7 @@ AUCTION_FIELDS_TO_CLONE = [
     "enable_online_payments",
     "enable_square_payments",
     "add_membership_fee_to_invoices_for_expired_members",
+    "send_club_welcome_letter",
     "alternate_split_mode",
     "alternative_split_label",
     "google_drive_link",

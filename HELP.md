@@ -10,9 +10,13 @@ and what's left. Delete sections once they're done.
   `sitemap.xml`, footer/navbar/app-menu links, `/auctions/<slug>/help/` redirecting to the right
   guide, `search_help` (palette + MCP) searching the guides first, and `test_help.py` failing the
   build when a page or auction rule is in no guide.
-- **Guides:** thirteen: the eight planned, plus `mobile-app`, `payments` (Square and PayPal),
-  `scanning`, `bagging-fish` (from the "Transporting fish" blog post) and `ai-agents`. Every page and
-  every auction rule is in a guide or excused in `NOT_IN_HELP`, so both backlogs are empty.
+- **Guides:** nineteen: the eight planned, plus `mobile-app`, `payments` (Square and PayPal),
+  `scanning`, `bagging-fish` (from the "Transporting fish" blog post) and `ai-agents`, and the club
+  guides split out of `clubs`: `club-membership`, `club-email`, `club-events`,
+  `breeder-award-programs`, `club-donations` and `club-money`. Every page, every auction rule and
+  every club setting is in a guide or excused, so all three backlogs are empty.
+- **About page:** `/about/` redirects to `/help/`. `PromoSite` is still the signed-out landing page
+  when `ENABLE_PROMO_PAGE` is on.
 - **Pages that became guides:** `/square/`, `/paypal/` and `/ai/` redirect into `payments` and
   `ai-agents`, keeping their URLs. The reader's own connections are drawn there by `square_account`,
   `paypal_account` and `ai_connections` in `help_tags`; `/ai/` still takes the key and disconnect POSTs.

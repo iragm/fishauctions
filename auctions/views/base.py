@@ -474,7 +474,7 @@ def _should_mark_invoice_renewal_needed(invoice):
         return False
     if not auction.add_membership_fee_to_invoices_for_expired_members:
         return False
-    if not club.membership_annual_fee:
+    if not club.charges_dues:
         return False
     # No email or user: don't auto-add the fee, unless the TOS already links a ClubMember.
     if not _invoice_membership_lookup_email(invoice) and not (invoice.auctiontos_user and invoice.auctiontos_user.user):
@@ -483,6 +483,8 @@ def _should_mark_invoice_renewal_needed(invoice):
     member = _invoice_membership_candidate(invoice)
     if not member:
         return True
+    if member.membership_carried_by_id:
+        return False
     # PayPal subscriptions auto-renew.
     if member.paypal_subscription_id:
         return False
@@ -504,8 +506,19 @@ def _ensure_invoice_renewal_state(invoice):
     if not invoice.auction:
         # Club-only renewal invoices set renewal_needed at creation.
         return
+    if (
+        invoice.renewal_needed
+        and not invoice.renewal_processed
+        and invoice.status != "PAID"
+        and invoice.member_membership_carried_by
+    ):
+        # Carried since the box was ticked, by hand or not: it renews with the carrier now, and the
+        # checkbox is disabled, so nobody could take the dues off this invoice.
+        invoice.renewal_needed = False
+        invoice.save(update_fields=["renewal_needed"])
+        invoice.recalculate()
     # Skip processed renewals and admin-set checkboxes.
-    if not invoice.renewal_processed and not invoice.renewal_manually_set:
+    elif not invoice.renewal_processed and not invoice.renewal_manually_set:
         should_need = _should_mark_invoice_renewal_needed(invoice)
         if invoice.renewal_needed != should_need:
             invoice.renewal_needed = should_need
@@ -565,7 +578,11 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                 # Link the email-only member to the user.
                 member.user = user
                 member.save(update_fields=["user"])
+            # Only reachable with dues taken before the membership was carried; they renew the carrier
+            # rather than vanish.
+            member = member.renews_through
             today = timezone.localdate()
+            had_paid = member.has_ever_paid
             old_expiration = member.membership_expiration_date
             member.membership_expiration_date = _compute_member_renewal_expiration(club, member, today)
             new_expiration = member.membership_expiration_date
@@ -581,6 +598,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
                     "email_address_status",
                 ]
             )
+            member.welcome_after_first_payment(had_paid)
             InvoicePayment.objects.create(
                 invoice=None,
                 club_member=member,

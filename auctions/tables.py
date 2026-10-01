@@ -71,25 +71,34 @@ class AuctionTOSHTMxTable(tables.Table):
 
     def render_membership(self, value, record):
         """Expiration, Expired badge and Renew button for club-managed auctions, like ClubMemberHTMxTable."""
-        from django.utils import timezone
-
         cm = record.clubmember
         if not cm:
             return "—"
+        if cm.membership_carried_by_id:
+            return format_html(
+                "{} <small class='text-muted'>with {}</small>", self._membership_cell(cm), cm.membership_carried_by
+            )
+        return self._membership_cell(cm)
+
+    @staticmethod
+    def _membership_cell(cm):
+        from django.utils import timezone
+
         today = timezone.localdate()
-        has_fee = bool(cm.club.membership_annual_fee)
+        has_fee = cm.club.charges_dues
         renew_btn = static_html("")
-        if has_fee and not cm.is_deleted:
+        if has_fee and not cm.is_deleted and not cm.membership_carried_by_id:
             renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
             renew_btn = format_html(
                 " <a href='javascript:void(0)' hx-get='{}' hx-target='#modals-here'"
-                " class='btn btn-sm btn-primary py-0 px-1'>Renew</a>",
+                " class='btn btn-sm btn-primary py-0 px-1'>{}</a>",
                 renew_url,
+                cm.renew_label,
             )
-        expires = cm.membership_expiration_date
+        expires = cm.membership_expiration_date or cm.effective_expiration_date
         if not expires:
             if has_fee and not cm.is_deleted:
-                badge = static_html(" <span class='badge bg-danger ms-1'>Expired</span>")
+                badge = static_html(" <span class='badge bg-secondary ms-1'>Never paid</span>")
                 return format_html("—{}{}", badge, renew_btn)
             return static_html("—")
         formatted = expires.strftime("%b %-d, %Y")
@@ -718,18 +727,26 @@ class ClubMemberHTMxTable(tables.Table):
         return result
 
     def render_membership_expiration_date(self, value, record):
+        cell = self._expiration_cell(value, record)
+        if record.membership_carried_by_id:
+            return format_html("{} <small class='text-muted'>with {}</small>", cell, record.membership_carried_by)
+        return cell
+
+    @staticmethod
+    def _expiration_cell(value, record):
         from django.utils import timezone
 
         today = timezone.localdate()
-        has_fee = bool(record.club.membership_annual_fee)
+        has_fee = record.club.charges_dues
 
         renew_btn = static_html("")
-        if has_fee and not record.is_deleted:
+        if has_fee and not record.is_deleted and not record.membership_carried_by_id:
             renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
             renew_btn = format_html(
                 " <a href='javascript:void(0)' hx-get='{}' hx-target='#modals-here'"
-                " class='btn btn-sm btn-primary py-0 px-1'>Renew</a>",
+                " class='btn btn-sm btn-primary py-0 px-1'>{}</a>",
                 renew_url,
+                record.renew_label,
             )
 
         # A last-paid date alone still implies an expiration; show it marked as derived.
@@ -742,7 +759,7 @@ class ClubMemberHTMxTable(tables.Table):
 
         if not value:
             if has_fee and not record.is_deleted:
-                badge = static_html(" <span class='badge bg-danger ms-1'>Expired</span>")
+                badge = static_html(" <span class='badge bg-secondary ms-1'>Never paid</span>")
                 return format_html("—{}{}", badge, renew_btn)
             return static_html("—")
 
@@ -852,7 +869,8 @@ class ClubMemberHTMxTable(tables.Table):
                     )
                 # Only with a membership fee.
                 renewal_items = static_html("")
-                if record.club.membership_annual_fee:
+                # A carried membership renews only with its carrier's.
+                if record.club.charges_dues and not record.membership_carried_by_id:
                     renew_confirm_url = reverse("club_member_renew", kwargs={"pk": record.pk})
                     set_expiry_url = reverse(
                         "club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk}
@@ -862,10 +880,11 @@ class ClubMemberHTMxTable(tables.Table):
                     renewal_items = format_html(
                         '<li><a class="dropdown-item" href="javascript:void(0)"'
                         ' hx-get="{}" hx-target="#modals-here">'
-                        '<i class="bi bi-calendar-check me-1"></i>Renew</a></li>'
+                        '<i class="bi bi-calendar-check me-1"></i>{}</a></li>'
                         '<li><a class="dropdown-item" href="{}">'
                         '<i class="bi bi-calendar-range me-1"></i>Set expiration date</a></li>',
                         renew_confirm_url,
+                        record.renew_label,
                         set_expiry_url,
                     )
                 edit_items = format_html(

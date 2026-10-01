@@ -11,7 +11,7 @@ from django.utils.html import escape
 
 from auctions import help_guides, palette_actions, palette_routes
 from auctions.field_adoption import FieldAdoption
-from auctions.models import Lot, LotImage, MobileDevice
+from auctions.models import Club, Lot, LotImage, MobileDevice
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -86,6 +86,30 @@ class HelpCoverageTests(SimpleTestCase):
     def test_every_running_and_taking_part_guide_exists(self):
         for slug in help_guides.GUIDE_FOR.values():
             self.assertIn(slug, help_guides.GUIDES)
+
+
+class ClubSettingsCoverageTests(StandardTestCase):
+    """The build fails when a club setting is added and no guide names it with ``{% ui "Label" %}``."""
+
+    def test_every_club_setting_is_named_in_a_guide(self):
+        club = Club.objects.create(name="Coverage club")
+        named = help_guides.documented_ui()
+        missing = sorted(
+            f"{name} ({label!r})"
+            for name, label in help_guides.club_setting_labels(club).items()
+            if label not in named and name not in help_guides.CLUB_SETTINGS_NOT_IN_HELP
+        )
+        self.assertEqual(
+            missing,
+            [],
+            'These club settings are in no help guide. Name each one with {% ui "Label" %} in a club guide, '
+            "or excuse it in help_guides.CLUB_SETTINGS_NOT_IN_HELP.",
+        )
+
+    def test_every_excuse_is_a_real_setting(self):
+        club = Club.objects.create(name="Coverage club")
+        labels = help_guides.club_setting_labels(club)
+        self.assertEqual(sorted(set(help_guides.CLUB_SETTINGS_NOT_IN_HELP) - set(labels)), [])
 
 
 class RuleUsageWordingTests(SimpleTestCase):

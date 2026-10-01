@@ -335,7 +335,8 @@ urlpatterns = [
     # drops a POST body and the RFC 9728 metadata names the resource without one.
     re_path(r"^mcp/?$", MCPEndpointView.as_view(), name="mcp"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
-    path("about/", views.PromoSite.as_view(), name="promo"),
+    # The old about page. Its questions are answered in the help now; the name stays for old links.
+    path("about/", RedirectView.as_view(pattern_name="help", permanent=True), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
     path("account/setup/", views.AccountSetupRedirect.as_view(), name="account_setup"),
     path("invoices/", login_required(views.Invoices.as_view()), name="my_invoices"),

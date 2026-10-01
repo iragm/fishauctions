@@ -1198,6 +1198,26 @@ def membership_paid_q(today):
     return Q(membership_expiration_date__gte=today) | derived
 
 
+def dues_club_q(prefix="club__"):
+    """``Club.charges_dues`` as SQL, through ``prefix`` from the model being filtered."""
+    return Q(**{f"{prefix}membership_annual_fee__gt": 0}) & ~Q(**{f"{prefix}membership_system": "none"})
+
+
+def membership_status_q(status, today):
+    """``ClubMember.membership_status`` as SQL: ``paid``, ``lapsed``, ``never_paid`` or ``no_dues``."""
+    no_dates = Q(membership_last_paid__isnull=True, membership_expiration_date__isnull=True)
+    if status == "no_dues":
+        return ~dues_club_q()
+    if status == "paid":
+        return dues_club_q() & membership_paid_q(today)
+    if status == "lapsed":
+        return dues_club_q() & ~membership_paid_q(today) & ~no_dates
+    if status == "never_paid":
+        return dues_club_q() & no_dates
+    msg = f"{status!r} is not a membership status"
+    raise ValueError(msg)
+
+
 def membership_expiring_soon_q(today, days=30):
     """Members whose (possibly derived) expiration falls in the next ``days`` days. Rolling clubs expire a
     year after payment; January-1st clubs on the next January 1st.
@@ -1227,7 +1247,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email, member number, source, expired, expiring, never paid, duplicate, deactivated, nonmailchimp, nonbrevo...",
+                "placeholder": "Filter by name, email, member number, source, paid, expiring, expired, never paid, unpaid, duplicate, deactivated, nonmailchimp, nonbrevo...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1258,10 +1278,12 @@ class ClubMemberFilter(django_filters.FilterSet):
         return filtered.filter(is_deleted=False)
 
     def clubmember_search(self, queryset, name, value):
-        """Text search with tokens: discord, current, expired, expiring, never paid, deactivated, duplicate.
-        The rest searches name (with nicknames), email, discord username and membership number.
+        """Text search with tokens: discord, current/paid, expiring, expired/lapsed (paid once, not now),
+        never paid, unpaid (either of those), deactivated, duplicate. The rest searches name (with
+        nicknames), email, discord username and membership number.
         """
-        tokens = value.lower().split()
+        # The placeholder offers "never paid"; split, "paid" would be searched as a name.
+        tokens = value.lower().replace("never paid", "never_paid").split()
         source_filter = None
         status_filter = None
         duplicate_filter = False
@@ -1271,14 +1293,16 @@ class ClubMemberFilter(django_filters.FilterSet):
         for token in tokens:
             if token == "discord":
                 source_filter = "discord"
-            elif token == "current":
-                status_filter = "current"
-            elif token == "expired":
-                status_filter = "expired"
+            elif token in ("current", "paid"):
+                status_filter = "paid"
+            elif token in ("expired", "lapsed"):
+                status_filter = "lapsed"
             elif token in ("expiring", "soon"):
                 status_filter = "expiring"
-            elif token in ("never", "unpaid", "never_paid"):
+            elif token in ("never", "never_paid"):
                 status_filter = "never_paid"
+            elif token == "unpaid":
+                status_filter = "unpaid"
             elif token in ("joined", "website", "navbar"):
                 source_filter = "joined"
             elif token in ("manual", "manually_added"):
@@ -1304,15 +1328,20 @@ class ClubMemberFilter(django_filters.FilterSet):
             queryset = queryset.filter(brevo_last_synced__isnull=True)
         if status_filter:
             today = timezone.localdate()
-            if status_filter == "current":
-                queryset = queryset.filter(membership_paid_q(today))
-            elif status_filter == "expired":
-                # Unpaid includes never paid.
-                queryset = queryset.exclude(membership_paid_q(today))
-            elif status_filter == "expiring":
-                queryset = queryset.filter(membership_expiring_soon_q(today))
-            elif status_filter == "never_paid":
-                queryset = queryset.filter(membership_expiration_date__isnull=True, membership_last_paid__isnull=True)
+            if status_filter == "unpaid":
+                queryset = queryset.filter(
+                    membership_status_q("lapsed", today) | membership_status_q("never_paid", today)
+                )
+            elif status_filter in ("lapsed", "expiring"):
+                # The renewal letter lists, which a carried membership never gets.
+                status_q = (
+                    membership_status_q("lapsed", today)
+                    if status_filter == "lapsed"
+                    else dues_club_q() & membership_expiring_soon_q(today)
+                )
+                queryset = queryset.filter(status_q, membership_carried_by__isnull=True)
+            else:
+                queryset = queryset.filter(membership_status_q(status_filter, today))
 
         text = " ".join(remaining)
         if text:

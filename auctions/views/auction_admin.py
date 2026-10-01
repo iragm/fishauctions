@@ -634,7 +634,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         # Every row renders the Admin badge, which reads the creator and the member row.
         return AuctionTOS.annotate_lot_counts(
             AuctionTOS.objects.filter(auction=self.auction)
-            .select_related("clubmember__club", "user__userdata")
+            .select_related("clubmember__club", "clubmember__membership_carried_by", "user__userdata")
             .prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))
             # prefetch, not select_related: a join gives every row its own Auction instance, so
             # `self.auction.club` was a query per row.
@@ -660,7 +660,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         if (
             self.auction.is_club_managed
             and self.auction.alternate_split_mode == "club_member"
-            and self.auction.club.membership_annual_fee
+            and self.auction.club.charges_dues
         ):
             filters.extend(
                 [

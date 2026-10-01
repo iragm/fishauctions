@@ -118,12 +118,20 @@ ROUTE_LIST: list[Route] = [
         "Browsing",
         keywords=["new speaker", "add a presenter", "add a program"],
     ),
-    _r("promo", "About this site", "Browsing", keywords=["about", "what is this", "marketing"]),
     _r(
         "help",
         "Help guides",
         "Browsing",
-        keywords=["help", "how do i", "how does this work", "guide", "instructions", "tutorial"],
+        keywords=[
+            "help",
+            "how do i",
+            "how does this work",
+            "guide",
+            "instructions",
+            "tutorial",
+            "about",
+            "what is this",
+        ],
     ),
     _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "questions"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
@@ -1177,6 +1185,7 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    "promo": "The old about page; it redirects to the help, which is in the catalog as help.",
     "help_guide": (
         "One help guide. search_help answers with a link to the section that holds the answer, which "
         "beats landing on the top of a guide, and the help index lists every guide."

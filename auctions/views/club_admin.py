@@ -428,8 +428,14 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
     def _get_member(self, pk):
         return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
 
+    def _refuse_carried(self, member):
+        messages.error(self.request, f"{member}'s membership is carried with {member.membership_carried_by}'s.")
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
     def get(self, request, slug, pk):
         member = self._get_member(pk)
+        if member.membership_carried_by_id:
+            return self._refuse_carried(member)
         context = {
             "club": self.club,
             "member": member,
@@ -440,6 +446,8 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
+        if member.membership_carried_by_id:
+            return self._refuse_carried(member)
         next_url = request.POST.get("next", "")
         date_str = request.POST.get("membership_expiration_date", "")
         try:
@@ -483,7 +491,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not (self.club.membership_annual_fee and (self.club.can_accept_paypal or self.club.can_accept_square)):
+        if not (self.club.charges_dues and (self.club.can_accept_paypal or self.club.can_accept_square)):
             raise Http404
         # Members whose dues are current have nothing to pay.
         if request.user.is_authenticated:
@@ -518,6 +526,22 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
         context["member"] = member
         context["invoice"] = invoice
         return context
+
+
+def _carry_over_carried_membership(source, target):
+    """A merged-away member whose membership was carried passes that to the kept one, unless the kept one
+    has its own: a carrier, people it carries, a PayPal subscription, or dues paid past the carrier's.
+    """
+    carrier = source.membership_carried_by
+    if not carrier or carrier.is_deleted or carrier.pk == target.pk or target.membership_carried_by_id:
+        return
+    if target.paypal_subscription_id or target.carried_memberships.filter(is_deleted=False).exists():
+        return
+    own, carried = target.effective_expiration_date, carrier.effective_expiration_date
+    if own and (not carried or own > carried):
+        return
+    target.membership_carried_by = carrier
+    target.save(update_fields=["membership_carried_by"])
 
 
 class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
@@ -690,6 +714,15 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     AuctionTOS.objects.filter(clubmember=source).update(clubmember=target)
                     BapAward.objects.filter(club_member=source).update(club_member=target)
                     InvoicePayment.objects.filter(club_member=source).update(club_member=target)
+                    if target.membership_carried_by_id == source.pk:
+                        target.membership_carried_by = None
+                        target.save(update_fields=["membership_carried_by"])
+                    # Carrying is one level deep, so those source carried go to whoever carries the target.
+                    new_carrier = target.membership_carried_by or target
+                    for carried in ClubMember.objects.filter(membership_carried_by=source).exclude(pk=new_carrier.pk):
+                        carried.membership_carried_by = new_carrier
+                        carried.save(update_fields=["membership_carried_by"])
+                    _carry_over_carried_membership(source, target)
                     source.is_deleted = True
                     source.save(update_fields=["is_deleted"])
                     ClubHistory.objects.create(
