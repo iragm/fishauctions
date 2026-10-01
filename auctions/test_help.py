@@ -177,7 +177,9 @@ class HelpPagesArePublicTests(StandardTestCase):
         self.assertNotIn(guide.title, [result["guide"] for result in help_guides.search("airstone")])
 
     def test_the_footer_links_the_help(self):
-        self.assertContains(self.client.get(reverse("tos")), f'href="{reverse("help")}"')
+        # Not the TOS page: it reads tos.html from the project root, which is gitignored and absent in CI.
+        footer_link = f'<a class="text-muted" href="{reverse("help")}">Help</a>'
+        self.assertContains(self.client.get(reverse("support")), footer_link)
 
     def test_the_menu_is_the_account_menu(self):
         response = self.client.get(help_guides.GUIDES["labels"].url)
