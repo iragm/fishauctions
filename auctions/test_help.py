@@ -11,7 +11,7 @@ from django.utils.html import escape
 
 from auctions import help_guides, palette_actions, palette_routes
 from auctions.field_adoption import FieldAdoption
-from auctions.models import Club, Lot, LotImage, MobileDevice
+from auctions.models import Auction, AuctionTOS, Club, Lot, LotImage, MobileDevice
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -478,6 +478,56 @@ class HelpStatsTests(StandardTestCase):
         with patch("auctions.help_stats.in_person_photos", return_value=facts):
             response = self.client.get(help_guides.GUIDES["run-an-in-person-auction"].url)
         self.assertContains(response, "about 150% more")
+
+
+class RulesChartTests(StandardTestCase):
+    def auction_read_for(self, words, seconds, readers=2):
+        auction = Auction.objects.create(
+            title="Secret club auction",
+            created_by=self.user,
+            date_start=timezone.now() - datetime.timedelta(days=30),
+            summernote_description="<p>word</p>" * words,
+        )
+        AuctionTOS.objects.bulk_create(
+            AuctionTOS(
+                auction=auction, pickup_location=self.location, name=f"Reader {i}", time_spent_reading_rules=seconds
+            )
+            for i in range(readers)
+        )
+        return auction
+
+    def test_the_chart_is_anonymous_and_drops_outliers(self):
+        from auctions.help_stats import _rules_chart, visible_words
+
+        self.assertEqual(visible_words("<p>Bring&nbsp;cash</p><p>no <b>bettas</b></p>"), 4)
+        for words in range(40, 140, 10):
+            self.auction_read_for(words, 30 + words % 7)
+        self.auction_read_for(3000, 31)
+        self.auction_read_for(100, 400)
+        # A tab left open, people added by an admin, and too few readers: none of them count.
+        self.auction_read_for(100, 3600)
+        AuctionTOS.objects.filter(auction=self.auction_read_for(100, 500)).update(manually_added=True)
+        self.auction_read_for(100, 500, readers=1)
+
+        chart = _rules_chart(min_reads=2, min_auctions=5)
+        self.assertEqual(chart["auctions"], 10)
+        self.assertNotIn([3000, 31], chart["points"])
+        self.assertTrue(all(seconds < 100 for _words, seconds in chart["points"]))
+        self.assertNotIn("Secret", str(chart))
+        self.assertEqual(_rules_chart(min_reads=3, min_auctions=5), {})
+
+        with patch("auctions.help_stats.rules_chart", return_value=chart):
+            response = self.client.get(help_guides.GUIDES["auction-rules"].url)
+        self.assertContains(response, "no one will read them anyway")
+        self.assertContains(response, 'id="rules-reading-points"')
+        with patch("auctions.help_stats.rules_chart", return_value={}):
+            response = self.client.get(help_guides.GUIDES["auction-rules"].url)
+        self.assertNotContains(response, "no one will read them anyway")
+
+    def test_search_does_not_read_the_chart(self):
+        with patch("auctions.help_stats.rules_chart", return_value={"points": [[10, 20]], "auctions": 1}):
+            texts = [text for _anchor, _heading, text in help_guides._sections("auction-rules")]
+        self.assertFalse(any("getContext" in text for text in texts))
 
 
 class PaymentPagesAreHelpTests(StandardTestCase):

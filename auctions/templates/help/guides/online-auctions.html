@@ -35,6 +35,7 @@
 <div class="table-responsive">
 <table class="table table-sm">
   <tbody>
+    <tr><th>How big a lot?</th><td>Smaller. Split $100 of shrimp into several bags: <a href="#how-much">the cheaper the lot, the more people bid on it</a>.</td></tr>
     <tr><th>Minimum or buy now?</th><td>A minimum means it won't sell for less. A buy now price close to what it's worth sells straight away; a silly one just means it goes to auction. Starting high and lowering it later doesn't work: people look once.</td></tr>
     <tr><th>Editing</th><td>{% page "edit_lot" "Edit lot" %} works until somebody bids or lot submission ends. After that, ask the people running the auction.</td></tr>
     <tr><th>Deleting</th><td>{% page "delete_lot" "Delete" %} works until somebody bids. With an unsold lot fee, only in the first day after you add the lot, and not in the last day of lot submission.</td></tr>
@@ -75,6 +76,12 @@
   <li>Something that shouldn't be for sale? {% page "report_lot" "Report" %} it.</li>
 </ul>
 <p>Don't want your name next to your bids? Untick {% ui "Username visible" %} in your preferences. The people running the auction still see who you are.</p>
+<h3 class="h6 mt-3" id="how-much">How much to bid</h3>
+{% include "help/partials/bid_amounts_chart.html" %}
+<ul>
+  <li>{% if help.bid_amounts.round_pct %}{{ help.bid_amounts.round_pct }}% of bids here are a multiple of $5.{% else %}Most bids are a multiple of $5.{% endif %} Bid $11, not $10, and you beat everyone who stopped at $10. Two bids the same? The earlier one wins, so bid early.</li>
+  <li>Cheap lots have the most bidders. Keep a closer eye on the $5 plant than on the $100 pleco.</li>
+</ul>
 
 <h2 class="h5 mt-4" id="ending">4. How an auction ends</h2>
 <p>Each lot ends at the auction's end time, unless somebody bids in the last 15 minutes. Then that lot runs 15 more minutes from the bid, and again for each late bid, up to an hour past the end.{% if help.site.online_extended %} About {{ help.site.online_extended }}% of sold lots on this site end late that way.{% endif %}</p>
@@ -114,5 +121,5 @@
 <p>Dead on arrival, short, not as described, or it never turned up: tell the people running the auction, not the seller. Reply to any email you got about the auction, or use the {% ui "Email" %} button on the auction page. Send the lot number.</p>
 <p>They'll refund some or all of it through the invoices. It comes off the seller's payment, and the club gives up its cut too.</p>
 {% tip %}Don't sort out money with the seller yourselves. A seller who sends you $5 for a dead fish still pays the club's cut on the sale, and the club may refund you as well.{% endtip %}
-<p>After the auction, {% page "feedback" "Feedback" %} (in the menu under your name) lists the lots you bought and sold in the last three months. Rate each one +1 or &minus;1, or leave it, and add a comment. Sellers rate buyers too.</p>
+<p>After the auction, {% page "feedback" "Feedback" %} (in the menu under your name) lists the lots you bought and sold in the last three months. Rate each one +1 or &minus;1, or leave it, and add a comment. Sellers rate buyers too.{% if help.site.feedback_left and help.site.feedback_positive %} {{ help.site.feedback_left }}% of buyers here rate anything, and {{ help.site.feedback_positive }}% of the ratings are +1.{% endif %}</p>
 <p>Want to reach a seller about a lot you missed? Search {% page "allLots" "Lots" %} with {% ui "Open/ended" %} picked and ask in the lot's chat. Some sellers show their email on {% page "userpage" "their user page" %}.</p>

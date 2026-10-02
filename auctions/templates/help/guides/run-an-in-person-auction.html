@@ -70,7 +70,7 @@
 <p>The <strong>unsold lot fee</strong> is only charged on lots you end unsold on {% page "auction_lot_winners_dynamic" "Set lot winners" %}. A lot the seller left at home, or that never reached the table, costs nothing.</p>
 
 <h2 class="h5 mt-4" id="people">3. Bidders and bidder numbers</h2>
-<p>Everyone who buys or sells needs to be on the {% page "auction_tos_list" "Users" %} tab. People who join through the site add themselves. Everyone else, you add.</p>
+<p>Everyone who buys or sells needs to be on the {% page "auction_tos_list" "Users" %} tab. People who join through the site add themselves. Everyone else, you add.{% if help.site.in_person_join_on_day %} At in-person auctions here, {{ help.site.in_person_join_on_day }}% of people join on the day.{% endif %}</p>
 <ol>
   <li>Type their name in the search box on the Users tab. Already there? You're done.</li>
   <li>If not, click {% ui "Create user" %} under the empty search. It fills in the name you typed.</li>
@@ -161,7 +161,7 @@
 <p>{% if help.site.recorded_once %}{{ help.site.recorded_once }}% of lots sold here are recorded once and never changed. A second recorder catches the rest:{% else %}Typos happen on about 1 lot in 100. A second recorder catches them:{% endif %} their entry says "This lot has been double checked", or warns that it's different and offers to undo the first. It works from paper slips afterwards, too.</p>
 {% if help.stats_auction and not help.stats_auction.is_online and help.stats.recorded_once is not None %}{% helptip "graph-up" %}In {{ help.stats_auction.title }}, {{ help.stats.recorded_once }}% of the lots sold were recorded once and never changed. Makes you think, doesn't it?{% endhelptip %}{% endif %}
 {% mike %}Mike is recording and types 104 in the price box and 15 in the bidder box. Bidder 15 has just bought a $104 bag of guppies. With three-digit bidder numbers, the page would have caught it.{% endmike %}
-<p>With the phone app, the recorder can use voice: "lot 12, 15 dollars, bidder 104, sold". {% page "auction_voice_command_log" "The voice log" %} shows what the phone heard.</p>
+<p>With the phone app, the recorder can use voice: "lot 12, 15 dollars, bidder 104, sold".{% if help.site.voice_right %} {{ help.site.voice_right }}% of voice commands here are right first time.{% endif %} {% page "auction_voice_command_log" "The voice log" %} shows what the phone heard.</p>
 
 <h3 class="h6 mt-3" id="queue">The lot queue</h3>
 <p>{% page "auction_lot_queue" "Lot queue" %}, under {% ui "More" %}, is the running order. A runner adds each bag as it comes to the table: a USB scanner on the lot's QR code, {% ui "Scan with camera" %} on a phone, or the lot number and {% ui "Add" %}.</p>

@@ -73,11 +73,22 @@
   <li>{% ui "Promote this auction" %}, once you're ready for strangers to see it.</li>
 </ol>
 {% tip %}End bidding at 9 PM on a weeknight. People bid in the last evening, and they're at home then.{% endtip %}
+{% with timing=help.online_timing %}{% if timing %}<p>The share of lots that sell at a typical online auction here:</p>
+<div class="row g-3 mb-2" style="max-width: 40em;">
+  {% if timing.weekdays %}<div class="col-sm-6"><div class="table-responsive"><table class="table table-sm help-table">
+    <thead><tr><th>Ends on</th><th class="text-end">Auctions</th><th class="text-end">Lots sold</th></tr></thead>
+    <tbody>{% for row in timing.weekdays %}<tr><td>{{ row.label }}</td><td class="text-end">{{ row.auctions }}</td><td class="text-end">{{ row.sold }}%</td></tr>{% endfor %}</tbody>
+  </table></div></div>{% endif %}
+  {% if timing.lengths %}<div class="col-sm-6"><div class="table-responsive"><table class="table table-sm help-table">
+    <thead><tr><th>Bidding runs</th><th class="text-end">Auctions</th><th class="text-end">Lots sold</th></tr></thead>
+    <tbody>{% for row in timing.lengths %}<tr><td>{{ row.label }}</td><td class="text-end">{{ row.auctions }}</td><td class="text-end">{{ row.sold }}%</td></tr>{% endfor %}</tbody>
+  </table></div></div>{% endif %}
+</div>{% endif %}{% endwith %}
 <p>The <strong>unsold lot fee</strong> is charged on every lot that doesn't sell. Online, a lot either gets a bid or it doesn't, so there's nothing for you to decide.</p>
 <p>Then join your own auction, like everyone else: scroll to the bottom of the auction page, tick {% ui "Yes, I will be at this auction" %}, pick your pickup location, and click {% ui "Join auction" %}. The site warns you about mistakes it can spot, like a pickup time before bidding ends.</p>
 
 <h2 class="h5 mt-4" id="invite">4. Get people to join</h2>
-<p>Nobody can bid or add lots until they join, and joining is the step people miss. Every invite should say:</p>
+<p>Nobody can bid or add lots until they join, and joining is the step people miss.{% if help.site.online_join_last_day %} {{ help.site.online_join_last_day }}% of people here join an online auction in its last day.{% endif %} Every invite should say:</p>
 <blockquote class="blockquote fs-6 border-start ps-3">Make an account, open the auction, scroll to the bottom and click {% ui "Join auction" %}.</blockquote>
 <ul>
   <li><strong>Share the link.</strong> The {% ui "Copy" %} button at the bottom of the auction page copies it.</li>
@@ -114,7 +125,8 @@
 <p>{% page "auction_stats" "Stats" %}, under {% ui "More" %}, shows views, bids and new lots as they happen. Views flat halfway through? Post the link again.</p>
 
 <h2 class="h5 mt-4" id="invoices">7. Invoices and getting paid</h2>
-<p>Everyone who bought or sold gets one invoice, and it nets out. A seller who sold $135 and bought $20 is owed $115. They're all on the {% page "auction_tos_list" "Users" %} tab (the {% page "auction_invoices" "invoices page" %} is the same list). Click a name to open one.</p>
+{% if help.site.invoice_open_hours is not None %}<p>{{ help.site.invoice_opened }}% of invoice emails here get opened, usually within {{ help.site.invoice_open_hours }} hour{{ help.site.invoice_open_hours|pluralize }} of being sent.</p>
+{% endif %}<p>Everyone who bought or sold gets one invoice, and it nets out. A seller who sold $135 and bought $20 is owed $115. They're all on the {% page "auction_tos_list" "Users" %} tab (the {% page "auction_invoices" "invoices page" %} is the same list). Click a name to open one.</p>
 <div class="table-responsive">
 <table class="table table-sm help-table">
   <thead><tr><th>Status</th><th>Means</th></tr></thead>

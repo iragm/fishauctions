@@ -115,6 +115,7 @@ urlpatterns = [
     path("api/lots/get_recommended/", views.RecommendedLots.as_view()),
     path("api/pageview/", views.PageViewCreate.as_view(), name="pageview"),
     path("api/form-abandoned/", views.FormAbandonedBeacon.as_view(), name="form_abandoned"),
+    path("api/lots/<int:pk>/bid-abandoned/", views.AbandonedBidBeacon.as_view(), name="lot_bid_abandoned"),
     path("api/feedback/<int:pk>/<str:leave_as>/", views.Feedback.as_view()),
     path("api/users/ban/<int:pk>/", views.CreateUserBan.as_view()),
     path("api/users/unban/<int:pk>/", views.UserUnban.as_view()),

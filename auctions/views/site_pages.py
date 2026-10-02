@@ -529,11 +529,22 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
+#: Blog posts that moved into the help, as slug: (guide, section). Their old links go there.
+MOVED_TO_HELP = {"how-much-should-you-bid": ("online-auctions", "how-much")}
+
+
 class BlogPostView(DetailView):
     """Render a blog post"""
 
     model = BlogPost
     template_name = "blog_post.html"
+
+    def get(self, request, *args, **kwargs):
+        moved = MOVED_TO_HELP.get(kwargs.get("slug"))
+        if moved:
+            guide, section = moved
+            return redirect(f"{reverse('help_guide', kwargs={'slug': guide})}#{section}", permanent=True)
+        return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

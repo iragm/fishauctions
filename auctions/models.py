@@ -13,6 +13,7 @@ import datetime
 import logging
 import re
 import secrets
+import statistics
 import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
@@ -83,7 +84,7 @@ from .email_routing import (
     email_routing_enabled,
     sender_with_display_name,
 )
-from .friction_models import FormFailure  # noqa: F401
+from .friction_models import AbandonedBid, FormFailure  # noqa: F401
 from .helper_functions import bin_data, get_currency_symbol, static_html
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
@@ -5168,6 +5169,61 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {**counts, "percent": round(100 * counts["unchanged"] / counts["lots"])}
 
     @cached_property
+    def voice_accuracy(self):
+        """Set lot winners by voice: ``{"commands", "right", "percent"}``, where right is matched and not
+        corrected before saving. None if nobody used it.
+        """
+        counts = VoiceCommandLog.objects.filter(auction=self).aggregate(
+            commands=Count("pk"), right=Count("pk", filter=~Q(slot="") & Q(corrected_to=""))
+        )
+        if not counts["commands"]:
+            return None
+        return {**counts, "percent": round(100 * counts["right"] / counts["commands"])}
+
+    @cached_property
+    def invoice_opening(self):
+        """Invoice emails sent since their send time was kept: ``{"sent", "opened", "percent", "median_hours"}``,
+        or None. Opened means the emailed link, after it was sent.
+        """
+        sent = list(
+            Invoice.objects.filter(auction=self, email_sent_on__isnull=False).values_list("email_sent_on", "opened_on")
+        )
+        if not sent:
+            return None
+        hours = sorted(
+            (opened - emailed).total_seconds() / 3600 for emailed, opened in sent if opened and opened >= emailed
+        )
+        return {
+            "sent": len(sent),
+            "opened": len(hours),
+            "percent": round(100 * len(hours) / len(sent)),
+            "median_hours": statistics.median(hours) if hours else None,
+        }
+
+    @cached_property
+    def abandoned_bids(self):
+        """Bids people started on this auction's lots and didn't place: ``{"total", "came_back", by stage}``.
+        Came back means they bid on that lot afterwards. None if nobody gave up.
+        """
+        rows = list(
+            AbandonedBid.objects.filter(lot__auction=self).values_list("lot_id", "user_id", "stage", "updatedon")
+        )
+        if not rows:
+            return None
+        bids = {
+            (lot, user): when
+            for lot, user, when in Bid.objects.filter(
+                lot_number__auction=self, user__in={user for _lot, user, _stage, _when in rows}
+            ).values_list("lot_number_id", "user_id", "last_bid_time")
+        }
+        result = {"total": len(rows), "came_back": 0, "typed": 0, "blocked": 0, "confirm": 0}
+        for lot, user, stage, when in rows:
+            result[stage] += 1
+            if bids.get((lot, user)) and bids[(lot, user)] >= when:
+                result["came_back"] += 1
+        return result
+
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # Lots ever queued (sticky Lot.added_to_queue).
         return self.lots_qs.filter(added_to_queue=True).count()
@@ -9861,8 +9917,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
         "then; recorded online payments (InvoicePayment) take precedence over this as the cash date."
     )
     opened = models.BooleanField(default=False)
+    opened_on = models.DateTimeField(null=True, blank=True)
+    opened_on.help_text = "When the emailed link was first opened. Unset on invoices opened before 2026-10-02."
     printed = models.BooleanField(default=False)
     email_sent = models.BooleanField(default=False)
+    email_sent_on = models.DateTimeField(null=True, blank=True)
+    email_sent_on.help_text = "When the invoice email or push actually went. Unset before 2026-10-02."
     invoice_notification_due = models.DateTimeField(null=True, blank=True)
     invoice_notification_due.help_text = (
         "When set, a celery task will send an invoice notification email after this time"
@@ -9891,6 +9951,17 @@ class Invoice(CachedPropertiesMixin, models.Model):
             # NULLs never collide, so any number of those. Make one with ``for_participant``.
             models.UniqueConstraint(fields=["auctiontos_user", "auction"], name="invoice_one_per_participant"),
         ]
+
+    def mark_opened(self):
+        """Somebody opened this invoice's link. Saves only these columns: a payment webhook marking it PAID
+        can be saving the same row at the same moment, and a full save would write the old status back.
+        """
+        self.opened = True
+        fields = ["opened"]
+        if not self.opened_on:
+            self.opened_on = timezone.now()
+            fields.append("opened_on")
+        self.save(update_fields=fields)
 
     @classmethod
     def for_participant(cls, tos, auction=None):

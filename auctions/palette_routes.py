@@ -1338,6 +1338,7 @@ EXCLUDED: dict[str, str] = {
     "auction_stats_feature_use": _API,
     "auction_stats_referrers": _API,
     "form_abandoned": "A beacon the page fires on its way out. There is no page here to send anybody to.",
+    "lot_bid_abandoned": "A beacon the lot page fires on its way out. There is no page here to send anybody to.",
     "club_mark_contacted": "POST-only button on the club health queue; the page it sits on is admin_club_health.",
     "link_auctions_to_club": (
         "POST-only button on the unlinked auctions page; the page it sits on is admin_unlinked_auctions."

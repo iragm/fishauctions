@@ -51,7 +51,9 @@ from auctions.form_friction import (
     MAX_ABANDONED_FIELDS,
     read_abandon_token,
 )
+from auctions.friction_models import BID_STAGE_ORDER
 from auctions.models import (
+    AbandonedBid,
     Auction,
     AuctionCampaign,
     AuctionTOS,
@@ -398,6 +400,32 @@ class FormAbandonedBeacon(APIView):
         )
         session[ABANDON_SESSION_KEY] = [*already, form_name][-40:]
         return JsonResponse({"recorded": True}, status=201)
+
+
+class AbandonedBidBeacon(APIView):
+    """Record a bid somebody started on a lot page and didn't place, posted by the page via sendBeacon.
+
+    Signed-in people only: nobody else can bid. One row per person per lot, moved on to a further stage
+    (``friction_models.BID_STAGES``) but never back. 204 for anything not worth a row.
+    """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, pk):
+        stage = request.POST.get("stage", "")
+        if not request.user.is_authenticated or stage not in BID_STAGE_ORDER:
+            return HttpResponse(status=204)
+        if beacon_over_the_limit(request, "bid-abandoned", ABANDONED_FORMS_PER_ADDRESS_PER_MINUTE):
+            return HttpResponse(status=204)
+        lot = beacon_subject(Lot, pk, is_deleted=False)
+        if lot is None:
+            return HttpResponse(status=204)
+        row, created = AbandonedBid.objects.get_or_create(lot=lot, user=request.user, defaults={"stage": stage})
+        if not created and BID_STAGE_ORDER.index(stage) > BID_STAGE_ORDER.index(row.stage):
+            row.stage = stage
+            row.save(update_fields=["stage", "updatedon"])
+        return HttpResponse(status=204)
 
 
 def beacon_subject(model, pk, **extra):

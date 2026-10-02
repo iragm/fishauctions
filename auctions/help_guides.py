@@ -306,6 +306,41 @@ class HelpContext:
         return in_person_photos()
 
     @cached_property
+    def rules_chart(self) -> dict:
+        """Rules length against time spent reading them (``help_stats.rules_chart``)."""
+        from auctions.help_stats import rules_chart
+
+        return rules_chart()
+
+    @cached_property
+    def online_timing(self) -> dict:
+        """Lots sold by the weekday an online auction ends, and how long it runs (``help_stats.online_timing``)."""
+        from auctions.help_stats import online_timing
+
+        return online_timing()
+
+    @cached_property
+    def seller_rank(self) -> dict:
+        """How a seller's later lots do (``help_stats.seller_rank``)."""
+        from auctions.help_stats import seller_rank
+
+        return seller_rank()
+
+    @cached_property
+    def bid_amounts(self) -> dict:
+        """How much people bid (``help_stats.bid_amounts``)."""
+        from auctions.help_stats import bid_amounts
+
+        return bid_amounts()
+
+    @cached_property
+    def bred_species(self) -> dict:
+        """The species most often sold as bred by the seller (``help_stats.bred_species``)."""
+        from auctions.help_stats import bred_species
+
+        return bred_species()
+
+    @cached_property
     def stats_auction(self):
         """The auction whose numbers the guides quote: this one if the reader ran it, else their latest."""
         from auctions.help_stats import stats_auction
@@ -607,6 +642,7 @@ RULES_NOT_YET_DOCUMENTED: frozenset[str] = frozenset()
 def _sections(slug: str) -> list[tuple[str, str, str]]:
     """``(anchor, heading, text)`` for each ``<h2 id=...>`` section of a guide, rendered for nobody."""
     html = get_template(GUIDES[slug].template_name).render({"help": HelpContext(), "guide": GUIDES[slug]})
+    html = re.sub(r"<(script|svg)\b.*?</\1>", "", html, flags=re.DOTALL)
     parts = re.split(r"<h2[^>]*\bid=\"([^\"]+)\"[^>]*>(.*?)</h2>", html, flags=re.DOTALL)
     sections = [("", GUIDES[slug].title, parts[0])]
     for i in range(1, len(parts), 3):

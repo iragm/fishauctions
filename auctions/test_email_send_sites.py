@@ -109,6 +109,8 @@ class SendSiteTests(StandardTestCase):
         email = self.sent("jamie@example.com")
         self.check(email, "Hey Jamie,", club_header=True)
         self.assertIn(f"/invoices/{self.invoice.no_login_link}/", email.html_message)
+        self.invoice.refresh_from_db()
+        self.assertIsNotNone(self.invoice.email_sent_on)
 
     def test_a_paid_invoice_email_is_a_receipt_not_a_bill(self):
         """People who paid cash at the door read "You owe a total of" in the paid email as a demand."""

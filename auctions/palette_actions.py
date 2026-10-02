@@ -15405,6 +15405,11 @@ NOT_A_SKILL: dict[str, str] = {
         "one reader whose agreement means nothing."
     ),
     # The usability instruments
+    "AbandonedBidBeacon": (
+        "The lot page reporting that somebody started a bid and didn't place it. Like the form beacon, "
+        "what it records is a person giving up in a browser; an assistant placing or not placing a bid "
+        "is a different thing, and place_bid already covers the placing."
+    ),
     "FormAbandonedBeacon": (
         "The page reporting that somebody edited a form and left without saving it. It is a "
         "measurement of what a person did in a browser, fired by that browser as the page goes "

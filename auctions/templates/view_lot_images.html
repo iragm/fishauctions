@@ -923,6 +923,31 @@ side. They are closed after the recommended-lots strip at the bottom of the page
         </div>
     </div>
 </div>
+{% if request.user.is_authenticated %}
+<script>
+{% comment %}A bid started here and not placed: friction_models.AbandonedBid. Typed an amount, was told they can't bid, or cancelled the confirmation. The server keeps the furthest stage.{% endcomment %}
+(function () {
+  var box = document.getElementById('bid_amount');
+  if (!box || !navigator.sendBeacon) { return; }
+  var initial = box.value, stage = '', sent = '', placed = false;
+  function send() {
+    if (placed || !stage || stage === sent) { return; }
+    var data = new FormData();
+    data.append('stage', stage);
+    data.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+    navigator.sendBeacon("{% url 'lot_bid_abandoned' pk=lot.pk %}", data);
+    sent = stage;
+  }
+  box.addEventListener('input', function () { if (!stage && box.value !== initial) { stage = 'typed'; } });
+  var blocked = document.getElementById('bidError'), confirm = document.getElementById('confirmBid');
+  blocked.addEventListener('shown.bs.modal', function () { stage = 'blocked'; send(); });
+  confirm.addEventListener('shown.bs.modal', function () { placed = false; stage = 'confirm'; });
+  confirm.addEventListener('hidden.bs.modal', send);
+  document.getElementById('finalize-bid').addEventListener('click', function () { placed = true; });
+  window.addEventListener('pagehide', send);
+})();
+</script>
+{% endif %}
 <!-- Chat -->
 {% comment %}The second column of the row opened at the top of undiv_content: beside the lot on xl,
 under it on anything narrower. It was col-md-offset-1 / col-md-11 (Bootstrap 3 classes that do

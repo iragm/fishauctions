@@ -26,10 +26,10 @@ this only quotes its opening sentence.
 - **`account_adapter.py`** (33 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
-- **`account_deletion.py`** (443 lines)
+- **`account_deletion.py`** (445 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
-- **`account_export.py`** (302 lines)
+- **`account_export.py`** (307 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
 - **`account_nav.py`** (200 lines)
@@ -148,9 +148,9 @@ this only quotes its opening sentence.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
   `Row`, `Group`, `phrase`, `terms`, `group_by_term`, `top_terms`, `section`, `adjustments`, `custom_fields`
-- **`friction_models.py`** (74 lines)
+- **`friction_models.py`** (104 lines)
   Where people get stuck: one row per rejected form submission.
-  `FormFailure`
+  `FormFailure`, `AbandonedBid`
 - **`geocoding.py`** (67 lines)
   Turning a typed address into a point on the map.
   `configured`, `geocode`
@@ -159,11 +159,10 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (703 lines)
+- **`help_guides.py`** (739 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
-- **`help_stats.py`** (350 lines)
+- **`help_stats.py`** (785 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
-  `site_stats`, `request_refresh`, `refresh`, `in_person_photos`, `auction_facts`, `stats_auction`
 - **`helper_functions.py`** (162 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
   `static_html`, `scrub_emails`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
@@ -185,7 +184,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14190 lines)
+- **`models.py`** (14261 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -202,11 +201,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (313 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15732 lines)
+- **`palette_actions.py`** (15737 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1931 lines)
+- **`palette_routes.py`** (1932 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -253,7 +252,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1632 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1890 lines)
+- **`tasks.py`** (1893 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -405,7 +404,7 @@ this only quotes its opening sentence.
 - **`test_email_layout.py`** (208 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
-- **`test_email_send_sites.py`** (346 lines)
+- **`test_email_send_sites.py`** (348 lines)
   Every templated email, sent through post_office with real model objects, the way the site sends it.
   `SendSiteTests`, `SuiteMailBackendTests`
 - **`test_endauctions.py`** (902 lines)
@@ -418,7 +417,7 @@ this only quotes its opening sentence.
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
 - **`test_free_text_usage.py`** (48 lines)
   `FreeTextUsageTests`
-- **`test_help.py`** (495 lines)
+- **`test_help.py`** (545 lines)
   The help guides: that they cover every page and rule, that they are public, and that they talk about your auction.
 - **`test_helpers.py`** (1385 lines)
   Tests for helper functions, model utilities, template tags and context processors.
@@ -547,6 +546,9 @@ this only quotes its opening sentence.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
+- **`test_site_patterns.py`** (262 lines)
+  The help's site-wide tables and charts, and the two things collected for the auction stats page: invoice
+  `ago`, `SiteCountsTests`, `GuidesQuoteTheCountsTests`, `AbandonedBidTests`, `InvoiceOpenedTests`, `RefreshGuardTests`
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
@@ -624,7 +626,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1339 lines)
+- **`urls.py`** (1340 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -701,7 +703,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`delete_pending_accounts.py`** (18 lines)
   Delete accounts whose deletion grace period has expired.
   `Command`
-- **`email_invoice.py`** (42 lines)
+- **`email_invoice.py`** (44 lines)
   `Command`
 - **`email_unseen_chats.py`** (53 lines)
   `Command`
@@ -901,7 +903,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`admin_checklist.py`** (1061 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (788 lines)
+- **`ajax.py`** (816 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1268 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
@@ -960,7 +962,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`help.py`** (92 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (385 lines)
+- **`invoices.py`** (380 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`lot_pages.py`** (1331 lines)
@@ -979,7 +981,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (570 lines)
+- **`site_pages.py`** (581 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.

@@ -852,6 +852,9 @@ def send_invoice_notification(self, invoice_pk):
             auction_pk=invoice.auction.pk,
             invoice_pk=invoice.pk,
         )
+        from django.utils import timezone
+
+        invoice.email_sent_on = timezone.now()
         # Add history entry about the notification being sent
         channel = "push notification" if pushed else "email"
         AuctionHistory.objects.create(

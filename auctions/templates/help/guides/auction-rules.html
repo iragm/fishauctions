@@ -21,6 +21,7 @@
   <li>a link to your club's website or Facebook page.</li>
 </ul>
 <p>Club rules the site doesn't enforce go here too. "No more than 3 bags of the same species" is a rule for people to read, not a setting. If someone breaks it, remove the extra lots.</p>
+{% include "help/partials/rules_chart.html" %}
 {% tip %}Don't put dates or locations in the rules text. They'll be wrong when you copy the auction to next year's. Edit the pickup location instead.{% endtip %}
 {% mike %}Mike pasted the rules from his club's newsletter. It kept the newsletter's white text, so the page looked empty. Click in the box and press Ctrl+A to find text you can't see.{% endmike %}
 
@@ -124,6 +125,13 @@
   <li>{% rule "use_seller_dash_lot_numbering" %}: lot numbers like 110-3 (seller 110's third lot) instead of 1, 2, 3. Only changeable before the first lot. Most clubs are happier with plain numbers.</li>
   <li>{% rule "auto_add_images" %}: a new lot gets a photo from an older lot with the same name, from any auction you or your admins ran.</li>
 </ul>
+{% with rank=help.seller_rank %}{% if rank.rows %}<p>Does a lot limit cost you anything? A seller's lots here, in the order they added them, for sellers with 20 or more in one auction:</p>
+<div class="table-responsive" style="max-width: 32em;">
+<table class="table table-sm help-table">
+  <thead><tr><th>Lot</th><th class="text-end">Lots</th><th class="text-end">Sold</th><th class="text-end">Typical price</th></tr></thead>
+  <tbody>{% for row in rank.rows %}<tr><td>{{ row.label }}</td><td class="text-end">{{ row.lots|floatformat:"0g" }}</td><td class="text-end">{{ row.sold }}%</td><td class="text-end">${{ row.median|floatformat:"0" }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>{% endif %}{% endwith %}
 <p>With plain numbers, two bags with the same number show up when the second one sells ("already sold"). With seller-dash numbers you can see whose bag it is at a glance. Bidder numbers can be words, so seller JS gets lots JS-1, JS-2 and so on.</p>
 
 <h2 class="h5 mt-4" id="people">Who can join, buy and sell</h2>

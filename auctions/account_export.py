@@ -133,6 +133,7 @@ def export(user):
     from allauth.socialaccount.models import SocialAccount
 
     from auctions.models import (
+        AbandonedBid,
         AuctionTOS,
         Bid,
         ClubMember,
@@ -280,6 +281,10 @@ def export(user):
         "watched_lots": [
             {"lot": _plain(row.lot_number), "watched_since": _plain(row.createdon)}
             for row in Watch.objects.filter(user=user).select_related("lot_number")
+        ],
+        "bids_started_and_not_placed": [
+            {"lot": _plain(row.lot), "how_far": row.get_stage_display(), "when": _plain(row.updatedon)}
+            for row in AbandonedBid.objects.filter(user=user).select_related("lot")
         ],
         "searches": [
             {"searched_for": row.search, "when": _plain(row.createdon), "auction": _plain(row.auction)}

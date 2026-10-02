@@ -167,6 +167,7 @@ def _delete_personal_rows(user):
     from webpush.models import PushInformation, SubscriptionInfo
 
     from auctions.models import (
+        AbandonedBid,
         AdCampaignResponse,
         AuctionCampaign,
         AuctionIgnore,
@@ -217,6 +218,7 @@ def _delete_personal_rows(user):
     SquareSeller.objects.filter(user=user).delete()
 
     Watch.objects.filter(user=user).delete()
+    AbandonedBid.objects.filter(user=user).delete()
     ChatSubscription.objects.filter(user=user).delete()
     SearchHistory.objects.filter(user=user).delete()
     CommandPaletteSearch.objects.filter(user=user).delete()

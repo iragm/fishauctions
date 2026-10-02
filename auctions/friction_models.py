@@ -19,6 +19,9 @@ So ``kind="abandoned"`` rows come from the page: ``unsaved_changes.js`` knows wh
 (it has to, to draw the unsaved-changes bar) and beacons that on the way out. ``field_errors`` there
 is the set of field names edited and not saved, and ``seconds_on_page`` is how long they spent.
 
+:class:`AbandonedBid` is the same idea on the lot page, where the form is one box and a button: a bid
+somebody started and didn't place.
+
 Here rather than in ``models.py`` for the same reason as :mod:`auctions.moderation_models`.
 :mod:`auctions.form_friction` holds the view mixin that writes these rows.
 
@@ -72,3 +75,30 @@ class FormFailure(models.Model):
         if self.kind == "abandoned":
             return f"{self.form_name} abandoned after editing {fields}"
         return f"{self.form_name} rejected on {fields} (attempt {self.attempt})"
+
+
+#: How far a person got before giving up, least to most far.
+BID_STAGES = (
+    ("typed", "Typed an amount and left"),
+    ("blocked", "Pressed Place bid and was told they can't bid"),
+    ("confirm", "Opened the confirmation and cancelled"),
+)
+BID_STAGE_ORDER = [stage for stage, _label in BID_STAGES]
+
+
+class AbandonedBid(models.Model):
+    """A bid somebody started on a lot page and didn't place. One row per person per lot, at the furthest stage
+    they reached; whether they bid later is read off ``Bid``. Posted by the lot page as it goes away.
+    """
+
+    lot = models.ForeignKey("auctions.Lot", on_delete=models.CASCADE, related_name="abandoned_bids")
+    user = models.ForeignKey("auth.User", on_delete=models.CASCADE)
+    stage = models.CharField(max_length=10, choices=BID_STAGES)
+    createdon = models.DateTimeField(auto_now_add=True)
+    updatedon = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["lot", "user"], name="abandoned_bid_one_per_lot")]
+
+    def __str__(self):
+        return f"{self.user} on lot {self.lot_id}: {self.get_stage_display()}"

@@ -10,7 +10,8 @@
   <li>Tick {% ui "I bred this" %}.</li>
   <li>When it sells, you get the points. Your club may check each one first.</li>
 </ol>
-<p>The club page has a leaderboard for each program, this year's or all time, and your own points under {% page "club_detail_tab" "My points" %}. The {% page "selling" "Selling" %} page, searched for "bap", lists every lot you've had points for.</p>
+{% if help.bred_species.rows %}<p>Bred most often here lately: {% for row in help.bred_species.rows %}{{ row.name }}{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+{% endif %}<p>The club page has a leaderboard for each program, this year's or all time, and your own points under {% page "club_detail_tab" "My points" %}. The {% page "selling" "Selling" %} page, searched for "bap", lists every lot you've had points for.</p>
 <p>Points go to the club member who sold the lot, matched by your account or your email. Selling under a different email from the one your club has? Your points go nowhere until the club fixes it.</p>
 {% mike %}Mike ticked "I bred this" on a bag of platys he bought at the last auction. The BAP chair recognized the bag. Tick it only for fish that were born in your tanks.{% endmike %}
 

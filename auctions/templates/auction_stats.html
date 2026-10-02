@@ -565,6 +565,15 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
                     <td>{{ compare_auction.survey_stats.answered }} ({{ compare_auction.survey_stats.great }} great, {{ compare_auction.survey_stats.not_fun }} not so fun)</td>
                     {% endif %}
                   </tr>
+                  {% if auction.invoice_opening %}
+                  <tr>
+                    <td>Invoice emails opened<br><small class="text-muted">The emailed link, and the typical time from email to opening</small></td>
+                    <td>{{ auction.invoice_opening.percent }}% ({{ auction.invoice_opening.opened }} of {{ auction.invoice_opening.sent }}){% if auction.invoice_opening.median_hours is not None %}, after {{ auction.invoice_opening.median_hours|floatformat:1 }} hours{% endif %}</td>
+                    {% if compare_auction %}
+                    <td>{% if compare_auction.invoice_opening %}{{ compare_auction.invoice_opening.percent }}% ({{ compare_auction.invoice_opening.opened }} of {{ compare_auction.invoice_opening.sent }}){% else %}N/A{% endif %}</td>
+                    {% endif %}
+                  </tr>
+                  {% endif %}
                   <tr>
                     <td>Total unique views</td>
                     <td>{% if auction.cached_stats.misc.total_unique_views %}{{ auction.cached_stats.misc.total_unique_views }}{% else %}N/A{% endif %}</td>
@@ -798,6 +807,24 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
         <td>{{ auction.total_auction_duration_str }}</td>
         {% if compare_auction %}
         <td>{% if not compare_auction.is_online and compare_auction.total_auction_duration %}{{ compare_auction.total_auction_duration_str }}{% else %}N/A{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endif %}
+      {% if auction.voice_accuracy %}
+      <tr>
+        <td>Voice commands right first time<br><small class="text-muted">Matched, and not corrected before saving</small></td>
+        <td>{{ auction.voice_accuracy.percent }}% ({{ auction.voice_accuracy.right }} of {{ auction.voice_accuracy.commands }})</td>
+        {% if compare_auction %}
+        <td>{% if compare_auction.voice_accuracy %}{{ compare_auction.voice_accuracy.percent }}% ({{ compare_auction.voice_accuracy.right }} of {{ compare_auction.voice_accuracy.commands }}){% else %}N/A{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endif %}
+      {% if auction.abandoned_bids %}
+      <tr>
+        <td>Bids started and not placed<br><small class="text-muted">Typed an amount and left, couldn't bid, or cancelled the confirmation. Came back: bid on that lot later.</small></td>
+        <td>{{ auction.abandoned_bids.total }} ({{ auction.abandoned_bids.typed }} typed, {{ auction.abandoned_bids.blocked }} couldn't bid, {{ auction.abandoned_bids.confirm }} cancelled; {{ auction.abandoned_bids.came_back }} came back)</td>
+        {% if compare_auction %}
+        <td>{% if compare_auction.abandoned_bids %}{{ compare_auction.abandoned_bids.total }} ({{ compare_auction.abandoned_bids.came_back }} came back){% else %}N/A{% endif %}</td>
         {% endif %}
       </tr>
       {% endif %}
