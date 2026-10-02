@@ -3,7 +3,8 @@
 ``site_stats`` is a dict of one-line facts counted once a day from real sales, so "a lot with a photo sells
 more often" comes with this site's own percentage. The rest are the tables and charts some guides draw:
 ``in_person_photos``, ``rules_chart`` (rules length against ``AuctionTOS.time_spent_reading_rules``),
-``online_timing``, ``seller_rank``, ``bid_amounts`` and ``bred_species``. All are counted by the
+``online_timing``, ``seller_rank``, ``bid_amounts`` and ``bred_species``, plus the promo page's
+``promo_photos``. All are counted by the
 ``refresh_help_stats`` task (:func:`refresh`), never by a page: the guides are public and crawled, and these
 are scans of the lots table. A page that finds nothing counted asks for a count and reads the words
 meanwhile. ``auction_facts`` reads an auction's ``cached_stats`` (see ``Auction.recalculate_stats``), so a
@@ -137,6 +138,7 @@ def refresh(run=_run):
             ("seller rank", SELLER_RANK_CACHE_KEY, "_seller_rank"),
             ("bid amounts", BID_AMOUNTS_CACHE_KEY, "_bid_amounts"),
             ("bred species", BRED_CACHE_KEY, "_bred_species"),
+            ("promo photos", PROMO_PHOTOS_CACHE_KEY, "_promo_photos"),
         ):
             # Looked up when run, so a test can patch the count.
             run_one(label, lambda key=key, name=name: cache.set(key, globals()[name](), SITE_CACHE_SECONDS))
@@ -458,6 +460,10 @@ TIMING_CACHE_KEY = "help_online_timing_v1"
 SELLER_RANK_CACHE_KEY = "help_seller_rank_v1"
 BID_AMOUNTS_CACHE_KEY = "help_bid_amounts_v1"
 BRED_CACHE_KEY = "help_bred_species_v1"
+PROMO_PHOTOS_CACHE_KEY = "promo_lot_photos_v1"
+#: Fewer than this and the promo page leaves its photo strip off: a short strip looks like an empty site.
+PROMO_MIN_PHOTOS = 8
+PROMO_MAX_PHOTOS = 16
 #: The fewest auctions a row of the online timing tables is quoted from.
 MIN_TIMING_AUCTIONS = 5
 #: The bid chart's last dollar.
@@ -492,6 +498,11 @@ def bid_amounts() -> dict:
 def bred_species() -> dict:
     """``{"rows": [{"name", "lots"}]}``, as last counted."""
     return _counted(BRED_CACHE_KEY)
+
+
+def promo_photos() -> dict:
+    """``{"photos": [{"image", "url", "name"}]}``, as last counted."""
+    return _counted(PROMO_PHOTOS_CACHE_KEY)
 
 
 def _dollar_auctions(auctions) -> set[int]:
@@ -675,6 +686,59 @@ def _bred_species(top: int = 10, min_lots: int = 3) -> dict:
 
 
 # --- one auction ---------------------------------------------------------------
+
+
+def _promo_photos(min_photos: int = PROMO_MIN_PHOTOS, max_photos: int = PROMO_MAX_PHOTOS) -> dict:
+    """Sellers' own photos of lots sold in the last six months in promoted auctions. At most two per seller,
+    so one prolific seller isn't the whole strip; a seller without an account is told apart by their
+    ``auctiontos_seller``.
+    """
+    from auctions.models import Lot, LotImage
+
+    now = timezone.now()
+    lot_ids = list(
+        Lot.objects.filter(
+            winning_price__isnull=False,
+            is_deleted=False,
+            banned=False,
+            auction__promote_this_auction=True,
+            auction__is_deleted=False,
+            date_end__gte=now - datetime.timedelta(days=180),
+            date_end__lte=now,
+        )
+        .order_by("-date_end")
+        .values_list("pk", flat=True)[:400]
+    )
+    images = (
+        LotImage.objects.filter(lot_number_id__in=lot_ids, image_source__in=["ACTUAL", "REPRESENTATIVE"])
+        .exclude(Q(image="") | Q(image__isnull=True), cloudflare_image_id="")
+        .select_related("lot_number")
+        .only(
+            "lot_number",
+            "image",
+            "cloudflare_image_id",
+            "url",
+            "lot_number__lot_name",
+            "lot_number__user_id",
+            "lot_number__auctiontos_seller_id",
+        )
+        .order_by("-lot_number__date_end", "-is_primary", "pk")[: max_photos * 20]
+    )
+    photos, seen_lots, per_seller = [], set(), {}
+    for image in images:
+        lot = image.lot_number
+        seller = ("user", lot.user_id) if lot.user_id else ("tos", lot.auctiontos_seller_id or lot.pk)
+        if lot.pk in seen_lots or per_seller.get(seller, 0) >= 2:
+            continue
+        url = image.thumbnail_url
+        if not url:
+            continue
+        seen_lots.add(lot.pk)
+        per_seller[seller] = per_seller.get(seller, 0) + 1
+        photos.append({"image": image.pk, "url": url, "name": lot.lot_name})
+        if len(photos) >= max_photos:
+            break
+    return {"photos": photos} if len(photos) >= min_photos else {}
 
 
 def _series(stats, key):

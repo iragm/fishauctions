@@ -1,6 +1,6 @@
 {% load help_tags %}
 {% comment %}See HELP.md for the voice. The club as a whole: finding one, setting one up, who can do what, and its auctions. Each big job (members, email, events, BAP, donations, money) has its own guide in the Clubs group; this one points at them.{% endcomment %}
-<p>A club here has a public page, a member list, and its auctions. It can also take dues, send announcements, keep a calendar, and run a breeder award program. Use as much or as little as you like: plenty of clubs only run auctions.</p>
+<p>A club here has a public page, a member list, and its auctions. It can also take dues, send announcements, keep a calendar, run a breeder award program and track donations. Use as much or as little as you like: plenty of clubs only run auctions.</p>
 {% if help.club and help.is_club_admin %}{% helptip %}You're an admin of {{ help.club.name }}. Its settings are all on {% page "club_setup" "Setup" %}.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="members">Being a member</h2>

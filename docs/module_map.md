@@ -105,7 +105,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (448 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (293 lines)
+- **`context_processors.py`** (294 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -161,7 +161,7 @@ this only quotes its opening sentence.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
 - **`help_guides.py`** (739 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
-- **`help_stats.py`** (785 lines)
+- **`help_stats.py`** (849 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
 - **`helper_functions.py`** (162 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
@@ -474,7 +474,7 @@ this only quotes its opening sentence.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
   `MobileLastUsedAuctionTests`
-- **`test_mobile_menu.py`** (319 lines)
+- **`test_mobile_menu.py`** (323 lines)
   The app's navigation drawer: /api/mobile/config/ -> "menu".
   `MenuPayloadTests`, `RowSanitizerTests`, `NavbarDriftTests`, `ConfigEndpointTests`
 - **`test_mobile_offline.py`** (599 lines)
@@ -533,6 +533,9 @@ this only quotes its opening sentence.
 - **`test_printable_lot_list.py`** (148 lines)
   The printable lot list: every lot on one page, with the columns its labels print.
   `PrintableLotListTests`, `NaturalSortKeyTests`
+- **`test_promo.py`** (127 lines)
+  The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
+  `PromoPageTests`, `PromoPhotoTests`
 - **`test_query_counts.py`** (559 lines)
   Query-count guards for the N+1s that were fixed.
   `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
@@ -626,7 +629,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1340 lines)
+- **`urls.py`** (1339 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -817,7 +820,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`authentication.py`** (43 lines)
   Authentication classes for mobile endpoints.
   `OptionalJWTAuthentication`
-- **`menu.py`** (180 lines)
+- **`menu.py`** (185 lines)
   The app's navigation drawer, built here and served in /api/mobile/config/.
   `menu_for`
 - **`permissions.py`** (17 lines)
@@ -981,7 +984,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (581 lines)
+- **`site_pages.py`** (604 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.

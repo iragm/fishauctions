@@ -159,7 +159,7 @@ GROUPS = (
                 "club-membership",
                 "Members and dues",
                 "bi-person-vcard",
-                "The member list, membership cards, and taking dues by card or cash.",
+                "The member list, wallet membership cards, dues by card or cash, and automatic renewals.",
             ),
             Guide(
                 "club-email",

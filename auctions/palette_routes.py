@@ -1201,7 +1201,7 @@ EXCLUDED: dict[str, str] = {
     "library_answer": "The written answer the library page loads into itself; not a page on its own.",
     "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
     "batch_page": "One scanned page as a picture, opened from the article it is part of.",
-    "promo": "The old about page; it redirects to the help, which is in the catalog as help.",
+    "promo": "Marketing for people who don't use the site yet; anyone who does is better served by the help.",
     "help_guide": (
         "One help guide. search_help answers with a link to the section that holds the answer, which "
         "beats landing on the top of a guide, and the help index lists every guide."

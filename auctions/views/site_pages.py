@@ -36,6 +36,7 @@ from django.views.generic.edit import (
     FormView,
 )
 
+from auctions import help_stats
 from auctions.filters import (
     AuctionFilter,
     LotFilter,
@@ -51,6 +52,7 @@ from auctions.models import (
     BlogPost,
     Invoice,
     Lot,
+    LotImage,
     SearchHistory,
     UserData,
 )
@@ -169,20 +171,41 @@ class SupportView(FormView):
         return super().form_valid(form)
 
 
+def promo_lot_photos() -> list[dict]:
+    """The promo page's photo strip, as last counted by ``help_stats``, less any photo or lot taken down
+    since: the count is daily, and a removed lot must not sit on the landing page until tomorrow.
+    """
+    photos = help_stats.promo_photos().get("photos", [])
+    if not photos:
+        return []
+    still_up = set(
+        LotImage.objects.filter(
+            pk__in=[photo["image"] for photo in photos], lot_number__is_deleted=False, lot_number__banned=False
+        ).values_list("pk", flat=True)
+    )
+    photos = [photo for photo in photos if photo["image"] in still_up]
+    return photos if len(photos) >= help_stats.PROMO_MIN_PHOTOS else []
+
+
 class PromoSite(TemplateView):
+    """The marketing page: ``/`` for a signed-out visitor, and ``/about/`` for everyone, when
+    ``ENABLE_PROMO_PAGE`` is on. Every feature on it links to the help section that explains it, and
+    ``PromoPageTests`` fails when one of those sections is gone.
+    """
+
     template_name = "promo.html"
 
     def dispatch(self, request, *args, **kwargs):
         if not settings.ENABLE_PROMO_PAGE:
-            return redirect(reverse("home"))
+            return redirect(reverse("help"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
         context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
-        context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
-        context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
+        context["photos"] = promo_lot_photos()
+        context["site"] = help_stats.site_stats()
         return context
 
 

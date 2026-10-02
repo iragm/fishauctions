@@ -98,13 +98,14 @@
 </ul>
 {% tip %}Took money? {% ui "Renew" %}. Just correcting a mistake? {% ui "Set expiration date" %}. Using the wrong one either counts dues nobody paid, or loses dues somebody did.{% endtip %}
 <p>Your own membership form, on your website or Google Forms, doesn't make someone a paid member here. Renew them by hand, or have the form do it with an API key that can renew memberships.</p>
-<h3 class="h6 mt-3">PayPal subscriptions</h3>
-<p>Clubs that take PayPal can let members pay by yearly subscription, so it renews itself. Under {% page "club_membership_settings" "Membership and payments" %}, open {% ui "PayPal membership subscriptions" %}, follow the steps in PayPal, and paste the {% ui "PayPal webhook ID" %} it gives you.</p>
+<h3 class="h6 mt-3" id="auto-renew">Automatic renewals</h3>
+<p>Clubs that take PayPal can let members pay by yearly subscription, so their membership renews itself with nobody chasing it. Under {% page "club_membership_settings" "Membership and payments" %}, open {% ui "PayPal membership subscriptions" %}, follow the steps in PayPal, and paste the {% ui "PayPal webhook ID" %} it gives you.</p>
+<p>Without PayPal, turn on the <a href="{% url 'help_guide' slug='club-email' %}#membership-emails">expiration reminders</a>: once you charge a fee and have a payment account connected, each one carries a button to pay.</p>
 
 <h2 class="h5 mt-4" id="cards">Membership cards</h2>
 <p>With {% ui "Show member barcodes" %} on, every member gets a number and a barcode. It's made by the site; you can't bring your own numbering.</p>
 <ul>
-  <li>Members find it under {% ui "Membership" %} on your club page, in their welcome and renewal emails, and in their phone's wallet.</li>
+  <li>Members find it under {% ui "Membership" %} on your club page, in their welcome and renewal emails, and in Apple Wallet or Google Wallet on their phone. The wallet card updates itself when they renew.</li>
   <li>Scan it at the door to check them in, or at checkout to find their invoice. <a href="{% url 'help_guide' slug='scanning' %}">Barcodes and scanners</a> has how.</li>
   <li>{% ui "Resend membership card" %} emails it to them again.</li>
   <li>A card was lost or shared? {% ui "Membership number" %}, then {% ui "Reset" %}. The old number stops working; resend the card.</li>
