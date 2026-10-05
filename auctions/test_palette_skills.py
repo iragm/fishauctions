@@ -227,6 +227,33 @@ class InvoiceStatusTests(SkillTestCase):
         )
         self.assertIn("already", result["summary"])
 
+    def test_a_memo_goes_on_with_the_payment_and_find_invoice_reads_it_back(self):
+        result = self._run(
+            "set_invoice_status",
+            {"person": "555", "auction": self.in_person_auction.title, "status": "paid", "memo": "Venmo 10/2"},
+            user=self.admin_user,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.buyer_invoice.refresh_from_db()
+        self.assertEqual(self.buyer_invoice.status, "PAID")
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.memo, "Venmo 10/2")
+        found = self._run(
+            "find_invoice", {"person": "555", "auction": self.in_person_auction.title}, user=self.admin_user
+        )
+        self.assertIn("Venmo 10/2", found["memo"])
+
+    def test_a_memo_can_change_on_an_invoice_that_is_already_paid(self):
+        Invoice.objects.filter(pk=self.buyer_invoice.pk).update(status="PAID")
+        result = self._run(
+            "set_invoice_status",
+            {"person": "555", "auction": self.in_person_auction.title, "memo": "Zelle, not cash"},
+            user=self.admin_user,
+        )
+        self.assertIn("already", result["summary"])
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.memo, "Zelle, not cash")
+
     def test_a_participant_cannot_change_invoices(self):
         result = self._run(
             "set_invoice_status",

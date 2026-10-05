@@ -724,6 +724,23 @@ body.detail-panel-open {
     color: #00bc8c;
 }
 
+/* What to ask an AI agent (help_tags.aitip), and the connect-an-agent line on every help page. The
+   green of help-tip, with its own class so "about you" and "ask an agent" don't share a rule. */
+.help-ai {
+    background: rgba(0, 188, 140, 0.09);
+    border-left-color: rgba(0, 188, 140, 0.6);
+}
+
+.help-ai > .bi {
+    color: #00bc8c;
+}
+
+.help-ai-label {
+    font-weight: 600;
+    color: #00bc8c;
+    margin-right: 0.25rem;
+}
+
 /* A tip in a help guide (help_tags.tip): advice pulled out of the text, the same for every reader.
    The warning amber, tinted, so it reads as "worth knowing" without looking like something broke. */
 .help-hint {

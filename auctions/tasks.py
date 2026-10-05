@@ -837,30 +837,15 @@ def send_invoice_notification(self, invoice_pk):
             send_kwargs["headers"] = {"Reply-to": contact_email}
             send_kwargs["context"]["reply_to_email"] = contact_email
 
-        # notify_user: opted-in app users get a push instead; bookkeeping below is the same.
-        from auctions.notifications import notify_user
-
-        push_user = invoice.auctiontos_user.user
-        invoice_url = f"https://{current_site.domain}{invoice.get_absolute_url()}"
-        pushed = notify_user(
-            push_user,
-            category="invoice",
-            title=subject,
-            body="Tap to view your invoice.",
-            url=invoice_url,
-            send_email=lambda: mail.send(email, **send_kwargs),
-            auction_pk=invoice.auction.pk,
-            invoice_pk=invoice.pk,
-        )
+        # Always an email, never a push (notifications.PUSH_EXEMPT_CATEGORIES): a searchable record.
+        mail.send(email, **send_kwargs)
         from django.utils import timezone
 
         invoice.email_sent_on = timezone.now()
-        # Add history entry about the notification being sent
-        channel = "push notification" if pushed else "email"
         AuctionHistory.objects.create(
             auction=invoice.auction,
             user=None,
-            action=f"Invoice notification {channel} sent to {invoice.auctiontos_user.name} ({email})",
+            action=f"Invoice notification email sent to {invoice.auctiontos_user.name} ({email})",
             applies_to="INVOICES",
         )
 

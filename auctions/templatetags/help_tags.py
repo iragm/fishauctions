@@ -11,6 +11,7 @@ Inside ``{% with rule_usage=True %}`` a rule also says how many auctions use it
 from decimal import Decimal
 
 from django import template
+from django.conf import settings
 from django.core.cache import cache
 from django.templatetags.static import static
 from django.urls import NoReverseMatch, reverse
@@ -148,6 +149,19 @@ PERCENT_RULES = frozenset(
         "tax",
     }
 )
+#: Rules where leaving the box empty means the feature is off, so "Yours:" says Off rather than Blank.
+OFF_WHEN_BLANK = frozenset({"force_donation_threshold"})
+#: Rules the auction form hides for the other kind of auction (``AuctionEditForm.__init__``). No "Yours:" there.
+IN_PERSON_ONLY = frozenset(
+    {
+        "online_bidding",
+        "message_users_when_lots_sell",
+        "pre_register_lot_discount_percent",
+        "date_online_bidding_starts",
+        "date_online_bidding_ends",
+    }
+)
+ONLINE_ONLY = frozenset({"date_end"})
 #: Rules with no short value to show: the rules text is a page long.
 NO_VALUE = frozenset({"summernote_description"})
 
@@ -155,6 +169,8 @@ NO_VALUE = frozenset({"summernote_description"})
 def _rule_value(auction, name):
     """How ``auction`` has ``name`` set, in a few words, or blank when it has no short answer."""
     if name in NO_VALUE:
+        return ""
+    if name in (IN_PERSON_ONLY if auction.is_online else ONLINE_ONLY):
         return ""
     if name == "user_cut":
         return f"{100 - auction.winning_bid_percent_to_club}%"
@@ -165,7 +181,7 @@ def _rule_value(auction, name):
     if isinstance(value, bool):
         return "On" if value else "Off"
     if value in (None, ""):
-        return "Blank"
+        return "Off" if name in OFF_WHEN_BLANK else "Blank"
     if name in PERCENT_RULES:
         return f"{value}%"
     if name in MONEY_RULES:
@@ -311,6 +327,21 @@ def tip(parser, token):
     )
 
 
+@register.tag
+def aitip(parser, token):
+    """``{% aitip %}…{% endaitip %}``: what to ask an AI agent, after a section. The same for every reader.
+
+    Opens with the robot and "AI:", the look of the connect-an-agent line at the top of every page.
+    """
+    nodelist = parser.parse(("endaitip",))
+    parser.delete_first_token()
+    return _WrapNode(
+        nodelist,
+        '<div class="help-note help-ai"><i class="bi bi-robot"></i><div><span class="help-ai-label">AI:</span> ',
+        "</div></div>",
+    )
+
+
 class _MikeNode(_WrapNode):
     def render(self, context):
         self.opening = format_html(
@@ -354,9 +385,10 @@ def paypal_account(context):
 
 @register.inclusion_tag("help/partials/push_status.html", takes_context=True)
 def push_status(context):
-    """Whether "your lot is coming up" reaches the reader: their setting, the app, and this device.
+    """Turn on "your lot is about to sell" notifications and test them, for the app or this browser.
 
-    The device is asked in the page: the app's bridge in the app, the browser's own subscription outside it.
+    Only the page can tell whether this device is set up: the app's bridge in the app, the browser's own
+    subscription outside it. With the app on the account, a browser isn't asked (``user_has_app_push``).
     """
     ctx = _help(context)
     if not (ctx and ctx.signed_in):
@@ -367,6 +399,8 @@ def push_status(context):
         "lot_alerts": ctx.account["lot_alerts"],
         "app_push": ctx.account["app_push"],
         "in_app": bool(getattr(request, "is_mobile_app", False)),
+        "vapid_public_key": settings.WEBPUSH_SETTINGS.get("VAPID_PUBLIC_KEY", ""),
+        "csrf_token": context.get("csrf_token"),
     }
 
 

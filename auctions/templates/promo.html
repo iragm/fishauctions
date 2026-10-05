@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% comment %}The promo page: / for a signed-out visitor and /about/ for everyone (PromoSite). One line per feature, each linking to the help section that explains it; PromoPageTests checks every one of those links lands on a real section. Motion is decoration only: with JavaScript off or reduced motion asked for, everything is simply there.{% endcomment %}
+{% comment %}The promo page: / for a signed-out visitor and /about/ for everyone (PromoSite). One line per feature, each linking to the help section that explains it; PromoPageTests checks every one of those links lands on a real section. With JavaScript off, every demo is drawn in one telling state. Reduced motion stops things sliding and floating, not the demos.{% endcomment %}
 {% block title %}Club auctions, members and events{% endblock %}
 {% block meta_description %}Free software for club auctions, online and in person, and for running the club between them: memberships, events, mailing lists, Discord and breeder awards.{% endblock %}
 {% block extra_head %}
@@ -13,10 +13,12 @@
 <style>
   .promo { --promo-accent: #2fa4e7; --promo-green: #00bc8c; }
   .promo section { scroll-margin-top: 4rem; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
   .promo-kicker { color: var(--promo-accent); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: .85rem; }
   .promo-hero h1 { font-size: clamp(2.2rem, 5.5vw, 3.8rem); font-weight: 700; line-height: 1.08; }
   .promo-rotator { color: var(--promo-green); display: block; transition: opacity .3s, transform .3s; }
-  .promo-rotator.is-out { opacity: 0; transform: translateY(.3em); }
+  .promo-rotator.is-out { opacity: 0; }
+  .promo-motion .promo-rotator.is-out { transform: translateY(.3em); }
   .promo-lead { font-size: 1.25rem; }
 
   .promo-areas a { display: block; height: 100%; padding: 1.25rem; border-radius: .75rem; background: #303030; color: inherit; text-decoration: none; border: 1px solid transparent; transition: border-color .2s, transform .2s; }
@@ -51,11 +53,12 @@
   .promo-mock { background: #303030; border-radius: .75rem; padding: 1.25rem; box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, .35); }
   .promo-mock-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: #adb5bd; }
 
-  .promo-sales li { display: flex; justify-content: space-between; padding: .5rem .75rem; border-radius: .4rem; background: #3a3a3a; margin-bottom: .4rem; font-variant-numeric: tabular-nums; }
-  .promo-sales li.is-new { animation: promo-pop .5s ease-out; }
-  .promo-sales li:not(:first-child) { opacity: .7; }
-  @keyframes promo-pop { from { transform: translateY(-.5rem); opacity: 0; background: #00bc8c55; } }
-  .promo-total { font-size: 2rem; font-weight: 700; color: var(--promo-green); font-variant-numeric: tabular-nums; }
+  .promo-winners .form-control { min-height: calc(1.5em + .75rem + 2px); font-variant-numeric: tabular-nums; }
+  .promo-catch { min-height: 1.5em; transition: opacity .3s; }
+  .promo-catch.is-hidden { opacity: 0; }
+  .promo-winners [data-save].is-pressed { filter: brightness(.8); }
+  .promo-banner { transition: opacity .3s; }
+  .promo-banner.is-hidden { opacity: 0; }
 
   .promo-lot .promo-lot-blank { width: 100%; height: 190px; border-radius: .5rem; background: linear-gradient(135deg, #375a7f, #1f3349); display: flex; align-items: center; justify-content: center; font-size: 3rem; color: #ffffff66; }
   .promo-price { font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; transition: color .3s; }
@@ -71,7 +74,9 @@
   .promo-motion .promo-free { opacity: 0; transform: translateY(.5rem); transition: opacity .6s 1.8s, transform .6s 1.8s; }
   .promo-motion .is-visible .promo-free { opacity: 1; transform: none; }
 
-  .promo-card { aspect-ratio: 1.586; max-width: 360px; margin: 0 auto; border-radius: 1rem; padding: 1.25rem; color: #fff; background: radial-gradient(circle at 85% 15%, #2fa4e7 0, transparent 45%), linear-gradient(135deg, #375a7f, #1b2d40); display: flex; flex-direction: column; box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, .45); }
+  .promo-card { aspect-ratio: 1.586; max-width: 360px; margin: 0 auto; border-radius: 1rem; padding: 1.25rem; color: #fff; background: #1f2937; display: flex; flex-direction: column; box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, .45); }
+  .promo-card-logo { width: 2.25rem; height: 2.25rem; border-radius: 50%; background: #fff; color: #1f2937; display: inline-flex; align-items: center; justify-content: center; }
+  .promo-card-label { font-size: .75rem; color: #c8c8c8; }
   .promo-motion .promo-card { animation: promo-float 6s ease-in-out infinite; }
   @keyframes promo-float { 50% { transform: translateY(-8px) rotate(-1deg); } }
   .promo-barcode { height: 46px; margin-top: auto; border-radius: .25rem; background: #fff repeating-linear-gradient(90deg, #111 0 2px, transparent 2px 4px, #111 4px 5px, transparent 5px 8px, #111 8px 11px, transparent 11px 12px); background-clip: content-box; padding: 6px 8px; }
@@ -80,15 +85,10 @@
   .promo-bubble { padding: .65rem 1rem; border-radius: 1rem; max-width: 85%; margin-bottom: .6rem; }
   .promo-bubble.from-you { background: #375a7f; margin-left: auto; border-bottom-right-radius: .25rem; }
   .promo-bubble.from-ai { background: #3a3a3a; border-bottom-left-radius: .25rem; }
-  .promo-motion .promo-bubble.from-ai.is-waiting { opacity: 0; }
+  .promo-bubble.from-ai.is-waiting { opacity: 0; }
   .promo-bubble.from-ai { transition: opacity .4s; }
   .promo-caret::after { content: "|"; animation: promo-blink 1s steps(1) infinite; margin-left: 1px; }
   @keyframes promo-blink { 50% { opacity: 0; } }
-
-  .promo-video { position: relative; display: block; width: 100%; max-width: 22rem; margin-left: auto; margin-right: auto; border: 0; padding: 0; border-radius: .75rem; overflow: hidden; background: #000; }
-  .promo-video img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; opacity: .75; transition: opacity .2s; }
-  .promo-video:hover img { opacity: 1; }
-  .promo-video .bi { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 4rem; color: #fff; text-shadow: 0 .25rem 1rem rgba(0, 0, 0, .6); }
 
   .promo-motion .reveal { opacity: 0; transform: translateY(1.5rem); transition: opacity .7s ease-out, transform .7s ease-out; transition-delay: calc(var(--i, 0) * 90ms); }
   .promo-motion .reveal.is-visible { opacity: 1; transform: none; }
@@ -101,7 +101,7 @@
   <h1 class="mb-3">One home for your club's <span class="promo-rotator" data-words="auctions|members|events|mailing list|Discord|breeder awards">auctions</span></h1>
   <p class="promo-lead text-muted mx-auto mb-4" style="max-width: 36rem;">In person or online, and everything your club does between auctions. Completely free.</p>
   <div class="d-flex flex-wrap gap-2 justify-content-center">
-    <a class="btn btn-success text-dark btn-lg" href="{% url 'support' %}">Bring your club</a>
+    <a class="btn btn-success text-dark btn-lg" href="{% if enable_club_finder %}{% url 'clubs' %}{% else %}{% url 'support' %}{% endif %}">Bring your club</a>
     <a class="btn btn-primary btn-lg" href="{% url 'auctions' %}">Find an auction</a>
   </div>
   {% if site.lots %}<p class="text-muted small mt-3 mb-0">{{ site.lots|floatformat:"0g" }} lots auctioned here in the last three years.</p>{% endif %}
@@ -134,27 +134,25 @@
     <div class="col-lg-6">
       <div class="promo-kicker reveal">In-person auctions</div>
       <h2 class="display-6 fw-bold mb-4 reveal">You run the room. We do the paperwork.</h2>
-      <a class="promo-feature reveal" href="{% url 'help_guide' slug='scanning' %}"><i class="bi bi-upc-scan"></i><div><div class="promo-feature-title">Check in with a scan</div><div class="text-muted">Membership cards and paddles, from any phone camera.</div></div></a>
-      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#selling"><i class="bi bi-mic"></i><div><div class="promo-feature-title">A few seconds a lot</div><div class="text-muted">Type it, tap it, or just say "lot 12, bidder 104, fifteen dollars".</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#lots"><i class="bi bi-box-seam"></i><div><div class="promo-feature-title">Add lots easily</div><div class="text-muted">Users can add lots themselves, or you can add lots for them.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#selling"><i class="bi bi-mic"></i><div><div class="promo-feature-title">Simple bid recording</div><div class="text-muted">Type it, tap it, or just say "lot 12, bidder 104, fifteen dollars".</div></div></a>
       <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#projector"><i class="bi bi-projector"></i><div><div class="promo-feature-title">Every lot on the big screen</div><div class="text-muted">Photos on the projector as each lot is called.</div></div></a>
       <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#checkout"><i class="bi bi-receipt"></i><div><div class="promo-feature-title">Checkout in seconds</div><div class="text-muted">Invoices add themselves up. Square, Tap to Pay or cash.</div></div></a>
-      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#online-bidding"><i class="bi bi-house"></i><div><div class="promo-feature-title">Bidders at home, too</div><div class="text-muted">Members who can't make it bid online against the room.</div></div></a>
     </div>
     <div class="col-lg-6 reveal">
-      <div class="promo-mock" id="promo-sales" aria-hidden="true">
-        <div class="d-flex justify-content-between align-items-baseline mb-3">
-          <span class="promo-mock-label">Set lot winners</span>
-          <span class="promo-mock-label">Sold so far</span>
+      {% comment %}Drawn as the demo's first catch: lot 5 sold to a bidder number nobody has. The script picks up from here, fixes it to 243, and goes on through the other lots.{% endcomment %}
+      <div class="promo-mock promo-winners" id="promo-winners" aria-hidden="true">
+        <div class="promo-mock-label mb-2">Set lot winners</div>
+        <div class="alert bg-success text-dark py-2 px-3 mb-3 promo-banner is-hidden" data-banner><i class="bi bi-check-circle-fill me-1"></i><span data-banner-text>Bidder 57 is now the winner of lot 4</span></div>
+        <div class="row g-2 align-items-start">
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">Lot</div><div class="form-control" data-field="lot">5</div></div>
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">Price</div><div class="input-group"><span class="input-group-text">$</span><div class="form-control" data-field="price">10</div></div></div>
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">Winner</div><div class="form-control is-invalid" data-field="winner">234</div></div>
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">&nbsp;</div><div class="btn btn-success text-dark w-100" data-save>Save</div></div>
         </div>
-        <div class="text-end promo-total mb-2" data-total>$412</div>
-        <ul class="promo-sales list-unstyled mb-0">
-          <li><span>Lot 41</span><span>Bidder 117</span><span>$35 <i class="bi bi-check-lg text-success"></i></span></li>
-          <li><span>Lot 40</span><span>Bidder 23</span><span>$12 <i class="bi bi-check-lg text-success"></i></span></li>
-          <li><span>Lot 39</span><span>Bidder 8</span><span>$20 <i class="bi bi-check-lg text-success"></i></span></li>
-          <li><span>Lot 38</span><span>Bidder 64</span><span>$7 <i class="bi bi-check-lg text-success"></i></span></li>
-        </ul>
+        <div class="promo-catch text-danger fw-semibold mt-2"><i class="bi bi-shield-exclamation me-1"></i><span data-catch>Caught: bidder 234 isn't in this auction</span></div>
       </div>
-      {% if in_person_tutorial %}<button type="button" class="promo-video mt-4" data-video="{{ in_person_tutorial }}" aria-label="Play the in-person auction tour"><img src="https://i.ytimg.com/vi/{{ in_person_tutorial }}/hqdefault.jpg" alt="" loading="lazy"><i class="bi bi-play-circle-fill"></i></button><div class="text-muted small text-center mt-2">The in-person tour</div>{% endif %}
+      <p class="text-muted text-center mt-3 mb-0"><i class="bi bi-shield-check text-success me-1"></i>Wrong numbers are caught before anything is saved.</p>
     </div>
   </div>
 </section>
@@ -175,7 +173,7 @@
       </div>
       <a class="promo-feature reveal" href="{% url 'help_guide' slug='online-auctions' %}#bid"><i class="bi bi-cup-hot"></i><div><div class="promo-feature-title">Bid from the couch</div><div class="text-muted">A week to look things up before you bid.</div></div></a>
       <a class="promo-feature reveal" href="{% url 'help_guide' slug='online-auctions' %}#sell"><i class="bi bi-shield-check"></i><div><div class="promo-feature-title">Nothing sells too cheap</div><div class="text-muted">Sellers set a minimum bid, or a buy-now price.</div></div></a>
-      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-online-auction' %}#multi-location"><i class="bi bi-geo-alt"></i><div><div class="promo-feature-title">Pickup near everyone</div><div class="text-muted">Neighbouring clubs share one auction, each with its own pickup spot.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-online-auction' %}#multi-location"><i class="bi bi-geo-alt"></i><div><div class="promo-feature-title">Deliver lots to multiple locations</div><div class="text-muted">Club members choose the location nearest them.</div></div></a>
       <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-online-auction' %}#invoices"><i class="bi bi-calculator"></i><div><div class="promo-feature-title">Invoices build themselves</div><div class="text-muted">Everyone knows what they owe before pickup.</div></div></a>
     </div>
     <div class="col-lg-6 reveal">
@@ -191,7 +189,6 @@
           <span class="badge text-bg-primary fs-6 px-3 py-2">Place bid</span>
         </div>
       </div>
-      {% if online_tutorial %}<button type="button" class="promo-video mt-4" data-video="{{ online_tutorial }}" aria-label="Play the online auction tour"><img src="https://i.ytimg.com/vi/{{ online_tutorial }}/hqdefault.jpg" alt="" loading="lazy"><i class="bi bi-play-circle-fill"></i></button><div class="text-muted small text-center mt-2">The online tour</div>{% endif %}
     </div>
   </div>
 </section>
@@ -204,13 +201,17 @@
   <div class="row g-4 g-lg-5 align-items-center">
     <div class="col-lg-4 reveal">
       <div class="promo-card" aria-hidden="true">
-        <div class="d-flex justify-content-between align-items-start">
-          <div class="fw-bold fs-5">Your Club</div>
-          <i class="bi bi-person-vcard fs-3"></i>
+        <div class="d-flex align-items-center gap-2">
+          <span class="promo-card-logo"><i class="bi bi-water"></i></span>
+          <div class="fw-bold">Your Club</div>
+          <div class="ms-auto small text-end">Active Paid Membership</div>
         </div>
-        <div class="mt-3 small opacity-75">Member</div>
-        <div class="fw-semibold">Pat Rivera &middot; #1042</div>
-        <div class="small opacity-75 mb-2">Paid through December</div>
+        <div class="mt-3 promo-card-label">Member</div>
+        <div class="fs-5 fw-semibold lh-sm">Pat Rivera</div>
+        <div class="d-flex gap-4 mt-2">
+          <div><div class="promo-card-label">Member ID</div><div class="small">1042</div></div>
+          <div><div class="promo-card-label">Membership</div><div class="small">Valid through 31 Dec 2026</div></div>
+        </div>
         <div class="promo-barcode"></div>
       </div>
       <div class="text-center text-muted mt-3"><i class="bi bi-apple"></i> Apple Wallet &middot; <i class="bi bi-google"></i> Google Wallet</div>
@@ -235,8 +236,10 @@
     <div class="col-lg-5 text-center text-lg-start">
       <div class="promo-kicker reveal">AI tools</div>
       <h2 class="display-6 fw-bold reveal">Or just ask.</h2>
-      <p class="fs-5 text-muted reveal">Connect Claude, ChatGPT or Grok, and manage all of it in plain English.</p>
+      <p class="fs-5 text-muted reveal mb-1">Connect Claude, ChatGPT or Grok, and manage all of it in plain English.</p>
+      <p class="small text-muted reveal">Perfect for instant help and troubleshooting about any aspect of your auction or club</p>
       <a class="btn btn-primary reveal" href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI assistant</a>
+      <p class="small text-muted mt-3 mb-0 reveal">Or <a href="{% url 'support' %}">get help from an actual person</a>.</p>
     </div>
     <div class="col-lg-7 reveal">
       <div class="promo-mock promo-chat" id="promo-chat" aria-hidden="true">
@@ -256,10 +259,9 @@
 </section>
 
 <section class="promo-mock text-center py-5 my-4 reveal">
-  <h2 class="display-6 fw-bold mb-2">Make a splash with your next auction.</h2>
-  <p class="text-muted mb-4">Tell us your club's name and we'll set it up.</p>
+  <h2 class="display-6 fw-bold mb-4">Make a splash with your next auction.</h2>
   <div class="d-flex flex-wrap gap-2 justify-content-center">
-    <a class="btn btn-success text-dark btn-lg" href="{% url 'support' %}">Bring your club</a>
+    <a class="btn btn-success text-dark btn-lg" href="{% url 'auctions' %}">Find an auction</a>
     <a class="btn btn-primary btn-lg" href="{% url 'help' %}">Read the help</a>
   </div>
 </section>
@@ -269,12 +271,15 @@
 {% block extra_js %}
 <script>
 (function () {
+  // promo-motion only moves things about: reveals, the floating card, the photo strip. The demos below
+  // change words and numbers, so they run with reduced motion too.
   var motion = document.documentElement.classList.contains("promo-motion");
+  var observing = "IntersectionObserver" in window;
 
   // Run `start` once, the first time `el` scrolls into view.
   function whenSeen(el, start, threshold) {
     if (!el) return;
-    if (!motion) { start(); return; }
+    if (!observing) { start(); return; }
     var seen = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (entry.isIntersecting) { seen.disconnect(); start(); }
@@ -297,7 +302,7 @@
 
   // The on-this-page bar follows the section in view.
   var navLinks = document.querySelectorAll(".promo-nav .nav-link");
-  if ("IntersectionObserver" in window) {
+  if (observing) {
     var spy = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (!entry.isIntersecting) return;
@@ -306,8 +311,6 @@
     }, { rootMargin: "-45% 0px -50% 0px" });
     navLinks.forEach(function (link) { spy.observe(document.querySelector(link.getAttribute("href"))); });
   }
-
-  if (!motion) return;
 
   var rotator = document.querySelector(".promo-rotator");
   if (rotator) {
@@ -322,20 +325,60 @@
     }, 2200);
   }
 
-  var sales = document.getElementById("promo-sales");
-  whenSeen(sales, function () {
-    var list = sales.querySelector(".promo-sales"), totalEl = sales.querySelector("[data-total]");
-    var total = 412, lot = 42;
-    setInterval(function () {
-      var bidder = 1 + Math.floor(Math.random() * 150), price = 5 + Math.floor(Math.random() * 40);
-      total += price;
-      var row = document.createElement("li");
-      row.className = "is-new";
-      row.innerHTML = "<span>Lot " + lot++ + "</span><span>Bidder " + bidder + "</span><span>$" + price + ' <i class="bi bi-check-lg text-success"></i></span>';
-      list.insertBefore(row, list.firstChild);
-      if (list.children.length > 4) list.removeChild(list.lastChild);
-      totalEl.textContent = "$" + total.toLocaleString();
-    }, 2400);
+  // Set lot winners, one keystroke at a time, with a mistake caught on two of the three lots.
+  var winners = document.getElementById("promo-winners");
+  whenSeen(winners, function () {
+    var save = winners.querySelector("[data-save]"), banner = winners.querySelector("[data-banner]");
+    var bannerText = winners.querySelector("[data-banner-text]"), caught = winners.querySelector("[data-catch]");
+    function field(name) { return winners.querySelector('[data-field="' + name + '"]'); }
+    var steps = [
+      ["type", "lot", "5"], ["type", "price", "10"], ["type", "winner", "234"], ["save"],
+      ["error", "winner", "Caught: bidder 234 isn't in this auction"],
+      // The markup is drawn as of here.
+      ["clear", "winner"], ["type", "winner", "243"], ["save"], ["sold", "Bidder 243 is now the winner of lot 5"],
+      ["type", "lot", "6"], ["type", "price", "25"], ["type", "winner", "57"], ["save"], ["sold", "Bidder 57 is now the winner of lot 6"],
+      ["type", "lot", "6"], ["type", "price", "8"], ["type", "winner", "112"], ["save"],
+      ["error", "lot", "Caught: lot 6 has already been sold"],
+      ["clear", "lot"], ["type", "lot", "7"], ["save"], ["sold", "Bidder 112 is now the winner of lot 7"]
+    ];
+    var i = 5;
+    function next(delay) { setTimeout(run, delay); }
+    function run() {
+      var step = steps[i];
+      i = (i + 1) % steps.length;
+      if (step[0] === "type") {
+        var el = field(step[1]), text = step[2], c = 0;
+        el.classList.add("promo-caret");
+        var typing = setInterval(function () {
+          el.textContent = text.slice(0, ++c);
+          if (c < text.length) return;
+          clearInterval(typing);
+          el.classList.remove("promo-caret");
+          next(350);
+        }, 160);
+      } else if (step[0] === "save") {
+        save.classList.add("is-pressed");
+        setTimeout(function () { save.classList.remove("is-pressed"); }, 200);
+        next(500);
+      } else if (step[0] === "error") {
+        banner.classList.add("is-hidden");
+        field(step[1]).classList.add("is-invalid");
+        caught.textContent = step[2];
+        caught.parentElement.classList.remove("is-hidden");
+        next(2600);
+      } else if (step[0] === "clear") {
+        field(step[1]).classList.remove("is-invalid");
+        field(step[1]).textContent = "";
+        caught.parentElement.classList.add("is-hidden");
+        next(400);
+      } else if (step[0] === "sold") {
+        ["lot", "price", "winner"].forEach(function (name) { field(name).textContent = ""; });
+        bannerText.textContent = step[1];
+        banner.classList.remove("is-hidden");
+        next(2400);
+      }
+    }
+    next(1200);
   });
 
   var lotCard = document.getElementById("promo-lot");
@@ -390,20 +433,5 @@
     play();
   });
 })();
-
-// The tours load YouTube only when asked to play.
-document.querySelectorAll(".promo-video").forEach(function (button) {
-  button.addEventListener("click", function () {
-    var frame = document.createElement("iframe");
-    frame.src = "https://www.youtube-nocookie.com/embed/" + encodeURIComponent(button.dataset.video) + "?autoplay=1&rel=0";
-    frame.title = button.getAttribute("aria-label");
-    frame.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
-    frame.allowFullscreen = true;
-    var box = document.createElement("div");
-    box.className = "ratio ratio-16x9 rounded overflow-hidden mt-4";
-    box.appendChild(frame);
-    button.replaceWith(box);
-  });
-});
 </script>
 {% endblock %}

@@ -3978,17 +3978,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     exact_location_set = models.BooleanField(default=False)
     exact_location_set.help_text = "The location was pinned from a phone at the venue (or confirmed exact)."
     email_users_when_invoices_ready = models.BooleanField(default=True)
-    SURVEY_NONE = "none"
-    SURVEY_IN_INVOICE = "invoice"
-    SURVEY_SEPARATE = "separate"
-    POST_AUCTION_SURVEY_CHOICES = (
-        (SURVEY_NONE, "No feedback"),
-        (SURVEY_IN_INVOICE, "Feedback included in invoice email"),
-        (SURVEY_SEPARATE, "Feedback as separate email"),
-    )
-    post_auction_survey = models.CharField(
-        max_length=20, choices=POST_AUCTION_SURVEY_CHOICES, default=SURVEY_IN_INVOICE
-    )
+    post_auction_survey = models.BooleanField(default=True, verbose_name="Ask for feedback")
     post_auction_survey.help_text = "Ask people how the auction went"
     survey_emails_sent = models.BooleanField(default=False)
     invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
@@ -11387,7 +11377,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     push_notifications_instead_of_email = models.BooleanField(default=False, blank=True)
     push_notifications_instead_of_email.help_text = (
         "Get notifications in the app instead of emails, for everything "
-        "except account emails like password resets. Requires the app to be installed "
+        "except invoices and account emails like password resets. Requires the app to be installed "
         "and signed in. Auctions near you arrive as notifications too."
     )
     paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
@@ -11399,6 +11389,11 @@ class UserData(CachedPropertiesMixin, models.Model):
         "When the user asked us to delete their account.  The account keeps working until the grace "
         "period is up (see auctions.account_deletion); signing in again cancels the request."
     )
+    merge_into_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    merge_into_user.help_text = (
+        "Another account this user asked to be merged into. That account finishes it; see auctions.account_merge."
+    )
+    merge_requested_on = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"

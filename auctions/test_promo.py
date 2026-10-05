@@ -22,8 +22,16 @@ HELP_LINK = re.compile(r'href="(/help/([\w-]+)/)(?:#([\w-]+))?"')
 @isolated_cache("promo-page")
 @override_settings(ENABLE_PROMO_PAGE=True)
 class PromoPageTests(StandardTestCase):
-    def test_a_signed_out_visitor_lands_on_it(self):
-        self.assertTemplateUsed(self.client.get(reverse("home")), "promo.html")
+    def test_a_signed_out_visitor_lands_on_it_at_its_own_address(self):
+        """One address for everyone, so a link copied from it works for whoever it's sent to."""
+        self.assertRedirects(self.client.get(reverse("home")), reverse("promo"))
+        self.assertRedirects(
+            self.client.get(reverse("home") + "?utm_source=flyer"), reverse("promo") + "?utm_source=flyer"
+        )
+
+    @override_settings(ENABLE_CLUB_FINDER=True)
+    def test_bring_your_club_goes_to_the_map(self):
+        self.assertContains(self.client.get(reverse("promo")), f'href="{reverse("clubs")}">Bring your club', count=1)
 
     def test_about_is_the_promo_page_signed_in_too(self):
         self.client.force_login(self.user)

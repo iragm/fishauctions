@@ -215,11 +215,12 @@ class DistanceUnitTests(StandardTestCase):
 
 
 class PayPalInfoViewTests(TestCase):
-    """/paypal/ is the PayPal section of the Card payments guide, signed in or not."""
+    """/paypal/ is the Card payments guide, signed in or not. Its PayPal section shows only to people with PayPal."""
 
     def test_paypal_info_non_logged_in_user(self):
         response = self.client.get(reverse("paypal_seller"), follow=True)
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Square")
         self.assertContains(response, 'id="paypal"')
 
     def test_paypal_info_logged_in_user(self):

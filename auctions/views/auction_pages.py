@@ -1043,7 +1043,7 @@ class AuctionSurvey(TemplateView):
             if not self.token and not request.user.is_authenticated:
                 return redirect_to_login(request.get_full_path())
             raise Http404
-        if self.auction.post_auction_survey == Auction.SURVEY_NONE:
+        if not self.auction.post_auction_survey:
             return redirect(self.auction.get_absolute_url())
         return super().dispatch(request, *args, **kwargs)
 

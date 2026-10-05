@@ -208,10 +208,12 @@ class InterestInline(admin.TabularInline):
 
 class UserdataInline(admin.StackedInline):
     model = UserData
+    fk_name = "user"
     can_delete = False
     verbose_name_plural = "User data"
     exclude = (
         "unsubscribe_link",
+        "merge_into_user",
         "rank_unique_species",
         "number_unique_species",
         "rank_total_lots",

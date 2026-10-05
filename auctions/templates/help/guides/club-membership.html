@@ -47,6 +47,7 @@
 </div>
 <p>The menu at the end of each row has the rest: {% ui "Permissions" %}, {% ui "Renew" %}, {% ui "Set expiration date" %}, {% ui "Membership number" %}, {% ui "Resend membership card" %}, {% ui "Merge with..." %} and {% ui "Deactivate" %}. A deactivated member drops off the list, keeps their history, and comes back with {% ui "Reactivate" %}.</p>
 <p>{% page "club_member_map" "Map" %} puts everyone with an address on a map. Handy for picking a meeting place, or a second pickup location.</p>
+{% aitip %}Ask "who is about to lapse?" or "how many members have renewed?"{% endaitip %}
 
 <h2 class="h5 mt-4" id="adding">Adding members</h2>
 <div class="table-responsive">
@@ -75,6 +76,7 @@
 </ul>
 <h3 class="h6 mt-3" id="duplicates">The same person twice</h3>
 <p>It happens: one entry from the old spreadsheet and one from signing up. A <i class="bi bi-people-fill text-warning"></i> next to a name means the site thinks it's found one. Search "duplicate" to see them all. Open the menu on the one you don't want, click {% page "club_member_merge" "Merge with..." %}, and pick the one to keep. Anything the kept one is missing is filled in from the other, the two sets of permissions are combined, and the other is deactivated. It can't be undone.</p>
+{% aitip %}Ask "add Jane Doe, jane@example.com, as a member".{% endaitip %}
 
 <h2 class="h5 mt-4" id="dues">Dues</h2>
 <p>On {% page "club_membership_settings" "Membership and payments" %}:</p>
@@ -99,8 +101,9 @@
 {% tip %}Took money? {% ui "Renew" %}. Just correcting a mistake? {% ui "Set expiration date" %}. Using the wrong one either counts dues nobody paid, or loses dues somebody did.{% endtip %}
 <p>Your own membership form, on your website or Google Forms, doesn't make someone a paid member here. Renew them by hand, or have the form do it with an API key that can renew memberships.</p>
 <h3 class="h6 mt-3" id="auto-renew">Automatic renewals</h3>
-<p>Clubs that take PayPal can let members pay by yearly subscription, so their membership renews itself with nobody chasing it. Under {% page "club_membership_settings" "Membership and payments" %}, open {% ui "PayPal membership subscriptions" %}, follow the steps in PayPal, and paste the {% ui "PayPal webhook ID" %} it gives you.</p>
-<p>Without PayPal, turn on the <a href="{% url 'help_guide' slug='club-email' %}#membership-emails">expiration reminders</a>: once you charge a fee and have a payment account connected, each one carries a button to pay.</p>
+{% if help.paypal %}<p>Members can pay by yearly subscription, so their membership renews itself with nobody chasing it. Under {% page "club_membership_settings" "Membership and payments" %}, open {% ui "PayPal membership subscriptions" %}, follow the steps in PayPal, and paste the {% ui "PayPal webhook ID" %} it gives you.</p>{% endif %}
+<p>{% if help.paypal %}Or turn{% else %}Turn{% endif %} on the <a href="{% url 'help_guide' slug='club-email' %}#membership-emails">expiration reminders</a>: once you charge a fee and have a payment account connected, each one carries a button to pay.</p>
+{% aitip %}Ask "Bob paid his dues". It renews him and records the payment.{% endaitip %}
 
 <h2 class="h5 mt-4" id="cards">Membership cards</h2>
 <p>With {% ui "Show member barcodes" %} on, every member gets a number and a barcode. It's made by the site; you can't bring your own numbering.</p>
@@ -112,3 +115,4 @@
   <li>No phone? Print it: add a row for them on {% page "club_barcode_labels" "Print Barcodes" %} and click {% page "club_barcode_labels_pdf" "Download PDF" %}.</li>
 </ul>
 <p>{% page "club_stats" "Club stats" %} charts how many members you've had over the years.</p>
+{% aitip %}Ask "resend Jane her membership card".{% endaitip %}

@@ -102,7 +102,7 @@ GROUPS = (
                 "payments",
                 "Card payments",
                 "bi-credit-card",
-                "Taking cards with Square, or PayPal for the clubs that have it: pay buttons, checkout QR codes, Tap to Pay.",
+                "Taking cards with Square: pay buttons, checkout QR codes, Tap to Pay.",
                 audience=ADMIN,
             ),
             Guide(
@@ -288,6 +288,11 @@ class HelpContext:
         return [{"name": name, "url": url, "icon": icon} for name, url, icon in stores if url]
 
     @property
+    def now(self):
+        """For a guide comparing one of the auction's dates with now."""
+        return timezone.now()
+
+    @property
     def signed_in(self) -> bool:
         return bool(self.user and self.user.is_authenticated)
 
@@ -352,6 +357,106 @@ class HelpContext:
         from auctions.help_stats import auction_facts
 
         return auction_facts(self.stats_auction) if self.stats_auction else {}
+
+    @cached_property
+    def paypal_invoices(self) -> dict:
+        """The PayPal export for the reader's auction or latest one (``help_stats.paypal_invoices``)."""
+        from auctions.help_stats import paypal_invoices
+
+        return paypal_invoices(self.user, self.auction, self.is_admin)
+
+    @cached_property
+    def paypal(self) -> bool:
+        """Whether PayPal is on for the reader: their club takes it, or their account has it, or they linked one.
+
+        The guides mention PayPal only when this is true; everyone else is pointed at Square.
+        """
+        club = self.club
+        if club is not None and (club.allow_non_oauth_paypal or club.can_accept_paypal):
+            return True
+        if not self.signed_in:
+            return False
+        userdata = getattr(self.user, "userdata", None)
+        if userdata is not None and userdata.paypal_enabled:
+            return True
+        from auctions.models import PayPalSeller
+
+        return PayPalSeller.objects.filter(user=self.user).exists()
+
+    @cached_property
+    def tos(self):
+        """The reader's place in the auction, with their pickup location, or None."""
+        if not (self.auction and self.signed_in):
+            return None
+        from auctions.models import AuctionTOS
+
+        return AuctionTOS.objects.filter(auction=self.auction, user=self.user).select_related("pickup_location").first()
+
+    @cached_property
+    def invoice(self):
+        """The reader's invoice in the auction, or None."""
+        if not self.tos:
+            return None
+        from auctions.models import Invoice
+
+        return Invoice.objects.filter(auctiontos_user=self.tos).first()
+
+    @cached_property
+    def pay_now(self) -> bool:
+        """Whether the auction's invoices get a Pay now button. ``Invoice.show_payment_button`` asked of an
+        unsaved invoice that owes a dollar, so the answer is the auction's set-up, not the reader's balance.
+        """
+        if not self.auction:
+            return False
+        from decimal import Decimal
+
+        from auctions.models import Invoice
+
+        invoice = Invoice(auction=self.auction, status="DRAFT")
+        invoice.__dict__["rounded_net_after_payments"] = Decimal(-1)
+        return bool(invoice.show_payment_button)
+
+    @cached_property
+    def lot_fields(self) -> list[dict]:
+        """The boxes after the name on the auction's lot form, in the form's words: ``{"label", "required"}``.
+        The ones ``lot_form.html`` shows for the auction (``get_auction_info``).
+        """
+        auction = self.auction
+        if not auction:
+            return []
+        from auctions.forms import CreateLotForm
+        from auctions.models import AuctionDropdown
+
+        fields = []
+
+        def add(name, required=False, label=""):
+            fields.append({"label": label or str(CreateLotForm.base_fields[name].label), "required": required})
+
+        if auction.use_quantity_field:
+            add("quantity")
+        if auction.use_description:
+            add("summernote_description")
+        if auction.reserve_price != "disable":
+            add("reserve_price", auction.reserve_price == "required")
+        if auction.buy_now != "disable":
+            add("buy_now_price", auction.buy_now == "required")
+        if auction.use_i_bred_this_fish_field:
+            add("i_bred_this_fish")
+        if auction.use_reference_link:
+            add("reference_link")
+        if auction.use_donation_field:
+            add("donation")
+        if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
+            add("custom_checkbox", label=auction.custom_checkbox_name)
+        if auction.custom_field_1 != "disable" and auction.custom_field_1_name:
+            add("custom_field_1", auction.custom_field_1 == "required", auction.custom_field_1_name)
+        if (
+            auction.use_custom_dropdown_field != "disable"
+            and auction.custom_dropdown_name
+            and AuctionDropdown.objects.filter(auction=auction).count() >= 2
+        ):
+            add("custom_dropdown", auction.use_custom_dropdown_field == "required", auction.custom_dropdown_name)
+        return fields
 
     @cached_property
     def has_ai_agent(self) -> bool:
@@ -594,6 +699,7 @@ NOT_IN_HELP: dict[str, str] = {
     "faq": "Being replaced by these guides.",
     "auction_help": "Redirects into these guides.",
     "auction_survey": "One question, reached from its buttons in an email; the question is the whole page.",
+    "print_my_unprinted_labels": "Reached from the buy-now sale email, which says what it prints.",
     "blog_post": "Posts are announcements, read on their own.",
     "admin_dashboard": "Site operator only.",
     "admin_setup_checklist": "Site operator only.",
@@ -625,6 +731,11 @@ NOT_IN_HELP: dict[str, str] = {
     "square_seller": "Redirects into the Card payments guide.",
     "square_connect": "The connect button in the Card payments guide is drawn by help_tags.square_account, only for someone Square will take.",
     "paypal_connect": "PayPal is set up for a few clubs with their own credentials; the guides don't offer the older connect-your-own-account flow.",
+    "auction_printable_lot_list": "Every lot on one page, under More; the page says what it is.",
+    "bulk_add_image": "Reached from the Quick add images button on a person's Actions menu; the page steps through their lots.",
+    "lot_by_pk_qr": "The address inside a label's QR code; people scan it, nobody navigates to it.",
+    "all_auctions": "The same list as Auctions, at another address.",
+    "invoice_by_pk": "One invoice. The guides link the reader's own; My Invoice and Invoices reach it.",
     "my_labels_by_username": "One person's labels by username; nothing links it. print_labels_by_bidder_number is the same page.",
 }
 

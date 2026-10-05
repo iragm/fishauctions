@@ -122,6 +122,7 @@ urlpatterns = [
     path("api/users/location/", views.SetCoordinates.as_view()),
     path("api/users/enable-notifications", views.UpdateLotPushNotificationsView.as_view(), name="enable_notifications"),
     path("api/lots/<int:pk>/test-notification/", views.LotPushTestNotificationView.as_view(), name="lot_push_test"),
+    path("api/users/test-notification/", views.PushTestNotificationView.as_view(), name="push_test"),
     path("api/users/lot_notifications/", views.LotNotifications.as_view()),
     path("api/users/auction_notifications/", views.AuctionNotifications.as_view()),
     path("api/check-username/", views.CheckUsernameAvailability.as_view(), name="check_username"),
@@ -432,15 +433,16 @@ urlpatterns = [
         login_required(views.LotLabelView.as_view()),
         name="my_labels_by_username",
     ),
-    path(
-        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/",
-        login_required(views.LotLabelView.as_view()),
-        name="print_labels_by_bidder_number",
-    ),
+    # Before the <path:> route below, which would otherwise swallow "14/unprinted" as a bidder number.
     path(
         "auctions/<slug:slug>/print/bidder/<str:bidder_number>/unprinted/",
         login_required(views.UnprintedLotLabelsView.as_view()),
         name="print_unprinted_labels_by_bidder_number",
+    ),
+    path(
+        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/",
+        login_required(views.LotLabelView.as_view()),
+        name="print_labels_by_bidder_number",
     ),
     path(
         "auctions/<slug:slug>/users/",
@@ -676,6 +678,11 @@ urlpatterns = [
         "account/delete/",
         login_required(views.AccountDeleteView.as_view()),
         name="account_delete",
+    ),
+    path(
+        "account/merge/",
+        login_required(views.AccountMergeView.as_view()),
+        name="account_merge",
     ),
     # Public: the user is signed out by the time they land here.
     path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),

@@ -673,6 +673,8 @@ def lot_add_block(auction, tos, is_admin, *, bulk=True):
     if not tos.selling_allowed and not is_admin:
         return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You don't have permission to add lots to this auction"
     if not is_admin and not auction.can_submit_lots:
+        if timezone.now() < auction.lot_submission_start_date:
+            return LOT_ADD_BLOCK_SUBMISSION_ENDED, f"Lot submission hasn't opened yet for {auction}"
         return LOT_ADD_BLOCK_SUBMISSION_ENDED, f"Lot submission has ended for {auction}"
     if bulk and not is_admin and not auction.allow_bulk_adding_lots:
         return (

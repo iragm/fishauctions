@@ -6052,6 +6052,8 @@ def find_invoice(request, params: dict[str, Any]) -> dict[str, Any]:
         "person": None if mine else whose,
         "bidder_number": tos.bidder_number,
         "invoice": body,
+        # The invoice page's Memo box; admins only, and replaced (not appended) by set_invoice_status.
+        **({"memo": untrusted_short(tos.memo)} if not mine else {}),
         "adjustments": [
             {"label": untrusted_short(adjustment.notes), "amount": adjustment.display}
             for adjustment in invoice.invoiceadjustment_set.all()[:LIST_LIMIT]
@@ -6368,9 +6370,19 @@ def set_invoice_status(request, params: dict[str, Any]) -> dict[str, Any]:
     invoice = tos.invoice
     if not invoice:
         return _error(f"{tos.name} doesn't have an invoice in {auction.title} yet.")
+    memo = _str(params, "memo")
+    if memo:
+        # The invoice page's Memo box is the participant's admin note: the same write update_person makes.
+        written = update_person(
+            request, {"person": tos.bidder_number or tos.name, "memo": memo, "auction": auction.slug}
+        )
+        if not written.get("ok"):
+            return written
+        tos.refresh_from_db()
     if invoice.status == status:
         return _ok(
-            f"{untrusted_short(tos.name)}'s invoice is already {invoice.get_status_display().lower()}.",
+            f"{untrusted_short(tos.name)}'s invoice is already {invoice.get_status_display().lower()}."
+            + (" The memo is saved." if memo else ""),
             bidder_number=tos.bidder_number,
             auction=auction.slug,
         )
@@ -12287,6 +12299,10 @@ register(
         params={
             "person": "string, required. Their name or bidder number.",
             "status": "string, optional: 'paid' (default), 'ready', or 'open'.",
+            "memo": (
+                "string, optional. Replaces the admin-only Memo on the invoice, e.g. 'Venmo 10/2'. "
+                "find_invoice shows the current one; to add to it, send the whole text."
+            ),
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
@@ -15465,6 +15481,10 @@ NOT_A_SKILL: dict[str, str] = {
     "RemotePrintJobCancelView": _THIS_JOB,
     # Pages with forms on them
     "AccountDeleteView": _DESTRUCTIVE,
+    "AccountMergeView": (
+        "Takes two sign-ins, one on each account, and an agent holds the key to one. Closing an account "
+        "and moving its sign-ins to another is decided on the page that lists what moves."
+    ),
     "UserAPIKeyView": (
         "Issuing a key for another program to act as you is a decision to make while looking at "
         "the page that explains what the key can do, and the secret is shown once and never again. "
@@ -15629,6 +15649,7 @@ NOT_A_SKILL: dict[str, str] = {
     "LotChatSubscribe": _MACHINE,
     "LotNotifications": _MACHINE,
     "LotPushTestNotificationView": _MACHINE,
+    "PushTestNotificationView": _MACHINE,
     "NoLotAuctions": _MACHINE,
     "PageViewCreate": _MACHINE,
     "SetCoordinates": _MACHINE,

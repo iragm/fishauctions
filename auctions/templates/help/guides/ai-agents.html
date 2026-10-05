@@ -20,14 +20,12 @@
       <li>"Who still owes money in the spring auction?"</li>
       <li>"Is there anything this site can do that my club isn't using?"</li>
       <li>"Summarize the help on labels for me."</li>
-      <li>"How does the lot recommendation system work?" It can read this site's own source code to answer.</li>
     </ul>
   </div></div></div>
 </div>
-<p>It can do anything your account can do, and nothing more.</p>
 
 <h2 class="h5 mt-4" id="connect">Connecting</h2>
-<p>You don't copy any passwords. You give the assistant this site's address, and it sends you here to sign in and say what it may do.</p>
+<p>You give the assistant this site's address, and it sends you here to sign in and say what it may do.</p>
 <div class="input-group input-group-sm mb-3 help-table">
   <input type="text" class="form-control" id="mcp-url" value="{{ mcp_address }}" readonly aria-label="Connector address">
   <button class="btn btn-primary copy-button" type="button" data-copy-target="mcp-url"><i class="bi bi-clipboard"></i> Copy</button>
@@ -61,12 +59,20 @@
     </ol>
   </div></div></div>
 </div>
-<p>Anything else that speaks the Model Context Protocol connects the same way.</p>
-{% tip %}Connect once. Two connections means everything happens twice, lots included. Remove extras under <a href="#connected">What's connected</a>.{% endtip %}
+{% tip %}Connect once. Two connections means everything happens twice. Remove extras <a href="#connected">below</a>.{% endtip %}
 
 <h2 class="h5 mt-4" id="connected">What's connected</h2>
 <p>Everything you've connected is listed here, with a {% ui "Disconnect" %} button. Disconnecting stops it straight away.</p>
 {% ai_connections "apps" %}
+
+<h2 class="h5 mt-4" id="other-apps">With your other apps</h2>
+<p>Connect the assistant to other apps as well, and it can carry information between them and this site. Each of these needs the other app's own connector, if it has one.</p>
+<ul>
+  <li><strong>Your payment app.</strong> "Check this week's payments against who still owes, then mark the ones who paid." PayPal, Square and Stripe all offer connectors. <a href="{% url 'help_guide' slug='payments' %}#chasing">Payments</a></li>
+  <li><strong>Your accounting software.</strong> "Copy this month's hall rent and speaker fees into the club's records." Or the other way: who the club owes, entered as bills. <a href="{% url 'help_guide' slug='club-money' %}#records">Club money</a></li>
+  <li><strong>The web.</strong> "Find pet shops and breeders near the club that might donate a raffle prize, and add them to our vendor list." <a href="{% url 'help_guide' slug='club-donations' %}#vendors">Donations</a></li>
+</ul>
+<p>Every change asks you first, and one at a time, so a long list takes a while.</p>
 
 <h2 class="h5 mt-4" id="keys">Keys, for scripts</h2>
 <p>You don't need a key for Claude, ChatGPT or Grok. A key is for a script, a cron job, or a connector your organisation's administrator adds once for everybody. Anyone with the key is you, so treat it like a password.</p>
@@ -78,7 +84,7 @@
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
 
 <h2 class="h5 mt-4" id="no-ai">No AI account?</h2>
-<p>Click the site's name at the top left of any page and type what you want to do. It finds the page, and can do a lot of the same things.</p>
+<p>Click the site's name at the top left of any page and type what you want to do. This is slower and doesn't have every feature, but is a great way to find the page you're looking for.</p>
 <script>
   document.querySelectorAll('.copy-button').forEach(function (button) {
     button.addEventListener('click', function () {

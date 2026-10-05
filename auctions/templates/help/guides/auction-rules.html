@@ -23,7 +23,6 @@
 <p>Club rules the site doesn't enforce go here too. "No more than 3 bags of the same species" is a rule for people to read, not a setting. If someone breaks it, remove the extra lots.</p>
 {% include "help/partials/rules_chart.html" %}
 {% tip %}Don't put dates or locations in the rules text. They'll be wrong when you copy the auction to next year's. Edit the pickup location instead.{% endtip %}
-{% mike %}Mike pasted the rules from his club's newsletter. It kept the newsletter's white text, so the page looked empty. Click in the box and press Ctrl+A to find text you can't see.{% endmike %}
 
 <h2 class="h5 mt-4" id="dates">Dates</h2>
 <div class="table-responsive">
@@ -38,7 +37,6 @@
 </table>
 </div>
 {% tip %}Midnight is the start of a day, not the end. An auction set to end at 12:00 AM on the 14th ends the moment the 14th begins: a whole day early, if you meant the evening of the 14th. Use 11:59 PM.{% endtip %}
-<p><strong>Snowstorm on pickup day?</strong> Move the end time and every lot still for sale moves with it. That works until the last hour before the old end. After that, late bids have already pushed some lots' ends back, so lots keep the times they have.</p>
 <p><strong>"People can't add lots"</strong> almost always means lot submission has closed. Check that date first.</p>
 
 <h2 class="h5 mt-4" id="fees">Fees and the club's cut</h2>
@@ -61,29 +59,19 @@
   <li>Many clubs do both: a small flat fee plus a percentage.</li>
 </ul>
 <p>Set a $1 unsold lot fee and the guy who lists a pair of common guppies at $40 thinks twice. Without it, a lot with a silly price is free advertising: he watches who asks about it, then sells to them in the parking lot.</p>
-{% mike %}Mike made this year's auction from scratch instead of copying last year's. The club cut was 0%. The treasurer found out when the stats said the club had made $300 on a $5,000 auction.{% endmike %}
 <ul>
   <li>{% rule "force_donation_threshold" %}: a lot that sells for this much or less becomes a donation, and the whole price goes to the club. With a $1 entry fee, a $1 lot leaves the seller nothing anyway. Most auctions leave it blank.</li>
   <li>{% rule "tax" %}: a percentage added to what buyers pay for lots. Whether your club has to charge tax, and at what rate, is up to your club.</li>
 </ul>
 {% tip %}Changed a fee after the auction ended? Every invoice recalculates. If you've already paid some sellers, write down their totals before you change anything.{% endtip %}
+{% aitip %}Ask "what do we charge sellers in the spring auction?" or "make the club's cut 20%".{% endaitip %}
 
 <h2 class="h5 mt-4" id="alternate-split">Charging some sellers less</h2>
 <p>{% rule "alternate_split_mode" %} gives some sellers their own, lower fees. Usually that's club members. Sometimes it's a vendor table.</p>
-<div class="row g-3 mb-3">
-  <div class="col-md-6"><div class="card h-100"><div class="card-body">
-    <h3 class="h6 card-title">Club member discount</h3>
-    <p class="card-text small mb-0">Everyone with a paid membership in your club gets the lower fees. Nobody has to tick anything.</p>
-  </div></div></div>
-  <div class="col-md-6"><div class="card h-100"><div class="card-body">
-    <h3 class="h6 card-title">Custom</h3>
-    <p class="card-text small mb-0">You pick the people. Click a person on the {% page "auction_tos_list" "Users" %} tab and tick the box.</p>
-  </div></div></div>
-</div>
-<p>The lower fees are {% rule "winning_bid_percent_to_club_for_club_members" %} (or {% rule "club_member_cut" %}, its other half), {% rule "lot_entry_fee_for_club_members" %} and {% rule "registration_fee_for_club_members" %}. Set both club cuts: an alternate club cut left at 0% means members keep every penny.</p>
+{% tip %}You pick the people. Click a person on the {% page "auction_tos_list" "Users" %} tab and tick the box.{% endtip %}
 {% tip %}Run the auction's people from your club's member list (<a href="#rule-manage_users_through_club">Manage users through club</a>, below) and pick {% ui "Club member discount" %}. Paid members then get the discount automatically, and renewing at the door gets it too.{% endtip %}
+<p>The lower fees are {% rule "winning_bid_percent_to_club_for_club_members" %}, {% rule "lot_entry_fee_for_club_members" %} and {% rule "registration_fee_for_club_members" %}. Set both club cuts: an alternate club cut left at 0% means members keep every penny. {% rule "club_member_cut" %} is the same number from the members' side.</p>
 <p>{% rule "alternative_split_label" %} is what those people are called on invoices and the Users tab.</p>
-{% mike %}Mike set his club's label to “Friends of Mike”. It was on every invoice for a year.{% endmike %}
 <p>The alternate fees aren't in the summary at the top of your auction page, on purpose: most clubs don't want to publish a vendor's rate. To tell members, put it in the rules text.</p>
 <p>{% rule "club_member_discount" %} is something else: a dollar amount off the invoice of any paid club member who bought at least one lot. There's no percentage discount for buyers. It's too easy to set one that loses money. For a one-off, add a discount to that person's invoice.</p>
 
@@ -115,8 +103,9 @@
   <li>{% rule "allow_deleting_bids" %}: bidders can take back their own bids until the auction ends. Off by default: a bid you can take back isn't really a bid.</li>
   <li>{% rule "message_users_when_lots_sell" %}: in person, people watching a lot get a notification when it comes up.</li>
 </ul>
-<p>Each bid has to beat the last by 5%, rounded down, and by at least $1. On a $40 lot the next bid is $42. There's no setting for fixed steps.</p>
+<p>Each bid has to beat the last by 5%, rounded down to the dollar, and by at least $1. On a $40 lot the next bid is $42; on a $3 lot, $4. With <a href="#rule-only_whole_dollar_bids">Only whole dollar bids</a> off, it's 5% to the cent, at least 1&cent;: the next bid on that $3 lot is $3.15. There's no setting for fixed steps.</p>
 <p>{% rule "online_bidding" %} is for in-person auctions: people can bid on the site between {% rule "date_online_bidding_starts" %} and {% rule "date_online_bidding_ends" %}. Most should leave it off. <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}#online-bidding">Running an in-person auction</a> says when it's worth it.</p>
+{% aitip %}Ask "turn on buy now" or "raise the minimum bid to $2".{% endaitip %}
 
 <h2 class="h5 mt-4" id="lots">Lots</h2>
 <ul>
@@ -132,16 +121,19 @@
   <tbody>{% for row in rank.rows %}<tr><td>{{ row.label }}</td><td class="text-end">{{ row.lots|floatformat:"0g" }}</td><td class="text-end">{{ row.sold }}%</td><td class="text-end">${{ row.median|floatformat:"0" }}</td></tr>{% endfor %}</tbody>
 </table>
 </div>{% endif %}{% endwith %}
-<p>With plain numbers, two bags with the same number show up when the second one sells ("already sold"). With seller-dash numbers you can see whose bag it is at a glance. Bidder numbers can be words, so seller JS gets lots JS-1, JS-2 and so on.</p>
+<p>With seller-dash numbers you can see whose bag it is at a glance. Bidder numbers can be words, so seller JS gets lots JS-1, JS-2 and so on.</p>
+{% aitip %}Ask "let everyone bring 20 lots".{% endaitip %}
 
 <h2 class="h5 mt-4" id="people">Who can join, buy and sell</h2>
 <ul>
-  <li>{% rule "promote_this_auction" %}: lists your auction publicly and tells nearby people about it once. Off, only people with the link can find it. Copies are never promoted, so tick it every time.</li>
+  <li>{% rule "promote_this_auction" %}: lists your auction publicly and tells nearby people about it once. Off, only people with the link can find it.</li>
   <li>{% rule "only_approved_sellers" %}: new people can't add lots until you tick them on the {% page "auction_tos_list" "Users" %} tab.</li>
   <li>{% rule "only_approved_bidders" %}: new people can't bid until you tick them. People you add yourself, and anyone who's paid an invoice in one of your past auctions, are approved already.</li>
 </ul>
+{% tip %}Copies are never promoted, so tick it every time.{% endtip %}
 <p>Both apply to people as they join. Turning one on doesn't take anything away from people already in the auction.</p>
-<p>Want a members-only auction? Leave it unpromoted and send the link to members. Or leave it public: public auctions are how a lot of clubs find new members.</p>
+<p>Want a members-only auction? Leave it unpromoted and send the link to members.</p>
+{% tip %}Or leave it public: public auctions are how a lot of clubs find new members.{% endtip %}
 <ul>
   <li>{% rule "require_phone_number" %}: people have to give a phone number before they can join.</li>
 </ul>
@@ -153,13 +145,14 @@
 
 <h2 class="h5 mt-4" id="invoices">Invoices and payment</h2>
 <ul>
-  <li>{% rule "invoice_payment_instructions" %}: shown on every invoice and in the invoice email. "Bring cash or a check to pickup." Leave old instructions here and new people will follow them.</li>
-  <li>{% rule "email_users_when_invoices_ready" %}: emails people their invoice when you mark it ready or paid. Leave it on. It's also how the site finds out an address doesn't work.</li>
-  <li>{% rule "post_auction_survey" %}: asks people "How was it?" with two buttons, in the invoice email or in an email of its own a day after the auction. Online auctions always ask in an email of their own, a day after pickup: their invoices go out before anyone has picked anything up. What they said is under {% ui "More" %}, {% page "auction_survey_results" "Feedback" %}.</li>
+  <li>{% rule "invoice_payment_instructions" %}: shown on every invoice and in the invoice email. "Bring cash or a check to pickup."</li>
+  <li>{% rule "email_users_when_invoices_ready" %}: emails people their invoice when you mark it ready or paid. Leave it on.</li>
+  <li>{% rule "post_auction_survey" %}: asks people "How was it?" with two buttons, on their invoice and in the invoice email. Online auctions ask in an email of their own a day after pickup instead, since their invoices go out before anyone has picked anything up. What they said is under {% ui "More" %}, {% page "auction_survey_results" "Feedback" %}.</li>
   <li>{% rule "invoice_rounding" %}: rounds each invoice to a whole dollar, always in the person's favour. It saves making change.</li>
   <li>{% rule "enable_online_payments" %} and {% rule "enable_square_payments" %}: a pay button on every invoice. You only see these once an account is connected. <a href="{% url 'help_guide' slug='payments' %}">Card payments</a> has the details.</li>
   <li>{% rule "add_membership_fee_to_invoices_for_expired_members" %}: in club-managed auctions, adds your membership fee to the invoice of anyone whose membership has lapsed, and renews them when they pay. You can take it off any one invoice.</li>
 </ul>
+{% tip %}Invoice emails are also how the site finds out an address doesn't work. On the Users tab, a red <i class="bi bi-envelope-exclamation-fill text-danger"></i> next to a name means email to that address bounced, and <i class="bi bi-envelope-check-fill"></i> means they opened their invoice from the email, so the address works. Filter the tab by {% ui "Only invalid email" %} to see who needs fixing, or by {% ui "Only verified email" %}.{% endtip %}
 
 <h2 class="h5 mt-4" id="club">The club</h2>
 <ul>
@@ -177,7 +170,9 @@
   <li>{% rule "buy_now" %}: sellers can set a price that sells the lot straight away.</li>
   <li>{% rule "use_categories" %}: Cichlids, Livebearers, Plants and so on, picked from the lot name. Leave it on for a fish auction: people browse by category.</li>
   <li>{% rule "use_scientific_name" %}: suggests the species as the seller types. It prints on labels and feeds breeder award points.</li>
-  <li>{% rule "use_quantity_field" %}, {% rule "use_description" %} and {% rule "use_reference_link" %}: a count, a longer description, and a link. A YouTube link plays next to the photos.</li>
+  <li>{% rule "use_quantity_field" %}: a Quantity box on the lot form, for "3 guppies" as a number instead of in the name.</li>
+  <li>{% rule "use_description" %}: a longer description box, with formatting. Turn it off for a shorter lot form. It isn't on the bulk add form either way.</li>
+  <li>{% rule "use_reference_link" %}: a box for a link, like a care sheet or the seller's own page. A YouTube link plays next to the photos. Not on the bulk add form either.</li>
   <li>{% rule "use_donation_field" %}: sellers can mark a lot as a donation.</li>
   <li>{% rule "use_i_bred_this_fish_field" %}: an "I bred this" box, for a badge on the lot and breeder award points.</li>
 </ul>
@@ -195,12 +190,13 @@
 </div>
 <p>Custom fields print on labels and are columns in the lot spreadsheet.</p>
 {% tip %}Running a joint auction with three clubs? Add a dropdown called "Club" with each club's name. Sellers pick theirs, and the lot spreadsheet adds up each club's share.{% endtip %}
+{% aitip %}Ask "add Wild caught and Tank raised to the dropdown".{% endaitip %}
 
 <h2 class="h5 mt-4" id="cant-change">Things there's no setting for</h2>
 <ul>
   <li><strong>Renaming an auction.</strong> The name is the auction's link. Copy it ({% ui "More" %}, then {% ui "Copy to new auction" %}) with the right name, then delete the old one.</li>
   <li><strong>A percentage off for buyers.</strong> Add a discount to the invoice.</li>
-  <li><strong>Bid steps by price.</strong> Every bid is 5% over the last, at least $1.</li>
+  <li><strong>Bid steps by price.</strong> Every bid is 5% over the last, at least $1, or 1&cent; in an auction that takes cents.</li>
   <li><strong>Raffles.</strong> Gambling law differs everywhere. Run it on paper and add the tickets to invoices.</li>
   <li><strong>Bumping a lot to the top of the queue for a fee.</strong> Every club does this differently, so there's no setting. An AI agent can do it for you; see <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}#bumps">bumps</a>.</li>
 </ul>

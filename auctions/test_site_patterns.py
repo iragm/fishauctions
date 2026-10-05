@@ -185,6 +185,11 @@ class GuidesQuoteTheCountsTests(StandardTestCase):
         response = self.client.get(reverse("blog_post", kwargs={"slug": "how-much-should-you-bid"}))
         self.assertRedirects(response, help_guides.GUIDES["online-auctions"].url + "#how-much", status_code=301)
 
+    def test_the_paypal_blog_post_lands_in_the_help(self):
+        BlogPost.objects.create(title="PayPal Integration", slug="online-payments-suck", body="old")
+        response = self.client.get(reverse("blog_post", kwargs={"slug": "online-payments-suck"}))
+        self.assertRedirects(response, help_guides.GUIDES["payments"].url + "#paypal", status_code=301)
+
 
 class AbandonedBidTests(StandardTestCase):
     def beacon(self, stage, lot=None):

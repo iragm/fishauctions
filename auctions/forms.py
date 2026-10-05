@@ -2376,8 +2376,6 @@ class AuctionEditForm(forms.ModelForm):
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
-        # A POST without it (an older page, the API) keeps what the auction has.
-        self.fields["post_auction_survey"].required = False
         # A percent: 150 would have charged more tax than the lots cost.
         limit_number_field(self.fields["tax"], max_value=100)
         # Hidden by JS without a club; don't block submission.
@@ -2632,9 +2630,6 @@ class AuctionEditForm(forms.ModelForm):
                 "Associate this auction with a club before enabling membership fees.",
             )
         return cleaned_data
-
-    def clean_post_auction_survey(self):
-        return self.cleaned_data.get("post_auction_survey") or self.instance.post_auction_survey
 
     def clean_date_end(self):
         """Less than an hour away gives bidders no warning, and lots only follow a move made before then."""
@@ -3913,7 +3908,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             else:
                 self.fields["push_notifications_instead_of_email"].help_text = (
                     "Install the app and sign in on a device to enable this. Then you'll get "
-                    "notifications in the app instead of emails, for everything except account emails."
+                    "notifications in the app instead of emails, for everything except invoices and account emails."
                 )
         # App users get lot alerts in the app; no browser subscribe prompt (or in the WebView).
         has_app_push = bool(self.instance and self.instance.pk and self.instance.has_app_push)

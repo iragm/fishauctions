@@ -4,7 +4,7 @@
   {% include "auction_ribbon.html" %}
   <div class="container mt-3">
     <h4><i class="bi bi-emoji-smile"></i> Feedback</h4>
-    {% if auction.post_auction_survey == "none" %}
+    {% if not auction.post_auction_survey %}
       <p>The post auction survey is off in <a href="{% url 'edit_auction' slug=auction.slug %}">this auction's rules</a>.</p>
     {% endif %}
     <p>{{ stats.answered }} gave feedback: {{ stats.great }} great, {{ stats.not_fun }} not so fun.</p>

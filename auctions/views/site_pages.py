@@ -105,7 +105,7 @@ class SupportView(FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # The same two videos and chapter lists as the promo page: one online, one in person.
+        # The same two videos and chapter lists as the help: one online, one in person.
         context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
         context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
         context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
@@ -188,8 +188,8 @@ def promo_lot_photos() -> list[dict]:
 
 
 class PromoSite(TemplateView):
-    """The marketing page: ``/`` for a signed-out visitor, and ``/about/`` for everyone, when
-    ``ENABLE_PROMO_PAGE`` is on. Every feature on it links to the help section that explains it, and
+    """The marketing page at ``/about/``, where ``/`` sends a signed-out visitor, when ``ENABLE_PROMO_PAGE``
+    is on: one address for everyone, so a link copied from it works for whoever it's sent to. Every feature on it links to the help section that explains it, and
     ``PromoPageTests`` fails when one of those sections is gone.
     """
 
@@ -202,8 +202,6 @@ class PromoSite(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
-        context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
         context["photos"] = promo_lot_photos()
         context["site"] = help_stats.site_stats()
         return context
@@ -218,7 +216,10 @@ class ToDefaultLandingPage(View):
                 return AllLots.as_view()(request)
             else:
                 if settings.ENABLE_PROMO_PAGE:
-                    return PromoSite.as_view()(request)
+                    # A redirect, not the page drawn here, so its address is the one signed-in users see.
+                    # Browsers carry a #section across it; the query string (utm_*) is carried here.
+                    query = request.META.get("QUERY_STRING")
+                    return redirect(reverse("promo") + (f"?{query}" if query else ""))
                 else:
                     return AllAuctions.as_view()(request)
         # Only check TOS if authenticated
@@ -553,7 +554,10 @@ class AllLots(LotListView, AuctionViewMixin):
 
 
 #: Blog posts that moved into the help, as slug: (guide, section). Their old links go there.
-MOVED_TO_HELP = {"how-much-should-you-bid": ("online-auctions", "how-much")}
+MOVED_TO_HELP = {
+    "how-much-should-you-bid": ("online-auctions", "how-much"),
+    "online-payments-suck": ("payments", "paypal"),
+}
 
 
 class BlogPostView(DetailView):

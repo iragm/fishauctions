@@ -108,7 +108,7 @@ class SurveyPageTests(StandardTestCase):
         self.assertEqual(self.client.get(self.url).status_code, 404)
 
     def test_survey_off_sends_people_to_the_auction(self):
-        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey="none")
+        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey=False)
         response = self.answer("great")
         self.assertEqual(response.status_code, 302)
         self.tosB.refresh_from_db()
@@ -166,12 +166,12 @@ class SurveyEmailTests(StandardTestCase):
         self.assertIn(f"?answer=not_fun&uuid={self.invoice.no_login_link}", text)
 
     def test_an_online_invoice_email_never_asks(self):
-        self.assertEqual(self.online_auction.post_auction_survey, "invoice")
+        self.assertTrue(self.online_auction.post_auction_survey)
         self.assertNotIn("How was", render(self.html, invoice=self.invoiceB, domain="example.com"))
         self.assertNotIn("How was", render(self.text, invoice=self.invoiceB, domain="example.com"))
 
-    def test_invoice_email_does_not_ask_when_the_survey_is_separate(self):
-        Auction.objects.filter(pk=self.in_person_auction.pk).update(post_auction_survey="separate")
+    def test_invoice_email_does_not_ask_when_feedback_is_off(self):
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(post_auction_survey=False)
         self.invoice.refresh_from_db()
         self.assertNotIn("How was", render(self.html, invoice=self.invoice, domain="example.com"))
         self.assertNotIn("How was", render(self.text, invoice=self.invoice, domain="example.com"))
@@ -195,7 +195,7 @@ class SendSurveyEmailsTests(StandardTestCase):
         past = timezone.now() - datetime.timedelta(days=2)
         self.location.pickup_time = past
         self.location.save()
-        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey="separate", date_end=past)
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_end=past)
         AuctionTOS.objects.filter(pk__in=[self.tosB.pk, self.online_tos.pk]).update(email="x@example.com")
 
     @patch("auctions.auction_survey.mail.send")
@@ -226,18 +226,16 @@ class SendSurveyEmailsTests(StandardTestCase):
         self.assertEqual(auction_survey.send_survey_emails(), 0)
 
     @patch("auctions.auction_survey.mail.send")
-    def test_an_online_auction_asking_in_the_invoice_asks_after_pickup_instead(self, send):
-        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey="invoice")
-        self.assertEqual(auction_survey.send_survey_emails(), 2)
+    def test_not_when_feedback_is_off(self, send):
+        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey=False)
+        self.assertEqual(auction_survey.send_survey_emails(), 0)
 
-    def test_an_in_person_auction_asking_in_the_invoice_sends_nothing_separately(self):
+    def test_an_in_person_auction_never_sends_it_separately(self):
         past = timezone.now() - datetime.timedelta(days=2)
         Auction.objects.filter(pk=self.in_person_auction.pk).update(
-            date_start=past, lot_submission_end_date=past, online_bidding="disable", post_auction_survey="invoice"
+            date_start=past, lot_submission_end_date=past, online_bidding="disable"
         )
         self.assertNotIn(self.in_person_auction.pk, [auction.pk for auction in auction_survey.due_auctions()])
-        Auction.objects.filter(pk=self.in_person_auction.pk).update(post_auction_survey="separate")
-        self.assertIn(self.in_person_auction.pk, [auction.pk for auction in auction_survey.due_auctions()])
 
     @patch("auctions.auction_survey.mail.send")
     def test_not_when_the_auction_emails_nobody_their_invoice(self, send):
@@ -250,6 +248,11 @@ class SendSurveyEmailsTests(StandardTestCase):
         self.userB.userdata.save()
         self.assertEqual(auction_survey.send_survey_emails(), 1)
         self.assertEqual(send.call_args.kwargs["context"]["unsubscribe"], str(self.user.userdata.unsubscribe_link))
+
+    @patch("auctions.auction_survey.mail.send")
+    def test_people_without_an_account_are_skipped(self, send):
+        AuctionTOS.objects.filter(pk=self.tosB.pk).update(user=None)
+        self.assertEqual(auction_survey.send_survey_emails(), 1)
 
     @patch("auctions.auction_survey.mail.send")
     def test_untrusted_creator_emails_nobody(self, send):
@@ -282,5 +285,57 @@ class SurveyInThePaletteTests(StandardTestCase):
         self.assertNotIn("How was This auction is online?", self._titles())
 
     def test_not_when_the_survey_is_off(self):
-        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey="none")
+        Auction.objects.filter(pk=self.online_auction.pk).update(post_auction_survey=False)
         self.assertNotIn("How was This auction is online?", self._titles())
+
+
+class SurveyOnTheInvoicePageTests(StandardTestCase):
+    """Everyone ends up on their invoice, including app users and people who skip the email."""
+
+    def setUp(self):
+        super().setUp()
+        self.invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_buyer)
+        Invoice.objects.filter(pk=self.invoice.pk).update(status="UNPAID")
+        self.url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        self.question = f"How was {self.in_person_auction}?"
+
+    def test_in_person_asks_once_the_invoice_is_ready(self):
+        self.client.force_login(self.user_with_no_lots)
+        self.assertContains(self.client.get(self.url), self.question)
+
+    def test_not_while_the_invoice_is_open(self):
+        Invoice.objects.filter(pk=self.invoice.pk).update(status="DRAFT")
+        self.client.force_login(self.user_with_no_lots)
+        self.assertNotContains(self.client.get(self.url), self.question)
+
+    def test_not_to_the_admin_looking_at_it(self):
+        self.client.force_login(self.user)
+        self.assertNotContains(self.client.get(self.url), self.question)
+
+    def test_not_once_answered_or_when_off(self):
+        self.client.force_login(self.user_with_no_lots)
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(survey_answer="great")
+        self.assertNotContains(self.client.get(self.url), self.question)
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(survey_answer="")
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(post_auction_survey=False)
+        self.assertNotContains(self.client.get(self.url), self.question)
+
+    def test_the_no_login_link_answers_with_its_token(self):
+        response = self.client.get(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+        self.assertContains(response, f'name="uuid" value="{self.invoice.no_login_link}"')
+        survey = reverse("auction_survey", kwargs={"slug": self.in_person_auction.slug})
+        self.client.post(survey, {"answer": "great", "uuid": self.invoice.no_login_link})
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.survey_answer, "great")
+
+    def test_online_waits_for_pickup(self):
+        self.invoiceB.refresh_from_db()
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoiceB.pk})
+        question = f"How was {self.online_auction}?"
+        self.client.force_login(self.userB)
+        self.assertNotContains(self.client.get(url), question)
+        past = timezone.now() - datetime.timedelta(days=2)
+        self.location.pickup_time = past
+        self.location.save()
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_end=past)
+        self.assertContains(self.client.get(url), question)

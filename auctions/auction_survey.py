@@ -1,14 +1,15 @@
 """The post-auction survey: "How was <auction>?", two buttons, and a box for anything else.
 
-``Auction.post_auction_survey`` asks it in the invoice email, in an email of its own once the auction is
-``pretty_much_over``, or not at all. An online auction's invoices go out before pickup, so it always asks
-in its own email, which for it waits for pickup (:func:`survey_mode`). The answer lives on the person's
-``AuctionTOS``.
+``Auction.post_auction_survey`` turns it on. An in-person auction asks in the invoice email. An online
+auction's invoices go out before pickup, so it asks in an email of its own once the auction is
+``pretty_much_over``, a day after pickup (:func:`asks_in_invoice`). Both ask on the invoice page too, for
+anyone who never opens the email. The answer lives on the person's ``AuctionTOS``.
 
 The emailed buttons are links (``?answer=great&uuid=...``) to a page that posts the answer from
 JavaScript: mail scanners open every link in a message, both buttons included, and don't run scripts.
 The uuid is the invoice's ``no_login_link``, which is why the survey is only emailed to people with an
-invoice, and a click on it proves the address works, so it marks the address verified.
+invoice, and a click on it proves the address works, so it marks the address verified. The separate email
+goes only to people with an account, since nobody else has a way to unsubscribe from it.
 """
 
 import logging
@@ -53,16 +54,14 @@ def participant(auction, user, token=""):
     return None
 
 
-def survey_mode(auction):
-    """How ``auction`` really asks: its rule, except that an online auction asks separately, after pickup."""
-    if auction.is_online and auction.post_auction_survey == Auction.SURVEY_IN_INVOICE:
-        return Auction.SURVEY_SEPARATE
-    return auction.post_auction_survey
+def asks_in_invoice(auction):
+    """In person, the invoice email asks. Online, the invoice comes before pickup, so a separate email asks after."""
+    return not auction.is_online
 
 
 def wants_answer(tos):
     """Whether this person should still be asked."""
-    return bool(tos and tos.auction.post_auction_survey != Auction.SURVEY_NONE and not tos.survey_answer)
+    return bool(tos and tos.auction.post_auction_survey and not tos.survey_answer)
 
 
 def record_answer(tos, answer):
@@ -99,10 +98,13 @@ def verify_email(tos):
 
 
 def email_links(invoice, mode, domain):
-    """``{question, great, not_fun}`` for an emailed invoice when its auction asks this way, else ``None``."""
+    """``{question, great, not_fun}`` for an emailed invoice when its auction asks this way, else ``None``.
+
+    ``mode`` is the email asking: ``"invoice"`` or ``"separate"``.
+    """
     auction = getattr(invoice, "auction", None)
     tos = getattr(invoice, "auctiontos_user", None)
-    if not auction or not tos or survey_mode(auction) != mode or tos.survey_answer:
+    if not auction or not tos or not wants_answer(tos) or (mode == "invoice") != asks_in_invoice(auction):
         return None
     base = f"https://{domain}"
     return {
@@ -112,14 +114,25 @@ def email_links(invoice, mode, domain):
     }
 
 
+def on_invoice_page(invoice):
+    """Whether the invoice page asks: once the invoice is ready in person, or a day after pickup online."""
+    auction = invoice.auction
+    if not auction or not wants_answer(invoice.auctiontos_user):
+        return False
+    if asks_in_invoice(auction):
+        return invoice.status != "DRAFT"
+    return auction.pretty_much_over
+
+
 def due_auctions(now=None):
-    """Auctions asking by separate email whose emails haven't gone yet, between ``pretty_much_over`` (a day
-    after the last pickup, online) and :data:`SEND_WINDOW` after they wound down.
+    """Online auctions asking for feedback whose emails haven't gone yet, between ``pretty_much_over`` (a day
+    after the last pickup) and :data:`SEND_WINDOW` after they wound down.
     """
     now = now or timezone.now()
     candidates = Auction.objects.filter(
         is_deleted=False,
-        post_auction_survey__in=[Auction.SURVEY_SEPARATE, Auction.SURVEY_IN_INVOICE],
+        is_online=True,
+        post_auction_survey=True,
         # An auction that emails nobody their invoice doesn't email them this either.
         email_users_when_invoices_ready=True,
         survey_emails_sent=False,
@@ -127,11 +140,7 @@ def due_auctions(now=None):
         date_start__gte=now - timedelta(days=90),
     )
     return [
-        auction
-        for auction in candidates
-        if survey_mode(auction) == Auction.SURVEY_SEPARATE
-        and auction.pretty_much_over
-        and now < auction.wind_down_time + SEND_WINDOW
+        auction for auction in candidates if auction.pretty_much_over and now < auction.wind_down_time + SEND_WINDOW
     ]
 
 
@@ -155,9 +164,16 @@ def send_survey_emails():
 
 
 def recipients(auction):
-    """Invoices whose owner has a working address, hasn't answered yet, and hasn't unsubscribed."""
+    """Invoices whose owner has a working address, hasn't answered yet, and has an account they haven't
+    unsubscribed from. Without an account there's no unsubscribe link, so no separate email.
+    """
     return (
-        Invoice.objects.filter(auction=auction, auctiontos_user__isnull=False, auctiontos_user__survey_answer="")
+        Invoice.objects.filter(
+            auction=auction,
+            auctiontos_user__isnull=False,
+            auctiontos_user__user__isnull=False,
+            auctiontos_user__survey_answer="",
+        )
         .exclude(auctiontos_user__email__isnull=True)
         .exclude(auctiontos_user__email="")
         .exclude(auctiontos_user__email_address_status="BAD")

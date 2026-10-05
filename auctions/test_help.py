@@ -248,6 +248,40 @@ class HelpIsAboutYourAuctionTests(StandardTestCase):
         response = self.client.get(help_guides.guide_url("auction-rules", self.online_auction))
         self.assertContains(response, "Yours: Club Member")
 
+    def test_a_blank_donation_threshold_is_off_not_blank(self):
+        self.online_auction.force_donation_threshold = None
+        self.online_auction.save()
+        self.client.force_login(self.user)
+        response = self.client.get(help_guides.guide_url("auction-rules", self.online_auction))
+        self.assertContains(response, "Yours: Off")
+
+    def test_a_rule_for_the_other_kind_of_auction_has_no_yours_badge(self):
+        from auctions.templatetags.help_tags import _rule_value
+
+        self.assertEqual(_rule_value(self.online_auction, "online_bidding"), "")
+        self.assertEqual(_rule_value(self.in_person_auction, "date_end"), "")
+        self.assertNotEqual(_rule_value(self.in_person_auction, "online_bidding"), "")
+
+    def test_the_paypal_pay_button_is_only_mentioned_to_people_who_have_it(self):
+        url = help_guides.GUIDES["payments"].url
+        self.assertNotContains(self.client.get(url), "Enter your club's PayPal credentials")
+        self.assertContains(self.client.get(url), "Sending PayPal invoices")  # the CSV is for everyone
+        self.user.userdata.paypal_enabled = True
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(url), "Enter your club's PayPal credentials")
+
+    def test_paypal_invoice_counts_are_about_your_auction(self):
+        from auctions.help_stats import paypal_invoices
+        from auctions.models import Invoice
+
+        auction = self.online_auction
+        self.assertEqual(paypal_invoices(None), {})
+        Invoice.objects.filter(auction=auction).delete()
+        Invoice.objects.create(auction=auction, auctiontos_user=self.tosB, status="DRAFT", calculated_total=-5)
+        facts = paypal_invoices(self.user, auction, is_admin=True)
+        self.assertEqual((facts["ready"], facts["open"]), (0, 1))
+
     def test_nobody_else_sees_an_auctions_settings(self):
         self.online_auction.alternative_split_label = "Club Member"
         self.online_auction.save()
@@ -255,8 +289,11 @@ class HelpIsAboutYourAuctionTests(StandardTestCase):
         self.assertNotContains(response, "Club Member")
 
     def test_signed_out_there_are_no_tips(self):
-        response = self.client.get(help_guides.GUIDES["run-an-in-person-auction"].url)
-        self.assertNotContains(response, "help-tip")
+        for slug in ("run-an-in-person-auction", "online-auctions", "in-person-auctions"):
+            html = self.client.get(help_guides.GUIDES[slug].url).content.decode()
+            # The connect-an-agent line and the AI tips are for everyone; every help-tip is personal.
+            self.assertNotIn("help-tip", html, slug)
+            self.assertIn('class="help-note help-ai"', html)
 
     def test_the_auction_help_link_lands_on_the_guide_for_that_auction(self):
         self.client.force_login(self.user)
@@ -311,7 +348,7 @@ class HelpFormattingTests(StandardTestCase):
                 self.assertEqual(re.findall(r'<h[1-6] class="h[1-4]\b', source), [])
 
     def test_signed_out_everybody_is_offered_an_ai_agent(self):
-        self.assertContains(self.client.get(reverse("help")), "ain't reading all that")
+        self.assertContains(self.client.get(reverse("help")), "have it search and summarize the help")
 
     def test_nobody_with_an_agent_is_offered_one(self):
         from auctions.models import UserAPIKey
@@ -319,7 +356,7 @@ class HelpFormattingTests(StandardTestCase):
         _raw, prefix, key_hash = UserAPIKey.generate()
         UserAPIKey.objects.create(user=self.user, name="mine", prefix=prefix, key_hash=key_hash)
         self.client.force_login(self.user)
-        self.assertNotContains(self.client.get(reverse("help")), "ain't reading all that")
+        self.assertNotContains(self.client.get(reverse("help")), "have it search and summarize the help")
 
 
 class HelpKnowsTheAppStoresTests(StandardTestCase):
@@ -356,6 +393,35 @@ class HelpUsesYourAuctionTests(StandardTestCase):
         response = self.client.get(help_guides.guide_url("in-person-auctions", self.in_person_auction))
         self.assertContains(response, f"Online bidding is off in {self.in_person_auction.title}")
 
+    def test_an_online_bidder_gets_their_lot_form_fees_invoice_and_pickup(self):
+        self.online_auction.use_quantity_field = True
+        self.online_auction.reserve_price = "required"
+        self.online_auction.save()
+        self.client.force_login(self.userB)
+        response = self.client.get(help_guides.guide_url("online-auctions", self.online_auction))
+        self.assertContains(response, "asks for: Quantity, Description, Minimum bid (required)")
+        self.assertContains(response, "charges you $10 for every lot of yours that gets no bids")
+        self.assertContains(response, "rounds totals to the dollar")
+        self.assertContains(response, f"{self.online_auction.title} takes bids in whole dollars")
+        self.assertContains(response, "invoices don't have a")
+        self.assertContains(response, self.invoiceB.get_absolute_url())
+        self.assertContains(response, "You pick up from")
+        self.assertContains(response, f"type=google&location={self.location.pk}")
+
+    def test_an_in_person_seller_gets_their_auction_set_up(self):
+        # Lot submission can't open after the auction starts.
+        self.in_person_auction.date_start = timezone.now() + datetime.timedelta(days=2)
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=3)
+        self.in_person_auction.lot_submission_start_date = timezone.now() + datetime.timedelta(days=1)
+        self.in_person_auction.save()
+        self.client.force_login(self.user_with_no_lots)
+        response = self.client.get(help_guides.guide_url("in-person-auctions", self.in_person_auction))
+        self.assertContains(response, "takes the same cut whoever adds the lot")
+        self.assertContains(response, "has no Quantity box")
+        self.assertContains(response, f"Adding lots to {self.in_person_auction.title} opens")
+        self.assertContains(response, "charges $10 for a lot that goes up and doesn't sell")
+        self.assertNotContains(response, "member list")
+
     def test_the_labels_guide_lists_what_your_labels_print(self):
         self.in_person_auction.label_print_fields = "lot_name,custom_checkbox_label"
         self.in_person_auction.use_custom_checkbox_field = False
@@ -363,6 +429,19 @@ class HelpUsesYourAuctionTests(StandardTestCase):
         self.client.force_login(self.user)
         response = self.client.get(help_guides.guide_url("labels", self.in_person_auction))
         self.assertContains(response, "print: Lot number, Lot name.")
+
+    def test_scanning_without_a_club_is_the_lot_queue(self):
+        self.client.force_login(self.user)
+        url = help_guides.guide_url("scanning", self.in_person_auction)
+        self.assertContains(self.client.get(url), f"Because {self.in_person_auction.title} doesn't have a club set")
+        self.in_person_auction.club = Club.objects.create(name="Scanning club")
+        self.in_person_auction.save()
+        self.assertNotContains(self.client.get(url), "doesn't have a club set")
+
+    def test_tap_to_pay_says_when_the_auction_has_none(self):
+        self.client.force_login(self.user)
+        response = self.client.get(help_guides.guide_url("in-person-auctions", self.in_person_auction))
+        self.assertContains(response, "Some clubs allow tap to pay with credit card, but it doesn't look like")
 
     def test_your_account_says_what_is_missing(self):
         self.client.force_login(self.user_who_does_not_join)
@@ -379,27 +458,40 @@ class HelpKnowsYourPhoneTests(StandardTestCase):
         self.client.force_login(self.user)
         return self.client.get(help_guides.GUIDES[slug].url, **extra)
 
-    def test_a_browser_is_asked_whether_it_is_subscribed(self):
+    def test_a_browser_subscribes_and_tests_right_here(self):
         response = self.guide("in-person-auctions")
-        self.assertContains(response, "You have lot notifications turned off.")
+        self.assertContains(response, "Turn on notifications")
         self.assertContains(response, "pushManager.getSubscription")
+        self.assertContains(response, reverse("push_test"))
         self.assertNotContains(response, "pushGetState")
 
     def test_with_the_app_they_go_to_the_app_not_the_browser(self):
         MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
         with patch("auctions.notifications.push_configured", return_value=True):
             response = self.guide("in-person-auctions")
+        self.assertContains(response, "Notify me when bidding starts")
         self.assertContains(response, "They go to the app on your phone, not this browser.")
         self.assertNotContains(response, "pushManager.getSubscription")
+
+    def test_once_on_with_the_app_only_the_test_is_left(self):
+        MobileDevice.objects.create(user=self.user, device_uuid=uuid.uuid4(), fcm_token="tok", push_enabled=True)
+        self.user.userdata.push_notifications_when_lots_sell = True
+        self.user.userdata.save()
+        with patch("auctions.notifications.push_configured", return_value=True):
+            response = self.guide("in-person-auctions")
+        self.assertContains(response, '<ol id="help-push-steps" class="mb-0" hidden>', html=False)
+        self.assertContains(response, '<div id="help-push-done">', html=False)
 
     def test_in_the_app_the_app_is_asked_about_this_phone(self):
         response = self.guide("in-person-auctions", HTTP_USER_AGENT=self.APP_UA)
         self.assertContains(response, "pushGetState")
+        self.assertContains(response, "pushEnable")
         self.assertNotContains(response, "pushManager.getSubscription")
 
-    def test_signed_out_nobody_is_asked(self):
+    def test_signed_out_gets_the_steps_not_the_buttons(self):
         response = self.client.get(help_guides.GUIDES["in-person-auctions"].url)
-        self.assertNotContains(response, "help-push-device")
+        self.assertNotContains(response, "help-push")
+        self.assertContains(response, "turn notifications on right here")
 
     def test_the_app_guide_says_whether_you_have_the_app(self):
         self.assertContains(self.guide("mobile-app"), "You haven't signed in to the app on a phone yet.")
@@ -451,6 +543,39 @@ class HelpStatsTests(StandardTestCase):
         facts = _site_stats(min_lots=1)
         self.assertIn("online_unsold", facts)
         self.assertEqual(_site_stats(min_lots=10**6), {})
+
+    def test_watchers_are_people_in_promoted_online_auctions(self):
+        from auctions.help_stats import _watchers
+        from auctions.models import Watch
+
+        self.online_auction.date_start = timezone.now() - datetime.timedelta(days=30)
+        self.online_auction.save()
+        Watch.objects.create(user=self.userB, lot_number=self.lot)
+        # Four people joined; one watched a lot.
+        self.assertEqual(_watchers(min_people=4), {"online_watchers": 25})
+        self.assertEqual(_watchers(min_people=5), {})
+
+    def test_label_scans_count_printed_in_person_labels(self):
+        from auctions.help_stats import _label_scans
+        from auctions.models import PageView
+
+        seller = self.admin_in_person_tos
+        lots = Lot.objects.filter(lot_name__in=["scanned", "unscanned", "unprinted"])
+        scanned = Lot.objects.create(
+            lot_name="scanned", auction=self.in_person_auction, auctiontos_seller=seller, label_printed=True
+        )
+        Lot.objects.create(
+            lot_name="unscanned", auction=self.in_person_auction, auctiontos_seller=seller, label_printed=True
+        )
+        Lot.objects.create(lot_name="unprinted", auction=self.in_person_auction, auctiontos_seller=seller)
+        PageView.objects.create(lot_number=scanned, source="qr")
+        PageView.objects.create(lot_number=scanned, source="qr")
+        self.assertEqual(_label_scans(lots, min_lots=2), {"labels_scanned": 50})
+        self.assertEqual(_label_scans(lots, min_lots=3), {})
+
+        with patch("auctions.help_stats.site_stats", return_value={"labels_scanned": 50}):
+            response = self.client.get(help_guides.GUIDES["labels"].url)
+        self.assertContains(response, "50% of lot labels from all in-person auctions are scanned")
 
     def test_photo_prices_come_from_big_promoted_in_person_auctions(self):
         from auctions.help_stats import _in_person_photos

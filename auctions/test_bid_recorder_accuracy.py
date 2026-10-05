@@ -113,3 +113,11 @@ class BackfillSalesRecordedTests(InPersonSaleBase):
         cache.set(SITE_CACHE_KEY, {"recorded_once": 95})
         response = self.client.get(help_guides.GUIDES["run-an-in-person-auction"].url)
         self.assertContains(response, "95% of lots sold here are recorded once and never changed.")
+
+        cache.set(SITE_CACHE_KEY, {"double_checked": 12})
+        response = self.client.get(help_guides.GUIDES["run-an-in-person-auction"].url)
+        self.assertContains(response, "12% of all lots have been double checked")
+        cache.set(SITE_CACHE_KEY, {})
+        self.assertNotContains(
+            self.client.get(help_guides.GUIDES["run-an-in-person-auction"].url), "have been double checked"
+        )

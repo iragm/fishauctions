@@ -1,6 +1,7 @@
 {% load help_tags %}
 {% comment %}See HELP.md for the voice. Everything that reads a barcode or QR code: phone cameras, USB scanners (static/js/barcode_scanner.js: F9 before, Enter after, club auctions only), the Print Barcodes sheet, and the app's Scan lots.{% endcomment %}
 <p>Scanning saves typing at the three busiest places in an auction: the door, the auctioneer's table, and checkout. You can scan with a phone's camera, a USB barcode scanner, or both.</p>
+{% if help.is_admin and help.auction and not help.auction.club and not help.auction.is_online %}{% helptip %}Most barcode stuff is club related. Because {{ help.auction.title }} doesn't have a club set, you'll really just use scanning for the {% page "auction_lot_queue" "Lot queue" %}.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="what">What you can scan</h2>
 <div class="table-responsive">
@@ -24,7 +25,7 @@
   <li>{% page "auction_lot_queue" "Lot queue" %}: scan each bag's label as it comes to the table.</li>
 </ul>
 <p>A lot's QR code needs no page at all: any phone camera opens the lot, with its seller, winner and price.</p>
-{% tip %}Camera won't start on an iPhone? In Safari, tap <strong>aA</strong> in the address bar, <strong>Website Settings</strong>, and set <strong>Camera</strong> to <strong>Allow</strong>. It doesn't work inside another app's built-in browser; open the page in Safari or Chrome. The Checkin page has a <strong>Camera not working?</strong> section to send us if it still won't.{% endtip %}
+{% tip %}Camera won't start? The {% page "auction_quick_check_in" "Checkin" %} page has a <strong>Camera not working?</strong> section to send us.{% endtip %}
 
 <h2 class="h5 mt-4" id="usb">With a USB scanner</h2>
 <p>A USB scanner is faster than a camera at a busy door. It types the barcode into the computer like a keyboard, and every admin page of a club auction listens for it. Nothing needs to be clicked first.</p>
@@ -47,9 +48,8 @@
   </tbody>
 </table>
 </div>
-<p>The page doesn't save anything. Check the sheet printed right before you leave it.</p>
+<p>The page doesn't save anything. Check the sheet printed correctly before you leave it.</p>
 {% tip %}Print a sheet of your T-shirts, raffle tickets and membership renewals, laminate it, and keep it at the checkout table. It works every month.{% endtip %}
-<p>Charges only go on an open invoice. Somebody who's already paid gets a message instead.</p>
 
 <h2 class="h5 mt-4" id="self-check-in">A self check-in kiosk</h2>
 <p>{% page "auction_self_check_in" "Self-checkin" %}, under {% ui "More" %}, turns a laptop with a scanner into a kiosk. Members scan their own card and get a welcome on the screen. It only takes membership cards, so nobody can scan a T-shirt onto their own invoice.</p>

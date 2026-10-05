@@ -235,13 +235,17 @@ def _site_stats(min_lots: int = MIN_LOTS) -> dict:
 
     # In person: sales recorded once and never corrected (``Lot.sales_recorded``).
     recorded = lots.filter(auction__is_online=False, winning_price__isnull=False, sales_recorded__gte=1).aggregate(
-        n=Count("pk"), once=Count("pk", filter=Q(sales_recorded=1))
+        n=Count("pk"), once=Count("pk", filter=Q(sales_recorded=1)), checked=Count("pk", filter=Q(admin_validated=True))
     )
     if recorded["n"] >= min_lots:
         facts["recorded_once"] = _pct(recorded["once"], recorded["n"])
+        # Lots a second recorder entered the same winner and price for (``Lot.admin_validated``).
+        facts["double_checked"] = _pct(recorded["checked"], recorded["n"])
 
     facts.update(_joining(min_lots))
+    facts.update(_label_scans(lots, min_lots))
     facts.update(_feedback(lots, min_lots))
+    facts.update(_watchers(min_lots))
     facts.update(_voice(min_lots))
     facts.update(_invoice_opening(min_lots))
     return facts
@@ -305,6 +309,33 @@ def _feedback(lots, min_lots) -> dict:
     if buyers >= min_lots:
         facts["feedback_left"] = _pct(raters, buyers)
     return facts
+
+
+def _watchers(min_people) -> dict:
+    """People who joined a promoted online auction, and the share of them who watched a lot in it."""
+    from auctions.models import AuctionTOS, Watch
+
+    people = AuctionTOS.objects.filter(
+        user__isnull=False, auction__in=_recent_auctions().filter(is_online=True, promote_this_auction=True)
+    )
+    watched = Watch.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
+    counts = people.aggregate(n=Count("pk"), watching=Count("pk", filter=Exists(watched)))
+    return {"online_watchers": _pct(counts["watching"], counts["n"])} if counts["n"] >= min_people else {}
+
+
+def _label_scans(lots, min_lots) -> dict:
+    """In person: printed labels whose lot was opened by scanning, as ``Auction.number_of_lots_with_scanned_qr``
+    counts one: ``qr`` is any phone camera (the label's ``/qr/<pk>/`` redirects to ``?src=qr``), ``ar`` the app.
+    """
+    from auctions.models import PageView
+
+    scanned = PageView.objects.filter(lot_number=OuterRef("pk")).filter(
+        Q(source__icontains="qr") | Q(source__iexact="ar")
+    )
+    counts = lots.filter(auction__is_online=False, label_printed=True).aggregate(
+        n=Count("pk"), scanned=Count("pk", filter=Exists(scanned))
+    )
+    return {"labels_scanned": _pct(counts["scanned"], counts["n"])} if counts["n"] >= min_lots else {}
 
 
 def _voice(min_commands) -> dict:
@@ -847,3 +878,30 @@ def stats_auction(user, auction=None, is_admin=False):
         if candidate.pretty_much_over:
             return candidate
     return None
+
+
+def paypal_invoices(user, auction=None, is_admin=False) -> dict:
+    """What the PayPal batch invoice export holds for ``user``'s auction: this one if they run it, else the
+    latest one that has started. ``ready`` is what the CSV would bill, ``open`` what still needs setting to
+    Ready. Empty when they run no auction or it can't be exported.
+    """
+    if not (user and user.is_authenticated):
+        return {}
+    from auctions.models import Auction, AuctionTOS
+
+    if not (auction is not None and is_admin):
+        admin_of = AuctionTOS.objects.filter(user=user, is_admin=True).values("auction")
+        auction = (
+            Auction.objects.filter(is_deleted=False, date_start__lt=timezone.now())
+            .filter(Q(created_by=user) | Q(pk__in=admin_of))
+            .order_by("-date_start")
+            .first()
+        )
+    if auction is None or not auction.show_paypal_csv_link or auction.paypal_payments_enabled:
+        return {}
+    return {
+        "auction": auction,
+        "ready": len(auction.paypal_invoices_to_export),
+        "open": auction.draft_paypal_invoices,
+        "chunks": auction.paypal_invoice_chunks,
+    }

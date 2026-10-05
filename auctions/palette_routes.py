@@ -166,7 +166,6 @@ ROUTE_LIST: list[Route] = [
             "bug report",
         ],
     ),
-    _r("add_to_calendar", "Add auctions to my calendar", "Browsing", keywords=["calendar", "ical", "subscribe"]),
     # --- My stuff ---
     _r("selling", "Lots I am selling", "My stuff", keywords=["my lots", "what am i selling"]),
     _r("watched", "Lots I am watching", "My stuff", keywords=["watchlist", "watched", "saved lots"]),
@@ -252,6 +251,12 @@ ROUTE_LIST: list[Route] = [
         "Download everything this site knows about me",
         "Account",
         keywords=["export my data", "download my data", "copy of my data", "what do you know about me", "gdpr"],
+    ),
+    _r(
+        "account_merge",
+        "Merge two of my accounts into one",
+        "Account",
+        keywords=["merge accounts", "duplicate account", "two accounts", "combine accounts", "second account"],
     ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
@@ -1191,6 +1196,7 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    "add_to_calendar": "Needs a pickup location; the Add to calendar button sits next to each one on the auction page.",
     # The library: one document's pages. search_documents and read_document answer with its link.
     "document_detail": "One library document; search_documents and read_document answer with its link.",
     "document_file": "A document's original file, served to someone who can see it; opened from its page.",
@@ -1244,6 +1250,7 @@ EXCLUDED: dict[str, str] = {
     "htmx_lot": _API,
     "lot_bid": _API,
     "lot_push_test": _API,
+    "push_test": _API,
     "enable_notifications": _API,
     "lot_chat_subscribe": _API,
     "delete_auction_chat": _API,

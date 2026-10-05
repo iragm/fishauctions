@@ -175,7 +175,8 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
       try {
         await queueScanner.start();
       } catch (e) {
-        // status message already set by the scanner
+        // The status box keeps the scanner's reason; the button goes back to starting it.
+        btn.innerHTML = '<i class="bi bi-camera"></i> Scan with camera';
       }
     });
 

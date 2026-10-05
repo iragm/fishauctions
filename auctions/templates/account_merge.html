@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Merge accounts{% endblock %}
+{% block content %}
+<div class="mt-3">
+{% if review %}
+  {% comment %}The kept account's confirmation: what arrives, then the one button.  Requests are shown nowhere else and never emailed.{% endcomment %}
+  <h5>Merge {{ review.username }} into {{ request.user.username }}?</h5>
+  <p class="mb-1">This account gets:</p>
+  <ul>
+    {% if summary.lots_sold %}<li>{{ summary.lots_sold }} lot{{ summary.lots_sold|pluralize }} sold</li>{% endif %}
+    {% if summary.lots_won %}<li>{{ summary.lots_won }} lot{{ summary.lots_won|pluralize }} won</li>{% endif %}
+    {% if summary.auctions_joined %}<li>{{ summary.auctions_joined }} auction{{ summary.auctions_joined|pluralize }} joined</li>{% endif %}
+    {% if summary.auctions_created %}<li>{{ summary.auctions_created }} auction{{ summary.auctions_created|pluralize }} created</li>{% endif %}
+    {% if summary.clubs %}<li>{{ summary.clubs|length }} club{{ summary.clubs|length|pluralize }}: {{ summary.clubs|join:", " }}</li>{% endif %}
+    {% if summary.credit %}<li>{{ summary.credit }} credit</li>{% endif %}
+    {% for sign_in in summary.sign_ins %}
+    <li>Sign in with {{ sign_in.provider }}{% if sign_in.account %} ({{ sign_in.account }}){% endif %}</li>
+    {% endfor %}
+    {% if summary.agents %}<li>{{ summary.agents }} AI agent{{ summary.agents|pluralize }} or key{{ summary.agents|pluralize }}</li>{% endif %}
+    <li>Bids, watched lots, history and settings</li>
+  </ul>
+  <div class="alert alert-warning text-dark">
+    <i class="bi bi-exclamation-triangle"></i>
+    {{ review.username }} will be closed, and this can't be undone.  Only merge an account that's yours.
+  </div>
+  <form method="post" action="{% url 'account_merge' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="accept">
+    <input type="hidden" name="source" value="{{ review.pk }}">
+    <button type="submit" class="btn btn-danger">Merge accounts</button>
+    <a href="{% url 'account_merge' %}" class="btn btn-secondary">Cancel</a>
+  </form>
+{% else %}
+  <div class="help-note">
+    <i class="bi bi-lightbulb-fill"></i>
+    <div>Start from the account you want to close; the account you merge it into keeps its username.</div>
+  </div>
+
+  {% for source in incoming %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <p><strong>{{ source.username }}</strong> asked to be merged into this account.</p>
+      <form method="post" action="{% url 'account_merge' %}" class="d-inline">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="decline">
+        <input type="hidden" name="source" value="{{ source.pk }}">
+        <a href="{% url 'account_merge' %}?from={{ source.username|urlencode }}" class="btn btn-primary">Review</a>
+        <button type="submit" class="btn btn-danger">Decline</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if outgoing %}
+  <div class="card">
+    <div class="card-body">
+      <p>Now sign in as <strong>{{ outgoing.0.username }}</strong> and open Merge accounts before {{ outgoing.1|date:"M j, P" }}.</p>
+      <form method="post" action="{% url 'account_logout' %}" class="d-inline">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'account_login' %}?next={% url 'account_merge' %}">
+        <button type="submit" class="btn btn-primary">Sign out</button>
+      </form>
+      <form method="post" action="{% url 'account_merge' %}" class="d-inline">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="cancel">
+        <button type="submit" class="btn btn-danger">Cancel request</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <form method="post" action="{% url 'account_merge' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="request">
+    <label for="merge_username" class="form-label">Merge {{ request.user.username }} into:</label>
+    <input type="text" class="form-control mb-3" id="merge_username" name="username" placeholder="Username"
+           autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required
+           style="max-width: 24rem;">
+    <button type="submit" class="btn btn-primary">Request merge</button>
+  </form>
+  {% endif %}
+{% endif %}
+</div>
+{% endblock %}

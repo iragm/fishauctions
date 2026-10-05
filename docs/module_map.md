@@ -32,10 +32,13 @@ this only quotes its opening sentence.
 - **`account_export.py`** (307 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_nav.py`** (200 lines)
+- **`account_merge.py`** (417 lines)
+  Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
+  `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
+- **`account_nav.py`** (201 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1570 lines)
+- **`admin.py`** (1572 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -71,7 +74,7 @@ this only quotes its opening sentence.
 - **`auction_form_layout.py`** (223 lines)
   The layout of ``AuctionEditForm``: what an organizer sees first, and what is behind *Advanced*.
   `build_layout`, `advanced_fields_in_use`
-- **`auction_survey.py`** (196 lines)
+- **`auction_survey.py`** (212 lines)
   The post-auction survey: "How was <auction>?", two buttons, and a box for anything else.
 - **`authentication.py`** (79 lines)
   `APIKeyAuthentication`, `OptionalAPIKeyAuthentication`, `ApiKeyThrottle`
@@ -143,7 +146,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6413 lines)
+- **`forms.py`** (6408 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -159,9 +162,9 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (739 lines)
+- **`help_guides.py`** (850 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
-- **`help_stats.py`** (849 lines)
+- **`help_stats.py`** (907 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
 - **`helper_functions.py`** (162 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
@@ -184,7 +187,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14261 lines)
+- **`models.py`** (14256 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -198,14 +201,14 @@ this only quotes its opening sentence.
 - **`module_map.py`** (181 lines)
   The map of this repository: which module does what, generated from the modules themselves.
   `Module`, `iter_modules`, `render`, `rule_violations`, `main`
-- **`notifications.py`** (313 lines)
+- **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15737 lines)
+- **`palette_actions.py`** (15758 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1932 lines)
+- **`palette_routes.py`** (1939 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -228,7 +231,7 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (855 lines)
   DRF serializers for the club API.
-- **`services.py`** (1342 lines)
+- **`services.py`** (1344 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
@@ -252,7 +255,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1632 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1893 lines)
+- **`tasks.py`** (1878 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -268,6 +271,9 @@ this only quotes its opening sentence.
 - **`test_account_linking.py`** (125 lines)
   Participant rows link to their person's account when written, so "mine" is ``user`` alone.
   `AccountLinkingTests`
+- **`test_account_merge.py`** (252 lines)
+  Merging two accounts: the two-sided request, what moves, and what a stranger can't do with it.
+  `AccountMergeCoverageTests`, `MergeTestCase`, `MergeRequestTests`, `MergeConfirmationTests`, `MergeTests`
 - **`test_account_nav.py`** (304 lines)
   The Account setup menu: `auctions/account_nav.py`, its sidebar, and /account/setup/.
   `SidebarReachTests`, `LandingTests`, `PaymentRowTests`, `NavbarTests`, `SettingsSplitTests`
@@ -289,7 +295,7 @@ this only quotes its opening sentence.
   What the assistant does when nobody is looking at a page.
 - **`test_auction_admin_views.py`** (834 lines)
   Regression tests for auction-admin and lot-management views with thin coverage: the add-to-calendar
-- **`test_auction_links.py`** (626 lines)
+- **`test_auction_links.py`** (637 lines)
   Auction join links, the lot list's behaviour, and the Cloudflare image pipeline.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
@@ -300,9 +306,9 @@ this only quotes its opening sentence.
 - **`test_auction_props.py`** (1262 lines)
   Tests for ``Auction`` computed properties.
   `AuctionPropertyTests`, `LotPropertyTests`, `LotInvoicePropertyTests`, `SellerInvoiceRemovedLotTests`, `BuyNowSellerCreditTests`
-- **`test_auction_survey.py`** (286 lines)
+- **`test_auction_survey.py`** (341 lines)
   The post-auction survey: answering by link, the free-text box, the admin page, the emails.
-  `render`, `SurveyPageTests`, `SurveyResultsTests`, `SurveyEmailTests`, `SendSurveyEmailsTests`, `SurveyInThePaletteTests`
+  `render`, `SurveyPageTests`, `SurveyResultsTests`, `SurveyEmailTests`, `SendSurveyEmailsTests`, `SurveyInThePaletteTests`, `SurveyOnTheInvoicePageTests`
 - **`test_auction_views.py`** (776 lines)
   Auction pages an admin edits: permissions, the edit form, custom fields and cloning.
   `AuctionViewPermissionTests`, `AuctionEditViewTests`, `AuctionCustomFieldsViewTests`, `AuctionCloneCustomFieldsTests`, `PayPalFormFieldVisibilityTests`, `LotListViewTests`, `MyLotsViewTests`, `AuctionUsersViewTests`, `MovingAnOnlineAuctionsEndTests`
@@ -311,7 +317,7 @@ this only quotes its opening sentence.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
 - **`test_bap_lots.py`** (1403 lines)
   The breeder award program: which lots are eligible, and the pages that award points.
-- **`test_bid_recorder_accuracy.py`** (115 lines)
+- **`test_bid_recorder_accuracy.py`** (123 lines)
   `SalesRecordedTests`, `LotAdminPriceEditTests`, `BackfillSalesRecordedTests`
 - **`test_bidding.py`** (1157 lines)
   Tests for bid values, bidding permissions, and the bid dialog.
@@ -333,7 +339,7 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (140 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`
-- **`test_celery_tasks.py`** (1131 lines)
+- **`test_celery_tasks.py`** (1142 lines)
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
@@ -417,7 +423,7 @@ this only quotes its opening sentence.
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
 - **`test_free_text_usage.py`** (48 lines)
   `FreeTextUsageTests`
-- **`test_help.py`** (545 lines)
+- **`test_help.py`** (670 lines)
   The help guides: that they cover every page and rule, that they are public, and that they talk about your auction.
 - **`test_helpers.py`** (1385 lines)
   Tests for helper functions, model utilities, template tags and context processors.
@@ -448,7 +454,7 @@ this only quotes its opening sentence.
 - **`test_lot_page_views.py`** (377 lines)
   The two page-view history modals: one lot's, and every lot on the selling dashboard.
   `PageViewHistoryHelperTests`, `LotPageViewHistoryViewTests`, `SellingDashboardPageViewHistoryTests`
-- **`test_lot_views.py`** (1303 lines)
+- **`test_lot_views.py`** (1326 lines)
   The lot pages an auction is actually run from: labels, push, set-winner and the queue.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
 - **`test_marketing.py`** (856 lines)
@@ -469,7 +475,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1702 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`, `CarriedMembershipTests`, `WelcomeLetterTests`
-- **`test_mobile_features.py`** (2718 lines)
+- **`test_mobile_features.py`** (2729 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -519,7 +525,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (165 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3186 lines)
+- **`test_palette_skills.py`** (3213 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -533,7 +539,7 @@ this only quotes its opening sentence.
 - **`test_printable_lot_list.py`** (148 lines)
   The printable lot list: every lot on one page, with the columns its labels print.
   `PrintableLotListTests`, `NaturalSortKeyTests`
-- **`test_promo.py`** (127 lines)
+- **`test_promo.py`** (135 lines)
   The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
   `PromoPageTests`, `PromoPhotoTests`
 - **`test_query_counts.py`** (559 lines)
@@ -549,7 +555,7 @@ this only quotes its opening sentence.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
-- **`test_site_patterns.py`** (262 lines)
+- **`test_site_patterns.py`** (267 lines)
   The help's site-wide tables and charts, and the two things collected for the auction stats page: invoice
   `ago`, `SiteCountsTests`, `GuidesQuoteTheCountsTests`, `AbandonedBidTests`, `InvoiceOpenedTests`, `RefreshGuardTests`
 - **`test_source_code.py`** (324 lines)
@@ -607,7 +613,7 @@ this only quotes its opening sentence.
 - **`test_usability_report.py`** (308 lines)
   Tests for the usability dashboard's three panels, and for the URL classifier behind the first.
   `RouteNameTests`, `ReachTests`, `FrictionReportTests`, `BuyerFunnelTests`, `DashboardTests`
-- **`test_user_features.py`** (530 lines)
+- **`test_user_features.py`** (531 lines)
   Tests for preferences that change what a user sees: distance units, exports, and trust.
   `DistanceUnitTests`, `PayPalInfoViewTests`, `UserExportTests`, `UserTrustSystemTests`, `WatchOrUnwatchViewTests`, `AdFetchTests`
 - **`test_userdata.py`** (299 lines)
@@ -629,7 +635,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1339 lines)
+- **`urls.py`** (1346 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -710,7 +716,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`email_unseen_chats.py`** (53 lines)
   `Command`
-- **`empty_account_and_move_data.py`** (35 lines)
+- **`empty_account_and_move_data.py`** (39 lines)
   `Command`
 - **`endauctions.py`** (149 lines)
   `declare_winners_on_lots`, `deactivate_pretty_much_over_lots`, `Command`
@@ -890,7 +896,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `convert_distance`, `distance_display`
 - **`email_tags.py`** (188 lines)
   Tags for emailed templates: the footer, the club header, the button and the greeting's first name.
-- **`help_tags.py`** (404 lines)
+- **`help_tags.py`** (438 lines)
   Tags for writing help guides (``auctions/templates/help/guides/``).
 - **`membership_tags.py`** (115 lines)
   `membership_barcode`, `google_wallet_save_url`
@@ -901,12 +907,12 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (571 lines)
+- **`account.py`** (621 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
 - **`admin_checklist.py`** (1061 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (816 lines)
+- **`ajax.py`** (841 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1268 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
@@ -965,7 +971,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`help.py`** (92 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (380 lines)
+- **`invoices.py`** (387 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`lot_pages.py`** (1331 lines)
@@ -984,7 +990,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (604 lines)
+- **`site_pages.py`** (608 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
