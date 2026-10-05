@@ -13800,8 +13800,8 @@ class LotQueueEntry(models.Model):
 
 
 class VoiceGrammar(models.Model):
-    """The grammar the app listens with on set winners: one row, site-wide, served in ``/api/mobile/config/``
-    and merged over the app's defaults (:mod:`auctions.voice`).
+    """The words voice listens for on set winners: one row, site-wide. :mod:`auctions.voice_interpreter`
+    reads with it, and ``/api/mobile/config/`` serves it to the app (:mod:`auctions.voice`).
 
     ``save()`` pins the pk (singleton). No row means app defaults. ``enabled=False`` hides the microphone.
     """
@@ -13837,6 +13837,14 @@ class VoiceGrammar(models.Model):
         "if early values misbehave. Under 200 the app raises it to 200."
     )
 
+    cloud_model = models.CharField(
+        max_length=40, blank=True, default=voice.CLOUD_LIVE, choices=voice.CLOUD_MODEL_CHOICES
+    )
+    cloud_model.help_text = (
+        "Listen through OpenAI in a web browser (a laptop at the auction, or a phone's browser). Charged "
+        "to this site's OpenAI key per minute of listening. Off leaves only the app."
+    )
+
     auto_submit_on_sold = models.BooleanField(default=True)
     auto_submit_on_sold.help_text = "Saying 'sold' saves the lot, instead of only filling the fields."
     block_auto_submit_when_unsure = models.BooleanField(default=True)
@@ -13866,10 +13874,10 @@ class VoiceGrammar(models.Model):
 
 
 class VoiceCommandLog(models.Model):
-    """One voice command the set-winners page acted on, and any operator correction: the tuning data.
+    """One thing voice did on set winners -- a field filled, a lot sold -- and any correction a person made.
 
-    A blank ``slot`` is an utterance that matched nothing; group those by ``heard`` to find words to add
-    to ``anchors``. Written by the page, session-authenticated, auction admins only.
+    A blank ``slot`` is a sale heard but not recorded. Written by ``VoiceInterpretView``; corrections by
+    the page. Shown on the auction's voice log page.
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)

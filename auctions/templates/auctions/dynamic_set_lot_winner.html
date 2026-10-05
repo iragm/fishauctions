@@ -5,7 +5,7 @@
 {% block title %}Set winners for {{ auction }}{% endblock %}
 
 {% block extra_js %}
-{% if request.is_mobile_app %}{{ voice_config|json_script:"voice-config" }}{% endif %}
+{% if voice_config %}{{ voice_config|json_script:"voice-config" }}{% endif %}
 <script>
   let tooltipTimeout;
   function initializeTooltipWithTimeout() {
@@ -38,7 +38,7 @@
   }
 
 
-  function undoSellLot() {
+  function undoSellLot(done) {
       let data = {
           lot_number: $("#last_sold_lot_number").text()
       };
@@ -51,9 +51,11 @@
           data: data,
           success: function(response) {
               handleServerResponse(response);
+              if (done) { done(response); }
           },
           error: function(error) {
               console.error(error);
+              if (done) { done(null); }
           }
       });
     }
@@ -63,8 +65,8 @@
       let fields = ['price', 'winner', 'lot']
       if (response.success_message) {
         removeTooltip()
-        // The lot is sold and the fields are about to be emptied, so nothing voice filled is still
-        // pending -- anything typed from here is a new lot, not a correction. No-op without voice.
+        // The lot is done and the fields are about to be emptied: anything from here is the next lot.
+        // No-op without voice.
         if (window.voiceResetFields) { window.voiceResetFields(); }
         fields.forEach(function(field) {
           $("#" + field).val('');
@@ -129,7 +131,8 @@
 
   }
 
-  function sendFormData(action = 'validate') {
+  // done(response, or null when it failed): for the saves voice starts, which wait on the answer.
+  function sendFormData(action = 'validate', done) {
       let formData = {
           lot: $("#lot").val(),
           price: $("#price").val(),
@@ -145,6 +148,7 @@
           data: formData,
           success: function(response) {
               handleServerResponse(response);
+              if (done) { done(response); }
           },
           error: function(xhr, status, error) {
             $("#success_banner").removeClass('bg-success');
@@ -153,6 +157,7 @@
             let errorMessage = (xhr.responseJSON && xhr.responseJSON.error) || error || (status === 'error' || status === 'timeout' ? 'Network connection problem, try again' : 'An unexpected error occurred, try again');
             $("#success_message").text(`FAILED: ${errorMessage}`);
             $("#undo_button").addClass('d-none');
+            if (done) { done(null); }
           }
       });
   }
@@ -162,30 +167,29 @@
     htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()) + (preview ? '/?preview=1' : '/'), {target: '#result'});
   }
 
-{% if request.is_mobile_app %}
+{% if voice_config %}
   {% comment %}
-    Voice-driven set winners. The app does the listening -- iOS WKWebView has no Web Speech API and
-    the shell denies the WebView's microphone -- and writes into these same three fields, so
-    everything below is a receiver plus the UI for how sure the app is. Validation, submit, undo and
-    the queue auto-advance above are untouched: the page still owns the form, and voice reaches it
-    through the same blur/submit paths a person's fingers would.
+    Voice. The phone or laptop sits by the auctioneer and listens. Everything heard since the lot on the
+    block came up (the window) goes to the server, which reads it as a sale (auctions/voice_interpreter.py)
+    and answers with commands for the three fields and the save. In the app, the app's recognizer listens
+    and pushes transcripts in (the WebView has no microphone of its own); in a browser, the page streams
+    its microphone to OpenAI. The page still owns the form: validation, save, undo and the queue are the
+    same ones a person's fingers use.
   {% endcomment %}
   const voiceConfig = JSON.parse(document.getElementById('voice-config').textContent);
   const voiceSlotToField = {lot: 'lot', bidder: 'winner', price: 'price'};
   const voiceFieldToSlot = {lot: 'lot', winner: 'bidder', price: 'price'};
   const voiceFieldLabel = {lot: 'the lot number', winner: 'the bidder', price: 'the price'};
   const voiceHelpSeenKey = 'voiceMicHelpSeen';
-  // What voice put in each field, the telemetry row it came from, and whether we're still unsure of
-  // it. Keyed by field id. voiceFilled is what makes a later edit recognisable as a correction.
+  // What voice put in each field and the log row it came from (so a later edit is recorded as a
+  // correction), whether it's still unsure, and what a person confirmed or typed over it.
   let voiceFilled = {};
   let voiceLogIds = {};
   let voiceUnsure = {};
+  let voiceConfirmed = {};
+  let voiceTyped = {};
   let voiceListening = false;
-  // The cutoff between "filled it in" and "filled it in, look at this". Starts at the admin's
-  // grammar, which is what the app runs on until someone touches it, and is replaced by the
-  // device's own confident_at as soon as the app reports one (VOICE-7) -- otherwise the slider
-  // would move the app's threshold while the amber flag on this page kept using the site's, and
-  // the operator would drag it and watch nothing change.
+  // The app's own slider moves this once it reports one (VOICE-7), so green means what the slider says.
   let voiceConfidentAt = voiceConfig.confident;
 
   function voiceStatus(text) {
@@ -197,541 +201,209 @@
     return (bridge && bridge.callHandler) ? bridge : null;
   }
 
+  function voiceCsrf(request) {
+    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+  }
+
   {% comment %}
-    Tuning telemetry (VOICE-5). Fire-and-forget in both directions: a failure here must never cost a
-    sale, and a missing row only costs us one sample. Passing the returned id back with
-    corrected_to is what pairs a correction with the command that caused it.
+    The window, and the one rule that keeps a close from being sold twice: one request out at a time,
+    and a save voice started holds everything else until it lands. Only then does the window move on to
+    what was said after the close (carry); reading it before would find the same close again and sell it
+    to the next lot. Segments heard meanwhile are kept and read next.
   {% endcomment %}
-  function voicePostLog(data, onSaved) {
+  const voiceMaxSegments = 40;
+  const voicePreviousMs = 10000;
+  let voiceSegments = [];
+  let voiceBusy = false;
+  let voiceActing = false;
+  let voiceAgain = false;
+  let voicePending = null;
+  let voicePrevious = null;
+  let voiceRefused = '';
+
+  function voiceHeard(text) {
+    text = String(text || '').trim();
+    if (!text) { return; }
+    voiceSegments.push(text);
+    if (voiceSegments.length > voiceMaxSegments) { voiceSegments = voiceSegments.slice(-voiceMaxSegments); }
+    voiceInterpret();
+  }
+
+  function voiceForm() {
+    return {lot: String($("#lot").val() || ''), winner: String($("#winner").val() || ''), price: String($("#price").val() || '')};
+  }
+
+  function voiceInterpret() {
+    if (voiceBusy) { voiceAgain = true; return; }
+    if (!voiceSegments.length) { return; }
+    voiceBusy = true;
+    voiceAgain = false;
+    const sent = voiceSegments.length;
+    // A sale saved moments ago, so its close said again isn't sold to the next lot.
+    const previous = voicePrevious && Date.now() - voicePrevious.at < voicePreviousMs ? voicePrevious : null;
     $.ajax({
-      url: "{% url 'auction_voice_command_log' slug=auction.slug %}",
+      url: "{% url 'auction_voice_interpret' slug=auction.slug %}",
       method: 'POST',
-      beforeSend: function (request) {
-        request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+      contentType: 'application/json',
+      beforeSend: voiceCsrf,
+      data: JSON.stringify($.extend({heard: voiceSegments, previous: previous}, voiceForm())),
+      success: function (reading) {
+        voiceBusy = false;
+        voiceApply(reading || {}, sent);
+        if (voiceAgain && !voiceBusy) { voiceInterpret(); }
       },
-      data: data,
-      success: function (response) {
-        if (onSaved && response && response.id) { onSaved(response.id); }
-      },
-      error: function () {}
-    });
-  }
-
-  function voiceLogCommand(slot, fields, onSaved) {
-    if (!slot) { return; }
-    voicePostLog($.extend({slot: slot}, fields), onSaved);
-  }
-
-  {% comment %}
-    VOICE-6: the utterances that matched nothing. Everything above logs commands the page acted on,
-    which means the log can only ever return words that already work -- "bitter" for "bidder" opened
-    no slot, produced no command, and was the row we most needed. So a final transcript that draws
-    no command inside voiceUnmatchedGraceMs gets logged with no slot and no confidence, and one that
-    draws a command below the unsure cutoff gets logged too, as the near miss it is.
-
-    Two rules keep this from filing a transcript of the room: two words minimum, and one row per
-    voiceUnmatchedMinSeconds. The server applies both again (it owns the table); doing it here as
-    well just saves the request. The grace timer exists because the command event follows its
-    transcript rather than arriving with it -- there is nothing else to pair them by.
-  {% endcomment %}
-  const voiceUnmatchedMinSeconds = 5;
-  const voiceUnmatchedMinTokens = 2;
-  const voiceUnmatchedGraceMs = 1200;
-  let voicePendingTranscript = null;
-  let voiceLastUnmatchedAt = 0;
-
-  function voiceForgetTranscript() {
-    if (voicePendingTranscript) { clearTimeout(voicePendingTranscript.timer); }
-    voicePendingTranscript = null;
-  }
-
-  function voiceLogUnmatched(text, confidence) {
-    if (Date.now() - voiceLastUnmatchedAt < voiceUnmatchedMinSeconds * 1000) { return; }
-    voiceLastUnmatchedAt = Date.now();
-    const data = {heard: text};
-    if (typeof confidence === 'number') { data.confidence = confidence; }
-    voicePostLog(data);
-  }
-
-  function voiceHeardTranscript(text, partial) {
-    if (partial) { return; }
-    voiceForgetTranscript();
-    const heard = String(text || '').trim().replace(/\s+/g, ' ');
-    if (!heard) { return; }
-    voicePendingTranscript = {
-      text: heard,
-      timer: setTimeout(function () {
-        voicePendingTranscript = null;
-        // The app heard this and sent no command for it. Match it here before writing it off --
-        // see voiceParse. Only then is it really an utterance nothing understood.
-        if (voiceMatchLocally(heard)) { return; }
-        // One word is as likely to be someone walking past the phone as a command, and the room
-        // never stops talking. Below two, nothing is worth writing down -- unless that one word is
-        // (or nearly is) an action anchor, because "sold", heard and matched by nothing, is the most
-        // useful row this table can hold and the floor was throwing it away. The server applies the
-        // same exception.
-        const spoken = voiceWords(heard);
-        const only = spoken.length === 1 ? voiceAnchorAt(spoken, 0) : null;
-        const isAction = !!only && voiceValueSlots.indexOf(only.slot) === -1;
-        if (heard.split(' ').length < voiceUnmatchedMinTokens && !isAction) { return; }
-        voiceLogUnmatched(heard, null);
-      }, voiceUnmatchedGraceMs)
-    };
-  }
-
-  {% comment %}
-    The page's own matcher, and the reason "heard: lot one" can no longer be the whole story.
-
-    The app owns the microphone and is supposed to own the matching too: it hears an utterance,
-    scores it, and pushes a `command` event in. When it pushes a `transcript` and no command, the
-    page used to have nothing to do but print the words and file them as unmatched — which looks
-    identical whether the grammar has never heard the word, the vocabulary fetch failed, or the
-    matcher on that build simply isn't wired up. All three end in the operator saying "lot one" and
-    watching nothing happen.
-
-    So the page matches it too, out of the same two pieces of data the app works from and which
-    voice.page_config now sends down with the page: the grammar's anchor words, and the lot and
-    bidder numbers that actually exist in *this* auction. That is what lets this be strict rather
-    than clever. It never invents a value — a lot number has to be one this auction has, or no
-    command is produced at all — and it never guesses which slot a bare number belongs to. The
-    price is the one field with no list to check against, and it is also the one the operator is
-    looking straight at.
-
-    It runs only after the app has had voiceUnmatchedGraceMs to answer, so a build that does match
-    is never second-guessed, and everything it produces goes through voiceHandleCommand exactly as
-    the app's own command would: the same green/amber threshold, the same telemetry row, the same
-    Confirm button. A fix that lives here also ships the way this feature is supposed to be fixed —
-    on the server, not through two app stores.
-  {% endcomment %}
-  const voiceAnchorPhrases = [];
-  Object.keys(voiceConfig.anchors || {}).forEach(function (slot) {
-    (voiceConfig.anchors[slot] || []).forEach(function (phrase, position) {
-      const words = String(phrase).toLowerCase().split(/\s+/).filter(Boolean);
-      // The first word of a slot's list is the canonical one and the rest are synonyms this
-      // deployment added -- the same ranking the app applies, so both sides score "buyer" alike.
-      if (words.length) {
-        voiceAnchorPhrases.push({slot: slot, words: words, quality: position === 0 ? 1 : 0.8});
+      error: function () {
+        voiceBusy = false;
+        if (voiceAgain) { voiceInterpret(); }
       }
     });
-  });
-  // Longest first, so "lot number" beats "lot" and "no sale" is never read as two ordinary words.
-  voiceAnchorPhrases.sort(function (a, b) { return b.words.length - a.words.length; });
+  }
 
-  {% comment %}
-    Anchors the way the app hears them, which this page could not until now: exactly, as a plural,
-    or one edit away with a voiced/voiceless swap costing nothing. "bitter" for "bidder" is the case
-    that matters -- American English flaps both consonants, so there is nothing in the audio that
-    separates them -- and the page used to drop every utterance containing it while the app filled
-    the field and asked.
+  // The window the server answered about, moved on to `start`, plus whatever was heard since it asked.
+  function voiceMoveOn(start, sent) {
+    voiceSegments = (start || []).concat(voiceSegments.slice(sent));
+  }
 
-    The five-character floor is the app's, for the app's reason: at three or four characters an edit
-    distance of one covers so much of English ("sold" / "gold" / "old") that ordinary speech would
-    start firing anchors, which is the failure this grammar exists to prevent. A trailing plural is
-    checked first and at any length, because "lots" is the same word rather than a guess about which
-    word it was.
-  {% endcomment %}
-  const voiceVoicingPairs = ['td', 'sz', 'pb', 'kg', 'fv'];
-
-  function voiceSameSound(a, b) {
-    if (a === b) { return true; }
-    return voiceVoicingPairs.some(function (pair) {
-      return pair.indexOf(a) !== -1 && pair.indexOf(b) !== -1;
+  function voiceApply(reading, sent) {
+    (reading.missed || []).forEach(voiceShowMissed);
+    if (Array.isArray(reading.keep)) {
+      voiceMoveOn(reading.keep, sent);
+      sent = reading.keep.length;
+    }
+    let action = null;
+    (reading.commands || []).forEach(function (command) {
+      if (voiceSlotToField[command.slot]) { voiceFill(command); } else { action = command; }
     });
-  }
-
-  function voiceNearlySame(word, anchor) {
-    if (Math.abs(word.length - anchor.length) > 1) { return false; }
-    let edits = 0;
-    let i = 0;
-    let j = 0;
-    while (i < word.length && j < anchor.length) {
-      if (voiceSameSound(word.charAt(i), anchor.charAt(j))) { i += 1; j += 1; continue; }
-      edits += 1;
-      if (edits > 1) { return false; }
-      if (word.length === anchor.length) { i += 1; j += 1; }
-      else if (word.length > anchor.length) { i += 1; }
-      else { j += 1; }
+    voiceStatus(reading.note || '');
+    const carry = Array.isArray(reading.carry) ? reading.carry : null;
+    voicePending = null;
+    if (!action) { return; }
+    if (action.slot === 'sold') {
+      // `wait`: a price from the bidding may be about to be said outright. Anything heard meanwhile is
+      // read again, and that reading replaces this one.
+      voicePending = {carry: carry, sent: sent, at: Date.now() + (reading.wait || 0)};
+      voiceTrySold();
+    } else if (action.slot === 'unsold') {
+      voiceAct('end_unsold', carry, sent);
+    } else if (action.slot === 'undo') {
+      voiceUndo(carry, sent);
     }
-    return edits + (word.length - i) + (anchor.length - j) <= 1;
+    // Unknown slots are ignored, so the server can add one before the page knows it.
   }
 
-  function voiceSingular(word) {
-    if (word.length > 4 && word.slice(-2) === 'es') { return word.slice(0, -2); }
-    // Not "ss": "pass" must not stem to "pas", and it is already an anchor reached exactly above.
-    if (word.length > 3 && word.slice(-1) === 's' && word.slice(-2) !== 'ss') { return word.slice(0, -1); }
-    return null;
-  }
-
-  function voiceAnchorAt(words, index) {
-    for (const anchor of voiceAnchorPhrases) {
-      const slice = words.slice(index, index + anchor.words.length).join(' ');
-      if (slice === anchor.words.join(' ')) {
-        return {slot: anchor.slot, quality: anchor.quality, length: anchor.words.length};
-      }
-    }
-    const word = words[index];
-    const singular = voiceSingular(word);
-    const single = voiceAnchorPhrases.filter(function (anchor) { return anchor.words.length === 1; });
-    for (const anchor of single) {
-      if (singular && singular === anchor.words[0]) {
-        return {slot: anchor.slot, quality: Math.min(anchor.quality, 0.8), length: 1};
-      }
-    }
-    if (word.length < 5) { return null; }
-    for (const anchor of single) {
-      if (voiceNearlySame(word, anchor.words[0])) {
-        return {slot: anchor.slot, quality: 0.6, length: 1};
-      }
-    }
-    return null;
-  }
-
-  {% comment %}
-    The page's three tiers, from how good the anchor word was. A canonical word fills green; a
-    synonym the deployment configured itself fills green too, because it is not a guess -- and
-    because a synonym that could only ever fill amber made "add the word your auctioneer says"
-    useless, since an amber field then blocks the save. A fuzzy hit fills amber and asks.
-  {% endcomment %}
-  function voiceFillConfidence(quality) {
-    if (quality >= 1) { return 1; }
-    return quality >= 0.8 ? voiceConfidentAt : voiceConfig.unsure;
-  }
-  const voiceNumberWords = voiceConfig.number_words || {};
-  const voiceHomophonePairs = voiceConfig.homophones || [];
-  const voiceVocabulary = {
-    lot: (voiceConfig.lot_numbers || []).map(String),
-    bidder: (voiceConfig.bidder_numbers || []).map(String)
-  };
-
-  {% comment %}
-    The vocabulary goes stale, and this page never reloads -- it is one long-lived page that posts.
-    A lot added at the table, a bidder who signs up at the desk, a lot un-sold so it can be sold
-    again: all three are values the matcher above would refuse, and refuse by saying "no lot like
-    that in this auction", which is a wrong answer rather than a slow one.
-
-    So it is re-fetched on a timer while listening, and immediately after every save and undo, which
-    are the two moments the lot list provably changed. The app refreshes its own copy the same way.
-  {% endcomment %}
-  const voiceVocabularyRefreshMs = 90000;
-  let voiceVocabularyTimer = null;
-
-  function voiceRefreshVocabulary() {
-    $.ajax({
-      url: "{% url 'auction_voice_vocabulary' slug=auction.slug %}",
-      method: 'GET',
-      success: function (data) {
-        if (!data) { return; }
-        if (Array.isArray(data.lot_numbers)) { voiceVocabulary.lot = data.lot_numbers.map(String); }
-        if (Array.isArray(data.bidder_numbers)) { voiceVocabulary.bidder = data.bidder_numbers.map(String); }
-        if (typeof data.only_whole_dollar_bids === 'boolean') {
-          voiceConfig.only_whole_dollar_bids = data.only_whole_dollar_bids;
-        }
-      },
-      error: function () {}
-    });
-  }
-  const voiceValueSlots = ['lot', 'bidder', 'price'];
-
-  {% comment %}
-    Currency symbols survive tokenizing because a recognizer writes money as "$25" and the symbol is
-    then the only thing left of the price anchor -- see voiceParse. The other three are here for the
-    same reason: a deployment whose currency_symbol is £ gets a recognizer that writes £25, and
-    stripping it would leave a bare number that means nothing.
-  {% endcomment %}
-  const voiceCurrencyChars = '$£€¥';
-
-  function voiceWords(text) {
-    return String(text || '').toLowerCase().replace(/[^a-z0-9$£€¥.\-]+/g, ' ').split(/\s+/).filter(Boolean);
-  }
-
-  function voiceIsNumberWord(word) {
-    return /^\d+(\.\d+)?$/.test(word) || Object.prototype.hasOwnProperty.call(voiceNumberWords, word);
-  }
-
-  function voiceNumberValue(word) {
-    return /^\d+(\.\d+)?$/.test(word) ? {digits: word, value: Number(word)}
-                                       : {digits: String(voiceNumberWords[word]), value: Number(voiceNumberWords[word])};
-  }
-
-  // "four oh two" is 402 and "twenty five" is 25, and nothing in the utterance says which kind of
-  // number it is — so both readings are produced and the auction's own vocabulary picks. That is
-  // the same bet the app makes, and it is what lets everything else here refuse to guess.
-  function voiceNumberCandidates(parts) {
-    const spelled = parts.map(function (part) { return part.digits; }).join('');
-    let total = 0;
-    let current = 0;
-    parts.forEach(function (part) {
-      if (part.value === 100 || part.value === 1000) {
-        current = (current || 1) * part.value;
-        if (part.value === 1000) { total += current; current = 0; }
+  function voiceFill(command) {
+    const field = voiceSlotToField[command.slot];
+    const value = String(command.value === null || command.value === undefined ? '' : command.value);
+    const confidence = (typeof command.confidence === 'number') ? command.confidence : 1;
+    const current = String($("#" + field).val() || '');
+    // What a person typed or picked stands until the lot changes.
+    if (voiceTyped[field] !== undefined && voiceTyped[field] === current) { return; }
+    if (current !== value) {
+      $("#" + field).val(value);
+      voiceFilled[field] = value;
+      if (command.log_id) { voiceLogIds[field] = command.log_id; }
+      if (field === 'lot' && !value) {
+        $("#result").html('');
       } else {
-        current += part.value;
+        // The field's own blur validates it, and for #lot loads the lot's picture.
+        $("#" + field).trigger('blur');
       }
-    });
-    const composed = String(total + current);
-    return spelled === composed ? [spelled] : [spelled, composed];
-  }
-
-  function voicePriceOf(parts) {
-    const amount = parts.length === 1 ? parts[0].value : Number(voiceNumberCandidates(parts).pop());
-    if (!isFinite(amount)) { return null; }
-    // The auction refuses half dollars when it says so, and offering one is offering a command the
-    // page is about to reject. Refused rather than rounded, which is what the app does with the same
-    // utterance: a heard "ten fifty" that quietly became 11 is money nobody said out loud, and the
-    // price field in a whole-dollar auction would have taken it.
-    if (voiceConfig.only_whole_dollar_bids && Math.round(amount) !== amount) { return null; }
-    return String(amount);
-  }
-
-  function voiceAlternativesFor(candidate) {
-    const extra = [];
-    voiceHomophonePairs.forEach(function (pair) {
-      const values = (pair || []).map(String);
-      if (values.indexOf(candidate) === -1) { return; }
-      values.forEach(function (value) {
-        if (value !== candidate && extra.indexOf(value) === -1) { extra.push(value); }
-      });
-    });
-    return extra;
-  }
-
-  // Only ever a value this auction actually has. A lot number the page invents is a command the
-  // server refuses; one that lands on somebody else's lot is worse than that.
-  //
-  // The loose pass exists for seller-dash lot numbering, where the real lot numbers are "3-1" and
-  // "BOB-2" and nobody says the dash: "three one" can only ever reach 31 or 4, so an exact match
-  // never fires and voice was simply dead in those auctions. Digits-only is tried *after* the
-  // exact pass so a plain lot 31 always wins over a "3-1" in an auction that has both spellings,
-  // and when two dashed numbers flatten to the same digits ("3-11" and "31-1") it comes back as
-  // two hits, which is the amber field with both offered rather than a guess.
-  function voiceSnapExact(candidates, vocabulary) {
-    const known = {};
-    vocabulary.forEach(function (value) { known[String(value).toLowerCase()] = String(value); });
-    const hits = [];
-    candidates.forEach(function (candidate) {
-      const hit = known[String(candidate).toLowerCase()];
-      if (hit && hits.indexOf(hit) === -1) { hits.push(hit); }
-    });
-    return hits;
-  }
-
-  function voiceDigitsOnly(value) {
-    return String(value).replace(/[^0-9]/g, '');
-  }
-
-  function voiceSnap(candidates, vocabulary) {
-    const exact = voiceSnapExact(candidates, vocabulary);
-    if (exact.length) { return exact; }
-    const wanted = candidates.map(voiceDigitsOnly).filter(Boolean);
-    if (!wanted.length) { return []; }
-    const hits = [];
-    vocabulary.forEach(function (value) {
-      const digits = voiceDigitsOnly(value);
-      if (digits && wanted.indexOf(digits) !== -1 && hits.indexOf(String(value)) === -1) {
-        hits.push(String(value));
-      }
-    });
-    return hits;
-  }
-
-  function voiceReadValue(slot, parts, heard, quality) {
-    const confidence = voiceFillConfidence(typeof quality === 'number' ? quality : 1);
-    if (slot === 'price') {
-      const price = voicePriceOf(parts);
-      return price === null ? null : {slot: slot, value: price, confidence: confidence, heard: heard};
     }
-    const candidates = voiceNumberCandidates(parts);
-    let hits = voiceSnap(candidates, voiceVocabulary[slot] || []);
-    if (hits.length === 1) { return {slot: slot, value: hits[0], confidence: confidence, heard: heard}; }
-    if (hits.length > 1) {
-      // Two real values in one utterance: offer both rather than picking, which is what the amber
-      // field and its buttons are for.
-      return {slot: slot, value: hits[0], confidence: voiceConfig.unsure, heard: heard, candidates: hits};
+    if (confidence >= voiceConfidentAt || voiceConfirmed[field] === value) {
+      voiceClearUnsure(field);
+    } else if (current !== value || !voiceUnsure[field]) {
+      voiceShowUnsure(field, command.heard, value, command.candidates);
     }
-    // Nothing matched as heard. "Fifteen" and "fifty" are a coin flip in a room with a PA, so try
-    // the pairs the grammar knows about — but the result is never confident, because the word that
-    // was actually said is the one that did not exist here.
-    const alternatives = [];
-    candidates.forEach(function (candidate) {
-      voiceAlternativesFor(candidate).forEach(function (value) {
-        if (alternatives.indexOf(value) === -1) { alternatives.push(value); }
-      });
+  }
+
+  function voiceMissing(emptyOnly) {
+    const missing = [];
+    ['lot', 'winner', 'price'].forEach(function (field) {
+      const empty = !String($("#" + field).val() || '').trim();
+      if (empty || (!emptyOnly && voiceUnsure[field])) { missing.push(voiceFieldLabel[field]); }
     });
-    hits = voiceSnap(alternatives, voiceVocabulary[slot] || []);
-    if (hits.length) {
-      return {slot: slot, value: hits[0], confidence: voiceConfig.unsure, heard: heard, candidates: hits};
-    }
-    return null;
+    return missing;
   }
 
   {% comment %}
-    One utterance into commands. Two passes, because "lot fifteen" puts the anchor in front of its
-    number and "twenty five dollars" puts it behind — and a recognizer hands us the second one as
-    "$25", with the spoken anchor gone entirely, which is why a currency symbol counts as one.
-
-    A number nothing claims is dropped on purpose. A bare "fifteen" is as likely to be the room as
-    a command, and there is no reading of it that is worth filling a field with.
+    A sale heard waits here until it can be saved: a field still empty, or amber until someone confirms
+    it, holds it, and confirming the last one saves it. A sale the server says isn't finished (no carry)
+    waits for more to be heard. A save the server refused isn't retried with the same three values.
   {% endcomment %}
-  function voiceParse(heard) {
-    const words = voiceWords(heard);
-    const items = [];
-    let index = 0;
-    while (index < words.length) {
-      const word = words[index];
-      if (word.length === 1 && voiceCurrencyChars.indexOf(word) !== -1) {
-        // The symbol arrived as its own token ("$ 10"), which iOS does and Android sometimes does.
-        // Same anchor; the number after it is read by the ordinary number branch on the next pass.
-        items.push({kind: 'anchor', slot: 'price'});
-        index += 1;
-        continue;
-      }
-      const money = voiceCurrencyChars.indexOf(word.charAt(0)) !== -1 && /^\d/.test(word.slice(1));
-      if (money) { items.push({kind: 'anchor', slot: 'price'}); }
-      const bare = money ? word.slice(1) : word;
-      if (voiceIsNumberWord(bare)) {
-        const parts = [voiceNumberValue(bare)];
-        index += 1;
-        while (index < words.length && voiceIsNumberWord(words[index])) {
-          parts.push(voiceNumberValue(words[index]));
-          index += 1;
-        }
-        items.push({kind: 'number', parts: parts});
-        continue;
-      }
-      const matched = voiceAnchorAt(words, index);
-      if (matched) {
-        items.push({kind: 'anchor', slot: matched.slot, quality: matched.quality});
-        index += matched.length;
+  let voiceSoldTimer = null;
+
+  function voiceTrySold() {
+    clearTimeout(voiceSoldTimer);
+    if (!voicePending || voiceBusy) { return; }
+    if (Date.now() < voicePending.at) {
+      voiceSoldTimer = setTimeout(voiceTrySold, voicePending.at - Date.now());
+      return;
+    }
+    if (!voiceConfig.auto_submit_on_sold) {
+      voiceStatus('Sold: check the fields and press Save');
+      return;
+    }
+    const missing = voiceMissing(!voiceConfig.block_auto_submit_when_unsure);
+    if (missing.length) {
+      voiceStatus('Sold: waiting for ' + missing.join(' and '));
+      return;
+    }
+    if (!voicePending.carry) { return; }
+    const form = voiceForm();
+    const signature = [form.lot, form.winner, form.price].join('|');
+    if (signature === voiceRefused) { return; }
+    const pending = voicePending;
+    voicePending = null;
+    voiceAct('save', pending.carry, pending.sent, signature);
+  }
+
+  function voiceAct(action, carry, sent, signature) {
+    voiceBusy = true;
+    voiceActing = true;
+    const sale = voiceForm();
+    sendFormData(action, function (response) {
+      voiceActing = false;
+      voiceBusy = false;
+      if (response && response.success_message) {
+        // Done with this lot, by us or (an "already sold" banner) by someone else: on to what followed.
+        voiceMoveOn(carry, sent);
+        voicePrevious = (action === 'save' && response.banner !== 'error') ? $.extend({at: Date.now()}, sale) : null;
+        voiceRefused = '';
       } else {
-        items.push({kind: 'word'});
-        index += 1;
+        voiceRefused = signature || '';
       }
-    }
-
-    const commands = [];
-    const misses = [];
-    const seen = {};
-    const claimed = [];
-    items.forEach(function (item, position) {
-      if (item.kind !== 'anchor' || seen[item.slot]) { return; }
-      const quality = typeof item.quality === 'number' ? item.quality : 1;
-      if (voiceValueSlots.indexOf(item.slot) === -1) {
-        seen[item.slot] = true;
-        // An action heard through a fuzzy anchor is still acted on -- there is no field to fill in
-        // amber -- but it is logged as the near miss it was.
-        commands.push({slot: item.slot, value: '', confidence: voiceFillConfidence(quality), heard: heard});
-        return;
-      }
-      let numberAt = -1;
-      if (items[position + 1] && items[position + 1].kind === 'number' && claimed.indexOf(position + 1) === -1) {
-        numberAt = position + 1;
-      } else if (items[position - 1] && items[position - 1].kind === 'number' && claimed.indexOf(position - 1) === -1) {
-        numberAt = position - 1;
-      }
-      if (numberAt === -1) { return; }
-      const command = voiceReadValue(item.slot, items[numberAt].parts, heard, quality);
-      if (!command) {
-        // An anchor with a number after it that this auction has never heard of. Worth saying out
-        // loud: "no lot like that here" is an answer, and it is the answer somebody staring at a
-        // microphone that appears to do nothing actually needs. The number is deliberately not
-        // repeated back — a run of number words has two readings and the matcher does not know
-        // which one was meant, so quoting one of them would be a guess printed as a fact. What was
-        // heard is already on the same line.
-        misses.push({slot: item.slot});
-        return;
-      }
-      claimed.push(numberAt);
-      seen[item.slot] = true;
-      commands.push(command);
+      voiceInterpret();
     });
-    // Fields before actions, always: 'sold' submits the form, so anything it is supposed to submit
-    // has to already be in it.
-    const order = voiceValueSlots.concat(['unsold', 'undo', 'clear', 'confirm', 'sold']);
-    commands.sort(function (a, b) { return order.indexOf(a.slot) - order.indexOf(b.slot); });
-    return {commands: commands, misses: misses};
   }
 
-  {% comment %}
-    The one race worth guarding. The fallback fires when the app has not answered inside the grace
-    window — but "has not answered yet" and "will never answer" are the same thing from here, and a
-    command that turns up late would act on an utterance the page has already acted on. Saying
-    "sold" twice for one lot is the expensive version of that.
-
-    So a locally matched utterance is remembered by its exact text for a few grace windows, and a
-    command carrying that same text is dropped. Only that text: the next thing said is a new
-    utterance and is handled normally, which is what stops this from swallowing a real second
-    "sold" a moment later.
-  {% endcomment %}
-  let voiceMatchedHere = null;
-  const voiceDuplicateWindowMs = voiceUnmatchedGraceMs * 3;
-
-  function voiceNormalizedText(text) {
-    return String(text || '').toLowerCase().trim().replace(/\s+/g, ' ');
-  }
-
-  function voiceAlreadyHandledHere(event) {
-    // Never our own: two identical utterances in a row ("sold", then "sold" for the next lot) are
-    // two real commands, and both of them come through here carrying the same text.
-    if (event.local || !voiceMatchedHere) { return false; }
-    if (Date.now() - voiceMatchedHere.at > voiceDuplicateWindowMs) {
-      voiceMatchedHere = null;
-      return false;
+  // "Scratch that", right after voice saved a sale: put the lot back on the block.
+  function voiceUndo(carry, sent) {
+    const lot = $("#last_sold_lot_number").text();
+    if ($("#undo_button").hasClass('d-none') || !lot) {
+      voiceStatus('Nothing to undo');
+      voiceMoveOn(carry, sent);
+      return;
     }
-    // Containment, and then the slot -- not string equality. The app's `heard` is the tokens for one
-    // *slot* ("132 10"), never the whole utterance, so comparing the two strings could never be
-    // true: this guard, the only thing standing between a late command and a second save of the
-    // same lot, had never once fired.
-    const heard = voiceNormalizedText(event.heard);
-    if (heard && voiceMatchedHere.heard.indexOf(heard) === -1) { return false; }
-    if (voiceValueSlots.indexOf(event.slot) !== -1) {
-      return Object.prototype.hasOwnProperty.call(voiceMatchedHere.slots, event.slot);
-    }
-    return voiceMatchedHere.actions.indexOf(event.slot) !== -1;
-  }
-
-  const voiceMissLabel = {lot: 'lot', bidder: 'bidder'};
-
-  function voiceMatchLocally(heard) {
-    if (voiceConfig.enabled === false) { return false; }
-    let parsed = {commands: [], misses: []};
-    try {
-      parsed = voiceParse(heard);
-    } catch (error) {
-      // Never let the fallback break the page: without it things merely don't get filled in.
-      return false;
-    }
-    if (!parsed.commands.length) {
-      // Nothing to do, but "nothing happened" and "there is no lot 1 here" are different answers
-      // and the second one is the one worth putting on screen.
-      const miss = parsed.misses[0];
-      if (miss && voiceMissLabel[miss.slot]) {
-        voiceStatus('heard "' + heard + '" — no ' + voiceMissLabel[miss.slot] + ' like that in this auction');
+    voiceBusy = true;
+    voiceActing = true;
+    undoSellLot(function (response) {
+      voiceActing = false;
+      voiceBusy = false;
+      voicePrevious = null;
+      if (response && response.success_message) {
+        $("#lot").val(lot);
+        getLotPicture();
       }
-      return false;
-    }
-    voiceMatchedHere = {heard: voiceNormalizedText(heard), at: Date.now(), slots: {}, actions: []};
-    parsed.commands.forEach(function (command) {
-      command.local = true;
-      if (voiceValueSlots.indexOf(command.slot) !== -1) {
-        voiceMatchedHere.slots[command.slot] = command.value;
-      } else {
-        voiceMatchedHere.actions.push(command.slot);
-      }
-      voiceHandleCommand(command);
+      voiceMoveOn(carry, sent);
+      voiceInterpret();
     });
-    return true;
   }
 
-  function voiceSettleTranscript(confidence) {
-    // A command arrived for what was last heard, so this transcript is accounted for -- unless the
-    // app was barely sure of it, in which case it is a word the grammar nearly knows, and that is
-    // worth exactly as much as one it doesn't know at all.
-    const pending = voicePendingTranscript;
-    voiceForgetTranscript();
-    if (!pending) { return; }
-    if (typeof confidence === 'number' && confidence < voiceConfig.unsure) {
-      voiceLogUnmatched(pending.text, confidence);
-    }
+  function voiceShowMissed(missed) {
+    const item = $('<li class="mb-1"></li>');
+    item.text('Lot ' + (missed.lot || '?') + ' not recorded: heard "' + missed.heard + '"');
+    $("#voice-missed").removeClass('d-none').prepend(item);
+    $("#voice-missed li").slice(8).remove();
   }
 
   function voiceClearUnsure(field) {
@@ -740,15 +412,10 @@
     $("#voice-unsure-" + field).addClass('d-none').empty();
   }
 
-  function voiceUnsureFields() {
-    return Object.keys(voiceUnsure);
-  }
-
   {% comment %}
-    The unsure state: amber dashed field plus what was heard, what it became, and a one-tap Confirm.
-    When the app couldn't separate two candidates ("fifteen" / "fifty"), both are offered rather
-    than one of them being guessed at -- picking the other one is a single tap and is recorded as a
-    correction, which is exactly the sample the grammar needs.
+    The unsure state: amber dashed field, what was heard, what it became, and a one-tap Confirm. Two
+    readings that both exist here ("fifteen" / "fifty") are both offered; picking one is a correction,
+    and the log keeps it.
   {% endcomment %}
   function voiceShowUnsure(field, heard, value, candidates) {
     voiceUnsure[field] = true;
@@ -759,7 +426,11 @@
     summary.text(heard ? 'heard "' + heard + '" → ' + value + '?' : 'not sure: ' + value + '?');
     box.append(summary);
     const confirmButton = $('<button type="button" class="btn btn-sm btn-success text-dark me-1">Confirm</button>');
-    confirmButton.on('click', function () { voiceClearUnsure(field); });
+    confirmButton.on('click', function () {
+      voiceConfirmed[field] = String($("#" + field).val() || '');
+      voiceClearUnsure(field);
+      voiceTrySold();
+    });
     box.append(confirmButton);
     (candidates || []).forEach(function (candidate) {
       const text = String(candidate);
@@ -773,193 +444,295 @@
 
   function voiceApplyCorrection(field, value) {
     $("#" + field).val(value);
+    voiceTyped[field] = value;
     voiceRecordCorrection(field, value);
     voiceClearUnsure(field);
     $("#" + field).trigger('blur');
+    voiceTrySold();
   }
 
   function voiceRecordCorrection(field, value) {
-    // No id means either the operator typed this field themselves (nothing to correct) or the
-    // command's own POST is still in flight -- one round trip against however long it takes a person
-    // to notice a wrong bidder and retype it. Dropping that sample beats guessing which row it
-    // belonged to.
+    // No row id: a person typed this field themselves, or the reading is still out. Either way there's
+    // nothing to pair the correction with.
     if (!voiceLogIds[field] || String(value) === String(voiceFilled[field])) { return; }
-    voiceLogCommand(voiceFieldToSlot[field], {id: voiceLogIds[field], corrected_to: value});
+    $.ajax({
+      url: "{% url 'auction_voice_command_log' slug=auction.slug %}",
+      method: 'POST',
+      beforeSend: voiceCsrf,
+      data: {id: voiceLogIds[field], slot: voiceFieldToSlot[field], corrected_to: value}
+    });
     voiceFilled[field] = value;
   }
 
-  function voiceFillField(slot, field, value, confidence, heard, candidates) {
-    $("#" + field).val(value);
-    voiceFilled[field] = value;
-    // Fire the field's own blur: that already runs sendFormData() validation (which paints the
-    // is-valid green, or red for a bidder who doesn't exist) and, for #lot, getLotPicture().
-    $("#" + field).trigger('blur');
-    if (confidence >= voiceConfidentAt) {
-      voiceClearUnsure(field);
-    } else {
-      voiceShowUnsure(field, heard, value, candidates);
-    }
-    voiceLogCommand(slot, {heard: heard, chosen: value, confidence: confidence}, function (id) {
-      voiceLogIds[field] = id;
-    });
-  }
-
-  function voiceClearFields() {
-    ['lot', 'price', 'winner'].forEach(function (field) {
-      $("#" + field).val('');
-      voiceClearUnsure(field);
-    });
-    voiceFilled = {};
-    voiceLogIds = {};
-    $("#result").html('');
-  }
-
-  // Called from handleServerResponse once a lot is actually saved: the fields are empty again, so
-  // whatever the operator types next is a new lot, not a correction of the last one.
+  // From handleServerResponse once a lot is saved or ended: whatever goes in the fields next is the next lot.
   window.voiceResetFields = function () {
     ['lot', 'price', 'winner'].forEach(voiceClearUnsure);
     voiceFilled = {};
     voiceLogIds = {};
-    // A lot just sold or came back unsold, so the list of lots voice may hear has changed.
-    voiceRefreshVocabulary();
+    voiceConfirmed = {};
+    voiceTyped = {};
+    if (!voiceActing) {
+      // Saved by hand: what voice heard was about that lot.
+      voiceSegments = [];
+      voicePending = null;
+      voicePrevious = null;
+    }
   };
 
   {% comment %}
-    What is actually holding a save back, read off the form rather than taken from the app.
-
-    `blocked_by` is the app's snapshot of what *it* filled in, and it was wrong twice over. A value
-    the operator typed with the keyboard was never in it, so "sold" was refused on a form that was
-    complete. And a `sold` computed before its own siblings arrived -- which is exactly what "sold,
-    ten dollars, bidder one two three" produces, because the app reports commands in the order they
-    were spoken -- listed all three fields as missing when they were about to be filled.
-
-    The page is looking straight at the three inputs, so it never has to guess. The app's list is
-    still read for the one thing it knows and the page doesn't: whether this deployment has
-    auto-submit switched off altogether.
+    The app's recognizer: a phrase at a time, as transcripts. A final one ends the phrase; so does the
+    app re-arming for the next (a `state` event), which matters because a build that already acted on a
+    phrase's words marks its final as partial. Its own `command` events are ignored: the server reads.
   {% endcomment %}
-  function voiceBlockedMessage(blockedBy, emptyOnly) {
-    if ((blockedBy || []).indexOf('disabled') !== -1) { return ['auto-save is off for this auction']; }
-    const missing = [];
-    ['lot', 'winner', 'price'].forEach(function (field) {
-      const empty = !String($("#" + field).val() || '').trim();
-      if (empty || (!emptyOnly && voiceUnsure[field])) { missing.push(voiceFieldLabel[field]); }
-    });
-    return missing;
+  const voicePhraseSettleMs = 4000;
+  let voicePhrase = '';
+  let voicePhraseTimer = null;
+
+  function voicePhraseDone() {
+    clearTimeout(voicePhraseTimer);
+    const text = voicePhrase;
+    voicePhrase = '';
+    voiceHeard(text);
+  }
+
+  function voiceAppTranscript(event) {
+    voiceStatus(event.text ? 'heard: "' + event.text + '"' : '');
+    voicePhrase = String(event.text || '');
+    clearTimeout(voicePhraseTimer);
+    if (event.partial) {
+      voicePhraseTimer = setTimeout(voicePhraseDone, voicePhraseSettleMs);
+    } else {
+      voicePhraseDone();
+    }
   }
 
   {% comment %}
-    A `sold` waits a beat before it acts, for the ordering reason above: the save is delivered first
-    in "sold, ten dollars, bidder one two three", and acting on it the moment it arrives is a refusal
-    on a form whose values are still two events behind. 250 ms is longer than the gap between the
-    commands of one utterance and far shorter than the gap between two utterances, so it costs the
-    operator nothing they can feel and it cannot swallow a later "sold".
+    A browser's microphone, through OpenAI. Django mints a key that opens one session (the site's own
+    never leaves the server), the microphone goes over WebRTC, and transcripts come back on the data
+    channel. The live model leaves ending a turn to us, and where it ends matters: cut mid-word, the
+    model guesses the rest -- "one oh fi-" came back "one oh four", "forty-fo-" came back "forty-five".
+    So a turn ends where the microphone goes quiet: under twice the room's own noise floor (the level
+    the last three seconds spent a fifth of their time under -- the quietest instant is too quiet in a
+    noisy room, and pauses vanish) for long enough to be a breath, not a gap between syllables. Words
+    stopping isn't a pause: the model holds them back while it's unsure, which is exactly mid-word. Nor
+    is a full stop, which the model writes mid-number ("one oh."). A long turn ends at the next gap
+    between words, so an auctioneer who never draws breath still has each sale saved within seconds,
+    and past the longest turn it ends anywhere.
+    Sessions end on OpenAI's side after a while; a dropped one is reopened, and nothing heard for
+    fifteen minutes stops it.
   {% endcomment %}
-  const voiceSoldDeferMs = 250;
-  let voiceSoldTimer = null;
+  const voiceCloudPauseMs = 450;
+  const voiceCloudGapMs = 150;
+  const voiceCloudLongMs = 12000;
+  const voiceCloudFloorSamples = 60;
+  // Without a level to go on (no AudioContext): a long gap in the words.
+  const voiceCloudNoLevelQuietMs = 1500;
+  const voiceCloudLongestMs = 30000;
+  const voiceCloudIdleMs = 15 * 60 * 1000;
+  const voiceCloud = {wanted: false, pc: null, dc: null, stream: null, audio: null, meter: null, ticker: null,
+                      item: null, text: '', firstAt: 0, lastAt: 0, committed: {}, commit: false,
+                      heardAt: 0, retries: 0, quietSince: 0};
 
-  function voiceTrySold(event) {
-    const heard = event.heard || '';
-    const confidence = (typeof event.confidence === 'number') ? event.confidence : 1;
-    // Never save past an unsure or empty field: block_auto_submit_when_unsure exists because selling
-    // a lot to a bidder nobody confirmed is far more expensive than asking one question. Turning it
-    // off stops the page asking about *unsure* fields; an empty one still holds the save.
-    const blocked = voiceBlockedMessage(event.blocked_by, !voiceConfig.block_auto_submit_when_unsure);
-    if (blocked.length) {
-      voiceStatus('Not saved: check ' + blocked.join(', '));
-      window.jQuery.toast({
-        title: 'Not saved yet',
-        content: 'Confirm ' + blocked.join(' and ') + ', then say sold again.',
-        type: 'warning',
-        delay: 6000
-      });
-      return;
-    }
-    voiceLogCommand('sold', {heard: heard, chosen: 'save', confidence: confidence});
-    sendFormData('save');
+  function voiceCloudSupported() {
+    return !!(voiceConfig.cloud && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.RTCPeerConnection);
   }
 
-  function voiceHandleCommand(event) {
-    if (voiceAlreadyHandledHere(event)) { return; }
-    const slot = event.slot;
-    const value = (event.value === null || event.value === undefined) ? '' : String(event.value);
-    const confidence = (typeof event.confidence === 'number') ? event.confidence : 1;
-    const heard = event.heard || '';
-    voiceSettleTranscript(confidence);
-    const field = voiceSlotToField[slot];
-    if (field) {
-      voiceFillField(slot, field, value, confidence, heard, event.candidates);
+  async function voiceCloudStart() {
+    voiceCloud.wanted = true;
+    let session;
+    try {
+      session = await $.ajax({url: "{% url 'auction_voice_cloud_session' slug=auction.slug %}", method: 'POST', beforeSend: voiceCsrf});
+    } catch (error) {
+      voiceCloudFail((error && error.responseJSON && error.responseJSON.error) || "Couldn't start listening");
       return;
     }
-    if (slot === 'sold') {
-      // Deferred, so the values spoken after it land first -- see voiceTrySold.
-      clearTimeout(voiceSoldTimer);
-      voiceSoldTimer = setTimeout(function () { voiceTrySold(event); }, voiceSoldDeferMs);
-      return;
-    }
-    if (slot === 'unsold') {
-      voiceLogCommand(slot, {heard: heard, chosen: 'end_unsold', confidence: confidence});
-      sendFormData('end_unsold');
-      return;
-    }
-    if (slot === 'undo') {
-      if ($("#undo_button").hasClass('d-none')) {
-        voiceStatus('Nothing to undo');
-        return;
+    try {
+      if (!voiceCloud.stream) {
+        voiceCloud.stream = await navigator.mediaDevices.getUserMedia({audio: true});
       }
-      voiceLogCommand(slot, {heard: heard, chosen: 'undo', confidence: confidence});
-      undoSellLot();
+    } catch (error) {
+      voiceCloudFail(error && error.name === 'NotAllowedError'
+        ? 'The microphone is blocked. Allow it for this site, then tap Listen again.'
+        : 'No microphone found');
       return;
     }
-    if (slot === 'clear') {
-      voiceLogCommand(slot, {heard: heard, chosen: 'clear', confidence: confidence});
-      voiceClearFields();
-      $("#lot").focus();
-      return;
+    try {
+      const pc = new RTCPeerConnection();
+      pc.addTrack(voiceCloud.stream.getAudioTracks()[0], voiceCloud.stream);
+      const dc = pc.createDataChannel('oai-events');
+      dc.addEventListener('open', function () {
+        if (session.update) { dc.send(JSON.stringify(session.update)); }
+      });
+      dc.addEventListener('message', function (message) {
+        let event = null;
+        try { event = JSON.parse(message.data); } catch (error) { return; }
+        voiceCloudEvent(event);
+      });
+      pc.addEventListener('connectionstatechange', function () {
+        if (['failed', 'disconnected', 'closed'].indexOf(pc.connectionState) !== -1 && voiceCloud.pc === pc) {
+          voiceCloudDropped();
+        }
+      });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const answer = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        body: offer.sdp,
+        headers: {Authorization: 'Bearer ' + session.key, 'Content-Type': 'application/sdp'}
+      });
+      if (!answer.ok) { throw new Error('OpenAI answered ' + answer.status); }
+      await pc.setRemoteDescription({type: 'answer', sdp: await answer.text()});
+      voiceCloud.pc = pc;
+      voiceCloud.dc = dc;
+      voiceCloud.commit = !!session.commit;
+      voiceCloud.heardAt = Date.now();
+      voiceCloudMeter();
+      clearInterval(voiceCloud.ticker);
+      voiceCloud.ticker = setInterval(voiceCloudTick, 200);
+      voiceRenderState({listening: true, on_device: false});
+      voiceShowFirstRunHelp();
+    } catch (error) {
+      voiceCloudDropped();
     }
-    if (slot === 'confirm') {
-      // Confirms the field it names, or everything outstanding when it names nothing.
-      const named = voiceSlotToField[value];
-      (named ? [named] : voiceUnsureFields()).forEach(voiceClearUnsure);
-      return;
-    }
-    // Unknown slot: ignore it. That's what lets either side add one without shipping the other.
   }
 
+  function voiceCloudEvent(event) {
+    if (!event || !event.type) { return; }
+    const now = Date.now();
+    if (event.type === 'conversation.item.input_audio_transcription.delta') {
+      if (event.item_id !== voiceCloud.item) {
+        voiceCloud.item = event.item_id;
+        voiceCloud.text = '';
+        voiceCloud.firstAt = now;
+      }
+      voiceCloud.text += event.delta || '';
+      voiceCloud.lastAt = now;
+      voiceCloud.heardAt = now;
+      voiceCloud.retries = 0;
+      voiceStatus('heard: "' + voiceCloud.text.trim().slice(-120) + '"');
+    } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+      voiceCloud.heardAt = now;
+      if (event.item_id === voiceCloud.item) { voiceCloud.item = null; }
+      voiceHeard(event.transcript);
+    } else if (event.type === 'error' && event.error && event.error.type !== 'invalid_request_error') {
+      voiceStatus(event.error.message || 'Voice problem');
+    }
+  }
+
+  function voiceCloudTick() {
+    const now = Date.now();
+    if (now - voiceCloud.heardAt > voiceCloudIdleMs) {
+      voiceCloudStop();
+      voiceStatus('Stopped listening: nothing heard for 15 minutes');
+      return;
+    }
+    if (!voiceCloud.item) { return; }
+    const quiet = voiceCloud.quietSince ? now - voiceCloud.quietSince : 0;
+    const paused = voiceCloud.meter
+      ? quiet >= voiceCloudPauseMs || (now - voiceCloud.firstAt > voiceCloudLongMs && quiet >= voiceCloudGapMs)
+      : now - voiceCloud.lastAt > voiceCloudNoLevelQuietMs;
+    if (paused || now - voiceCloud.firstAt > voiceCloudLongestMs) {
+      voiceCloudCommit();
+    }
+  }
+
+  function voiceCloudCommit() {
+    const item = voiceCloud.item;
+    if (!voiceCloud.commit || !item || voiceCloud.committed[item] || !voiceCloud.dc || voiceCloud.dc.readyState !== 'open') { return; }
+    voiceCloud.committed[item] = true;
+    voiceCloud.dc.send(JSON.stringify({type: 'input_audio_buffer.commit'}));
+  }
+
+  function voiceCloudMeter() {
+    if (voiceCloud.meter || !window.AudioContext) { return; }
+    try {
+      voiceCloud.audio = new AudioContext();
+      const analyser = voiceCloud.audio.createAnalyser();
+      analyser.fftSize = 2048;
+      voiceCloud.audio.createMediaStreamSource(voiceCloud.stream).connect(analyser);
+      const samples = new Uint8Array(analyser.fftSize);
+      const recent = [];
+      voiceCloud.meter = setInterval(function () {
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (let i = 0; i < samples.length; i++) { const v = (samples[i] - 128) / 128; sum += v * v; }
+        const level = Math.sqrt(sum / samples.length);
+        $("#voice-level-bar").css('width', Math.min(100, Math.round(level * 300)) + '%');
+        recent.push(level);
+        if (recent.length > voiceCloudFloorSamples) { recent.shift(); }
+        const floor = recent.slice().sort(function (a, b) { return a - b; })[Math.floor(recent.length / 5)];
+        if (level < Math.max(floor * 2, floor + 0.002)) {
+          voiceCloud.quietSince = voiceCloud.quietSince || Date.now();
+        } else {
+          voiceCloud.quietSince = 0;
+        }
+      }, 50);
+    } catch (error) {
+      voiceCloud.meter = null;
+    }
+  }
+
+  function voiceCloudClose() {
+    clearInterval(voiceCloud.ticker);
+    voiceCloud.ticker = null;
+    const pc = voiceCloud.pc;
+    voiceCloud.pc = null;
+    voiceCloud.dc = null;
+    voiceCloud.item = null;
+    if (pc) { try { pc.close(); } catch (error) {} }
+  }
+
+  function voiceCloudStop() {
+    voiceCloud.wanted = false;
+    voiceCloudClose();
+    clearInterval(voiceCloud.meter);
+    voiceCloud.meter = null;
+    if (voiceCloud.audio) { voiceCloud.audio.close().catch(function () {}); voiceCloud.audio = null; }
+    if (voiceCloud.stream) { voiceCloud.stream.getTracks().forEach(function (track) { track.stop(); }); voiceCloud.stream = null; }
+    voiceRenderState({listening: false});
+  }
+
+  function voiceCloudDropped() {
+    voiceCloudClose();
+    if (!voiceCloud.wanted) { return; }
+    voiceCloud.retries += 1;
+    if (voiceCloud.retries > 3) {
+      voiceCloudFail('Lost the connection to OpenAI');
+      return;
+    }
+    voiceStatus('Reconnecting...');
+    setTimeout(function () { if (voiceCloud.wanted && !voiceCloud.pc) { voiceCloudStart(); } }, 2000);
+  }
+
+  function voiceCloudFail(message) {
+    voiceCloudStop();
+    voiceStatus(message);
+    window.jQuery.toast({title: 'Voice problem', content: message, type: 'danger', delay: 8000});
+  }
+
+  {% if request.is_mobile_app %}
   {% comment %}
-    VOICE-7: the settings panel. Three controls, all of which the app already answers -- it owns the
-    values and stores them per device, so nothing here is posted anywhere. voiceSetSettings merges
-    field by field and takes effect on the next utterance, so each control sends only itself and
-    nobody has to stop and restart listening to change their mind.
+    VOICE-7: the settings panel. The app owns these values and stores them per device, so nothing here is
+    posted anywhere; voiceSetSettings merges field by field and takes effect on the next phrase.
   {% endcomment %}
   function voiceRenderSettings(state) {
     const settings = state && state.settings;
-    // An app build old enough to have no settings handlers answers without this block. Leave the
-    // button hidden rather than showing a control that leads to three dead inputs.
+    // An app build with no settings handlers answers without this block: leave the button hidden.
     if (!settings) { return; }
     $("#voice-settings-btn").removeClass('d-none');
     const range = state.settings_range || {};
     const slider = $("#voice-confident");
-    // Set the bounds before the value: the browser clamps to whatever min/max say at the time.
+    // Bounds before the value: the browser clamps to whatever min/max say at the time.
     if (typeof range.confident_min === 'number') { slider.attr('min', range.confident_min); }
     if (typeof range.confident_max === 'number') { slider.attr('max', range.confident_max); }
-    // The device's cutoff wins over the site's from here on: it is the one the operator can see
-    // and move, and green here has to mean what the slider says it means.
     if (typeof settings.confident_at === 'number') { voiceConfidentAt = settings.confident_at; }
-    // Don't write to the slider while a thumb is on it -- a state event arriving mid-drag would
-    // yank it out from under them. The checkboxes have no such moment and are always written, so
-    // they show what is actually in force: the app can decline to process on this phone when the
-    // language pack turns out to be missing, and the box has to come back unticked when it does.
+    // Not while a thumb is on it: a state event mid-drag would yank it away.
     if (document.getElementById('voice-confident') !== document.activeElement
         && typeof settings.confident_at === 'number') {
       slider.val(settings.confident_at);
     }
     $("#voice-on-device").prop('checked', !!settings.prefer_on_device);
     $("#voice-bias-low").prop('checked', !!settings.bias_low_prices);
-    // A note, not a gate: picking the smaller of two readings the recognizer already returned works
-    // on every phone, and that half of the setting is on whatever this says. What it reports is
-    // whether this device is also handed the auction's real lot and bidder numbers before it
-    // listens -- false until Listen has been tapped once, and false below Android 13, which has no
-    // way to be given a vocabulary at all.
     $("#voice-bias-note").text(state.bias_supported
       ? "This phone is also given the auction's own lot and bidder numbers to listen for."
       : "Listening for this auction's own lot and bidder numbers needs one tap on Listen first, and Android 13 or newer.");
@@ -972,18 +745,14 @@
       voiceStatus('Could not save that setting');
     });
   }
+  {% else %}
+  function voiceRenderSettings() {}
+  function voiceSaveSettings() {}
+  {% endif %}
 
   function voiceRenderState(state) {
     const listening = !!(state && state.listening);
     voiceListening = listening;
-    // Bidders sign up at the desk while selling runs; see voiceRefreshVocabulary.
-    if (listening && !voiceVocabularyTimer) {
-      voiceRefreshVocabulary();
-      voiceVocabularyTimer = setInterval(voiceRefreshVocabulary, voiceVocabularyRefreshMs);
-    } else if (!listening && voiceVocabularyTimer) {
-      clearInterval(voiceVocabularyTimer);
-      voiceVocabularyTimer = null;
-    }
     const button = $("#voice-btn");
     if (listening) {
       button.removeClass('btn-primary').addClass('btn-danger');
@@ -997,39 +766,31 @@
       $("#voice-level-bar").css('width', '0%');
       voiceStatus('');
     }
-    // voiceGetState carries the settings too, and so does what voiceStart answers with -- which is
-    // the moment bias_supported can first be true, since the app won't make a platform call on page
-    // load just to answer it. Harmless for the states that carry nothing.
     voiceRenderSettings(state);
   }
 
   {% comment %}
-    The app pushes events in with evaluateJavascript, so this has to exist before anyone taps
-    Listen. Unknown event types are ignored for the same reason unknown slots are.
+    The app pushes events in with evaluateJavascript, so this has to exist before anyone taps Listen.
+    Unknown event types are ignored for the same reason unknown slots are.
   {% endcomment %}
   window.fishauctionsVoice = {
     onEvent: function (event) {
-      // Tolerate a JSON string as well as an object: which one arrives depends on how the app
-      // builds the evaluateJavascript call, and that is not worth a coordinated release to agree on.
+      // A JSON string or an object, depending on how the app built the call.
       if (typeof event === 'string') {
         try { event = JSON.parse(event); } catch (err) { return; }
       }
       if (!event || !event.type) { return; }
       if (event.type === 'state') {
+        // listening while already listening is the app starting its next phrase.
+        if (event.listening && voiceListening && voicePhrase) { voicePhraseDone(); }
         voiceRenderState(event);
       } else if (event.type === 'level') {
         const level = Math.max(0, Math.min(1, Number(event.level) || 0));
         $("#voice-level-bar").css('width', Math.round(level * 100) + '%');
       } else if (event.type === 'transcript') {
-        // v1 had no transcript and no meter, which made "dead microphone" and "bad model" look
-        // exactly alike. Showing what was heard, even when nothing matched, is the difference.
-        voiceStatus(event.text ? 'heard: "' + event.text + '"' : '');
-        voiceHeardTranscript(event.text, event.partial);
-      } else if (event.type === 'command') {
-        voiceHandleCommand(event);
+        voiceAppTranscript(event);
       } else if (event.type === 'error') {
-        // Reset the button first: voiceRenderState clears the status line, and the error is the one
-        // thing that has to survive on it.
+        // Reset the button first: rendering the state clears the status line, and the error has to stay.
         voiceRenderState({listening: false});
         voiceStatus(event.message || event.code || 'Voice error');
         window.jQuery.toast({
@@ -1050,11 +811,15 @@
   }
 
   function voiceInit() {
+    // enabled:false is the site-wide kill switch (Voice grammar in the admin).
+    if (!voiceConfig.enabled) { return; }
     const bridge = voiceBridge();
-    // enabled:false is the site-wide kill switch (Voice grammar in the admin) -- don't even ask.
-    if (!bridge || !voiceConfig.enabled) { return; }
     $("#voice-btn").on('click', function () {
       const button = $(this);
+      if (!bridge) {
+        if (voiceCloud.wanted) { voiceCloudStop(); } else { voiceCloudStart(); }
+        return;
+      }
       button.prop('disabled', true);
       const stopping = voiceListening;
       const call = stopping
@@ -1074,18 +839,17 @@
       $("#voice-first-run").addClass('d-none');
       try { window.localStorage.setItem(voiceHelpSeenKey, '1'); } catch (err) {}
     });
+    {% if request.is_mobile_app %}
     $("#voice-settings-btn").on('click', function () {
       const panel = $("#voice-settings");
       const opening = panel.hasClass('d-none');
       panel.toggleClass('d-none', !opening);
       $(this).attr('aria-expanded', opening ? 'true' : 'false');
-      // Ask again on open rather than trusting what page load said: bias_supported flips to true
-      // the first time Listen is tapped, and the operator opening this panel is usually asking
-      // about exactly that.
-      if (opening) { bridge.callHandler('voiceGetSettings').then(voiceRenderSettings).catch(function () {}); }
+      // Ask again on open: bias_supported turns true the first time Listen is tapped.
+      if (opening && bridge) { bridge.callHandler('voiceGetSettings').then(voiceRenderSettings).catch(function () {}); }
     });
-    // On release, not on every input event: a drag is dozens of events, and each one would be a
-    // platform call. The app merges what it gets, so each control sends only itself.
+    {% endif %}
+    // On release, not on every input event: a drag is dozens of platform calls.
     $("#voice-confident").on('change', function () {
       voiceSaveSettings({confident_at: parseFloat(this.value)});
     });
@@ -1095,17 +859,24 @@
     $("#voice-bias-low").on('change', function () {
       voiceSaveSettings({bias_low_prices: this.checked});
     });
-    // Typing over a field voice filled is the correction we most want to know about.
+    // A person typing over a field: the correction the log most wants, and a value voice must not undo.
+    // A sale waiting for that field (the lot number nobody said) is read again with it, and saved.
     $("#lot, #price, #winner").on('change', function () {
+      voiceTyped[this.id] = String($(this).val() || '');
       voiceRecordCorrection(this.id, $(this).val());
+      voiceClearUnsure(this.id);
+      if (voicePending) { voiceInterpret(); }
     });
-    // supported:false means this app build has no voice handlers at all -- leave the button hidden
-    // rather than showing every phone a dead control.
-    bridge.callHandler('voiceGetState').then(function (state) {
-      if (!state || !state.supported) { return; }
+    if (bridge) {
+      // supported:false is an app build with no voice handlers: no button rather than a dead one.
+      bridge.callHandler('voiceGetState').then(function (state) {
+        if (!state || !state.supported) { return; }
+        $("#voice-btn").removeClass('d-none');
+        voiceRenderState(state);
+      }).catch(function () {});
+    } else if (voiceCloudSupported()) {
       $("#voice-btn").removeClass('d-none');
-      voiceRenderState(state);
-    }).catch(function () {});
+    }
   }
 {% endif %}
 
@@ -1167,7 +938,7 @@ $(document).ready(function() {
         e.preventDefault();
         sendFormData('save');
     });
-    {% if request.is_mobile_app %}
+    {% if voice_config %}
     voiceInit();
     {% endif %}
 });
@@ -1181,20 +952,17 @@ $(document).ready(function() {
 
 <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></div></div>
 <button id="fullscreen-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
-{% if request.is_mobile_app %}
+{% if voice_config %}
 {% comment %}
-  Voice input. Rendered hidden and revealed only once the app answers voiceGetState() with
-  supported: true -- is_mobile_app alone isn't enough, because app builds that predate the voice
-  handlers, or phones with no recognizer at all, would otherwise show a button that does nothing.
-
-  supported is the capability and nothing else: since the 2026-08-08 build the app answers it from
-  a permission-free check and asks for the microphone inside voiceStart, so
-  {supported: true, permission: false} is the normal first visit and the button must appear -- the
-  tap is what earns the OS prompt. (Answering it by initializing the recognizer is what once hid
-  this button permanently on every phone that hadn't already granted the microphone.)
+  Voice input, hidden until something can listen. In the app that's once it answers voiceGetState() with
+  supported: true -- builds that predate the voice handlers, or phones with no recognizer, would otherwise
+  show a button that does nothing. {supported: true, permission: false} is the normal first visit: the
+  tap is what earns the OS prompt. In a browser it's a microphone and OpenAI listening switched on.
 {% endcomment %}
 <button type="button" id="voice-btn" class="btn btn-sm btn-primary ms-2 d-none"><i class="bi bi-mic"></i> Listen</button>
+{% if request.is_mobile_app %}
 <button type="button" id="voice-settings-btn" class="btn btn-sm btn-primary ms-1 d-none" aria-expanded="false" aria-controls="voice-settings" aria-label="Voice settings"><i class="bi bi-sliders"></i></button>
+{% endif %}
 <span id="voice-level" class="voice-level d-none" aria-hidden="true"><span id="voice-level-bar"></span></span>
 <small id="voice-status" class="ms-2 text-muted"></small>
 <div id="voice-first-run" class="alert alert-info mt-2 d-none" role="alert">
@@ -1203,6 +971,7 @@ $(document).ready(function() {
   amount of software fixes that. Use a Bluetooth headset or a clip-on mic, or hold the phone up.
   <button type="button" id="voice-first-run-dismiss" class="btn btn-sm btn-primary ms-2">Got it</button>
 </div>
+<ul id="voice-missed" class="list-unstyled small text-warning mt-1 mb-0 d-none"></ul>
 {% comment %}
   Voice settings (VOICE-7). The operator tunes voice in the middle of a live auction, on the phone
   in their hand, so this lives next to the microphone rather than in preferences. The app owns these
@@ -1213,6 +982,7 @@ $(document).ready(function() {
   The slider deliberately shows no number. 0.72 means nothing to anyone; "how often do you want to
   retype it" is the actual question, and the ends of the track ask it.
 {% endcomment %}
+{% if request.is_mobile_app %}
 <div id="voice-settings" class="voice-settings card card-body mt-2 d-none">
   <label for="voice-confident" class="form-label mb-1">Filling in fields</label>
   <input type="range" class="form-range" id="voice-confident" min="0.6" max="0.9" step="0.01">
@@ -1235,6 +1005,7 @@ $(document).ready(function() {
   <small class="text-muted mt-3">Saved on this phone only, not to your account.</small>
 </div>
 {% endif %}
+{% endif %}
 
 </span>
 {% endblock %}
@@ -1249,9 +1020,8 @@ $(document).ready(function() {
 </div>
 
   {% comment %}
-    The .voice-unsure divs stay empty unless the app fills a field it isn't sure it heard right;
-    they hold the "heard X -> Y?" prompt and its Confirm button. Harmless on the web, where nothing
-    ever writes to them.
+    The .voice-unsure divs stay empty unless voice fills a field it isn't sure it heard right; they hold
+    the "heard X -> Y?" prompt and its Confirm button.
   {% endcomment %}
   <form id="auctionForm" class="row row-cols-md-auto g-3 d-flex align-items-center justify-content-center">
     <div class="col-12 mb-3">

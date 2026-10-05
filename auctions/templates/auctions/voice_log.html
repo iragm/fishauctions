@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block title %}Voice log for {{ auction }}{% endblock %}
+{% comment %}
+  What voice did on set lot winners in this auction, newest first: a row per field it filled and sale it
+  closed, and a "not recorded" row for a sale it heard but couldn't finish. Written by
+  views/voice.py::VoiceInterpretView; "Changed to" is a person typing over what voice filled.
+{% endcomment %}
+{% block content %}
+{% include 'auction_ribbon.html' %}
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th scope="col">When</th>
+        <th scope="col">Heard</th>
+        <th scope="col">Did</th>
+        <th scope="col">Changed to</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="text-nowrap">{{ row.createdon|date:"g:i:s A" }}</td>
+        <td>{{ row.heard }}</td>
+        <td class="text-nowrap">{% if row.nothing_matched %}<span class="text-warning">Not recorded</span>{% elif row.slot == "sold" %}Sold{% elif row.slot == "unsold" %}Ended unsold{% elif row.slot == "undo" %}Undid a sale{% else %}{{ row.get_slot_display }} {{ row.chosen }}{% endif %}</td>
+        <td>{{ row.corrected_to }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="text-muted">Nothing heard yet. Tap Listen on {% if auction.slug %}<a href="{% url 'auction_lot_winners_dynamic' slug=auction.slug %}">set lot winners</a>{% endif %}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

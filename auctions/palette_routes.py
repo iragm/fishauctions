@@ -1287,10 +1287,13 @@ EXCLUDED: dict[str, str] = {
     "lot_end_unsold": _ACTION_ONLY,
     "bulk_set_lots_won": _API,
     "auction_unsell_lot": _ACTION_ONLY,
-    "auction_voice_vocabulary": (
-        "The lot and bidder numbers voice may match against, fetched by the set-winners page to keep "
-        "its own matcher current while an auction runs. It is that page's working data, not a "
-        "capability: everything in it is already on the users and lots pages the palette can reach."
+    "auction_voice_interpret": (
+        "The set-winners page posting what its microphone heard while an auction runs, to be read as a "
+        "sale. Only that page has a microphone; a person saying who bought a lot uses set_lot_winner."
+    ),
+    "auction_voice_cloud_session": (
+        "A short-lived OpenAI key for the set-winners page's microphone. It opens one listening session "
+        "and is no use to anything without a microphone attached."
     ),
     "auction_enable_bidding_for_all": _API,
     "auction_invoices_ready": _API,

@@ -525,9 +525,14 @@ urlpatterns = [
         name="auction_voice_command_log",
     ),
     path(
-        "auctions/<slug:slug>/lots/set-winners/voice-vocabulary/",
-        views.VoiceVocabularyView.as_view(),
-        name="auction_voice_vocabulary",
+        "auctions/<slug:slug>/lots/set-winners/voice/",
+        views.VoiceInterpretView.as_view(),
+        name="auction_voice_interpret",
+    ),
+    path(
+        "auctions/<slug:slug>/lots/set-winners/voice/openai/",
+        views.VoiceCloudSessionView.as_view(),
+        name="auction_voice_cloud_session",
     ),
     path(
         "auctions/<slug:slug>/queue/",

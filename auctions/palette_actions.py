@@ -15655,6 +15655,8 @@ NOT_A_SKILL: dict[str, str] = {
     "SetCoordinates": _MACHINE,
     "SpeciesSuggestions": _MACHINE,
     "VoiceCommandLogView": _MACHINE,
+    "VoiceInterpretView": _MACHINE,
+    "VoiceCloudSessionView": _MACHINE,
     # Autocomplete and live validation feeds
     "AuctionAutocomplete": _MACHINE,
     "AuctionTOSAutocomplete": _MACHINE,

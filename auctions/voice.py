@@ -1,9 +1,8 @@
-"""Voice-driven set winners: the grammar the mobile app listens with.
+"""Voice-driven set winners: the grammar, the set-winners page's settings, and the OpenAI session.
 
-The app listens, but the grammar is data here, like
-:class:`~auctions.models.ThermalPrinterProfile`: which words an auctioneer says is an admin edit,
-not an app release. ``GET /api/mobile/config/`` serves it from
-:class:`~auctions.models.VoiceGrammar`, and the app merges it over its bundled defaults.
+The grammar is data here, like :class:`~auctions.models.ThermalPrinterProfile`: which words an
+auctioneer says is an admin edit, not an app release. :mod:`auctions.voice_interpreter` reads with it,
+and ``GET /api/mobile/config/`` serves it to the app, which still biases its recognizer with it.
 
 No model imports at module level: ``models.py`` uses these as JSONField defaults and migrations
 reference them by path.
@@ -23,6 +22,20 @@ BACKEND_CHOICES = [
     (BACKEND_CLOUD, "Cloud recognizer"),
     (BACKEND_SPOTTER, "Keyword spotter"),
 ]
+
+# OpenAI transcription models for listening in a web browser (``VoiceGrammar.cloud_model``). The live
+# model writes words as they're spoken and has no turn detection of its own, so the page commits each
+# turn itself; the others wait for a pause the server hears, which an auctioneer may not leave.
+CLOUD_LIVE = "gpt-live-transcribe"
+CLOUD_MODEL_CHOICES = [
+    ("", "Off"),
+    (CLOUD_LIVE, "gpt-live-transcribe (about $1 an hour)"),
+    ("gpt-4o-transcribe", "gpt-4o-transcribe (about 36c an hour, waits for pauses)"),
+    ("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe (about 18c an hour, waits for pauses)"),
+]
+CLOUD_SESSION_URL = "https://api.openai.com/v1/realtime/client_secrets"
+# Long enough to open the connection; the session outlives the key.
+CLOUD_KEY_SECONDS = 120
 
 # Slots a command event can fill; both sides ignore ones they don't know.
 SLOT_LOT = "lot"
@@ -269,29 +282,67 @@ def serialize_grammar(grammar):
     }
 
 
-def page_config(auction, grammar=None):
-    """Everything the set-winners page needs to match a spoken command itself.
+def cloud_model(grammar):
+    """The OpenAI model the browser listens through, or "" when that's off or the site has no key."""
+    from django.conf import settings
 
-    The app listens, but it can hear something and produce no command, with nothing on the page able to
-    tell a grammar gap from a matcher that never ran. So the page gets the grammar plus this auction's
-    vocabulary. ``grammar`` is passed when the caller loaded the singleton.
+    from .models import VoiceGrammar
+
+    if grammar is None:
+        grammar = VoiceGrammar()
+    if not grammar.enabled or not getattr(settings, "OPENAI_API_KEY", ""):
+        return ""
+    return grammar.cloud_model or ""
+
+
+def cloud_session(model, vocabulary):
+    """What OpenAI is asked for when the page starts listening: ``(client secret request, session.update)``.
+
+    The update repeats the transcription settings for the page to send once connected, because the live
+    model's keyword hints aren't echoed back by the key request and may not be applied from it.
+    Keywords are the words a general model is likeliest to get wrong here, and the bidder numbers no
+    model would guess: "NM", "BOB".
     """
-    from .mobile.services import voice as voice_service
+    prompt = (
+        "A club auction of aquarium fish and plants. The auctioneer reads each lot number, calls the bids "
+        f"and sells the lot to a bidder number: Lot 42... sold to bidder 104 for {vocabulary.get('currency_symbol') or '$'}10."
+    )
+    keywords = ["lot", "bidder", "paddle", "sold", "no sale"]
+    keywords += [value for value in vocabulary.get("bidder_numbers") or [] if not str(value).isdigit()][:40]
+    transcription = {"model": model, "prompt": prompt}
+    if model == CLOUD_LIVE:
+        transcription.update({"keywords": keywords, "languages": ["en"], "delay": "low"})
+        turns = None
+    else:
+        transcription["language"] = "en"
+        turns = {"type": "server_vad", "silence_duration_ms": 500}
+    audio = {"noise_reduction": {"type": "far_field"}, "transcription": transcription, "turn_detection": turns}
+    request = {
+        "expires_after": {"anchor": "created_at", "seconds": CLOUD_KEY_SECONDS},
+        "session": {"type": "transcription", "audio": {"input": audio}},
+    }
+    update = None
+    if model == CLOUD_LIVE:
+        update = {"type": "session.update", "session": {"type": "transcription", "audio": {"input": audio}}}
+    return request, update
+
+
+def page_config(auction, grammar=None):
+    """The set-winners page's voice settings: when a field is sure enough to fill green, whether "sold"
+    saves, and whether this browser can listen through OpenAI. ``grammar`` is passed when the caller
+    loaded the singleton. Reading what was heard is the server's job (``voice_interpreter``).
+    """
     from .models import VoiceGrammar
 
     if grammar is None:
         grammar = VoiceGrammar.load()
     thresholds = (grammar.thresholds if grammar else None) or default_thresholds()
     defaults = default_thresholds()
-    config = {
+    return {
         "enabled": grammar.enabled if grammar else True,
         "confident": thresholds.get("confident", defaults["confident"]),
         "unsure": thresholds.get("unsure", defaults["unsure"]),
         "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
         "auto_submit_on_sold": grammar.auto_submit_on_sold if grammar else True,
-        "anchors": (grammar.anchors if grammar else None) or default_anchors(),
-        "number_words": (grammar.number_words if grammar else None) or default_number_words(),
-        "homophones": (grammar.homophones if grammar else None) or default_homophones(),
+        "cloud": bool(cloud_model(grammar)),
     }
-    config.update(voice_service.build_vocabulary(auction))
-    return config

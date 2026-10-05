@@ -187,7 +187,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14256 lines)
+- **`models.py`** (14264 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -204,11 +204,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15758 lines)
+- **`palette_actions.py`** (15760 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2209 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1939 lines)
+- **`palette_routes.py`** (1942 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -619,9 +619,11 @@ this only quotes its opening sentence.
 - **`test_userdata.py`** (299 lines)
   ``UserData`` and ``AuctionTOS`` properties, and merging one user into another.
   `AuctionTOSPropertyTests`, `UserDataPropertyTests`, `UserDataMergeIntoTests`
-- **`test_voice.py`** (721 lines)
+- **`test_voice.py`** (834 lines)
   Voice-driven set winners.
-  `VoiceV1RemovedTests`, `VoiceVocabularyTests`, `VoiceVocabularyClubManagedTests`, `VoiceConfigBlockTests`, `VoicePageTests`, `VoiceCommandLogTests`, `VoiceUnmatchedLogTests`, `VoiceLogAdminTests`, `VoiceSettingsPanelTests`, `PriceAnchorCanonicalWordTests`
+- **`test_voice_interpreter.py`** (427 lines)
+  Reading what an auctioneer said as a sale (``auctions.voice_interpreter``).
+  `vocabulary`, `read`, `said`, `NumberTests`, `CloseTests`, `WaitingTests`, `NotASaleTests`, `AfterASaleTests`, `MissedTests`, `RecordedAuctionTests`
 - **`test_volunteers.py`** (268 lines)
   Tests for Part 7 — recruit volunteers (web feature).
   `VolunteerBase`, `VolunteerPageGatingTests`, `VolunteerHelperCountTests`, `VolunteerCreateTests`, `VolunteerSignupTests`, `VolunteerPageWarningTests`
@@ -635,16 +637,17 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1346 lines)
+- **`urls.py`** (1351 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
   `route_name`, `reach_by_route`, `friction_by_form`, `abandoned_durations`, `worst_fields`, `buyer_funnel`, `funnel_referrers`
 - **`validators.py`** (19 lines)
   `validate_username_no_at_symbol`
-- **`voice.py`** (297 lines)
-  Voice-driven set winners: the grammar the mobile app listens with.
-  `default_anchors`, `default_number_words`, `default_homophones`, `default_weights`, `default_thresholds`, `log_command`, `log_unmatched`, `serialize_grammar`, `page_config`
+- **`voice.py`** (348 lines)
+  Voice-driven set winners: the grammar, the set-winners page's settings, and the OpenAI session.
+- **`voice_interpreter.py`** (1534 lines)
+  Voice set-winners: what the auctioneer said, read as a sale.
 
 ## `auctions/documents/`
 
@@ -986,7 +989,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`printing.py`** (531 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
-- **`selling.py`** (1244 lines)
+- **`selling.py`** (1191 lines)
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
@@ -1000,6 +1003,9 @@ Every view on the site, split by the part of it the view belongs to.
 - **`usability.py`** (326 lines)
   The usability dashboards: measurements, the buyer funnel, and club outreach.
   `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminEarlyAdds`, `AdminFreeTextUsage`, `AdminSessionReplay`
+- **`voice.py`** (187 lines)
+  Voice on set lot winners: reading what was heard, opening the browser's OpenAI session, and the log.
+  `VoiceCommandLogView`, `VoiceInterpretView`, `VoiceCloudSessionView`
 - **`webhooks.py`** (971 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`

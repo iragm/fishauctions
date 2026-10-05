@@ -1,20 +1,25 @@
 """Voice-driven set winners.
 
 VOICE-1: the Vosklet implementation and cross-origin isolation are gone.
-VOICE-2: the per-auction vocabulary endpoint.
+VOICE-2: the per-auction vocabulary endpoint the app biases its recognizer with.
 VOICE-3: the grammar block in mobile config.
 VOICE-4: the set-winners page.
-VOICE-5: the tuning log.
-VOICE-6: logging utterances that matched nothing, rate-limited.
+VOICE-5: the log, and the page recording corrections on it.
+VOICE-6: sales heard but not recorded, rate-limited.
 VOICE-7: the in-app settings panel; the app stores the settings, Django stores nothing.
+The server reading what was heard (``voice_interpreter``, tested in test_voice_interpreter), and a
+browser listening through OpenAI.
 """
 
 import datetime
+import json
+from unittest import mock
 
+import httpx
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.db.models import Count
-from django.test import Client, TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -33,6 +38,7 @@ from auctions.models import (
 )
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
+from auctions.views import voice as voice_views
 
 APP_UA = "FishAuctionsApp/1.0 (Flutter; iOS)"
 
@@ -339,20 +345,33 @@ class VoiceConfigBlockTests(TestCase):
 # ---------------------------------------------------------------------------
 
 
+@override_settings(OPENAI_API_KEY="")
 class VoicePageTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.client.login(username="admin_user", password="testpassword")
         self.url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
 
-    def test_web_gets_no_voice_controls(self):
-        page = self.client.get(self.url).content.decode()
+    def test_web_gets_no_voice_controls_when_it_cant_listen(self):
+        response = self.client.get(self.url)
+        page = response.content.decode()
         self.assertNotIn('id="voice-btn"', page)
         self.assertNotIn("fishauctionsVoice", page)
+        self.assertNotIn("voice_config", response.context)
 
-    def test_web_does_not_even_build_the_config(self):
-        """The web page doesn't build the voice config."""
-        self.assertNotIn("voice_config", self.client.get(self.url).context)
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_web_listens_through_openai(self):
+        page = self.client.get(self.url).content.decode()
+        self.assertIn('id="voice-btn"', page)
+        self.assertIn(reverse("auction_voice_cloud_session", kwargs={"slug": self.in_person_auction.slug}), page)
+        self.assertIn("api.openai.com/v1/realtime/calls", page)
+        self.assertNotIn("sk-test", page)
+
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_openai_off_in_the_grammar_keeps_it_off_the_web(self):
+        VoiceGrammar.objects.create(cloud_model="")
+        page = self.client.get(self.url).content.decode()
+        self.assertNotIn('id="voice-btn"', page)
 
     def test_app_gets_the_bridge_and_a_hidden_button(self):
         """The app gets the bridge and a hidden button, revealed by voiceGetState() capability."""
@@ -380,26 +399,19 @@ class VoicePageTests(StandardTestCase):
         response = self.client.get(self.url, HTTP_USER_AGENT=APP_UA)
         self.assertFalse(response.context["voice_config"]["enabled"])
 
-    def test_the_page_can_match_a_transcript_on_its_own(self):
-        """The page can match a transcript itself when the app sends no command."""
+    def test_the_server_reads_what_was_heard(self):
+        """The page posts transcripts and acts on the answer; the app's own commands are ignored."""
         page = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
-        self.assertIn("voiceMatchLocally", page)
-        self.assertIn("voiceParse", page)
-        self.assertIn("voiceAnchorPhrases", page)
+        self.assertIn(reverse("auction_voice_interpret", kwargs={"slug": self.in_person_auction.slug}), page)
+        self.assertNotIn("event.type === 'command'", page)
+        for gone in ("voiceParse", "voiceMatchLocally", "voiceAnchorPhrases", "voice-vocabulary"):
+            self.assertNotIn(gone, page)
 
-    def test_the_page_gets_the_grammar_and_this_auctions_vocabulary(self):
+    def test_the_page_gets_no_vocabulary(self):
+        """The server reads against the live lot and bidder lists; the page has none to go stale."""
         config = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"]
-        self.assertIn("lot", config["anchors"])
-        self.assertEqual(config["number_words"]["one"], 1)
-        self.assertIn("lot_numbers", config)
-        self.assertIn("bidder_numbers", config)
-        self.assertIn(self.in_person_buyer.bidder_number, config["bidder_numbers"])
-
-    def test_an_admin_grammar_reaches_the_matcher_too(self):
-        """An admin-configured grammar reaches the page matcher too."""
-        VoiceGrammar.objects.create(anchors={"lot": ["lot", "item", "number"], "sold": ["sold"]})
-        config = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"]
-        self.assertIn("number", config["anchors"]["lot"])
+        self.assertNotIn("bidder_numbers", config)
+        self.assertNotIn("lot_numbers", config)
 
     def test_first_run_help_is_on_the_page(self):
         """First-run help is on the page."""
@@ -409,7 +421,169 @@ class VoicePageTests(StandardTestCase):
 
 
 # ---------------------------------------------------------------------------
-# VOICE-5 — tuning telemetry
+# The server reading what was heard
+# ---------------------------------------------------------------------------
+
+
+@isolated_cache("voice-interpret")
+class VoiceInterpretTests(StandardTestCase):
+    """The in-person auction's lot is 101-1 and its bidders include 555."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("auction_voice_interpret", kwargs={"slug": self.in_person_auction.slug})
+        self.client.login(username="admin_user", password="testpassword")
+
+    def _post(self, heard, **form):
+        body = {"heard": heard, "lot": "101-1", "winner": "", "price": ""}
+        body.update(form)
+        return self.client.post(self.url, json.dumps(body), content_type="application/json")
+
+    def test_a_close_comes_back_as_commands_for_the_form(self):
+        reading = self._post(["going once, going twice, sold to bidder five five five for ten dollars"]).json()
+        self.assertEqual(
+            [(command["slot"], command["value"]) for command in reading["commands"]],
+            [("bidder", "555"), ("price", "10"), ("sold", "")],
+        )
+        self.assertEqual(reading["carry"], [])
+
+    def test_what_it_did_is_logged_and_the_rows_come_back(self):
+        reading = self._post(["sold to bidder five five five for ten dollars"]).json()
+        rows = {row.slot: row for row in VoiceCommandLog.objects.filter(auction=self.in_person_auction)}
+        self.assertEqual(set(rows), {"bidder", "price", "sold"})
+        self.assertEqual(rows["bidder"].chosen, "555")
+        self.assertEqual(rows["sold"].chosen, "save")
+        self.assertEqual(reading["commands"][0]["log_id"], rows["bidder"].pk)
+        self.assertEqual(rows["bidder"].user, self.admin_user)
+
+    def test_a_field_already_holding_the_value_is_not_logged_again(self):
+        self._post(["sold to bidder five five five"], winner="555")
+        self.assertFalse(VoiceCommandLog.objects.filter(slot="bidder").exists())
+
+    def test_a_sale_still_waiting_is_not_logged_as_sold(self):
+        reading = self._post(["sold for ten dollars"]).json()
+        self.assertEqual(reading["note"], "Waiting for the bidder")
+        self.assertIsNone(reading["carry"])
+        self.assertFalse(VoiceCommandLog.objects.filter(slot="sold").exists())
+
+    def test_a_missed_sale_is_logged_as_not_recorded(self):
+        self._post(
+            ["sold for ten. java moss, who'll give two, two dollars, three, four, five, sold to 555 for 5 dollars"]
+        )
+        row = VoiceCommandLog.objects.get(slot="")
+        self.assertTrue(row.nothing_matched)
+        self.assertIn("lot 101-1", row.heard)
+
+    def test_the_kill_switch_reads_nothing(self):
+        VoiceGrammar.objects.create(enabled=False)
+        self.assertEqual(self._post(["sold to bidder five five five for ten dollars"]).json()["commands"], [])
+
+    def test_not_json_is_refused(self):
+        response = self.client.post(self.url, "heard=sold", content_type="application/x-www-form-urlencoded")
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_admin_is_refused(self):
+        self.client.login(username="no_lots", password="testpassword")
+        self.assertEqual(self._post(["sold"]).status_code, 403)
+
+    def test_anonymous_is_redirected_to_login(self):
+        self.client.logout()
+        self.assertEqual(self._post(["sold"]).status_code, 302)
+
+
+@isolated_cache("voice-cloud")
+@override_settings(OPENAI_API_KEY="sk-site-key")
+class VoiceCloudSessionTests(StandardTestCase):
+    """A browser's OpenAI session: the key it gets, and what OpenAI is asked for."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("auction_voice_cloud_session", kwargs={"slug": self.in_person_auction.slug})
+        self.client.login(username="admin_user", password="testpassword")
+
+    def _answer(self, secret="ek_temporary"):
+        response = mock.Mock()
+        response.json.return_value = {"value": secret, "expires_at": 1}
+        response.raise_for_status.return_value = None
+        return response
+
+    def test_the_page_gets_a_short_lived_key_and_never_the_sites(self):
+        with mock.patch.object(voice_views.httpx, "post", return_value=self._answer()) as post:
+            response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        answer = response.json()
+        self.assertEqual(answer["key"], "ek_temporary")
+        self.assertEqual(answer["model"], voice.CLOUD_LIVE)
+        self.assertTrue(answer["commit"])
+        self.assertNotIn("sk-site-key", response.content.decode())
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer sk-site-key")
+
+    def test_what_openai_is_asked_for(self):
+        AuctionTOS.objects.filter(pk=self.in_person_tos.pk).update(bidder_number="NM")
+        with mock.patch.object(voice_views.httpx, "post", return_value=self._answer()) as post:
+            answer = self.client.post(self.url).json()
+        session = post.call_args.kwargs["json"]["session"]
+        audio = session["audio"]["input"]
+        self.assertEqual(session["type"], "transcription")
+        self.assertEqual(audio["noise_reduction"], {"type": "far_field"})
+        self.assertIsNone(audio["turn_detection"])
+        self.assertIn("NM", audio["transcription"]["keywords"])
+        self.assertLessEqual(post.call_args.kwargs["json"]["expires_after"]["seconds"], 600)
+        # The live model's keywords go again once connected.
+        self.assertEqual(answer["update"]["type"], "session.update")
+        self.assertIn("NM", answer["update"]["session"]["audio"]["input"]["transcription"]["keywords"])
+
+    def test_a_model_that_waits_for_pauses_gets_server_turns(self):
+        VoiceGrammar.objects.create(cloud_model="gpt-4o-transcribe")
+        with mock.patch.object(voice_views.httpx, "post", return_value=self._answer()) as post:
+            answer = self.client.post(self.url).json()
+        self.assertEqual(
+            post.call_args.kwargs["json"]["session"]["audio"]["input"]["turn_detection"]["type"], "server_vad"
+        )
+        self.assertFalse(answer["commit"])
+        self.assertIsNone(answer["update"])
+
+    def test_off_in_the_grammar(self):
+        VoiceGrammar.objects.create(cloud_model="")
+        with mock.patch.object(voice_views.httpx, "post") as post:
+            self.assertEqual(self.client.post(self.url).status_code, 404)
+        post.assert_not_called()
+
+    @override_settings(OPENAI_API_KEY="")
+    def test_off_without_a_key(self):
+        self.assertEqual(self.client.post(self.url).status_code, 404)
+
+    def test_voice_off_turns_it_off_too(self):
+        VoiceGrammar.objects.create(enabled=False)
+        self.assertEqual(self.client.post(self.url).status_code, 404)
+
+    def test_a_page_stuck_reconnecting_is_stopped(self):
+        with (
+            mock.patch.object(voice_views, "CLOUD_SESSIONS_PER_HOUR", 2),
+            mock.patch.object(voice_views.httpx, "post", return_value=self._answer()),
+        ):
+            codes = [self.client.post(self.url).status_code for _ in range(3)]
+        self.assertEqual(codes, [200, 200, 429])
+
+    def test_openai_down(self):
+        with (
+            mock.patch.object(voice_views.httpx, "post", side_effect=httpx.ConnectError("down")),
+            self.assertLogs("auctions.views.voice", level="ERROR"),
+        ):
+            self.assertEqual(self.client.post(self.url).status_code, 502)
+
+    def test_non_admin_is_refused(self):
+        self.client.login(username="no_lots", password="testpassword")
+        with mock.patch.object(voice_views.httpx, "post") as post:
+            self.assertEqual(self.client.post(self.url).status_code, 403)
+        post.assert_not_called()
+
+    def test_get_is_not_allowed(self):
+        self.assertEqual(self.client.get(self.url).status_code, 405)
+
+
+# ---------------------------------------------------------------------------
+# VOICE-5 — the log
 # ---------------------------------------------------------------------------
 
 
@@ -418,56 +592,43 @@ class VoiceCommandLogTests(StandardTestCase):
         super().setUp()
         self.url = reverse("auction_voice_command_log", kwargs={"slug": self.in_person_auction.slug})
         self.client.login(username="admin_user", password="testpassword")
-
-    def test_records_an_accepted_command(self):
-        response = self.client.post(
-            self.url,
-            {"slot": "bidder", "heard": "bidder seventeen", "chosen": "17", "confidence": "0.93"},
+        self.row_id = voice.log_command(
+            self.admin_user, self.in_person_auction, slot="bidder", heard="bidder fifty", chosen="50", confidence=0.6
         )
-        self.assertEqual(response.status_code, 200)
-        row = VoiceCommandLog.objects.get(pk=response.json()["id"])
-        self.assertEqual(row.auction, self.in_person_auction)
-        self.assertEqual(row.user, self.admin_user)
-        self.assertEqual(row.slot, "bidder")
-        self.assertEqual(row.heard, "bidder seventeen")
-        self.assertEqual(row.chosen, "17")
-        self.assertAlmostEqual(row.confidence, 0.93)
-        self.assertFalse(row.was_corrected)
 
-    def test_a_correction_lands_on_the_same_row(self):
-        """A correction lands on the same row as the original command."""
-        log_id = self.client.post(
-            self.url,
-            {"slot": "bidder", "heard": "bidder fifty", "chosen": "50", "confidence": "0.6"},
-        ).json()["id"]
-        again = self.client.post(self.url, {"slot": "bidder", "id": log_id, "corrected_to": "15"})
-        self.assertEqual(again.json()["id"], log_id)
+    def test_a_correction_lands_on_the_row_voice_wrote(self):
+        response = self.client.post(self.url, {"slot": "bidder", "id": self.row_id, "corrected_to": "15"})
+        self.assertEqual(response.json()["id"], self.row_id)
         self.assertEqual(VoiceCommandLog.objects.count(), 1)
-        row = VoiceCommandLog.objects.get(pk=log_id)
+        row = VoiceCommandLog.objects.get(pk=self.row_id)
         self.assertEqual(row.corrected_to, "15")
         self.assertEqual(row.heard, "bidder fifty")
         self.assertEqual(row.chosen, "50")
         self.assertTrue(row.was_corrected)
 
-    def test_unknown_slot_is_ignored(self):
-        response = self.client.post(self.url, {"slot": "reserve_price", "heard": "whatever"})
-        self.assertIsNone(response.json()["id"])
-        self.assertEqual(VoiceCommandLog.objects.count(), 0)
+    def test_nothing_to_correct_writes_nothing(self):
+        self.assertIsNone(self.client.post(self.url, {"slot": "bidder", "corrected_to": "9"}).json()["id"])
+        self.assertIsNone(self.client.post(self.url, {"id": "banana", "corrected_to": "9"}).json()["id"])
+        self.assertEqual(VoiceCommandLog.objects.count(), 1)
 
     def test_garbage_confidence_does_not_lose_the_row(self):
         """Bad confidence input degrades instead of 500ing."""
-        response = self.client.post(self.url, {"slot": "lot", "heard": "lot four", "confidence": "banana"})
-        row = VoiceCommandLog.objects.get(pk=response.json()["id"])
-        self.assertIsNone(row.confidence)
+        row_id = voice.log_command(
+            self.admin_user, self.in_person_auction, slot="lot", heard="lot four", confidence="banana"
+        )
+        self.assertIsNone(VoiceCommandLog.objects.get(pk=row_id).confidence)
+
+    def test_an_unknown_slot_is_not_logged(self):
+        self.assertIsNone(voice.log_command(self.admin_user, self.in_person_auction, slot="reserve_price", heard="x"))
 
     def test_non_admin_cannot_write(self):
         self.client.login(username="no_lots", password="testpassword")
-        self.assertEqual(self.client.post(self.url, {"slot": "lot"}).status_code, 403)
-        self.assertEqual(VoiceCommandLog.objects.count(), 0)
+        self.assertEqual(self.client.post(self.url, {"id": self.row_id, "corrected_to": "9"}).status_code, 403)
+        self.assertEqual(VoiceCommandLog.objects.get(pk=self.row_id).corrected_to, "")
 
     def test_anonymous_is_redirected_to_login(self):
         self.client.logout()
-        self.assertEqual(self.client.post(self.url, {"slot": "lot"}).status_code, 302)
+        self.assertEqual(self.client.post(self.url, {"id": self.row_id}).status_code, 302)
 
     def test_cannot_amend_someone_elses_row(self):
         row = VoiceCommandLog.objects.create(
@@ -478,113 +639,65 @@ class VoiceCommandLogTests(StandardTestCase):
         row.refresh_from_db()
         self.assertEqual(row.corrected_to, "")
 
-    def test_get_is_not_allowed(self):
-        self.assertEqual(self.client.get(self.url).status_code, 405)
+    def test_the_log_page_shows_this_auction(self):
+        VoiceCommandLog.objects.create(auction=self.online_auction, slot="bidder", heard="somewhere else", chosen="1")
+        voice.log_command(
+            self.admin_user, self.in_person_auction, slot="sold", heard="sold to bidder fifty", chosen="save"
+        )
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        page = response.content.decode()
+        self.assertIn("bidder fifty", page)
+        self.assertIn("sold to bidder fifty", page)
+        self.assertNotIn("somewhere else", page)
+
+    def test_the_log_page_is_for_admins(self):
+        self.client.login(username="no_lots", password="testpassword")
+        self.assertEqual(self.client.get(self.url).status_code, 403)
 
 
 # ---------------------------------------------------------------------------
-# VOICE-6 — the utterances that matched nothing
+# VOICE-6 — sales heard but not recorded
 # ---------------------------------------------------------------------------
 
 
 @isolated_cache("voice-unmatched")
 class VoiceUnmatchedLogTests(StandardTestCase):
-    """Utterances that matched nothing, grouped by ``heard`` to find unknown words."""
+    """``voice.log_unmatched``: a row with no slot. Rate-limited, since one stuck window would repeat."""
 
     def setUp(self):
         super().setUp()
-        self.url = reverse("auction_voice_command_log", kwargs={"slug": self.in_person_auction.slug})
-        self.client.login(username="admin_user", password="testpassword")
-        # The rate limit is in the cache.
         cache.clear()
 
-    def _post(self, **data):
-        response = self.client.post(self.url, data)
-        cache.clear()
-        return response
+    def _log(self, heard, session_key="one"):
+        return voice.log_unmatched(self.admin_user, self.in_person_auction, heard=heard, session_key=session_key)
 
-    def test_records_an_utterance_that_matched_nothing(self):
-        response = self.client.post(self.url, {"heard": "sold to bitter forty two"})
-        self.assertEqual(response.status_code, 200)
-        row = VoiceCommandLog.objects.get(pk=response.json()["id"])
+    def test_records_what_was_heard(self):
+        row = VoiceCommandLog.objects.get(pk=self._log("lot 101-1: sold for ten"))
         self.assertEqual(row.auction, self.in_person_auction)
         self.assertEqual(row.user, self.admin_user)
-        self.assertEqual(row.heard, "sold to bitter forty two")
+        self.assertEqual(row.heard, "lot 101-1: sold for ten")
         self.assertEqual(row.slot, "")
-        self.assertEqual(row.chosen, "")
-        self.assertIsNone(row.confidence)
         self.assertTrue(row.nothing_matched)
 
-    def test_a_near_miss_keeps_its_score(self):
-        """A near miss keeps its score; null means nothing matched."""
-        response = self._post(heard="bitter forty two", confidence="0.31")
-        row = VoiceCommandLog.objects.get(pk=response.json()["id"])
-        self.assertAlmostEqual(row.confidence, 0.31)
-        self.assertEqual(row.slot, "")
-
     def test_one_word_is_not_worth_a_row(self):
-        """Single words aren't logged."""
-        response = self._post(heard="yeah")
-        self.assertIsNone(response.json()["id"])
-        self.assertEqual(VoiceCommandLog.objects.count(), 0)
-
-    def test_silence_is_not_worth_a_row(self):
-        self.assertIsNone(self._post(heard="").json()["id"])
-        self.assertIsNone(self._post(heard="   ").json()["id"])
+        self.assertIsNone(self._log("yeah"))
+        self.assertIsNone(self._log("   "))
         self.assertEqual(VoiceCommandLog.objects.count(), 0)
 
     def test_rate_limited_per_session(self):
-        """Unmatched utterances are rate-limited per session."""
-        first = self.client.post(self.url, {"heard": "one for the money"})
-        second = self.client.post(self.url, {"heard": "two for the show"})
-        self.assertIsNotNone(first.json()["id"])
-        self.assertIsNone(second.json()["id"])
-        self.assertEqual(VoiceCommandLog.objects.count(), 1)
-
-    def test_a_second_session_is_not_held_up_by_the_first(self):
-        """Two handsets are two microphones in two parts of the room, not one."""
-        self.assertIsNotNone(self.client.post(self.url, {"heard": "one for the money"}).json()["id"])
-        other = Client()
-        other.login(username="admin_user", password="testpassword")
-        self.assertIsNotNone(other.post(self.url, {"heard": "two for the show"}).json()["id"])
+        self.assertIsNotNone(self._log("one for the money"))
+        self.assertIsNone(self._log("two for the show"))
+        self.assertIsNotNone(self._log("two for the show", session_key="two"))
         self.assertEqual(VoiceCommandLog.objects.count(), 2)
 
-    def test_an_accepted_command_is_never_rate_limited(self):
-        """Accepted commands are never rate-limited."""
-        for index in range(5):
-            response = self.client.post(self.url, {"slot": "bidder", "heard": f"bidder {index}", "chosen": str(index)})
-            self.assertIsNotNone(response.json()["id"])
-        self.assertEqual(VoiceCommandLog.objects.filter(slot="bidder").count(), 5)
-
-    def test_an_unknown_slot_is_still_ignored(self):
-        """An unknown slot is ignored."""
-        self.assertIsNone(self._post(slot="reserve_price", heard="reserve is forty").json()["id"])
-        self.assertEqual(VoiceCommandLog.objects.count(), 0)
-
-    def test_non_admin_cannot_write(self):
-        self.client.login(username="no_lots", password="testpassword")
-        self.assertEqual(self.client.post(self.url, {"heard": "who is this"}).status_code, 403)
-        self.assertEqual(VoiceCommandLog.objects.count(), 0)
-
     def test_the_tuning_query_is_group_by_heard(self):
-        """The tuning query groups by heard."""
-        for _ in range(3):
-            self._post(heard="bitter forty two")
-        self._post(heard="going once going twice")
+        for session in ("a", "b", "c"):
+            self._log("bitter forty two", session_key=session)
+        self._log("going once going twice", session_key="d")
         counts = VoiceCommandLog.objects.filter(slot="").values("heard").annotate(times=Count("id")).order_by("-times")
         self.assertEqual(counts[0]["heard"], "bitter forty two")
         self.assertEqual(counts[0]["times"], 3)
-
-    def test_the_page_logs_what_matched_nothing(self):
-        """The page logs transcripts that produced no command."""
-        page = self.client.get(
-            reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug}),
-            HTTP_USER_AGENT=APP_UA,
-        ).content.decode()
-        self.assertIn("voiceHeardTranscript", page)
-        self.assertIn("voiceSettleTranscript", page)
-        self.assertIn("voiceUnmatchedMinTokens", page)
-        self.assertIn("voiceUnmatchedMinSeconds", page)
 
 
 class VoiceLogAdminTests(StandardTestCase):

@@ -600,7 +600,7 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
                     "Only one of these exists — saving a second edits the first. The app merges "
                     "what it gets here over the grammar it ships with, so a blank-ish row is safe."
                 ),
-                "fields": ("enabled", "backend", "locale", "prefer_on_device"),
+                "fields": ("enabled", "backend", "locale", "prefer_on_device", "cloud_model"),
             },
         ),
         (
@@ -608,7 +608,7 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
             {
                 "description": (
                     "Anchors say which field a spoken number belongs to. Homophones are the pairs "
-                    "a room with a PA system cannot distinguish — the app offers both rather than "
+                    "a room with a PA system cannot distinguish — voice offers both rather than "
                     "guessing between them."
                 ),
                 "fields": ("anchors", "number_words", "homophones"),

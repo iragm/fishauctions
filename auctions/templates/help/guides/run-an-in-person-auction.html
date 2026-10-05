@@ -167,7 +167,7 @@
 </div>
 <p>{% if help.site.recorded_once %}{{ help.site.recorded_once }}% of lots sold here are recorded once and never changed. A second recorder catches the rest:{% else %}Typos happen on about 1 lot in 100. A second recorder catches them:{% endif %} their entry says "This lot has been double checked", or warns that it's different and offers to undo the first. It works from paper slips afterwards, too.</p>
 {% if help.stats_auction and not help.stats_auction.is_online and help.stats.recorded_once is not None %}{% helptip "graph-up" %}In {{ help.stats_auction.title }}, {{ help.stats.recorded_once }}% of the lots sold were recorded once and never changed. Makes you think, doesn't it?{% endhelptip %}{% endif %}
-<p>With the phone app, the recorder can use voice: "lot 12, 15 dollars, bidder 104, sold".{% if help.site.voice_right %} {{ help.site.voice_right }}% of voice commands here are right first time.{% endif %} {% page "auction_voice_command_log" "The voice log" %} shows what the phone heard.</p>
+<p>Voice can do the recording: tap {% ui "Listen" %} in the phone app or a browser, keep the microphone near the auctioneer, and call the auction as usual. "Sold to 104 for 15" is saved as it's said.{% if help.site.voice_right %} {{ help.site.voice_right }}% of voice commands here are right first time.{% endif %} {% page "auction_voice_command_log" "The voice log" %} shows what the phone heard.</p>
 {% tip %}This system works OK at best.  My club is still manually recording bids, too, to double check that the phone heard correctly.{% endtip %}
 
 <h3 class="h6 mt-3" id="queue">The lot queue</h3>
