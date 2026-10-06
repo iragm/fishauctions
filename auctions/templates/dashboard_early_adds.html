@@ -58,7 +58,7 @@
             return p.title + ": " + p[key] + "% early, " + p.lots + " lots, gross " + p.gross;
           }}},
           onClick: function(event, elements) {
-            if (elements.length) { window.location.href = shown[elements[0]._index].url; }
+            if (elements.length) { window.location.href = "/auctions/" + encodeURIComponent(shown[elements[0]._index].slug) + "/stats/"; }
           }
         }
       });

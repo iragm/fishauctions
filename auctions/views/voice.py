@@ -151,12 +151,13 @@ class VoiceCloudSessionView(LoginRequiredMixin, AuctionViewMixin, View):
     """A short-lived OpenAI key for the page to stream its microphone to, with the session settings.
 
     The site's own key never leaves the server; the one returned opens one transcription session.
-    POST only. 404 when listening through OpenAI is off (``VoiceGrammar.cloud_model``), 429 past
-    :data:`CLOUD_SESSIONS_PER_HOUR`, 502 when OpenAI can't be reached.
+    POST only. 404 when listening through OpenAI is off (``VoiceGrammar.cloud_model``, or
+    ``UserData.voice_cloud_enabled`` for this person), 429 past :data:`CLOUD_SESSIONS_PER_HOUR`, 502
+    when OpenAI can't be reached.
     """
 
     def post(self, request, *args, **kwargs):
-        model = voice.cloud_model(VoiceGrammar.load())
+        model = voice.cloud_model(VoiceGrammar.load(), request.user)
         if not model:
             return JsonResponse({"error": "Listening in the browser is turned off"}, status=404)
         key = f"voice-cloud:{request.user.pk}"

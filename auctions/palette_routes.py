@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -59,13 +60,16 @@ class Route:
     fixed: dict[str, Any] = field(default_factory=dict)
     #: The kwarg name for the scope's object when a URL spells it differently.
     param: str = ""
+    #: ``f(user) -> bool`` for a page only some accounts have. Unlike ``admin``, this one is enforced:
+    #: the page is left out of the catalog and :func:`resolve_route` won't open it.
+    gate: Callable[[Any], bool] | None = None
 
     @property
     def search_text(self) -> str:
         return " ".join([self.label, self.key.replace("_", " "), *self.keywords]).lower()
 
 
-def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fixed=None, param=""):
+def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fixed=None, param="", gate=None):
     return Route(
         key=key,
         label=label,
@@ -75,7 +79,14 @@ def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fix
         keywords=tuple(keywords),
         fixed=dict(fixed or {}),
         param=param,
+        gate=gate,
     )
+
+
+def _has_library(user) -> bool:
+    from .documents.search import can_use_library
+
+    return can_use_library(user)
 
 
 # --- the catalog -------------------------------------------------------------
@@ -239,6 +250,7 @@ ROUTE_LIST: list[Route] = [
         "The library: club articles, breeder reports and documents",
         "Account",
         keywords=["documents", "articles", "newsletters", "bap reports", "upload a document", "archive", "scans"],
+        gate=_has_library,
     ),
     _r(
         "user_api_keys",
@@ -1533,6 +1545,8 @@ def _permitted_routes(user=None) -> list[Route]:
             continue
         if route.admin == ADMIN_CLUB and not can_admin_club:
             continue
+        if route.gate and not route.gate(user):
+            continue
         allowed.append(route)
     return allowed
 
@@ -1732,6 +1746,8 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     from . import palette_actions
 
     user = request.user
+    if route.gate and not route.gate(user):
+        return {"error": "I couldn't find that page."}
     kwargs: dict[str, Any] = dict(route.fixed)
     hint = str(params.get("target") or "").strip()
     # What the destination is about, so the narration can say so.

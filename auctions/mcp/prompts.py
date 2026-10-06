@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 from auctions import palette_actions
+from auctions.documents.search import can_use_library
 
 
 class Argument(NamedTuple):
@@ -267,9 +268,12 @@ PROMPTS: tuple[Prompt, ...] = (
 
 BY_NAME = {prompt.name: prompt for prompt in PROMPTS}
 
+#: Listed only to accounts the library is on for (``UserData.library_enabled``).
+LIBRARY_PROMPTS = frozenset({"digitize_documents", "tidy_the_library", "ask_the_library"})
 
-def descriptors() -> list[dict[str, Any]]:
-    """The ``prompts/list`` answer."""
+
+def descriptors(user=None) -> list[dict[str, Any]]:
+    """The ``prompts/list`` answer. ``user=None`` lists every prompt."""
     from . import icons
 
     return [
@@ -283,13 +287,17 @@ def descriptors() -> list[dict[str, Any]]:
             ],
             "icons": icons.for_prompt(prompt),
         }
-        for prompt in prompt_list()
+        for prompt in prompt_list(user)
     ]
 
 
-def prompt_list() -> tuple[Prompt, ...]:
-    """Every prompt, unfiltered by permission -- filtering the menu would leak who can do what."""
-    return PROMPTS
+def prompt_list(user=None) -> tuple[Prompt, ...]:
+    """Every prompt, unfiltered by permission -- filtering the menu would leak who can do what -- except
+    the library's, which aren't listed for someone without it.
+    """
+    if user is None or can_use_library(user):
+        return PROMPTS
+    return tuple(prompt for prompt in PROMPTS if prompt.name not in LIBRARY_PROMPTS)
 
 
 def render(name: str, arguments: dict[str, Any] | None) -> dict[str, Any] | None:

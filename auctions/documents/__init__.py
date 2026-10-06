@@ -32,6 +32,10 @@ so it is in the host's snapshots and nowhere else. ``manage.py reindex_documents
 the library stands; the nightly ``tidy_library`` task brings documents up to date with a new model or
 parser a hundred at a time.
 
+**Who has it**: accounts with ``UserData.library_enabled`` (``LIBRARY_ENABLED_FOR_USERS`` for new ones);
+for anyone else the pages 404 and the links, ``/mcp/`` tools and prompts aren't there
+(:func:`.search.can_use_library`).
+
 This file stays docstring-only: ``auctions/models.py`` imports :mod:`.models`, and anything imported
 here would load first.
 """

@@ -518,6 +518,9 @@ class SkillPromptTests(StandardTestCase):
 
         self.admin_user.is_superuser = True
         self.admin_user.save()
+        # Switched on per account, not by any permission.
+        self.admin_user.userdata.library_enabled = True
+        self.admin_user.userdata.save(update_fields=["library_enabled"])
         offered = {tool["name"] for tool in palette_assist.tools_for(self.admin_user)}
         over_mcp = {tool["name"] for tool in mcp_tools.tool_descriptors(self.admin_user)}
         for name, action in palette_actions.ACTIONS.items():

@@ -51,6 +51,7 @@ from django.utils.text import Truncator
 
 from . import command_palette, palette_routes, source_code
 from .documents.models import TOPIC_LABELS, TOPICS
+from .documents.search import can_use_library
 from .models import AuctionTOS, ClubMember, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
@@ -78,6 +79,9 @@ DANGER_NAVIGATE = "navigate"
 NEEDS_ANYONE = ""
 NEEDS_AUCTION_ADMIN = "auction_admin"
 NEEDS_CLUB_ADMIN = "club_admin"
+# The exception: the library is switched on per account (``UserData.library_enabled``), and run_action
+# refuses its tools to anyone it isn't on for.
+NEEDS_LIBRARY = "library"
 
 # How many candidates to name when a lookup is ambiguous ("which bob?").
 AMBIGUOUS_LIMIT = 6
@@ -14505,7 +14509,7 @@ def run_action(request, name: str, params: dict[str, Any]) -> dict[str, Any]:
     which is why the countdown is only UX.
     """
     action = get_action(name)
-    if action is None:
+    if action is None or (action.needs == NEEDS_LIBRARY and not can_use_library(request.user)):
         return _error("I don't know how to do that.")
     if not isinstance(params, dict):
         return _error("Those instructions didn't make sense.")
@@ -14558,8 +14562,9 @@ def actions_for(user=None) -> list[Action]:
     """
     if user is None:
         return list(ACTIONS.values())
+    library = can_use_library(user)
     if getattr(user, "is_superuser", False):
-        return list(ACTIONS.values())
+        return [action for action in ACTIONS.values() if library or action.needs != NEEDS_LIBRARY]
     runs_a_club = _runs_a_club(user)
     # Club staff keep auction skills.
     runs_an_auction = runs_a_club or bool(command_palette._admin_auction_ids(user))
@@ -14568,6 +14573,8 @@ def actions_for(user=None) -> list[Action]:
         if action.needs == NEEDS_AUCTION_ADMIN and not runs_an_auction:
             continue
         if action.needs == NEEDS_CLUB_ADMIN and not runs_a_club:
+            continue
+        if action.needs == NEEDS_LIBRARY and not library:
             continue
         allowed.append(action)
     return allowed
@@ -14921,6 +14928,7 @@ register(
         },
         danger=DANGER_SAFE,
         resolver=search_documents,
+        needs=NEEDS_LIBRARY,
         aliases={"q", "question", "search"},
         lookup=True,
         examples=["what did the club write about breeding killifish", "find articles on live food cultures"],
@@ -14942,6 +14950,7 @@ register(
         },
         danger=DANGER_SAFE,
         resolver=read_document,
+        needs=NEEDS_LIBRARY,
         aliases={"name", "title", "id", "offset"},
         lookup=True,
         examples=["read the rest of that article"],
@@ -14968,6 +14977,7 @@ register(
         destructive=True,
         idempotent=True,
         resolver=update_document,
+        needs=NEEDS_LIBRARY,
         aliases={"name", "id"},
         confirm_template="Update a library document",
         examples=["that article was written in 1978 by Joe Smith"],
@@ -14990,6 +15000,7 @@ register(
         },
         danger=DANGER_SAFE,
         resolver=list_documents,
+        needs=NEEDS_LIBRARY,
         lookup=True,
         examples=["list our club's library"],
     )
@@ -15023,6 +15034,7 @@ register(
         },
         danger=DANGER_CONFIRM,
         resolver=add_document,
+        needs=NEEDS_LIBRARY,
         aliases={"name", "body", "content", "markdown"},
         confirm_template="Add a document to the library",
         examples=["add this transcription to the club library"],
@@ -15037,6 +15049,7 @@ register(
         danger=DANGER_CONFIRM,
         destructive=True,
         resolver=delete_document_action,
+        needs=NEEDS_LIBRARY,
         aliases={"name", "id", "title"},
         confirm_template="Delete a library document",
         examples=["delete that duplicate scan"],

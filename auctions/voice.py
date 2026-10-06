@@ -282,8 +282,10 @@ def serialize_grammar(grammar):
     }
 
 
-def cloud_model(grammar):
-    """The OpenAI model the browser listens through, or "" when that's off or the site has no key."""
+def cloud_model(grammar, user):
+    """The OpenAI model ``user``'s browser listens through, or "" when that's off for the site, off for
+    them (``UserData.voice_cloud_enabled``), or the site has no key.
+    """
     from django.conf import settings
 
     from .models import VoiceGrammar
@@ -291,6 +293,9 @@ def cloud_model(grammar):
     if grammar is None:
         grammar = VoiceGrammar()
     if not grammar.enabled or not getattr(settings, "OPENAI_API_KEY", ""):
+        return ""
+    userdata = getattr(user, "userdata", None) if getattr(user, "is_authenticated", False) else None
+    if not (userdata and userdata.voice_cloud_enabled):
         return ""
     return grammar.cloud_model or ""
 
@@ -327,9 +332,9 @@ def cloud_session(model, vocabulary):
     return request, update
 
 
-def page_config(auction, grammar=None):
+def page_config(auction, user, grammar=None):
     """The set-winners page's voice settings: when a field is sure enough to fill green, whether "sold"
-    saves, and whether this browser can listen through OpenAI. ``grammar`` is passed when the caller
+    saves, and whether ``user``'s browser can listen through OpenAI. ``grammar`` is passed when the caller
     loaded the singleton. Reading what was heard is the server's job (``voice_interpreter``).
     """
     from .models import VoiceGrammar
@@ -344,5 +349,5 @@ def page_config(auction, grammar=None):
         "unsure": thresholds.get("unsure", defaults["unsure"]),
         "block_auto_submit_when_unsure": grammar.block_auto_submit_when_unsure if grammar else True,
         "auto_submit_on_sold": grammar.auto_submit_on_sold if grammar else True,
-        "cloud": bool(cloud_model(grammar)),
+        "cloud": bool(cloud_model(grammar, user)),
     }

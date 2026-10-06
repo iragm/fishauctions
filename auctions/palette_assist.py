@@ -958,10 +958,11 @@ def build_system_prompt(user, page: dict[str, Any] | None = None, app_destinatio
     native screens.
 
     **Nothing user-specific goes in here.** The catalog and the app's screens depend only on which of
-    three permissions the user holds, so the whole message is byte-identical for everyone in a tier
-    and they share one cached prompt prefix at the provider. A per-user prefix went cold between
-    sessions and was paid for again every time; the user's own facts ride in the first user message
-    instead (:func:`context_message`). ``page`` is unused, kept for positional callers.
+    three permissions the user holds and which ``Route.gate`` pages they have, so the whole message is
+    byte-identical for everyone in a tier and they share one cached prompt prefix at the provider. A
+    per-user prefix went cold between sessions and was paid for again every time; the user's own facts
+    ride in the first user message instead (:func:`context_message`). ``page`` is unused, kept for
+    positional callers.
     """
     pages = palette_routes.catalog_for_prompt(user)
     if app_destinations:

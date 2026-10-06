@@ -30,6 +30,7 @@ from auctions.documents.models import TOPICS, Document, DocumentBatch
 from auctions.documents.search import (
     answer,
     can_manage,
+    can_use_library,
     delete_document,
     search,
     visible_batches,
@@ -66,6 +67,15 @@ __all__ = [
 ]
 
 
+class LibraryMixin(LoginRequiredMixin):
+    """Signed in, with the library on for this account (:func:`~auctions.documents.search.can_use_library`)."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not can_use_library(request.user):
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+
 def _filtered(request, documents):
     """Narrow by the page's club, topic and species filters. Returns the queryset and what was chosen."""
     chosen = {}
@@ -95,7 +105,7 @@ def _managed_or_404(request, pk):
     return document
 
 
-class LibraryView(LoginRequiredMixin, TemplateView):
+class LibraryView(LibraryMixin, TemplateView):
     """The library: search box, upload form, and either the matching passages or every document."""
 
     template_name = "documents/library.html"
@@ -144,7 +154,7 @@ class LibraryView(LoginRequiredMixin, TemplateView):
         return redirect("library")
 
 
-class DocumentAnswerView(LoginRequiredMixin, View):
+class DocumentAnswerView(LibraryMixin, View):
     """The written answer above a search, loaded by htmx after the page so the page never waits on it."""
 
     def get(self, request, *args, **kwargs):
@@ -155,7 +165,7 @@ class DocumentAnswerView(LoginRequiredMixin, View):
         return render(request, "documents/_answer.html", {"result": result, "query": query})
 
 
-class DocumentDetailView(LoginRequiredMixin, TemplateView):
+class DocumentDetailView(LibraryMixin, TemplateView):
     """One document: what was read out of it, its tags, and for its managers what readers reported."""
 
     template_name = "documents/detail.html"
@@ -203,7 +213,7 @@ def _passages(document):
     return rows
 
 
-class DocumentFileView(LoginRequiredMixin, View):
+class DocumentFileView(LibraryMixin, View):
     """The original file. Pictures and PDFs open in the browser; anything else downloads, as bytes."""
 
     def get(self, request, pk):
@@ -230,7 +240,7 @@ class DocumentFileView(LoginRequiredMixin, View):
         return response
 
 
-class DocumentEditView(LoginRequiredMixin, View):
+class DocumentEditView(LibraryMixin, View):
     """Correct the title, author, year, club, topics or the text itself. ``update_document`` on ``/mcp/``."""
 
     template_name = "documents/edit.html"
@@ -252,7 +262,7 @@ class DocumentEditView(LoginRequiredMixin, View):
         return redirect(document.get_absolute_url())
 
 
-class DocumentReindexView(LoginRequiredMixin, View):
+class DocumentReindexView(LibraryMixin, View):
     """Read the file again with today's reader, replacing any hand corrections."""
 
     def post(self, request, pk):
@@ -269,7 +279,7 @@ class DocumentReindexView(LoginRequiredMixin, View):
         return redirect(document.get_absolute_url())
 
 
-class DocumentDeleteView(LoginRequiredMixin, View):
+class DocumentDeleteView(LibraryMixin, View):
     """Delete a document and its file. ``delete_document`` on ``/mcp/``."""
 
     def post(self, request, pk):
@@ -279,7 +289,7 @@ class DocumentDeleteView(LoginRequiredMixin, View):
         return redirect("library")
 
 
-class DocumentFeedbackView(LoginRequiredMixin, View):
+class DocumentFeedbackView(LibraryMixin, View):
     """A reader reporting a problem. Copyright isn't one of the reasons: that is a DMCA notice."""
 
     def post(self, request, pk):
@@ -300,7 +310,7 @@ def _batch_or_404(request, pk):
     return get_object_or_404(visible_batches(request.user).select_related("club", "owner"), pk=pk)
 
 
-class DocumentBatchView(LoginRequiredMixin, View):
+class DocumentBatchView(LibraryMixin, View):
     """A batch of pages: how far reading and stitching have got, the articles it made, and for whoever
     looks after it, adding pages and the buttons that move it on.
     """
@@ -365,7 +375,7 @@ class DocumentBatchView(LoginRequiredMixin, View):
         return redirect(batch.get_absolute_url())
 
 
-class BatchPageView(LoginRequiredMixin, View):
+class BatchPageView(LibraryMixin, View):
     """One scanned page, as a picture: what a reader checks a transcription against."""
 
     def get(self, request, pk):

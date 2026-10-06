@@ -15,17 +15,19 @@ from unittest import mock
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
 
-from auctions import llm, palette_actions
+from auctions import llm, palette_actions, palette_routes
 from auctions.documents import extract as extract_module
 from auctions.documents import index
 from auctions.documents.extract import ExtractionError, Reader, extract
 from auctions.documents.index import chunk
 from auctions.documents.models import Visibility
 from auctions.documents.search import can_manage, search, visible_documents
+from auctions.mcp import prompts
 from auctions.models import (
     Club,
     ClubMember,
@@ -36,6 +38,7 @@ from auctions.models import (
     DocumentFeedback,
     DocumentImageText,
     Species,
+    UserData,
 )
 from auctions.test_support import isolated_cache
 
@@ -138,6 +141,10 @@ class LibraryTestCase(TestCase):
         cls.member = User.objects.create_user("member", "member@example.com", "x")
         cls.outsider = User.objects.create_user("outsider", "outsider@example.com", "x")
         cls.staff = User.objects.create_superuser("staff", "staff@example.com", "x")
+        # Through the cached instance, which run_as hands the tools: a queryset update wouldn't reach it.
+        for user in (cls.owner, cls.member, cls.outsider, cls.staff):
+            user.userdata.library_enabled = True
+            user.userdata.save(update_fields=["library_enabled"])
         cls.club = Club.objects.create(name="Fish Club", abbreviation="FC")
         ClubMember.objects.create(club=cls.club, user=cls.owner, name="Owner", permission_edit_club=True)
         ClubMember.objects.create(club=cls.club, user=cls.member, name="Member")
@@ -963,3 +970,88 @@ class TidyTests(LibraryTestCase):
             self.assertEqual(index.tidy(), 2)
             self.assertEqual(index.tidy(), 1, "the two already queued are skipped")
         self.assertEqual(delay.call_count, 3)
+
+
+@override_settings(SINGLE_CLUB_MODE=False, ENABLE_CLUB_FINDER=True)
+class AccessTests(LibraryTestCase):
+    """The library is on per account (``UserData.library_enabled``). Without it, it isn't there at all."""
+
+    TOOLS = {
+        "search_documents",
+        "read_document",
+        "update_document",
+        "list_documents",
+        "add_document",
+        "delete_document",
+    }
+
+    def setUp(self):
+        super().setUp()
+        for user in (self.member, self.staff):
+            user.userdata.library_enabled = False
+            user.userdata.save(update_fields=["library_enabled"])
+
+    def run_as(self, user, name, **params):
+        request = RequestFactory().post("/mcp/")
+        request.user = user
+        request.palette_page = {}
+        return palette_actions.run_action(request, name, params)
+
+    def test_the_pages_are_not_found(self):
+        document = self.document(visibility=Visibility.PUBLIC)
+        self.client.force_login(self.member)
+        for url in (reverse("library"), document.get_absolute_url(), reverse("document_file", args=[document.pk])):
+            self.assertEqual(self.client.get(url).status_code, 404, url)
+        upload = SimpleUploadedFile("care.txt", b"Feed daphnia twice a day.")
+        self.assertEqual(self.client.post(reverse("library"), {"file": upload}).status_code, 404)
+        self.assertFalse(Document.objects.filter(owner=self.member).exists())
+
+    def test_nothing_links_to_it(self):
+        """The menu, the club's sidebar and the clubs guide."""
+        sidebar_link = reverse("library") + "?club=" + self.club.slug
+        guide = reverse("help_guide", kwargs={"slug": "clubs"})
+        club_page = reverse("club_detail", kwargs={"slug": self.club.slug})
+        self.client.force_login(self.owner)
+        self.assertContains(self.client.get(club_page), sidebar_link)
+        self.assertContains(self.client.get(guide), 'id="library"')
+        self.owner.userdata.library_enabled = False
+        self.owner.userdata.save(update_fields=["library_enabled"])
+        for page in (club_page, guide):
+            self.assertNotContains(self.client.get(page), reverse("library"), msg_prefix=page)
+
+    def test_the_tools_are_neither_offered_nor_run(self):
+        document = self.document(visibility=Visibility.PUBLIC)
+        for user in (self.member, self.staff):
+            self.assertFalse(self.TOOLS & {action.name for action in palette_actions.actions_for(user)})
+        self.assertTrue(self.TOOLS <= {action.name for action in palette_actions.actions_for(self.owner)})
+        self.assertIn("error", self.run_as(self.member, "read_document", document=str(document.pk)))
+        self.assertIn("error", self.run_as(self.member, "add_document", title="T", text="words"))
+        self.assertFalse(Document.objects.filter(owner=self.member).exists())
+        self.assertTrue(self.run_as(self.owner, "search_documents", query="microworms")["found"])
+
+    def test_nor_its_recipes_or_its_page_in_the_palette(self):
+        self.assertTrue(prompts.LIBRARY_PROMPTS <= set(prompts.BY_NAME))
+        offered = {descriptor["name"] for descriptor in prompts.descriptors(self.owner)}
+        self.assertTrue(prompts.LIBRARY_PROMPTS <= offered)
+        self.assertFalse(
+            prompts.LIBRARY_PROMPTS & {descriptor["name"] for descriptor in prompts.descriptors(self.member)}
+        )
+        self.assertNotIn("library", [route.key for route in palette_routes._permitted_routes(self.member)])
+        request = RequestFactory().get("/")
+        request.palette_page = {}
+        request.user = self.member
+        self.assertIn("error", palette_routes.resolve_route(request, palette_routes.ROUTES["library"], {}))
+        request.user = self.owner
+        self.assertEqual(
+            palette_routes.resolve_route(request, palette_routes.ROUTES["library"], {})["url"], reverse("library")
+        )
+
+    def test_new_accounts_follow_the_setting_and_a_command_sets_everyone(self):
+        for setting in (False, True):
+            with override_settings(LIBRARY_ENABLED_FOR_USERS=setting):
+                user = User.objects.create_user(f"new{setting}", f"new{setting}@example.com", "x")
+            self.assertEqual(user.userdata.library_enabled, setting)
+        call_command("change_library", "on", stdout=io.StringIO())
+        self.assertFalse(UserData.objects.filter(library_enabled=False).exists())
+        call_command("change_library", "off", stdout=io.StringIO())
+        self.assertFalse(UserData.objects.filter(library_enabled=True).exists())

@@ -268,7 +268,7 @@ class AdminEarlyAdds(AdminOnlyViewMixin, TemplateView):
         context["points_data"] = [
             {
                 "title": point.title,
-                "url": reverse("auction_stats", kwargs={"slug": point.slug}),
+                "slug": point.slug,
                 "gross": round(point.gross),
                 "lots": point.lots,
                 "early_lots_pct": point.early_lots_pct,

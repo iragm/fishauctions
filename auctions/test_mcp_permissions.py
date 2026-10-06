@@ -267,6 +267,9 @@ class CrossTenantTestCase(TestCase):
 
         for user in (self.their_owner, self.our_owner, self.outsider, self.their_bidder_user):
             UserData.objects.get_or_create(user=user)
+            # On, so the library's tools get as far as who may see what, like donation tracking above.
+            user.userdata.library_enabled = True
+            user.userdata.save(update_fields=["library_enabled"])
 
     # -- the driver ---------------------------------------------------------------------
 

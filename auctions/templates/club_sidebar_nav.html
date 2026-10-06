@@ -4,7 +4,7 @@ flex container sizes its line to the widest item's max-content width, so the now
 below stretches past the sidebar instead of being clipped by text-truncate.{% endcomment %}
 <nav class="nav flex-column flex-nowrap">
   <a class="nav-link {% if active_tab == 'home' %}active{% endif %}" href="{% url 'club_detail' club.slug %}"><i class="bi bi-house-fill me-1"></i> Club Home</a>
-  <a class="nav-link" href="{% url 'library' %}?club={{ club.slug }}"><i class="bi bi-book me-1"></i> Library</a>
+  {% if show_library %}<a class="nav-link" href="{% url 'library' %}?club={{ club.slug }}"><i class="bi bi-book me-1"></i> Library</a>{% endif %}
 
   {% if not members_through_auction and can_access_admin %}
   <a class="nav-link {% if active_tab == 'members' %}active{% endif %}" href="{% url 'club_admin' club.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>

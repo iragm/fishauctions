@@ -714,6 +714,8 @@ ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY
 # past it every user is refused at once instead of each waiting a second.
 LLM_TOKENS_PER_MINUTE = int(os.environ.get("LLM_TOKENS_PER_MINUTE") or 150000)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
+LIBRARY_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("LIBRARY_ENABLED_FOR_USERS") or None, default=False)
+VOICE_CLOUD_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("VOICE_CLOUD_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(
     "UNTRUSTED_MESSAGE", "You cannot currently promote auctions.  Please contact the website administrator for access."

@@ -14,8 +14,8 @@ the bid recorder. **The server reads; nothing else does.** Fix reading problems 
   `carry` -- the window after the close, applied only once the save lands. One request at a time.
 - Listening: in the app, the app's recognizer pushes `transcript` events (a `state` re-arm ends a phrase);
   its `command` events are ignored. In a browser, the page streams the mic to OpenAI over WebRTC with
-  a key from `VoiceCloudSessionView` (`VoiceGrammar.cloud_model`; the live model's turns are the page's
-  to commit).
+  a key from `VoiceCloudSessionView` (`VoiceGrammar.cloud_model`, and `UserData.voice_cloud_enabled` per
+  account; the live model's turns are the page's to commit).
 - Never invent a value: lots and bidders come from `build_vocabulary`; prices from the close or the
   last bid the auctioneer *had*. "For", "to" and "won" are never digits. A lot named after "sold" is
   the next lot's.

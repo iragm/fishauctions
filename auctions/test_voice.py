@@ -12,12 +12,14 @@ browser listening through OpenAI.
 """
 
 import datetime
+import io
 import json
 from unittest import mock
 
 import httpx
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.core.management import call_command
 from django.db.models import Count
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -33,6 +35,7 @@ from auctions.models import (
     ClubMember,
     Lot,
     PickupLocation,
+    UserData,
     VoiceCommandLog,
     VoiceGrammar,
 )
@@ -349,6 +352,7 @@ class VoiceConfigBlockTests(TestCase):
 class VoicePageTests(StandardTestCase):
     def setUp(self):
         super().setUp()
+        UserData.objects.filter(user=self.admin_user).update(voice_cloud_enabled=True)
         self.client.login(username="admin_user", password="testpassword")
         self.url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
 
@@ -372,6 +376,13 @@ class VoicePageTests(StandardTestCase):
         VoiceGrammar.objects.create(cloud_model="")
         page = self.client.get(self.url).content.decode()
         self.assertNotIn('id="voice-btn"', page)
+
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_only_accounts_it_is_on_for_listen_through_openai(self):
+        UserData.objects.filter(user=self.admin_user).update(voice_cloud_enabled=False)
+        self.assertNotIn('id="voice-btn"', self.client.get(self.url).content.decode())
+        config = self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"]
+        self.assertFalse(config["cloud"], "the app still listens its own way")
 
     def test_app_gets_the_bridge_and_a_hidden_button(self):
         """The app gets the bridge and a hidden button, revealed by voiceGetState() capability."""
@@ -498,6 +509,7 @@ class VoiceCloudSessionTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
+        UserData.objects.filter(user=self.admin_user).update(voice_cloud_enabled=True)
         self.url = reverse("auction_voice_cloud_session", kwargs={"slug": self.in_person_auction.slug})
         self.client.login(username="admin_user", password="testpassword")
 
@@ -556,6 +568,22 @@ class VoiceCloudSessionTests(StandardTestCase):
     def test_voice_off_turns_it_off_too(self):
         VoiceGrammar.objects.create(enabled=False)
         self.assertEqual(self.client.post(self.url).status_code, 404)
+
+    def test_off_for_this_account(self):
+        UserData.objects.filter(user=self.admin_user).update(voice_cloud_enabled=False)
+        with mock.patch.object(voice_views.httpx, "post") as post:
+            self.assertEqual(self.client.post(self.url).status_code, 404)
+        post.assert_not_called()
+
+    def test_new_accounts_follow_the_setting_and_a_command_sets_everyone(self):
+        for setting in (False, True):
+            with override_settings(VOICE_CLOUD_ENABLED_FOR_USERS=setting):
+                user = User.objects.create_user(f"new{setting}", f"new{setting}@example.com", "x")
+            self.assertEqual(user.userdata.voice_cloud_enabled, setting)
+        call_command("change_voice_cloud", "on", stdout=io.StringIO())
+        self.assertFalse(UserData.objects.filter(voice_cloud_enabled=False).exists())
+        call_command("change_voice_cloud", "off", stdout=io.StringIO())
+        self.assertFalse(UserData.objects.filter(voice_cloud_enabled=True).exists())
 
     def test_a_page_stuck_reconnecting_is_stopped(self):
         with (

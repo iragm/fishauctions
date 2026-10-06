@@ -207,7 +207,8 @@ root per RFC 8414/9728). Settings that fail silently rather than erroring:
 Rules:
 
 - No per-user gate, no requirement that a model be configured site-wide. `is_active` is checked on
-  every credential. (`UserData.use_llm_search` gates the *palette* only.)
+  every credential. (`UserData.use_llm_search` gates the *palette* only; `UserData.library_enabled`
+  gates the library's tools and prompts, as it does `/library/`: `NEEDS_LIBRARY`.)
 - A credential we recognise and won't act on is `403`, never `401` (`mcp.auth.Refusal`) — no
   `WWW-Authenticate` on that response.
 - `allow_writes` (a key) / the `write` scope (a token) are a **ceiling, not a grant**. Read-only

@@ -11288,6 +11288,14 @@ def get_default_square_enabled():
     return getattr(settings, "SQUARE_ENABLED_FOR_USERS", False)
 
 
+def get_default_library_enabled():
+    return getattr(settings, "LIBRARY_ENABLED_FOR_USERS", False)
+
+
+def get_default_voice_cloud_enabled():
+    return getattr(settings, "VOICE_CLOUD_ENABLED_FOR_USERS", False)
+
+
 def get_default_is_trusted():
     return settings.USERS_ARE_TRUSTED_BY_DEFAULT
 
@@ -11402,6 +11410,15 @@ class UserData(CachedPropertiesMixin, models.Model):
     can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
     paypal_enabled = models.BooleanField(default=get_default_paypal_enabled)
     square_enabled = models.BooleanField(default=get_default_square_enabled)
+    library_enabled = models.BooleanField(default=get_default_library_enabled)
+    library_enabled.help_text = "Show this user /library/ and the library's tools on /mcp/."
+    voice_cloud_enabled = models.BooleanField(
+        default=get_default_voice_cloud_enabled, verbose_name="Listen through OpenAI"
+    )
+    voice_cloud_enabled.help_text = (
+        "Let this user's web browser listen through OpenAI on Set lot winners (Voice grammar's cloud model, "
+        "on this site's key). The app listens without it."
+    )
     is_trusted = models.BooleanField(default=get_default_is_trusted)
     is_trusted.help_text = "Trusted users can promote auctions, accept payments, and send invoice notification emails"
     dismissed_cookies_tos = models.BooleanField(default=False)
@@ -11615,6 +11632,8 @@ class UserData(CachedPropertiesMixin, models.Model):
                 "can_create_club_auctions",
                 "paypal_enabled",
                 "square_enabled",
+                "library_enabled",
+                "voice_cloud_enabled",
                 "is_trusted",
             ]:
                 if getattr(self, field) and not getattr(target_userdata, field):
@@ -11806,6 +11825,8 @@ class UserData(CachedPropertiesMixin, models.Model):
             self.can_create_club_auctions = get_default_can_create_auctions()
             self.paypal_enabled = get_default_paypal_enabled()
             self.square_enabled = get_default_square_enabled()
+            self.library_enabled = get_default_library_enabled()
+            self.voice_cloud_enabled = get_default_voice_cloud_enabled()
             self.is_trusted = get_default_is_trusted()
             self.save(
                 update_fields=[
@@ -11825,6 +11846,8 @@ class UserData(CachedPropertiesMixin, models.Model):
                     "can_create_club_auctions",
                     "paypal_enabled",
                     "square_enabled",
+                    "library_enabled",
+                    "voice_cloud_enabled",
                     "is_trusted",
                 ]
             )
