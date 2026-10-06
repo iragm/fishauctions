@@ -5,6 +5,7 @@ unapproved and scoped to them and their club. The gaps page approves, merges or 
 """
 
 import logging
+from collections import defaultdict
 
 from dal import autocomplete
 from django.contrib import messages
@@ -33,6 +34,7 @@ from auctions.models import (
     Lot,
     Species,
     SpeciesNameRejection,
+    SpeciesNameVote,
     SpeciesSearchCache,
     normalize_species_name,
 )
@@ -44,6 +46,39 @@ from auctions.species_matching import (
 from .base import AdminOnlyViewMixin, AuctionAdminAnywhereViewMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _attach_votes(rows):
+    """Put the evidence on each row with a ``search_text`` and a ``species``: ``kept`` and ``taken_off``
+    (lots, from :class:`SpeciesNameVote`), ``people`` (who took it off) and ``instead`` (what those lots
+    got, commonest first). Two queries, however many rows.
+    """
+    texts = {row.search_text for row in rows}
+    if not texts:
+        return
+    votes = SpeciesNameVote.objects.filter(search_text__in=texts, species__isnull=False).order_by()
+    tallies = {
+        (entry["search_text"], entry["species"]): entry
+        for entry in votes.values("search_text", "species").annotate(
+            kept=Count("pk", filter=Q(agrees=True)),
+            taken_off=Count("pk", filter=Q(agrees=False)),
+            people=Count("user", filter=Q(agrees=False), distinct=True),
+        )
+    }
+    picks = list(votes.filter(agrees=False).values("search_text", "species", "chosen").annotate(lots=Count("pk")))
+    labels = {
+        species.pk: species.label for species in Species.objects.filter(pk__in={pick["chosen"] for pick in picks})
+    }
+    instead = defaultdict(list)
+    for pick in sorted(picks, key=lambda pick: -pick["lots"]):
+        label = labels.get(pick["chosen"], "no species")
+        instead[(pick["search_text"], pick["species"])].append((label, pick["lots"]))
+    for row in rows:
+        tally = tallies.get((row.search_text, row.species_id), {})
+        row.kept = tally.get("kept", 0)
+        row.taken_off = tally.get("taken_off", 0)
+        row.people = tally.get("people", 0)
+        row.instead = instead.get((row.search_text, row.species_id), [])
 
 
 class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
@@ -164,8 +199,9 @@ class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
             .annotate(lots=Count("lot"))
             .order_by("-id")[:50]
         )
-        # Retired pairings, undoable only here (species_matching.record_choice).
+        # Retired pairings, undoable only here (species_matching.record_choice), with the lots that retired them.
         context["rejections"] = list(SpeciesNameRejection.objects.select_related("species").order_by("-createdon")[:50])
+        _attach_votes(context["mappings"] + context["rejections"])
         # Both halves of a pair carry the flag; show one line per pair, stably ordered by pk.
         flagged = list(
             Species.objects.filter(possible_duplicate__isnull=False)
@@ -221,11 +257,15 @@ class SpeciesSearchCacheForgetView(AdminOnlyViewMixin, View):
 class SpeciesNameRejectionDeleteView(AdminOnlyViewMixin, View):
     """Let a retired pairing be matched again, usually because the rejections were about the lot names,
     not the species. The escape hatch for :func:`species_matching.record_choice`.
+
+    The lots that took it off are overruled, so their votes go: left in place, the next lot to take it off
+    would retire it again at once.
     """
 
     def post(self, request, pk):
         row = get_object_or_404(SpeciesNameRejection, pk=pk)
         name, species = row.search_text, row.species
+        SpeciesNameVote.objects.filter(search_text=name, species=species, agrees=False).delete()
         row.delete()
         messages.success(request, f"“{name}” may be matched to {species.label} again.")
         return redirect("species_gaps")

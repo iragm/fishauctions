@@ -9825,19 +9825,18 @@ def _species_echo(species) -> dict[str, Any]:
     }
 
 
-def _teach_the_lot_name(lot, species, user, is_admin) -> bool:
+def _teach_the_lot_name(lot, previous, user, is_admin) -> bool:
     """Remember "this lot name means this species", only from an auction admin (``LotAdmin``'s rule: the
-    cache is global). ``record_choice`` is reported either way.
+    cache is global). ``record_choice`` is reported either way. *previous* is the species the lot had.
     """
     from .species_matching import record_choice, remember
 
     if not lot.lot_name:
         return False
-    record_choice(lot.lot_name, species, first_save=False, changed=True, user=user)
-    if not is_admin or species is None:
+    record_choice(lot, previous=previous, user=user)
+    if not is_admin or lot.species is None:
         return False
-    remember(lot.lot_name, species, source="user", user=user)
-    return True
+    return remember(lot.lot_name, lot.species, source="user", user=user)
 
 
 def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -9859,7 +9858,7 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
             return _ok(f"Lot {lot.lot_number_display} had no scientific name on it.", **_lot_echo(lot))
         lot.species = None
         lot.save()
-        _teach_the_lot_name(lot, None, user, is_admin)
+        _teach_the_lot_name(lot, was, user, is_admin)
         _lot_history(request, lot, f"Took the species off lot {lot.lot_number_display}")
         return _ok(
             f"Took {was.full_scientific_name} off lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}.",
@@ -9910,7 +9909,7 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
     lot.species = species
     # save(): it re-derives the category.
     lot.save()
-    taught = _teach_the_lot_name(lot, species, user, is_admin)
+    taught = _teach_the_lot_name(lot, was, user, is_admin)
     _lot_history(request, lot, f"Set the species on lot {lot.lot_number_display} to {species.full_scientific_name}")
     summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is {species.full_scientific_name}."
     if from_the_lot_name:

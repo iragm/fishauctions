@@ -3540,6 +3540,9 @@ class Species(models.Model):
         rejected_texts = set(SpeciesNameRejection.objects.filter(species=self).values_list("search_text", flat=True))
         SpeciesNameRejection.objects.filter(species=duplicate, search_text__in=rejected_texts).delete()
         SpeciesNameRejection.objects.filter(species=duplicate).update(species=self)
+        # The evidence follows too. Unique per lot only, so nothing collides.
+        SpeciesNameVote.objects.filter(species=duplicate).update(species=self)
+        SpeciesNameVote.objects.filter(chosen=duplicate).update(chosen=self)
         # Nothing points at either row as a duplicate any more.
         Species.objects.filter(Q(possible_duplicate=duplicate) | Q(possible_duplicate=self)).update(
             possible_duplicate=None
@@ -3753,43 +3756,11 @@ class SpeciesSearchCache(models.Model):
     createdon = models.DateTimeField(auto_now_add=True)
     hits = models.PositiveIntegerField(default=0)
     hits.help_text = "How many times this cached answer has been served instead of asking again."
-    # What people did with the answer: the only evidence it is right.
-    accepts = models.PositiveIntegerField(default=0)
-    accepts.help_text = (
-        "Lots saved with this answer left alone.  Counted once per lot, on the save that created "
-        "it -- re-saving a lot without touching the species is not new evidence."
-    )
-    rejects = models.PositiveIntegerField(default=0)
-    rejects.help_text = (
-        "Lots this answer was cleared from or changed on.  Counted once per lot, like accepts.  "
-        "Enough of them retires the row; see is_discredited."
-    )
-
-    #: Rejections allowed: one in ten.
-    MAX_REJECT_RATIO = 0.1
-
-    #: ...and at least this many, so one stray clear doesn't retire an answer.
-    MIN_REJECTS_TO_RETIRE = 3
 
     @property
     def is_a_gap(self):
         """True when the lot was identified but the list lacks the species."""
         return self.species_id is None and bool(self.scientific_name)
-
-    @property
-    def is_discredited(self):
-        """True when rejections exceed :attr:`MAX_REJECT_RATIO` and :attr:`MIN_REJECTS_TO_RETIRE`
-        (``9 * rejects > accepts``, integer arithmetic, read on every lot save).
-        """
-        return self.rejects >= self.MIN_REJECTS_TO_RETIRE and self.rejects * 9 > self.accepts
-
-    def retire(self):
-        """Discard this answer and record a :class:`SpeciesNameRejection` for the pair, so the model can't write
-        it straight back. The name is left unanswered, not "not a species".
-        """
-        if self.species_id:
-            SpeciesNameRejection.objects.get_or_create(search_text=self.search_text, species_id=self.species_id)
-        self.delete()
 
     def __str__(self):
         return f"{self.search_text} -> {self.species or 'no species'}"
@@ -3798,8 +3769,9 @@ class SpeciesSearchCache(models.Model):
 class SpeciesNameRejection(models.Model):
     """ "This lot name is **not** that species": keeps a retired answer from coming back.
 
-    Vetoes a pair only, read only by the cache and the model shortlist, never by exact or token matching
-    (so people clearing fields can't outvote the list). Deletable on the gaps page.
+    Vetoes a pair only, for the cache, the token search and the model, never for exact matching (so
+    people clearing fields can't outvote the list). The :class:`SpeciesNameVote` rows that retired it
+    stay, as the evidence. Deletable on the gaps page.
     """
 
     search_text = models.CharField(max_length=120, db_index=True)
@@ -3812,6 +3784,40 @@ class SpeciesNameRejection(models.Model):
 
     class Meta:
         unique_together = ("search_text", "species")
+
+
+class SpeciesNameVote(models.Model):
+    """What one lot says about the species offered for its name: kept it, or took it off.
+
+    One per lot, rewritten when the lot changes, so a lot counts once however often it is saved. Kept when
+    the answer is retired: these are the evidence, and the gaps page shows them. ``species`` null is a vote
+    on a remembered "not a species". See species_matching.record_choice.
+    """
+
+    #: Lots that must take an answer off before it is retired, or pick the same species before a
+    #: remembered "not a species" gives way to it...
+    ENOUGH_TO_DECIDE = 3
+
+    #: ...and, to retire, they must outnumber the lots that kept it one to this many.
+    KEPT_PER_TAKEN_OFF = 9
+
+    lot = models.OneToOneField("Lot", on_delete=models.CASCADE, related_name="species_name_vote")
+    search_text = models.CharField(max_length=120)
+    search_text.help_text = "The lot's name, normalised the way SpeciesSearchCache keys it."
+    species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE, related_name="name_votes")
+    species.help_text = 'The answer the lot was offered.  Blank for a remembered "not a species".'
+    agrees = models.BooleanField()
+    chosen = models.ForeignKey(Species, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    chosen.help_text = "What the lot carried instead, when it disagreed.  Blank for a lot it was taken off."
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    user.help_text = "Whose save decided it."
+    updatedon = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.search_text}: {'kept' if self.agrees else 'not'} {self.species or 'no species'}"
+
+    class Meta:
+        indexes = [models.Index(fields=["search_text", "species"])]
 
 
 def _slugify_auction_title(value):

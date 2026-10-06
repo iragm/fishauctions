@@ -100,6 +100,7 @@ REPOINTED = frozenset(
         "auctions.SpeciesCommonName.added_by",
         "auctions.Species.added_by",
         "auctions.SpeciesSearchCache.created_by",
+        "auctions.SpeciesNameVote.user",
         "auctions.TapToPayAttempt.created_by",
         # Self-bans and duplicates this makes are removed afterwards.
         "auctions.UserBan.banned_user",

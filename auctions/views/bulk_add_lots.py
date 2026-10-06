@@ -1,7 +1,6 @@
 """Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
 
-``SaveLotAjax`` is the per-row save and the one place that writes the species name cache on a row's
-first save.
+``SaveLotAjax`` is the per-row save behind the bulk table.
 """
 
 import json
@@ -51,7 +50,6 @@ from auctions.services import (
     save_new_lot,
 )
 from auctions.species_matching import record_choice as record_species_choice
-from auctions.species_matching import remember as remember_species
 from auctions.species_matching import (
     visible_species,
 )
@@ -98,9 +96,8 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if lot_formset.is_valid():
             lots = lot_formset.save(commit=False)
             new_lot_count = 0
-            # Which rows the seller moved the species on: a rejection is evidence about a lot, so
-            # re-posting a row cleared last week must not count again. See record_choice.
-            species_moved = {id(form.instance) for form in lot_formset.forms if "species" in form.changed_data}
+            # Each saved lot's form: what the row had before, and what the page offered it.
+            forms_by_lot = {id(form.instance): form for form in lot_formset.forms}
             for lot in lots:
                 lot_is_new = not lot.pk
                 if lot_is_new:
@@ -114,13 +111,13 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     if owner:
                         lot.user = owner
                     lot.save()
-                # What the seller did with the remembered species. See record_choice.
-                if self.auction.use_scientific_name and lot.lot_name:
+                # What the seller did with the species the page offered. See record_choice.
+                form = forms_by_lot.get(id(lot))
+                if self.auction.use_scientific_name and lot.lot_name and form is not None:
                     record_species_choice(
-                        lot.lot_name,
-                        lot.species,
-                        first_save=lot_is_new,
-                        changed=id(lot) in species_moved,
+                        lot,
+                        previous=form.initial.get("species"),
+                        offered=form.cleaned_data.get("species_offered"),
                         user=self.request.user,
                     )
             if lots:
@@ -365,8 +362,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     added_by=request.user,
                 )
                 is_new = True
-            # The species before this save, so record_choice can tell clearing it from editing a
-            # lot it was already cleared on.
+            # For record_choice: taking the species off a lot is not the same as never having it.
             species_before = lot.species_id
 
             admin_bypassed_lot_limit = False  # Track if admin bypassed lot limit
@@ -544,23 +540,12 @@ class SaveLotAjax(APIView, AuctionViewMixin):
             # Lot.save() handles locking for both numbering modes.
             lot.save()
 
-            # Only once the row has really been saved: a row that bounced isn't an answer.
+            # Only once the row has really been saved: a row that bounced isn't an answer. Nothing
+            # here teaches the cache: the page has no picker, so the species is the matcher's own.
             if self.auction.use_scientific_name and lot.lot_name:
-                # What the seller did with the remembered answer, before remember() below so the
-                # person teaching a pairing isn't also counted as agreeing with it. See
-                # species_matching.record_choice.
                 record_species_choice(
-                    lot.lot_name,
-                    lot.species,
-                    first_save=is_new,
-                    changed=lot.species_id != species_before,
-                    user=request.user,
+                    lot, previous=species_before, offered=data.get("species_offered"), user=request.user
                 )
-                # Only on a first save, where the name and species were entered together: on a later
-                # edit the name may have been rewritten with the old species left behind, and the
-                # cache is global.
-                if is_new and lot.species:
-                    remember_species(lot.lot_name, lot.species, source="user", user=request.user)
 
             # Create auction history entry
             if is_new:

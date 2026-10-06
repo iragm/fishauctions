@@ -24,6 +24,7 @@ from auctions.models import (
     Species,
     SpeciesCommonName,
     SpeciesNameRejection,
+    SpeciesNameVote,
     SpeciesSearchCache,
 )
 from auctions.species_matching import (
@@ -483,10 +484,19 @@ class SpeciesIdentifyFirstTests(StandardTestCase):
         self.assertEqual(source, "llm")
         self.assertEqual(self.provider.call_count, 1)
 
-    def test_a_corrected_spelling_is_never_written_to_the_shared_cache(self):
-        """A corrected spelling is never cached: the key would be the misspelling."""
+    def test_a_respelling_only_the_search_can_place_is_not_remembered(self):
+        """A genus-level guess for a misspelling isn't an answer to serve every club."""
         self.provider.replies = [{"kind": "unknown", "common_name": "red ludwigia"}]
         suggest_species("red luwigia")
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="red luwigia").exists())
+
+    def test_nor_is_one_only_this_seller_can_read(self):
+        """The cache's name guard checks the typed misspelling, so a private name would leak."""
+        SpeciesCommonName.objects.create(
+            species=self.ludwigia, name="red ludwigia", approved=False, added_by=self.user, source="admin"
+        )
+        self.provider.replies = [{"kind": "unknown", "common_name": "red ludwigia"}]
+        self.assertEqual(suggest_species("red luwigia", user=self.user)[0], [self.ludwigia])
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="red luwigia").exists())
 
     def test_a_correction_that_matches_nothing_still_falls_through_to_round_two(self):
@@ -775,7 +785,8 @@ class SpeciesOnLotFormsTests(StandardTestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertIsNone(form.cleaned_data["species"])
 
-    def test_bulk_add_ajax_saves_a_species_and_remembers_it(self):
+    def test_bulk_add_ajax_saves_a_species_without_teaching_the_cache(self):
+        """The page has no picker, so the species on a row is the matcher's own answer, not a person's."""
         self.client.login(username="my_lot", password="testpassword")
         response = self.client.post(
             reverse("save_lot_ajax", kwargs={"slug": self.online_auction.slug}),
@@ -785,7 +796,7 @@ class SpeciesOnLotFormsTests(StandardTestCase):
         self.assertTrue(response.json()["success"], response.json())
         lot = Lot.objects.filter(lot_name="Fancy guppy pair").first()
         self.assertEqual(lot.species, self.guppy)
-        self.assertEqual(SpeciesSearchCache.objects.get(search_text="fancy guppy pair").species, self.guppy)
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="fancy guppy pair").exists())
 
     def test_editing_a_lot_later_does_not_teach_the_cache(self):
         self.client.login(username="my_lot", password="testpassword")
@@ -1947,7 +1958,8 @@ class SpeciesCreateViewTests(StandardTestCase):
         self._post(lot_name="Bristlenose pleco", attach_to_lots="on")
         self.lot.refresh_from_db()
         self.assertEqual(self.lot.species.scientific_name, "Ancistrus cirrhosus")
-        self.assertEqual(SpeciesSearchCache.objects.get(search_text="bristlenose pleco").species, self.lot.species)
+        # Its common name now, so the list answers it: no cache row needed.
+        self.assertEqual(suggest_species("Bristlenose pleco", use_llm=False), ([self.lot.species], "exact"))
 
     def test_it_never_overwrites_a_species_somebody_already_picked(self):
         guppy = make_species("Poecilia", "reticulata", "Guppy")
@@ -2205,8 +2217,8 @@ class PendingSpeciesTests(StandardTestCase):
     def test_an_unapproved_species_is_never_remembered(self):
         remember("rare pleco", self.mine, source="user", user=self.admin_user)
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="rare pleco").exists())
-        remember("guppy pair", self.shared, source="user", user=self.admin_user)
-        row = SpeciesSearchCache.objects.get(search_text="guppy pair")
+        remember("tank raised livebearers", self.shared, source="user", user=self.admin_user)
+        row = SpeciesSearchCache.objects.get(search_text="tank raised livebearers")
         self.assertEqual(row.species, self.shared)
         self.assertEqual(row.created_by, self.admin_user, "a wrong global answer has to be traceable")
 
@@ -2239,7 +2251,7 @@ class PendingSpeciesTests(StandardTestCase):
         self.mine.refresh_from_db()
         self.assertTrue(self.mine.approved)
         self.assertIn(self.mine, visible_species(self.user))
-        self.assertEqual(SpeciesSearchCache.objects.get(search_text="rare pleco").species, self.mine)
+        self.assertEqual(suggest_species("Rare pleco", user=self.user, use_llm=False), ([self.mine], "exact"))
 
     def test_only_a_superuser_may_approve(self):
         self.client.login(username="admin_user", password="testpassword")
@@ -2659,6 +2671,20 @@ class SingleWordCommonNameTests(StandardTestCase):
         for name in ("breeder box", "box of misc", "sponge filter", "bag of gravel"):
             with self.subTest(name=name):
                 self.assertEqual(list(suggest_species(name, use_llm=False)[0]), [], name)
+
+    def test_two_words_naming_different_fish_answer_nothing(self):
+        """'orange sunkist neos w stardust gene' was a Caridina cross because "stardust" is the longer word."""
+        make_species("Xiphophorus", "maculatus", "Southern platyfish", ["Platy"], aquarium_use="commercial")
+        self.assertEqual(list(suggest_species("guppy platy", use_llm=False)[0]), [])
+
+    def test_a_strain_and_its_own_species_do_not_disagree(self):
+        shrimp = make_species("Neocaridina", "davidi", "Cherry shrimp")
+        SpeciesCommonName.objects.create(species=shrimp, name="neos", source="aquarium")
+        sakura = Species.objects.create(
+            genus="Neocaridina", species="davidi", variety="Orange Sakura", parent=shrimp, source="aquarium"
+        )
+        SpeciesCommonName.objects.create(species=sakura, name="sunkist", source="aquarium")
+        self.assertEqual(list(suggest_species("sunkist neos", use_llm=False)[0]), [sakura])
 
     def test_the_most_specific_word_wins(self):
         make_species("Xiphophorus", "maculatus", "Southern platyfish", ["Platy"], aquarium_use="commercial")
@@ -3207,12 +3233,13 @@ class SpeciesSmallerFixesTests(StandardTestCase):
         self.assertIn('id="bap-genus-list"', body)
         self.assertIn('value="Tropheus"', body)
 
-    def test_the_bulk_add_page_clears_a_cloned_row_species(self):
+    def test_the_bulk_add_page_keeps_a_copied_rows_species_until_its_name_changes(self):
+        """A copied row keeps the name its species was worked out from; a blank one lost it for good."""
         from django.template.loader import get_template
 
         source = get_template("auctions/bulk_add_lots.html").template.source
-        self.assertIn("newElement.find('input[name$=\"-species\"]')", source)
-        self.assertIn("newElement.find('.species-hint').html('')", source)
+        self.assertNotIn("newElement.find('.species-hint').html('')", source)
+        self.assertIn("$(document).on('input', 'input[name$=\"-lot_name\"]'", source)
 
 
 class CopyingLotsToANewAuctionTests(StandardTestCase):
@@ -4233,7 +4260,9 @@ class BrowsableAPITests(StandardTestCase):
 
 @isolated_cache("species-feedback")
 class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
-    """Cached answers written by sellers can be unlearned. See species_matching.record_choice."""
+    """Each lot's say on the species offered for its name, and what enough of them do. See
+    species_matching.record_choice.
+    """
 
     def setUp(self):
         super().setUp()
@@ -4243,147 +4272,182 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.betta = make_species("Betta", "splendens", "Siamese fighting fish", aquarium_use="commercial")
         remember("sponge filter", self.guppy, source="user", user=self.user)
 
-    def _row(self):
-        return SpeciesSearchCache.objects.get(search_text="sponge filter")
+    def _lot(self, name="Sponge filter", species=None):
+        return Lot.objects.create(
+            lot_name=name, auction=self.online_auction, auctiontos_seller=self.online_tos, quantity=1, species=species
+        )
 
-    def test_leaving_the_answer_alone_counts_once_on_the_first_save(self):
-        record_choice("Sponge filter", self.guppy, first_save=True)
-        self.assertEqual(self._row().accepts, 1)
-        self.assertEqual(self._row().rejects, 0)
+    def _save(self, lot, species, **kwargs):
+        """Put *species* on *lot* the way a form does, and report it."""
+        previous = lot.species_id
+        lot.species = species
+        lot.save()
+        record_choice(lot, previous=previous, user=self.user, **kwargs)
 
-    def test_re_saving_a_lot_is_not_a_second_vote(self):
-        record_choice("Sponge filter", self.guppy, first_save=True)
+    def _offered(self, count, keep, name="Sponge filter"):
+        for _ in range(count):
+            self._save(self._lot(name), self.guppy if keep else None, offered=self.guppy.pk)
+
+    def _tally(self, name="sponge filter", species=None):
+        """(lots that kept it, lots that took it off)."""
+        votes = SpeciesNameVote.objects.filter(search_text=name, species=species or self.guppy)
+        return votes.filter(agrees=True).count(), votes.filter(agrees=False).count()
+
+    def _retired(self, name="sponge filter", species=None):
+        return SpeciesNameRejection.objects.filter(search_text=name, species=species or self.guppy).exists()
+
+    def _koi(self):
+        return Species.objects.create(
+            genus="Poecilia", species="reticulata", variety="Koi", parent=self.guppy, source="aquarium"
+        )
+
+    def test_keeping_the_offered_species_counts_once(self):
+        lot = self._lot()
         for _ in range(5):
-            record_choice("Sponge filter", self.guppy, first_save=False)
-        self.assertEqual(self._row().accepts, 1)
+            self._save(lot, self.guppy, offered=self.guppy.pk)
+        self.assertEqual(self._tally(), (1, 0))
 
-    def test_one_person_clearing_it_once_does_not_throw_the_answer_away(self):
-        """One person clearing a cached answer once doesn't delete it."""
-        record_choice("Sponge filter", None, first_save=True)
+    def test_one_lot_taking_it_off_does_not_retire_it(self):
+        self._offered(1, keep=False)
+        self.assertEqual(self._tally(), (0, 1))
         self.assertTrue(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
-        self.assertEqual(self._row().rejects, 1)
-        self.assertFalse(SpeciesNameRejection.objects.exists())
+        self.assertFalse(self._retired())
 
-    def test_three_lots_disagreeing_does(self):
-        for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
-            record_choice("Sponge filter", None, first_save=True)
+    def test_enough_lots_taking_it_off_retire_it_and_their_votes_stay(self):
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE, keep=False)
+        self.assertTrue(self._retired())
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
-        self.assertTrue(SpeciesNameRejection.objects.filter(search_text="sponge filter", species=self.guppy).exists())
+        self.assertEqual(self._tally(), (0, SpeciesNameVote.ENOUGH_TO_DECIDE))
 
-    def test_a_negative_is_scored_when_somebody_picks_a_species(self):
-        """Picking a species scores a remembered negative."""
-        remember("box of gravel", None, source="llm")
-        record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
-        row = SpeciesSearchCache.objects.get(search_text="box of gravel")
-        self.assertIsNone(row.species)
-        self.assertEqual(row.rejects, 1)
+    def test_one_lot_counts_once_however_it_is_edited(self):
+        lot = self._lot()
+        self._save(lot, self.guppy, offered=self.guppy.pk)
+        for species in (self.betta, None, self.betta, None):
+            self._save(lot, species)
+        self.assertEqual(self._tally(), (0, 1))
+        self.assertFalse(self._retired())
 
-    def test_one_seller_picking_a_species_is_not_the_sites_answer(self):
-        """One seller picking a species doesn't replace the cached answer."""
-        remember("box of gravel", None, source="llm")
-        record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
-        self.assertIsNone(SpeciesSearchCache.objects.get(search_text="box of gravel").species)
+    def test_putting_it_back_counts_as_keeping_it(self):
+        lot = self._lot()
+        self._save(lot, None, offered=self.guppy.pk)
+        self._save(lot, self.guppy)
+        self.assertEqual(self._tally(), (1, 0))
 
-    def test_three_of_them_replace_the_answer(self):
-        """Enough rejections replace the answer."""
+    def test_a_new_lot_offered_nothing_and_saved_blank_says_nothing(self):
+        """The bulk pages leave the box empty for several matches or a slow lookup; a blank isn't a verdict."""
+        for _ in range(5):
+            self._save(self._lot(), None)
+        self.assertFalse(SpeciesNameVote.objects.exists())
+
+    def test_declining_the_offer_before_the_first_save_counts(self):
+        self._save(self._lot(), None, offered=self.guppy.pk)
+        self.assertEqual(self._tally(), (0, 1))
+
+    def test_the_offer_arriving_after_an_autosave_still_counts_as_kept(self):
+        lot = self._lot()
+        self._save(lot, None)
+        self._save(lot, self.guppy, offered=self.guppy.pk)
+        self.assertEqual(self._tally(), (1, 0))
+
+    def test_a_strain_of_the_offered_species_agrees_with_it(self):
+        self._save(self._lot(), self._koi(), offered=self.guppy.pk)
+        self.assertEqual(self._tally(), (1, 0))
+
+    def test_but_the_plain_species_does_not_confirm_an_offered_strain(self):
+        koi = self._koi()
+        self._save(self._lot("Koi guppies"), self.guppy, offered=koi.pk)
+        self.assertEqual(self._tally("koi guppies", koi), (0, 1))
+
+    def test_a_remembered_answer_nobody_was_shown_gets_no_vote(self):
+        self._save(self._lot(), self.betta)
+        self.assertFalse(SpeciesNameVote.objects.exists())
+
+    def test_but_taking_it_off_a_lot_that_had_it_does(self):
+        self._save(self._lot(species=self.guppy), self.betta)
+        self.assertEqual(self._tally(), (0, 1))
+
+    def test_an_offer_somebody_could_not_have_seen_is_ignored(self):
+        private = Species.objects.create(genus="Yssichromis", species="piceatus", approved=False, source="admin")
+        self._save(self._lot(), None, offered=private.pk)
+        self.assertFalse(SpeciesNameVote.objects.exists())
+
+    def test_a_name_the_list_answers_is_never_retired(self):
+        """A veto never reaches exact matching, so it would change nothing."""
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE, keep=False, name="Guppy")
+        self.assertEqual(self._tally("guppy"), (0, SpeciesNameVote.ENOUGH_TO_DECIDE))
+        self.assertFalse(self._retired("guppy"))
+
+    def test_a_well_supported_answer_survives_enough_lots_taking_it_off(self):
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE * SpeciesNameVote.KEPT_PER_TAKEN_OFF, keep=True)
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE, keep=False)
+        self.assertFalse(self._retired())
+
+    def test_and_stops_surviving_once_they_pass_one_in_ten(self):
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE * SpeciesNameVote.KEPT_PER_TAKEN_OFF, keep=True)
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE + 1, keep=False)
+        self.assertTrue(self._retired())
+
+    def test_renaming_a_lot_withdraws_its_vote(self):
+        lot = self._lot()
+        self._save(lot, None, offered=self.guppy.pk)
+        lot.lot_name = "Breeder box"
+        self._save(lot, None)
+        self.assertFalse(SpeciesNameVote.objects.exists())
+
+    def test_a_negative_gives_way_when_lots_agree_on_the_species(self):
         remember("box of gravel", None, source="llm")
-        for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
-            record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
+        for _ in range(SpeciesNameVote.ENOUGH_TO_DECIDE):
+            self._save(self._lot("Box of gravel"), self.guppy)
         row = SpeciesSearchCache.objects.get(search_text="box of gravel")
         self.assertEqual(row.species, self.guppy)
         self.assertEqual(row.created_by, self.user)
-        self.assertEqual(row.rejects, 0)
-        self.assertEqual(row.accepts, 0)
 
-    def test_a_lot_saved_with_no_species_is_not_a_vote_against_a_negative(self):
-        """A lot saved with no species is not counted as agreement."""
+    def test_but_not_when_they_pick_different_ones(self):
+        """Three bags of mixed tetras holding three different tetras don't make the name a species."""
         remember("box of gravel", None, source="llm")
-        for _ in range(5):
-            record_choice("box of gravel", None, first_save=True, user=self.user)
-        self.assertEqual(SpeciesSearchCache.objects.get(search_text="box of gravel").rejects, 0)
-
-    def test_re_saving_one_lot_is_not_three_people_disagreeing_with_a_negative(self):
-        remember("box of gravel", None, source="llm")
-        record_choice("box of gravel", self.guppy, first_save=True, user=self.user)
-        for _ in range(5):
-            record_choice("box of gravel", self.guppy, first_save=False, changed=False, user=self.user)
+        for species in (self.guppy, self.betta, self.guppy):
+            self._save(self._lot("Box of gravel"), species)
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text="box of gravel").species)
+
+    def test_a_lot_saved_blank_says_nothing_about_a_negative(self):
+        remember("box of gravel", None, source="llm")
+        for _ in range(5):
+            self._save(self._lot("Box of gravel"), None)
+        self.assertFalse(SpeciesNameVote.objects.exists())
 
     def test_a_replacement_still_refuses_an_unapproved_species(self):
-        """A replacement still refuses an unapproved species."""
         remember("box of gravel", None, source="llm")
         private = Species.objects.create(genus="Yssichromis", species="piceatus", approved=False, source="admin")
-        for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
-            record_choice("box of gravel", private, first_save=True, user=self.user)
+        for _ in range(SpeciesNameVote.ENOUGH_TO_DECIDE):
+            self._save(self._lot("Box of gravel"), private)
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text="box of gravel").species)
 
-    def test_replacing_an_answer_does_not_inherit_its_votes(self):
-        record_choice("Sponge filter", None, first_save=True)
-        self.assertEqual(self._row().rejects, 1)
-        remember("sponge filter", self.betta, source="user", user=self.user)
-        self.assertEqual(self._row().rejects, 0)
-        self.assertEqual(self._row().accepts, 0)
-
-    def test_re_saving_one_cleared_lot_is_not_three_lots_disagreeing(self):
-        """Re-saving one cleared lot doesn't count as more rejections."""
-        record_choice("Sponge filter", None, first_save=True)
-        for _ in range(10):
-            record_choice("Sponge filter", None)
-        self.assertEqual(self._row().rejects, 1)
-        self.assertTrue(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
-
-    def test_a_well_supported_answer_survives_the_floor_being_reached(self):
-        SpeciesSearchCache.objects.filter(search_text="sponge filter").update(accepts=90)
-        for _ in range(SpeciesSearchCache.MIN_REJECTS_TO_RETIRE):
-            record_choice("Sponge filter", None, first_save=True)
-        self.assertTrue(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
-        self.assertEqual(self._row().rejects, 3)
-
-    def test_and_stops_surviving_once_the_rejections_pass_a_tenth(self):
-        SpeciesSearchCache.objects.filter(search_text="sponge filter").update(accepts=9, rejects=2)
-        record_choice("Sponge filter", None, first_save=True)
-        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
-
-    def test_picking_a_different_species_is_a_rejection_too(self):
-        SpeciesSearchCache.objects.filter(search_text="sponge filter").update(rejects=2)
-        record_choice("Sponge filter", self.betta, changed=True)
-        self.assertEqual(list(SpeciesNameRejection.objects.values_list("species_id", flat=True)), [self.guppy.pk])
-
-    def test_a_name_with_no_remembered_answer_is_not_scored(self):
-        record_choice("Some other lot", None, first_save=True)
-        self.assertFalse(SpeciesNameRejection.objects.exists())
-
-    def test_a_remembered_no_is_never_scored(self):
-        remember("box of gravel", None, source="llm")
-        record_choice("box of gravel", None, first_save=True)
-        row = SpeciesSearchCache.objects.get(search_text="box of gravel")
-        self.assertEqual((row.accepts, row.rejects), (0, 0))
-
-    def _retire_it(self):
-        SpeciesSearchCache.objects.filter(search_text="sponge filter").update(
-            rejects=SpeciesSearchCache.MIN_REJECTS_TO_RETIRE - 1
-        )
-        record_choice("Sponge filter", None, first_save=True)
-
     def test_a_retired_pairing_cannot_be_learned_again(self):
-        """A retired pairing cannot be learned again."""
-        self._retire_it()
-        remember("sponge filter", self.guppy, source="user", user=self.user)
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE, keep=False)
+        self.assertFalse(remember("sponge filter", self.guppy, source="user", user=self.user))
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
 
     def test_but_another_species_can_still_be_learned_for_that_name(self):
-        self._retire_it()
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE, keep=False)
         remember("sponge filter", self.betta, source="user", user=self.user)
-        self.assertEqual(self._row().species, self.betta)
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text="sponge filter").species, self.betta)
 
-    def test_a_rejection_does_not_overrule_the_species_list(self):
-        """A rejection never overrules the species list itself."""
-        record_choice("guppy", self.guppy)
+    def test_a_name_the_list_answers_is_not_remembered(self):
+        """The cache is read after the list, so the row would never be served."""
+        self.assertFalse(remember("guppy", self.guppy, source="user", user=self.user))
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="guppy").exists())
+
+    def test_a_retirement_does_not_overrule_the_species_list(self):
         SpeciesNameRejection.objects.create(search_text="guppy", species=self.guppy)
         self.assertEqual(suggest_species("guppy", use_llm=False), ([self.guppy], "exact"))
 
+    def test_but_it_does_stop_the_token_search(self):
+        """ "blue star endlers" kept getting a marine damselfish from the search after it was retired."""
+        self.assertEqual(suggest_species("male guppies", use_llm=False), ([self.guppy], "search"))
+        SpeciesNameRejection.objects.create(search_text="male guppies", species=self.guppy)
+        self.assertEqual(suggest_species("male guppies", use_llm=False), ([], "none"))
+
     def test_the_model_is_never_offered_a_retired_pairing(self):
-        """The model is never offered a retired pairing."""
         SpeciesNameRejection.objects.create(search_text="gup bag", species=self.guppy)
         provider = FakeProvider([{"id": self.guppy.pk}])
         llm.set_provider_override(provider)
@@ -4397,7 +4461,6 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.assertEqual(found, [])
 
     def test_and_naming_one_anyway_is_not_written_down_as_no_species(self):
-        """A discarded model answer is not cached as "not a species"."""
         SpeciesNameRejection.objects.create(search_text="mystery bag", species=self.guppy)
         provider = FakeProvider([{"id": self.guppy.pk}])
         llm.set_provider_override(provider)
@@ -4408,48 +4471,68 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         self.assertEqual(found, [])
         self.assertFalse(SpeciesSearchCache.objects.filter(search_text="mystery bag").exists())
 
-    def _clear_it_on_a_new_bulk_row(self):
+    def test_a_respelling_does_not_bring_a_retired_pairing_back(self):
+        SpeciesNameRejection.objects.create(search_text="gupy bag", species=self.guppy)
+        provider = FakeProvider([{"kind": "unknown", "common_name": "guppy"}, {"id": None}])
+        llm.set_provider_override(provider)
+        try:
+            found, _source = suggest_species("gupy bag", user=self.user)
+        finally:
+            llm.set_provider_override(None)
+        self.assertEqual(found, [])
+
+    def test_a_respelling_everybody_reads_the_same_way_is_remembered(self):
+        """So the next seller who misspells it costs no model call."""
+        provider = FakeProvider([{"kind": "unknown", "common_name": "guppy"}])
+        llm.set_provider_override(provider)
+        try:
+            found, source = suggest_species("gupy", user=self.user)
+        finally:
+            llm.set_provider_override(None)
+        self.assertEqual((found, source), ([self.guppy], "llm"))
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text="gupy").species, self.guppy)
+
+    def test_an_id_the_model_was_not_offered_is_not_a_verdict(self):
+        """A garbled reply must not become a permanent "not a species"."""
+        provider = FakeProvider([{"kind": "not an organism"}, {"id": 987654321}])
+        llm.set_provider_override(provider)
+        try:
+            found, _source = suggest_species("mystery critter", user=self.user)
+        finally:
+            llm.set_provider_override(None)
+        self.assertEqual(found, [])
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="mystery critter").exists())
+
+    def _bulk_save(self, **fields):
         self.client.login(username="my_lot", password="testpassword")
-        return self.client.post(
+        response = self.client.post(
             reverse("save_lot_ajax", kwargs={"slug": self.online_auction.slug}),
-            data={"lot_name": "Sponge filter", "quantity": 1, "reserve_price": 2, "species": ""},
+            data={"lot_name": "Sponge filter", "quantity": 1, "reserve_price": 2, **fields},
             content_type="application/json",
         )
-
-    def test_clearing_a_species_on_the_bulk_page_reports_it(self):
-        SpeciesSearchCache.objects.filter(search_text="sponge filter").update(
-            rejects=SpeciesSearchCache.MIN_REJECTS_TO_RETIRE - 1
-        )
-        response = self._clear_it_on_a_new_bulk_row()
         self.assertTrue(response.json()["success"], response.json())
-        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="sponge filter").exists())
-        self.assertTrue(SpeciesNameRejection.objects.filter(species=self.guppy).exists())
+        return response.json()
 
-    def test_but_one_seller_clearing_it_once_only_counts_it(self):
-        """One seller clearing it once only counts it."""
-        response = self._clear_it_on_a_new_bulk_row()
-        self.assertTrue(response.json()["success"], response.json())
-        self.assertEqual(self._row().rejects, 1)
-        self.assertFalse(SpeciesNameRejection.objects.exists())
+    def test_clearing_the_species_on_the_bulk_page_counts_against_it(self):
+        saved = self._bulk_save(species=self.guppy.pk, species_offered=self.guppy.pk)
+        self._bulk_save(lot_id=saved["lot_id"], species="", species_offered=self.guppy.pk)
+        self.assertEqual(self._tally(), (0, 1))
 
-    def test_saving_a_bulk_row_with_the_answer_left_alone_counts_it(self):
-        self.client.login(username="my_lot", password="testpassword")
-        self.client.post(
-            reverse("save_lot_ajax", kwargs={"slug": self.online_auction.slug}),
-            data={"lot_name": "Sponge filter", "quantity": 1, "reserve_price": 2, "species": self.guppy.pk},
-            content_type="application/json",
-        )
-        self.assertEqual(self._row().accepts, 1)
+    def test_a_bulk_row_saved_before_the_lookup_came_back_is_not_against_it(self):
+        saved = self._bulk_save(species="", species_offered="")
+        self._bulk_save(lot_id=saved["lot_id"], species=self.guppy.pk, species_offered=self.guppy.pk)
+        self.assertEqual(self._tally(), (1, 0))
 
-    def test_an_admin_moving_a_lot_off_a_species_rejects_the_pairing(self):
-        SpeciesSearchCache.objects.filter(search_text="sponge filter").update(
-            rejects=SpeciesSearchCache.MIN_REJECTS_TO_RETIRE - 1
-        )
+    def test_a_bulk_row_does_not_teach_the_cache(self):
+        """The page has no picker: the species on a row is the matcher's own answer."""
+        self._bulk_save(lot_name="Male bettas", species=self.betta.pk, species_offered=self.betta.pk)
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text="male bettas").exists())
+
+    def test_an_admin_moving_a_lot_off_a_species_counts_against_it(self):
+        self._offered(SpeciesNameVote.ENOUGH_TO_DECIDE - 1, keep=False)
         self.lot.lot_name = "Sponge filter"
         self.lot.species = self.guppy
         self.lot.save()
-        self.online_auction.use_scientific_name = True
-        self.online_auction.save()
         self.client.login(username="admin_user", password="testpassword")
         self.client.post(
             reverse("auctionlotadmin", kwargs={"pk": self.lot.pk}),
@@ -4465,7 +4548,7 @@ class RememberedAnswersCanBeUnlearnedTests(StandardTestCase):
         )
         self.lot.refresh_from_db()
         self.assertEqual(self.lot.species, self.betta)
-        self.assertTrue(SpeciesNameRejection.objects.filter(search_text="sponge filter", species=self.guppy).exists())
+        self.assertTrue(self._retired())
 
 
 class RetiredPairingsCanBeUndoneTests(StandardTestCase):
@@ -4474,27 +4557,36 @@ class RetiredPairingsCanBeUndoneTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.guppy = make_species("Poecilia", "reticulata", "Guppy")
+        self.betta = make_species("Betta", "splendens", "Siamese fighting fish")
         self.rejection = SpeciesNameRejection.objects.create(search_text="fancy guppy", species=self.guppy)
-
-    def test_the_gaps_page_lists_them(self):
-        self.client.login(username="admin_user", password="testpassword")
+        for lot, chosen in ((self.lot, self.betta), (self.lotB, None)):
+            SpeciesNameVote.objects.create(
+                lot=lot, search_text="fancy guppy", species=self.guppy, agrees=False, chosen=chosen, user=self.user
+            )
+        SpeciesNameVote.objects.create(lot=self.lotC, search_text="fancy guppy", species=self.guppy, agrees=True)
         self.admin_user.is_superuser = True
         self.admin_user.save()
-        body = self.client.get(reverse("species_gaps")).content.decode()
-        self.assertIn("fancy guppy", body)
-        self.assertIn("retired", body.lower())
+
+    def test_the_gaps_page_shows_the_lots_that_retired_it(self):
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("species_gaps"))
+        row = response.context["rejections"][0]
+        self.assertEqual((row.kept, row.taken_off, row.people), (1, 2, 1))
+        self.assertEqual(sorted(row.instead), [(self.betta.label, 1), ("no species", 1)])
+        self.assertIn("fancy guppy", response.content.decode())
 
     def test_a_superuser_can_allow_the_pairing_again(self):
-        self.admin_user.is_superuser = True
-        self.admin_user.save()
         self.client.login(username="admin_user", password="testpassword")
         self.client.post(reverse("species_rejection_delete", kwargs={"pk": self.rejection.pk}))
         self.assertFalse(SpeciesNameRejection.objects.exists())
+        # Overruled, so the next lot to take it off doesn't retire it again at once.
+        self.assertEqual(list(SpeciesNameVote.objects.values_list("agrees", flat=True)), [True])
 
     def test_nobody_else_can(self):
         self.client.login(username="my_lot", password="testpassword")
         self.client.post(reverse("species_rejection_delete", kwargs={"pk": self.rejection.pk}))
         self.assertTrue(SpeciesNameRejection.objects.exists())
+        self.assertEqual(SpeciesNameVote.objects.count(), 3)
 
 
 class DuplicateSpeciesTests(StandardTestCase):
@@ -4543,16 +4635,25 @@ class DuplicateSpeciesTests(StandardTestCase):
             genus="Poecilia", species="reticulata", variety="Cobra", parent=twin, source="admin"
         )
         Lot.objects.filter(pk=self.lot.pk).update(species=twin)
-        remember("fancy guppy", twin, source="user", user=self.user)
+        remember("mystery guppy", twin, source="user", user=self.user)
         moved = self.guppy.merge_duplicate(twin)
         self.assertFalse(Species.objects.filter(pk=twin.pk).exists())
         self.assertEqual(Lot.objects.get(pk=self.lot.pk).species, self.guppy)
         self.assertEqual(Species.objects.get(pk=strain.pk).parent, self.guppy)
-        self.assertEqual(SpeciesSearchCache.objects.get(search_text="fancy guppy").species, self.guppy)
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text="mystery guppy").species, self.guppy)
         self.assertEqual(moved["lots"], 1)
         names = set(self.guppy.common_names.values_list("name", flat=True))
         self.assertIn("Fancy guppy", names, "the hobby names on the losing row are the point of merging")
         self.assertIn("Millionfish", names, "its designated name is a name too")
+
+    def test_merging_moves_the_votes_too(self):
+        """They are the evidence for a retirement; deleting the losing row must not take them with it."""
+        twin = Species.objects.create(genus="Poecilia", species="reticulata", source="admin")
+        SpeciesNameVote.objects.create(lot=self.lot, search_text="mystery guppy", species=twin, agrees=True)
+        SpeciesNameVote.objects.create(lot=self.lotB, search_text="box of gravel", agrees=False, chosen=twin)
+        self.guppy.merge_duplicate(twin)
+        self.assertEqual(SpeciesNameVote.objects.get(lot=self.lot).species, self.guppy)
+        self.assertEqual(SpeciesNameVote.objects.get(lot=self.lotB).chosen, self.guppy)
 
     def test_merging_keeps_one_copy_of_a_shared_name(self):
         twin = Species.objects.create(genus="Poecilia", species="reticulata", source="admin")
@@ -4902,6 +5003,13 @@ class NamingASpeciesThatIsAlreadyThereTests(StandardTestCase):
         User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
         self.client.login(username="species_admin", password="testpassword")
         self._post()
+        self.assertTrue(SpeciesCommonName.objects.get(name="yellow lab").approved)
+
+    def test_a_superuser_naming_somebodys_private_name_approves_it(self):
+        self._post(names="yellow lab")
+        User.objects.create_superuser("species_admin", "species_admin@example.com", "testpassword")
+        self.client.login(username="species_admin", password="testpassword")
+        self._post(names="yellow lab")
         self.assertTrue(SpeciesCommonName.objects.get(name="yellow lab").approved)
 
     def test_a_name_that_already_names_another_species_is_refused(self):

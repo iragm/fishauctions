@@ -587,6 +587,10 @@ QUICK_ADD_LOT_FIELDS = (
 class QuickAddLot(forms.ModelForm):
     """Add a new lot by filling out only the most important fields"""
 
+    #: The species the page filled in for this row's name, so the seller clearing it counts
+    #: (species_matching.record_choice).
+    species_offered = forms.IntegerField(required=False, widget=HiddenInput())
+
     class Meta:
         model = Lot
         fields = [
@@ -622,6 +626,9 @@ class QuickAddLot(forms.ModelForm):
         self.fields["species_category"].help_text = ""
         # No picker; see configure_species_field.
         configure_species_field(self.fields, self.auction, picker=False)
+        if self.instance.pk and "species" in self.fields:
+            # The name its species was worked out from: tabbing through the box mustn't redo it.
+            self.fields["species"].widget.attrs["data-last-query"] = self.instance.lot_name
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
         else:
@@ -2957,6 +2964,9 @@ class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
 
     cloned_from = forms.IntegerField(required=False, widget=forms.HiddenInput())
+    #: Set by lot_form.html when it fills the species in from the lot name; see
+    #: species_matching.record_choice.
+    species_offered = forms.IntegerField(required=False, widget=forms.HiddenInput())
     #: Set by refreshSpeciesUI() in lot_form.html when the category picker is on screen. While closed,
     #: its posted value is a leftover and gets derived; once opened, it's the user's answer.
     category_shown = forms.BooleanField(required=False, widget=forms.HiddenInput())
@@ -3101,6 +3111,9 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].help_text = ""
         # Always rendered, shown and hidden by JS with the chosen auction.
         configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
+        if self.instance.pk:
+            # The name its species was worked out from, so focusing the name box doesn't redo it.
+            self.fields["species"].widget.attrs["data-last-query"] = self.instance.lot_name
         if selected_auction:
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
@@ -3132,6 +3145,7 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "cloned_from",
+            "species_offered",
             "image_url",
             Div(
                 Div(
@@ -5246,7 +5260,7 @@ class SpeciesCommonNameForm(forms.Form):
         return cleaned_data
 
     def save(self):
-        """Create the names, and return the ones that were really new."""
+        """Create the names, and return the ones that changed: new, or approved by a superuser naming them."""
         species = self.cleaned_data["species"]
         # Superusers approve their own; others need admin approval.
         approved = bool(self.added_by and self.added_by.is_superuser)
@@ -5265,6 +5279,11 @@ class SpeciesCommonNameForm(forms.Form):
                 },
             )
             if was_created:
+                created.append(row)
+            elif approved and not row.approved:
+                # Somebody's private name, which a superuser naming it approves.
+                row.approved = True
+                row.save(update_fields=["approved"])
                 created.append(row)
         return created
 

@@ -838,7 +838,6 @@ class LotValidation(LoginRequiredMixin):
             lot.donation = False
         # someday we may change this to be a field on the form, but for now we need to collect data
         lot.promotion_weight = randint(0, 20)
-        lot_is_new = not lot.pk
         if lot.pk:
             # this is an existing lot
             lot.save()
@@ -886,10 +885,9 @@ class LotValidation(LoginRequiredMixin):
         # species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
             record_species_choice(
-                lot.lot_name,
-                lot.species,
-                first_save=lot_is_new,
-                changed="species" in form.changed_data,
+                lot,
+                previous=form.initial.get("species"),
+                offered=form.cleaned_data.get("species_offered"),
                 user=self.request.user,
             )
         return super().form_valid(form)
@@ -1289,6 +1287,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             # Guarded on the auction setting: EditLot has no instance, so with the field off
             # cleaned_data holds a blank and would wipe the column.
             species = form.cleaned_data.get("species") if self.auction.use_scientific_name else None
+            previous_species = obj.species_id
             species_changed = bool(self.auction.use_scientific_name) and obj.species_id != getattr(species, "pk", None)
             if self.auction.use_scientific_name:
                 obj.species = species
@@ -1303,10 +1302,9 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             if obj.sold and {"auctiontos_winner", "winning_price"} & set(form.changed_data):
                 queue_lot_recorded(self.auction, obj)
             # Teach the cache only here, on a real change: auction admins correcting a lot, revertible
-            # on the gaps page. Seller forms don't.
-            if self.auction.use_scientific_name and species_changed and obj.lot_name:
-                # An admin changing the species is a rejection of the remembered answer, never an accept.
-                record_species_choice(obj.lot_name, species, first_save=False, changed=True, user=self.request.user)
+            # on the gaps page. Seller forms don't. The vote first, so it is about the old answer.
+            if self.auction.use_scientific_name and obj.lot_name:
+                record_species_choice(obj, previous=previous_species, user=self.request.user)
             if species_changed and species and obj.lot_name:
                 remember_species(obj.lot_name, species, source="user", user=self.request.user)
             # add message if the winner or price changed
