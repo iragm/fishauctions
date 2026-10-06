@@ -7,9 +7,9 @@ connector does tools only; prompts and resources reach Claude through a custom c
 ## Worth doing
 
 1. **`_meta["anthropic/requiresUserInteraction"]`** on `send_club_announcement`,
-   `retract_announcement`, `update_auction_setting`, `undo_sale` and `place_bid`: a permission prompt
-   on every call. Never on `check_in` (eighty a night). Reconcile with `destructive` so the two lists
-   don't drift.
+   `retract_announcement`, `update_auction_setting`, `update_auction_dates`, `undo_sale` and
+   `place_bid`: a permission prompt on every call. Never on `check_in` (eighty a night). Reconcile
+   with `destructive` so the two lists don't drift.
 2. **Incremental scope consent (SEP-835).** Connect read-only, return a `401` naming `write` on the
    first write. `mcp/auth.py` must tell "no token" from "token without this scope".
 3. **The library as resources.** A `document://{n}` template over `read_document`, never listed

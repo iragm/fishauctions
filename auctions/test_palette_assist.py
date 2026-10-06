@@ -8,6 +8,7 @@ import time
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
@@ -2207,6 +2208,7 @@ class DriftTests(PaletteAssistTestCase):
         "step_queue": "queue_lot",
         "add_lots": "add_lot",
         "set_lot_species": "edit_lot",
+        "update_auction_dates": "update_auction_setting",
         "add_dropdown_option": "update_auction_setting",
         "remove_dropdown_option": "update_auction_setting",
         "rename_dropdown_option": "update_auction_setting",
@@ -3354,11 +3356,218 @@ class UpdateAuctionSettingTests(RunActionTestCase):
             result = self._run("update_auction_setting", {"setting": setting, "value": "whatever"})
             self.assertNotIn("ok", result, f"{setting} should not be settable out loud")
 
+    def test_a_date_is_sent_to_the_tool_that_sets_dates(self):
+        result = self._run("update_auction_setting", {"setting": "online bidding opens", "value": "2030-01-01T13:00"})
+        self.assertIn("update_auction_dates", result["error"])
+
+    def test_an_online_auction_past_its_end_still_takes_a_setting(self):
+        """The stored end has microseconds the page's date picker drops. Posted back as stored, it read as
+        moved, and ``clean_date_end`` refused every setting once the auction had ended.
+        """
+        self.online_auction.promote_this_auction = False
+        self.online_auction.save()
+        self.assertLess(self.online_auction.date_end, timezone.now())
+        result = self._run(
+            "update_auction_setting", {"auction": self.online_auction.slug, "setting": "minimum bid", "value": "3"}
+        )
+        self.assertTrue(result.get("ok"), result)
+
+    def test_the_history_line_names_only_the_setting_that_changed(self):
+        from auctions.models import AuctionHistory
+
+        self._run("update_auction_setting", {"setting": "minimum bid", "value": "3"})
+        line = AuctionHistory.objects.filter(auction=self.in_person_auction).latest("pk")
+        self.assertEqual(set(line.changed_fields), {"minimum_bid"})
+
     def test_a_new_auction_is_not_promoted(self):
         from auctions.models import Auction
 
         auction = Auction.objects.create(title="Default promotion", created_by=self.user, date_start=timezone.now())
         self.assertFalse(auction.promote_this_auction)
+
+
+#: The fixture auctions' clock in :class:`UpdateAuctionDatesTests`: their creator's.
+CHICAGO = ZoneInfo("America/Chicago")
+
+
+class UpdateAuctionDatesTests(RunActionTestCase):
+    """``update_auction_dates``: the edit page's form, every date in one save, on the auction's own clock."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.userdata.timezone = "America/Chicago"
+        self.user.userdata.save()
+        self.day = (timezone.now() + datetime.timedelta(days=30)).astimezone(CHICAGO).date()
+        auction = self.in_person_auction
+        # Unpromoted, as in UpdateAuctionSettingTests; no end, as the site makes an in-person auction.
+        auction.promote_this_auction = False
+        auction.date_end = None
+        auction.online_bidding = "allow"
+        auction.date_start = self._at(18)
+        auction.lot_submission_start_date = self._at(9, days=-7)
+        auction.lot_submission_end_date = self._at(18)
+        auction.date_online_bidding_starts = self._at(9, days=-7)
+        auction.date_online_bidding_ends = self._at(18)
+        auction.save()
+
+    def _at(self, hour, minute=0, days=0):
+        """That time on the test's day, on Chicago's clock."""
+        day = self.day + datetime.timedelta(days=days)
+        return datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=CHICAGO)
+
+    def _iso(self, hour, minute=0, days=0):
+        """The same, as an agent writes it: no offset."""
+        return self._at(hour, minute, days).strftime("%Y-%m-%dT%H:%M")
+
+    def _dates(self, auction=None, user=None, **params):
+        auction = auction or self.in_person_auction
+        return self._run("update_auction_dates", {"auction": auction.slug, **params}, user=user)
+
+    def _online(self):
+        """The online auction, unpromoted, running for the test's day."""
+        online = self.online_auction
+        online.promote_this_auction = False
+        online.date_start = self._at(9)
+        online.date_end = self._at(20)
+        online.lot_submission_start_date = self._at(9)
+        online.lot_submission_end_date = self._at(19)
+        online.save()
+        return online
+
+    def test_the_request_that_asked_for_it(self):
+        """Online bidding opening at one and lot submission closing at half past three, in one call."""
+        result = self._dates(online_bidding_opens=self._iso(13), lot_submission_closes=self._iso(15, 30))
+        self.assertTrue(result.get("ok"), result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.date_online_bidding_starts, self._at(13))
+        self.assertEqual(self.in_person_auction.lot_submission_end_date, self._at(15, 30))
+        self.assertIn("1:00 PM", result["dates"]["online_bidding_opens"])
+        self.assertIn("3:30 PM", result["summary"])
+
+    def test_the_history_line_names_the_dates_that_changed_and_nothing_else(self):
+        from auctions.models import AuctionHistory
+
+        self._dates(online_bidding_opens=self._iso(13), lot_submission_closes=self._iso(15, 30))
+        line = AuctionHistory.objects.filter(auction=self.in_person_auction).latest("pk")
+        self.assertEqual(set(line.changed_fields), {"date_online_bidding_starts", "lot_submission_end_date"})
+
+    def test_a_time_without_an_offset_is_on_the_auctions_clock_not_the_callers(self):
+        """So a date read off describe_auction is written back as itself."""
+        self.admin_user.userdata.timezone = "Asia/Tokyo"
+        self.admin_user.userdata.save()
+        result = self._dates(user=self.admin_user, starts=self._iso(19))
+        self.assertTrue(result.get("ok"), result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.date_start, self._at(19))
+        self.assertIn("7:00 PM", result["dates"]["starts"])
+
+    def test_an_offset_is_kept(self):
+        utc = self._at(19).astimezone(datetime.UTC)
+        result = self._dates(starts=utc.strftime("%Y-%m-%dT%H:%M+00:00"))
+        self.assertTrue(result.get("ok"), result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.date_start, self._at(19))
+
+    def test_dates_that_depend_on_each_other_are_saved_together(self):
+        """One at a time, lot submission closing after the old end would be pulled back to it."""
+        online = self._online()
+        result = self._dates(online, ends=self._iso(20, days=7), lot_submission_closes=self._iso(19, days=7))
+        self.assertTrue(result.get("ok"), result)
+        online.refresh_from_db()
+        self.assertEqual(online.date_end, self._at(20, days=7))
+        self.assertEqual(online.lot_submission_end_date, self._at(19, days=7))
+
+    def test_a_date_the_save_would_move_is_refused_and_nothing_changes(self):
+        from auctions.models import AuctionHistory
+
+        online = self._online()
+        lines = AuctionHistory.objects.filter(auction=online).count()
+        result = self._dates(online, lot_submission_closes=self._iso(19, days=7))
+        self.assertIn("Nothing was changed", result["error"])
+        self.assertIn("lot_submission_closes", result["error"])
+        online.refresh_from_db()
+        self.assertEqual(online.lot_submission_end_date, self._at(19))
+        self.assertEqual(AuctionHistory.objects.filter(auction=online).count(), lines)
+
+    def test_online_bidding_opening_after_it_closes_is_refused_rather_than_swapped(self):
+        """The page swaps the two, which would have opened bidding the moment it was saved."""
+        result = self._dates(online_bidding_opens=self._iso(20))
+        self.assertIn("online_bidding_closes", result["error"])
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.date_online_bidding_starts, self._at(9, days=-7))
+        self.assertEqual(self.in_person_auction.date_online_bidding_ends, self._at(18))
+
+    def test_a_date_nobody_asked_about_that_moves_to_fit_is_kept_and_said(self):
+        """Starting before lot submission opens pulls the opening back to the start."""
+        result = self._dates(starts=self._iso(18, days=-10))
+        self.assertTrue(result.get("ok"), result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.lot_submission_start_date, self._at(18, days=-10))
+        self.assertIn("Lot submission opens", result["summary"])
+
+    def test_online_bidding_on_an_online_auction_is_its_bidding(self):
+        online = self._online()
+        result = self._dates(online, online_bidding_opens=self._iso(10))
+        self.assertTrue(result.get("ok"), result)
+        online.refresh_from_db()
+        self.assertEqual(online.date_start, self._at(10))
+
+    def test_an_in_person_auction_has_no_end(self):
+        result = self._dates(ends=self._iso(21))
+        self.assertIn("in person", result["error"])
+
+    def test_online_bidding_that_is_switched_off_has_no_dates(self):
+        self.in_person_auction.online_bidding = "disable"
+        self.in_person_auction.save()
+        result = self._dates(online_bidding_opens=self._iso(13))
+        self.assertIn("online_bidding", result["error"])
+
+    def test_a_date_with_no_time_is_asked_about_rather_than_read_as_midnight(self):
+        result = self._dates(lot_submission_closes=self.day.isoformat())
+        self.assertIn("more_info_needed", result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.lot_submission_end_date, self._at(18))
+
+    def test_only_an_admin_can_change_them(self):
+        result = self._dates(user=self.member, starts=self._iso(19))
+        self.assertIn("error", result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.date_start, self._at(18))
+
+    def test_the_same_dates_again_change_nothing(self):
+        from auctions.models import AuctionHistory
+
+        self._dates(starts=self._iso(19))
+        lines = AuctionHistory.objects.filter(auction=self.in_person_auction).count()
+        result = self._dates(starts=self._iso(19))
+        self.assertIn("already", result["summary"])
+        self.assertEqual(AuctionHistory.objects.filter(auction=self.in_person_auction).count(), lines)
+
+    def test_the_pages_warnings_come_back_as_a_note(self):
+        result = self._dates(starts=self._iso(0))
+        self.assertIn("midnight", result["note"])
+        self.in_person_auction.club = Club.objects.create(name="Dates Club", abbreviation="DTC")
+        self.in_person_auction.manage_users_through_club = "checkin"
+        self.in_person_auction.save()
+        result = self._dates(online_bidding_opens=self._iso(13))
+        self.assertIn("check-in mode", result["note"])
+
+    def test_describe_auction_reads_back_the_online_bidding_dates(self):
+        described = self._run("describe_auction", {"auction": self.in_person_auction.slug})["auction"]
+        self.assertIn("6:00 PM", described["online_bidding_closes"])
+        self.in_person_auction.online_bidding = "disable"
+        self.in_person_auction.save()
+        described = self._run("describe_auction", {"auction": self.in_person_auction.slug})["auction"]
+        self.assertNotIn("online_bidding_closes", described)
+
+    def test_every_date_on_the_edit_page_is_one_this_tool_sets(self):
+        """``update_auction_setting`` leaves dates alone by type, so a new one has to be named here."""
+        from django import forms
+
+        with timezone.override("UTC"):
+            form = palette_actions._auction_setting_form(self.user, self.in_person_auction)
+        dates = {name for name, field in form.fields.items() if isinstance(field, forms.DateTimeField)}
+        self.assertEqual(dates, set(palette_actions._AUCTION_DATES.values()))
 
 
 class ClubCheckInTests(PaletteAssistTestCase):

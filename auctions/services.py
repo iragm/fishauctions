@@ -793,6 +793,34 @@ def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
     return True
 
 
+def auction_date_warnings(auction, zone) -> list[str]:
+    """What the edit page says about an auction's dates once they're saved. ``zone`` is the reader's: a
+    start that is midnight only in UTC is not a midnight start.
+    """
+    warnings = []
+    if (
+        auction.use_check_in_mode
+        and not auction.is_online
+        and auction.online_bidding != "disable"
+        and auction.date_online_bidding_starts
+        and auction.date_online_bidding_starts < auction.date_start
+    ):
+        warnings.append(
+            "This auction uses check-in mode, so users can't bid until they've been checked in at the event.  "
+            "Online bidding is set to open before the auction starts, but no one will be able to bid online "
+            "until they've been checked in."
+        )
+    important = auction.date_end if auction.is_online else auction.date_start
+    if important:
+        local = important.astimezone(zone)
+        if local.hour == 0 and local.minute == 0:
+            warnings.append(
+                f"Don't set your {'end' if auction.is_online else 'start'} time to midnight, users will find it "
+                "confusing.  Use 23:59 instead."
+            )
+    return warnings
+
+
 #: Auction settings a copy inherits. A field missing here is reset to the default on copy.
 #: ``tests.AuctionCloneCustomFieldsTests`` fails if the custom fields form outgrows it.
 AUCTION_FIELDS_TO_CLONE = [

@@ -193,6 +193,10 @@ _DESTROYS = {
         "It overwrites one of an auction's settings, such as the minimum bid, the club's cut or "
         "whether the auction is listed publicly."
     ),
+    "update_auction_dates": (
+        "It overwrites an auction's dates, and what follows them moves too: unsold lots' closing times, "
+        "a single pickup location's time and the club calendar's event."
+    ),
     "request_volunteers": (
         "It sends a push notification to everyone at the auction that cannot be unseen, though "
         "cancel_volunteer_request withdraws the request itself."

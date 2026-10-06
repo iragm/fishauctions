@@ -10,6 +10,10 @@ view or service it goes through. This file keeps only choices that look like mis
   `services.PER_RUN_TOS_STATE` blanks the per-run columns otherwise.
 - `update_auction_setting` validates through the whole `AuctionEditForm`, so another field's broken
   rule refuses the change and the answer names it.
+- `update_auction_dates` reads a time with no offset on the **auction's** clock, not the caller's
+  like every other date parameter: it is the zone `describe_auction` reports dates in, so a date read
+  there comes back as itself. And it refuses what the page saves: `signals.on_save_auction` swaps or
+  clamps a date that doesn't fit the others, so a date that wouldn't be saved as asked saves nothing.
 - `join_auction` takes two calls: `agree_to_rules` is explicit.
 - `place_bid` is `bidding.place_bid_and_broadcast`, the only bidding path. `destructive`, no `undo`.
 - `answer_question` covers only the seller's own lots.

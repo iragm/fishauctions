@@ -40,7 +40,7 @@ from django.conf import settings
 from django.contrib.messages.storage.base import BaseStorage
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 from django.forms import model_to_dict
 from django.urls import reverse
@@ -55,6 +55,7 @@ from .documents.search import can_use_library
 from .models import AuctionTOS, ClubMember, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
+    auction_date_warnings,
     check_in_auctiontos,
     clone_lot_values,
     copy_lot_images,
@@ -697,6 +698,12 @@ def local_time(auction, value) -> str | None:
     except Exception:  # pragma: no cover - a naive or broken date is not worth losing the answer to
         logger.exception("Could not localize a date for %s", auction)
         return str(value)
+
+
+def _auction_zone(auction) -> ZoneInfo:
+    """The zone :func:`local_time` speaks in (``Auction.timezone``, the creator's), as a ``ZoneInfo``."""
+    name = str(auction.timezone)
+    return ZoneInfo(name) if name in available_timezones() else ZoneInfo(settings.TIME_ZONE)
 
 
 #: What the history line says when nothing set a surface: the palette on the site itself.
@@ -3616,6 +3623,8 @@ def describe_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         "ends": local_time(auction, auction.date_end),
         "lot_submission_opens": local_time(auction, auction.lot_submission_start_date),
         "lot_submission_closes": local_time(auction, auction.lot_submission_end_date),
+        # In person, online bidding's own dates, while it takes bids online.
+        **{name: when for name, when in _auction_dates(auction).items() if name.startswith("online_bidding_")},
         "lot_submission_open_now": bool(auction.can_submit_lots),
         "over": bool(auction.pretty_much_over),
         "uses_check_in": bool(auction.use_check_in_mode),
@@ -7778,8 +7787,8 @@ def _points_forecast(user, auction) -> dict[str, Any]:
 # --- the rest of what a club does: calendar, announcements, current auction ---
 
 
-def _parse_when(user, value: str):
-    """A person-typed datetime in their timezone: ``(value, error)``. ISO 8601; naive values are the user's zone."""
+def _parse_when(user, value: str, zone: ZoneInfo | None = None):
+    """A person-typed datetime: ``(value, error)``. ISO 8601; a naive value is in ``zone``, else the user's."""
     from django.utils.dateparse import parse_datetime
 
     text = (value or "").strip()
@@ -7789,8 +7798,9 @@ def _parse_when(user, value: str):
     if parsed is None:
         return None, f"I couldn't read “{text}” as a date and time. Use a format like 2026-09-14T19:00."
     if timezone.is_naive(parsed):
-        name = getattr(getattr(user, "userdata", None), "timezone", None)
-        zone = ZoneInfo(name) if name and name in available_timezones() else ZoneInfo(settings.TIME_ZONE)
+        if zone is None:
+            name = getattr(getattr(user, "userdata", None), "timezone", None)
+            zone = ZoneInfo(name) if name and name in available_timezones() else ZoneInfo(settings.TIME_ZONE)
         parsed = parsed.replace(tzinfo=zone)
     return parsed, ""
 
@@ -8340,6 +8350,17 @@ _AUCTION_SETTINGS_NOT_SPOKEN: dict[str, str] = {
     ),
 }
 
+#: ``update_auction_dates``'s parameters, each the ``AuctionEditForm`` field it sets. Named as
+#: ``describe_auction`` reports them, so a date read there is written back under the same name.
+_AUCTION_DATES = {
+    "starts": "date_start",
+    "ends": "date_end",
+    "lot_submission_opens": "lot_submission_start_date",
+    "lot_submission_closes": "lot_submission_end_date",
+    "online_bidding_opens": "date_online_bidding_starts",
+    "online_bidding_closes": "date_online_bidding_ends",
+}
+
 
 def _auction_timezone(user) -> str:
     """The zone ``AuctionEditForm`` parses dates in: the user's if valid, else the site's."""
@@ -8356,14 +8377,37 @@ def _auction_setting_form(user, auction=None, data=None):
     return AuctionEditForm(data, instance=auction, user=user, cloned_from=None, user_timezone=_auction_timezone(user))
 
 
-def _auction_setting_fields(form):
-    """Fields ``update_auction_setting`` may touch. Dates are excluded: they parse in the browser's timezone,
-    which an agent doesn't have.
+def _unchanged_form_data(form) -> dict[str, Any]:
+    """What the edit page posts when nothing on it is touched: each field's initial value, as the browser got it.
+
+    Not ``model_to_dict``: the date pickers drop microseconds, so a date read off the model counted as
+    changed. Every date went into the history line, and an online auction past its end refused every
+    setting (``clean_date_end``).
     """
+    data = {name: form[name].initial for name in form.fields}
+    return {name: ("" if value is None else value) for name, value in data.items()}
+
+
+def _auction_form_problem(auction, form, touched) -> dict[str, Any]:
+    """``_form_problem`` for an ``AuctionEditForm``, naming any field outside ``touched`` whose broken rule
+    blocks the change: the form validates the whole auction.
+    """
+    problem = _form_problem(form)
+    elsewhere = [name for name in form.errors if name not in touched and name in form.fields]
+    if elsewhere and "error" in problem:
+        labels = ", ".join(str(form.fields[name].label or name.replace("_", " ")) for name in elsewhere)
+        problem["error"] = (
+            f"Nothing was changed. {auction.title} won't save while there's a problem with {labels}: {problem['error']}"
+        )
+    return problem
+
+
+def _auction_setting_fields(form):
+    """Fields ``update_auction_setting`` may touch. Not the dates: ``update_auction_dates`` sets those, together."""
     return {
         name: field
         for name, field in form.fields.items()
-        if name not in _AUCTION_SETTINGS_NOT_SPOKEN and not name.startswith("date_") and not name.endswith("_date")
+        if name not in _AUCTION_SETTINGS_NOT_SPOKEN and not isinstance(field, forms.DateTimeField)
     }
 
 
@@ -8421,21 +8465,23 @@ def _set_one_auction_setting(request, auction, params: dict[str, Any]) -> dict[s
         lot_field_name = _resolve_form_setting(lot_fields_form.fields, wanted)
         if lot_field_name:
             return _set_one_lot_field_setting(request, auction, lot_field_name, params)
+        dates = {name: blank.fields[name] for name in _AUCTION_DATES.values()}
+        if _resolve_auction_setting(dates, wanted):
+            return _error(f"“{wanted}” is one of {auction.title}'s dates, which update_auction_dates changes.")
         spelled = wanted.lower().replace("-", "_").replace(" ", "_")
         if spelled in _AUCTION_SETTINGS_NOT_SPOKEN:
             return _error(f"{_AUCTION_SETTINGS_NOT_SPOKEN[spelled]} Open the auction's rules page to change it.")
         known = ", ".join(sorted(set(fields) | set(lot_fields_form.fields)))
         return _need(
             f"I don't know an auction setting called “{wanted}”. I can change: {known}. "
-            "Dates and the rules text are on the auction's own edit page."
+            "Dates are update_auction_dates, and the rules text is on the auction's own edit page."
         )
     raw = params.get("value")
     if raw is None:
         return _need(f"What should {field_name.replace('_', ' ')} be for {auction.title}?")
     form_field = fields[field_name]
     # All fields: the form validates the whole auction.
-    data = model_to_dict(auction, fields=list(blank.fields))
-    data = {key: ("" if value is None else value) for key, value in data.items()}
+    data = _unchanged_form_data(blank)
     if isinstance(form_field, forms.BooleanField):
         value = _preference_boolean(raw)
         if value is None:
@@ -8446,16 +8492,7 @@ def _set_one_auction_setting(request, auction, params: dict[str, Any]) -> dict[s
     was_promoted = auction.promote_this_auction
     form = _auction_setting_form(user, auction, data)
     if not form.is_valid():
-        problem = _form_problem(form)
-        # Another field's error blocks this change too; name it.
-        elsewhere = [name for name in form.errors if name != field_name and name in blank.fields]
-        if elsewhere and "error" in problem:
-            labels = ", ".join(str(blank.fields[name].label or name.replace("_", " ")) for name in elsewhere)
-            problem["error"] = (
-                f"Nothing was changed. {auction.title} won't save while there's a problem with "
-                f"{labels}: {problem['error']}"
-            )
-        return problem
+        return _auction_form_problem(auction, form, {field_name})
     auction = form.save()
     auction.create_history(applies_to="RULES", user=user, action=f"Edited {via(request)}", form=form)
     label = str(form_field.label or field_name.replace("_", " "))
@@ -8526,6 +8563,150 @@ def _set_one_lot_field_setting(request, auction, field_name: str, params: dict[s
             f"{label} didn't stick, because the field it names is switched off. "
             "Turn the field on first, then set its name."
         )
+    return result
+
+
+# --- update_auction_dates ----------------------------------------------------------
+
+
+def _auction_date_names(auction) -> list[str]:
+    """The :data:`_AUCTION_DATES` this auction's edit page shows. In person there is no end, and online
+    bidding has dates only while it is switched on; online, all bidding is online.
+    """
+    if auction.is_online:
+        return ["starts", "ends", "lot_submission_opens", "lot_submission_closes"]
+    names = ["starts", "lot_submission_opens", "lot_submission_closes"]
+    if auction.online_bidding != "disable":
+        names += ["online_bidding_opens", "online_bidding_closes"]
+    return names
+
+
+def _auction_dates(auction) -> dict[str, str]:
+    """Those dates on the auction's own clock."""
+    return {
+        name: local_time(auction, getattr(auction, _AUCTION_DATES[name]))
+        for name in _auction_date_names(auction)
+        if getattr(auction, _AUCTION_DATES[name])
+    }
+
+
+def _date_phrase(name: str) -> str:
+    """How a sentence about one of :data:`_AUCTION_DATES` opens: "It starts", "Lot submission closes"."""
+    return {"starts": "It starts", "ends": "Bidding ends"}.get(name, name.replace("_", " ").capitalize())
+
+
+#: An online auction's bidding is all online, so these are its ``starts`` and ``ends``.
+_ONLINE_BIDDING_IS_THE_AUCTION = {"online_bidding_opens": "starts", "online_bidding_closes": "ends"}
+
+
+def update_auction_dates(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change an auction's dates through ``AuctionEditForm``, all in one save, as the edit page does.
+
+    One save because ``signals.on_save_auction`` fits each date to the others: set one at a time, lot
+    submission closing after an online auction's old end was pulled back to it before the new end
+    arrived. A time with no offset is on the auction's clock, which every auction date is reported on,
+    so a date read off ``describe_auction`` comes back as itself. Other tools' dates are the caller's.
+    """
+    user = request.user
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    if not _is_auction_admin(user, auction):
+        return _error(f"Only admins of {auction.title} can change its dates.")
+    zone = _auction_zone(auction)
+    wanted: dict[str, Any] = {}
+    for name, field_name in _AUCTION_DATES.items():
+        said = _str(params, name) or _str(params, field_name)
+        if not said:
+            continue
+        when, problem = _parse_when(user, said, zone)
+        if problem:
+            return _error(problem)
+        if not re.search(r"\d[T ]\d", said):
+            # A bare date parses as midnight, which nobody means by "closes on the 11th".
+            return _need(f"“{said}” for {name} has no time of day. Give one, like {said}T13:00.")
+        wanted[name] = when
+    if not wanted:
+        return _need(f"Which of {auction.title}'s dates should change, and to when?")
+    if auction.is_online:
+        for name, same in _ONLINE_BIDDING_IS_THE_AUCTION.items():
+            if name not in wanted:
+                continue
+            when = wanted.pop(name)
+            if wanted.setdefault(same, when) != when:
+                return _error(f"{auction.title} is online, so {name} and {same} are the same date. Give one.")
+    shown = _auction_date_names(auction)
+    if "ends" in wanted and "ends" not in shown:
+        return _error(f"{auction.title} is in person, so it has no end time: it ends when its lots are sold.")
+    if any(name not in shown for name in wanted):
+        return _error(
+            f"{auction.title} doesn't take bids online, so online bidding has no dates to change. "
+            "Switching it on is update_auction_setting's online_bidding."
+        )
+    with timezone.override(_auction_timezone(user)):
+        return _set_auction_dates(request, auction, zone, wanted)
+
+
+def _set_auction_dates(request, auction, zone: ZoneInfo, wanted: dict[str, Any]) -> dict[str, Any]:
+    """The body of :func:`update_auction_dates`, inside the timezone the form wants.
+
+    Kept only if every date asked for was saved as asked. The page keeps whatever the signal makes of
+    it: online bidding set to open after it closes swaps the two, which opens bidding the moment it is
+    saved. A date nobody asked about that moves to fit is kept, and said.
+    """
+    user = request.user
+    blank = _auction_setting_form(user, auction)
+    data = _unchanged_form_data(blank)
+    before = {name: data[field_name] or None for name, field_name in _AUCTION_DATES.items()}
+    data.update({_AUCTION_DATES[name]: when for name, when in wanted.items()})
+    form = _auction_setting_form(user, auction, data)
+    if not form.is_valid():
+        return _auction_form_problem(auction, form, {_AUCTION_DATES[name] for name in wanted})
+    if not form.has_changed():
+        return _ok(f"Those are already {auction.title}'s dates.", auction=auction.slug, dates=_auction_dates(auction))
+    try:
+        with transaction.atomic():
+            auction = form.save()
+            after = {name: getattr(auction, field_name) for name, field_name in _AUCTION_DATES.items()}
+            moved = [name for name in _auction_date_names(auction) if after[name] != wanted.get(name, before[name])]
+            refused = [name for name in moved if name in wanted]
+            if refused:
+                transaction.set_rollback(True)
+            else:
+                auction.create_history(applies_to="RULES", user=user, action=f"Edited {via(request)}", form=form)
+    except forms.ValidationError as exc:
+        # As AuctionUpdate.form_valid: the save re-checks club management under a lock.
+        return _error(" ".join(exc.messages))
+    if refused:
+        auction.refresh_from_db()
+        would = "; ".join(
+            f"{name} to {local_time(auction, after[name])}"
+            + (f" rather than {local_time(auction, wanted[name])}" if name in wanted else "")
+            for name in moved
+        )
+        refusal = _error(
+            f"Nothing was changed: to fit {auction.title}'s other dates, saving would have moved {would}. "
+            "Give the dates it has to fit around in the same call."
+        )
+        refusal["dates"] = _auction_dates(auction)
+        return refusal
+    said = []
+    for name in _auction_date_names(auction):
+        if name in wanted:
+            passed = ", which has already passed" if after[name] < timezone.now() else ""
+            said.append(f"{_date_phrase(name)} {local_time(auction, after[name])}{passed}.")
+        elif name in moved:
+            said.append(f"{_date_phrase(name)} {local_time(auction, after[name])} now, moved to fit.")
+    result = _ok(
+        _sentence(f"Changed {auction.title}'s dates.", *said),
+        auction=auction.slug,
+        dates=_auction_dates(auction),
+        timezone=zone.key,
+        followups=[{"label": f"{auction.title}'s dates and rules", "url": auction.get_edit_url()}],
+    )
+    warnings = auction_date_warnings(auction, zone)
+    if warnings:
+        result["note"] = " ".join(warnings)
     return result
 
 
@@ -11475,7 +11656,8 @@ register(
             "the spring auction', 'create next month's auction' and 'make a copy of last year's "
             "auction for March 14th' mean. It cannot create a first auction from nothing — the "
             "answer says so and links to the page that can. The new auction is NOT listed publicly "
-            "until it is promoted (update_auction_setting), and its dates are worth checking."
+            "until it is promoted (update_auction_setting), and its other dates are shifted from the "
+            "copied auction's, so worth checking; update_auction_dates changes them."
         ),
         params={
             "title": "string, required. What to call it, e.g. 'Spring Auction 2027'.",
@@ -13059,8 +13241,8 @@ register(
         description=(
             "Change one of an auction's settings by name — whether it is listed publicly, the "
             "minimum bid, the club's cut, how many lots each person may bring, whether buy now is "
-            "allowed. Auction admins only. Dates and the rules text are not changeable here; send "
-            "the user to the auction's edit page for those. To read the settings instead, use "
+            "allowed. Auction admins only. Dates are update_auction_dates; the rules text is only "
+            "changeable on the auction's edit page. To read the settings instead, use "
             "describe_auction."
         ),
         params={
@@ -13075,6 +13257,39 @@ register(
         aliases={"name"},
         confirm_template="Change an auction setting",
         examples=["list this auction publicly", "stop promoting this auction", "set the minimum bid to 2"],
+        needs=NEEDS_AUCTION_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="update_auction_dates",
+        description=(
+            "Change when an auction happens: when it starts, when lot submission opens and closes, when "
+            "an online auction's bidding ends, and when an in-person auction's online bidding opens and "
+            "closes. Give only the dates that change. They are saved together or not at all, and the "
+            "answer reads back every date, including any the save moved to fit. A time without an offset "
+            "is on the auction's own clock, the one describe_auction gives its dates in. Auction admins only."
+        ),
+        params={
+            "starts": (
+                "string, optional. When it starts, as ISO 8601, e.g. '2026-10-11T13:00'. For an online "
+                "auction this is when bidding opens."
+            ),
+            "ends": "string, optional. When an online auction's bidding ends. An in-person auction has no end.",
+            "lot_submission_opens": "string, optional. When people can start adding lots.",
+            "lot_submission_closes": "string, optional. When people can no longer add lots; admins still can.",
+            "online_bidding_opens": "string, optional. When an in-person auction starts taking bids online.",
+            "online_bidding_closes": "string, optional. When an in-person auction stops taking bids online.",
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        destructive=True,
+        idempotent=True,
+        resolver=update_auction_dates,
+        aliases=set(_AUCTION_DATES.values()),
+        confirm_template="Change the dates of an auction",
+        examples=["online bidding opens October 11 at 1 PM", "lot submission closes at 3:30 that afternoon"],
         needs=NEEDS_AUCTION_ADMIN,
     )
 )
@@ -15140,6 +15355,7 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "rotate_lot_image": _PRECISE_TARGET,
     # Settings, which ordinary search already answers better than a model can.
     "update_auction_setting": _FIND_THE_FIELD,
+    "update_auction_dates": _FIND_THE_FIELD,
     "update_club_setting": _FIND_THE_FIELD,
     "update_preferences": _FIND_THE_FIELD,
     "update_printing_preferences": _FIND_THE_FIELD,
