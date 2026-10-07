@@ -11628,8 +11628,8 @@ class UserData(CachedPropertiesMixin, models.Model):
         default=get_default_voice_cloud_enabled, verbose_name="Listen through OpenAI"
     )
     voice_cloud_enabled.help_text = (
-        "Let this user's web browser listen through OpenAI on Set lot winners (Voice grammar's cloud model, "
-        "on this site's key). The app listens without it."
+        "Let this user listen through OpenAI on Set lot winners, in a web browser or in the app (Voice "
+        "grammar's cloud model, on this site's key). The app's own recognizer needs neither."
     )
     is_trusted = models.BooleanField(default=get_default_is_trusted)
     is_trusted.help_text = "Trusted users can promote auctions, accept payments, and send invoice notification emails"
@@ -14018,8 +14018,9 @@ class VoiceGrammar(models.Model):
         max_length=40, blank=True, default=voice.CLOUD_LIVE, choices=voice.CLOUD_MODEL_CHOICES
     )
     cloud_model.help_text = (
-        "Listen through OpenAI in a web browser (a laptop at the auction, or a phone's browser). Charged "
-        "to this site's OpenAI key per minute of listening. Off leaves only the app."
+        "Listen through OpenAI, in a web browser (a laptop at the auction, or a phone's browser) or in the "
+        "app. Charged to this site's OpenAI key per minute of listening. Off leaves only the app's own "
+        "recognizer, which needs neither this nor the account setting."
     )
 
     auto_submit_on_sold = models.BooleanField(default=True)

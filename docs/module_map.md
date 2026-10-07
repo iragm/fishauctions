@@ -187,7 +187,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14441 lines)
+- **`models.py`** (14442 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -336,9 +336,9 @@ this only quotes its opening sentence.
 - **`test_cache_hygiene.py`** (132 lines)
   Guards against tests that clear a cache shared with every other parallel worker.
   `find_test_modules`, `check_source`, `CachesAreNotSharedBetweenWorkersTests`, `CacheHygieneCheckerTests`
-- **`test_camera_scanner.py`** (140 lines)
+- **`test_camera_scanner.py`** (191 lines)
   Guards the iPhone code path through the camera barcode scanner.
-  `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`
+  `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`, `CameraScannerReadingTests`, `LotQueuePreviewTests`
 - **`test_celery_tasks.py`** (1142 lines)
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
@@ -628,7 +628,7 @@ this only quotes its opening sentence.
 - **`test_userdata.py`** (312 lines)
   ``UserData`` and ``AuctionTOS`` properties, and merging one user into another.
   `AuctionTOSPropertyTests`, `UserDataPropertyTests`, `UserDataMergeIntoTests`
-- **`test_voice.py`** (862 lines)
+- **`test_voice.py`** (907 lines)
   Voice-driven set winners.
 - **`test_voice_interpreter.py`** (427 lines)
   Reading what an auctioneer said as a sale (``auctions.voice_interpreter``).
@@ -644,7 +644,7 @@ this only quotes its opening sentence.
 - **`tests.py`** (329 lines)
   Shared test fixture and helpers every other test module builds on: StandardTestCase, WritableMediaRoot, patch_views.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
-- **`tests_selenium.py`** (1139 lines)
+- **`tests_selenium.py`** (1573 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
 - **`urls.py`** (1353 lines)
   Every URL on the site, and the one place a new one has to be declared.
@@ -653,7 +653,7 @@ this only quotes its opening sentence.
   `route_name`, `reach_by_route`, `friction_by_form`, `abandoned_durations`, `worst_fields`, `buyer_funnel`, `funnel_referrers`
 - **`validators.py`** (19 lines)
   `validate_username_no_at_symbol`
-- **`voice.py`** (353 lines)
+- **`voice.py`** (354 lines)
   Voice-driven set winners: the grammar, the set-winners page's settings, and the OpenAI session.
 - **`voice_interpreter.py`** (1534 lines)
   Voice set-winners: what the auctioneer said, read as a sale.
@@ -1018,7 +1018,7 @@ Every view on the site, split by the part of it the view belongs to.
   The usability dashboards: measurements, the buyer funnel, and club outreach.
   `AdminUsability`, `AdminClubHealth`, `ClubMarkContacted`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminLifecycle`, `AdminEarlyAdds`, `AdminFreeTextUsage`, `AdminSessionReplay`
 - **`voice.py`** (188 lines)
-  Voice on set lot winners: reading what was heard, opening the browser's OpenAI session, and the log.
+  Voice on set lot winners: reading what was heard, opening the page's OpenAI session, and the log.
   `VoiceCommandLogView`, `VoiceInterpretView`, `VoiceCloudSessionView`
 - **`webhooks.py`** (971 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.

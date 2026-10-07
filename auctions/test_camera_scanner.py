@@ -138,3 +138,54 @@ class QuickCheckoutCameraStartsOffTests(SimpleTestCase):
         # Scan a card, tap to pay, come back and scan the next: the camera has to be where it was
         # left, which is why the preference is stored rather than per page load.
         self.assertIn("setItem(CAMERA_PREFERENCE_KEY", self.source)
+
+
+class CameraScannerReadingTests(SimpleTestCase):
+    """What the scanner reads, and how fast. auctions.tests_selenium.LotQueueCameraTests runs it in Chrome."""
+
+    def setUp(self):
+        self.code = "\n".join(line for line in SCANNER.read_text().splitlines() if not line.lstrip().startswith("//"))
+
+    def test_zxing_reads_our_own_frame_not_its_inverted_one(self):
+        """Handed a <video>, ZXing's browser reader inverts every other buffer it builds, and a TRY_HARDER
+        frame builds two: every frame it read was the negative, so an iPhone never read a label.
+        """
+        self.assertNotIn("BrowserMultiFormatReader", self.code)
+        self.assertIn("new zxingLib.HTMLCanvasElementLuminanceSource(canvas)", self.code)
+
+    def test_zxing_decodes_only_what_the_preview_shows(self):
+        self.assertIn("drawImage(video, region.x, region.y, region.width, region.height", self.code)
+        self.assertIn("FALLBACK_MAX_EDGE", self.code)
+
+    def test_try_harder_on_alternate_frames(self):
+        self.assertIn("zxingReaders[fallbackFrames % 2]", self.code)
+
+    def test_a_page_can_narrow_the_formats(self):
+        self.assertIn("options.formats", self.code)
+        self.assertIn("new BarcodeDetector({ formats: formats })", self.code)
+        lot_queue = (REPO_ROOT / "auctions" / "templates" / "auctions" / "lot_queue.html").read_text()
+        self.assertIn("formats: ['qr_code']", lot_queue)
+
+    def test_every_code_in_a_native_frame(self):
+        self.assertNotIn("barcodes[0]", self.code)
+
+    def test_duplicates_are_suppressed_per_value(self):
+        self.assertIn("var recent = new Map()", self.code)
+        self.assertNotIn("lastValue", self.code)
+
+    def test_a_native_detector_that_refuses_every_read_hands_over_to_zxing(self):
+        """Chrome without Google Play services builds a BarcodeDetector that rejects every frame."""
+        self.assertIn("NATIVE_FAILURES_BEFORE_FALLBACK", self.code)
+        self.assertIn("switchToFallback(thisRun)", self.code)
+
+
+class LotQueuePreviewTests(SimpleTestCase):
+    """A phone's preview is one a square QR code fits in."""
+
+    def test_phones_get_a_four_by_three_preview(self):
+        css = (REPO_ROOT / "auctions" / "static" / "css" / "auction_site.css").read_text()
+        rule = css.split(".lot-queue-camera { max-width: 480px; aspect-ratio: 3 / 1; }")[1].split("}")[0]
+        self.assertIn("(orientation: portrait)", rule)
+        self.assertIn("aspect-ratio: 4 / 3", rule)
+        lot_queue = (REPO_ROOT / "auctions" / "templates" / "auctions" / "lot_queue.html").read_text()
+        self.assertIn('class="lot-queue-camera', lot_queue)

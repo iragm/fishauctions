@@ -172,9 +172,9 @@
     Voice. The phone or laptop sits by the auctioneer and listens. Everything heard since the lot on the
     block came up (the window) goes to the server, which reads it as a sale (auctions/voice_interpreter.py)
     and answers with commands for the three fields and the save. In the app, the app's recognizer listens
-    and pushes transcripts in (the WebView has no microphone of its own); in a browser, the page streams
-    its microphone to OpenAI. The page still owns the form: validation, save, undo and the queue are the
-    same ones a person's fingers use.
+    and pushes transcripts in, unless Listen with says OpenAI; in a browser, and in the app then, the page
+    streams its microphone to OpenAI. The page still owns the form: validation, save, undo and the queue
+    are the same ones a person's fingers use.
   {% endcomment %}
   const voiceConfig = JSON.parse(document.getElementById('voice-config').textContent);
   const voiceSlotToField = {lot: 'lot', bidder: 'winner', price: 'price'};
@@ -480,12 +480,16 @@
   };
 
   {% comment %}
-    The app's recognizer: a phrase at a time, as transcripts. A final one ends the phrase; so does the
-    app re-arming for the next (a `state` event), which matters because a build that already acted on a
-    phrase's words marks its final as partial. Its own `command` events are ignored: the server reads.
+    The app's recognizer: a phrase at a time, as transcripts. A phrase's partials and its final share a
+    `phrase_id`, and `final` is its last word whatever `partial` says (a build that already acted on a
+    phrase's words still marks its final partial). The next phrase's id ends the one held, and so does the
+    app re-arming (a `state` while listening), stopping or failing: it never continues a phrase. A build
+    that sends no `final` has a partial end the phrase once it stops changing. Its own `command` events
+    are ignored: the server reads.
   {% endcomment %}
   const voicePhraseSettleMs = 4000;
   let voicePhrase = '';
+  let voicePhraseId = null;
   let voicePhraseTimer = null;
 
   function voicePhraseDone() {
@@ -496,21 +500,26 @@
   }
 
   function voiceAppTranscript(event) {
+    const id = (event.phrase_id === undefined || event.phrase_id === null) ? null : event.phrase_id;
+    if (id !== null && voicePhrase && id !== voicePhraseId) { voicePhraseDone(); }
+    voicePhraseId = id;
     voiceStatus(event.text ? 'heard: "' + event.text + '"' : '');
     voicePhrase = String(event.text || '');
     clearTimeout(voicePhraseTimer);
-    if (event.partial) {
-      voicePhraseTimer = setTimeout(voicePhraseDone, voicePhraseSettleMs);
-    } else {
+    const sendsFinal = typeof event.final === 'boolean';
+    if (sendsFinal ? event.final : !event.partial) {
       voicePhraseDone();
+    } else if (!sendsFinal) {
+      voicePhraseTimer = setTimeout(voicePhraseDone, voicePhraseSettleMs);
     }
   }
 
   {% comment %}
-    A browser's microphone, through OpenAI. Django mints a key that opens one session (the site's own
-    never leaves the server), the microphone goes over WebRTC, and transcripts come back on the data
-    channel. The live model leaves ending a turn to us, and where it ends matters: cut mid-word, the
-    model guesses the rest -- "one oh fi-" came back "one oh four", "forty-fo-" came back "forty-five".
+    The page's own microphone, through OpenAI: a browser's, or the app's once it lets the page have it.
+    Django mints a key that opens one session (the site's own never leaves the server), the microphone
+    goes over WebRTC, and transcripts come back on the data channel. The live model leaves ending a turn
+    to us, and where it ends matters: cut mid-word, the model guesses the rest -- "one oh fi-" came back
+    "one oh four", "forty-fo-" came back "forty-five".
     So a turn ends where the microphone goes quiet: under twice the room's own noise floor (the level
     the last three seconds spent a fifth of their time under -- the quietest instant is too quiet in a
     noisy room, and pauses vanish) for long enough to be a breath, not a gap between syllables. Words
@@ -551,8 +560,11 @@
         voiceCloud.stream = await navigator.mediaDevices.getUserMedia({audio: true});
       }
     } catch (error) {
+      // In the app there's no site permission to allow: the app has already pointed at the phone's settings.
       voiceCloudFail(error && error.name === 'NotAllowedError'
-        ? 'The microphone is blocked. Allow it for this site, then tap Listen again.'
+        ? (voiceBridge()
+          ? 'The microphone is blocked. Allow the microphone for the app, then tap Listen again.'
+          : 'The microphone is blocked. Allow it for this site, then tap Listen again.')
         : 'No microphone found');
       return;
     }
@@ -770,8 +782,74 @@
   }
 
   {% comment %}
+    Listen with. A browser has OpenAI only. In the app, the app's own recognizer (free), or OpenAI on this
+    page's own microphone, which an app answering web_microphone lets it have: per device, like the rest
+    of the panel, and the phone unless OpenAI was chosen here. An app whose recognizer can't run here
+    (supported: false) leaves OpenAI, when that's on.
+  {% endcomment %}
+  const voiceSourceKey = 'voiceListenWith';
+  let voiceSourceChosen = null;
+  let voiceAppRecognizer = false;
+  let voiceAppMicrophone = false;
+
+  function voiceSource() {
+    if (!voiceBridge()) { return 'openai'; }
+    if (!voiceAppMicrophone || !voiceCloudSupported()) { return 'phone'; }
+    if (!voiceAppRecognizer) { return 'openai'; }
+    if (voiceSourceChosen === null) {
+      try { voiceSourceChosen = window.localStorage.getItem(voiceSourceKey); } catch (err) { voiceSourceChosen = null; }
+    }
+    return voiceSourceChosen === 'openai' ? 'openai' : 'phone';
+  }
+
+  function voiceRenderSource() {
+    const source = voiceSource();
+    $("#voice-source-" + source).prop('checked', true);
+    // These two are the app's recognizer's own.
+    $("#voice-phone-settings").toggleClass('d-none', source !== 'phone');
+  }
+
+  function voiceStartListening() {
+    if (voiceSource() === 'openai') {
+      voiceCloudStart();
+      return;
+    }
+    const button = $("#voice-btn");
+    button.prop('disabled', true);
+    voiceBridge().callHandler('voiceStart', {auction: '{{ auction.slug|escapejs }}'}).then(function (state) {
+      button.prop('disabled', false);
+      voiceRenderState(state);
+      if (state && state.listening) { voiceShowFirstRunHelp(); }
+      if (state && state.error) { voiceStatus(state.error); }
+    }).catch(function () {
+      button.prop('disabled', false);
+      voiceStatus('Voice is not available on this phone');
+    });
+  }
+
+  // Resolves once whichever was listening has stopped.
+  function voiceStopListening() {
+    const bridge = voiceBridge();
+    if (voiceCloud.wanted || !bridge) {
+      voiceCloudStop();
+      return Promise.resolve();
+    }
+    const button = $("#voice-btn");
+    button.prop('disabled', true);
+    return bridge.callHandler('voiceStop').then(function (state) {
+      button.prop('disabled', false);
+      voiceRenderState(state);
+    }).catch(function () {
+      button.prop('disabled', false);
+      voiceStatus('Voice is not available on this phone');
+    });
+  }
+
+  {% comment %}
     The app pushes events in with evaluateJavascript, so this has to exist before anyone taps Listen.
-    Unknown event types are ignored for the same reason unknown slots are.
+    Unknown event types are ignored for the same reason unknown slots are. While OpenAI listens, the
+    app's recognizer is off, and what it still sends (the state as it lets go of the microphone) isn't
+    about this.
   {% endcomment %}
   window.fishauctionsVoice = {
     onEvent: function (event) {
@@ -779,10 +857,10 @@
       if (typeof event === 'string') {
         try { event = JSON.parse(event); } catch (err) { return; }
       }
-      if (!event || !event.type) { return; }
+      if (!event || !event.type || voiceCloud.wanted) { return; }
       if (event.type === 'state') {
-        // listening while already listening is the app starting its next phrase.
-        if (event.listening && voiceListening && voicePhrase) { voicePhraseDone(); }
+        // listening while already listening is the app starting its next phrase; not listening, it stopped.
+        if (voicePhrase && (voiceListening || !event.listening)) { voicePhraseDone(); }
         voiceRenderState(event);
       } else if (event.type === 'level') {
         const level = Math.max(0, Math.min(1, Number(event.level) || 0));
@@ -790,6 +868,7 @@
       } else if (event.type === 'transcript') {
         voiceAppTranscript(event);
       } else if (event.type === 'error') {
+        if (voicePhrase) { voicePhraseDone(); }
         // Reset the button first: rendering the state clears the status line, and the error has to stay.
         voiceRenderState({listening: false});
         voiceStatus(event.message || event.code || 'Voice error');
@@ -815,25 +894,7 @@
     if (!voiceConfig.enabled) { return; }
     const bridge = voiceBridge();
     $("#voice-btn").on('click', function () {
-      const button = $(this);
-      if (!bridge) {
-        if (voiceCloud.wanted) { voiceCloudStop(); } else { voiceCloudStart(); }
-        return;
-      }
-      button.prop('disabled', true);
-      const stopping = voiceListening;
-      const call = stopping
-        ? bridge.callHandler('voiceStop')
-        : bridge.callHandler('voiceStart', {auction: '{{ auction.slug|escapejs }}'});
-      call.then(function (state) {
-        button.prop('disabled', false);
-        voiceRenderState(state);
-        if (!stopping && state && state.listening) { voiceShowFirstRunHelp(); }
-        if (!stopping && state && state.error) { voiceStatus(state.error); }
-      }).catch(function () {
-        button.prop('disabled', false);
-        voiceStatus('Voice is not available on this phone');
-      });
+      if (voiceCloud.wanted || voiceListening) { voiceStopListening(); } else { voiceStartListening(); }
     });
     $("#voice-first-run-dismiss").on('click', function () {
       $("#voice-first-run").addClass('d-none');
@@ -847,6 +908,13 @@
       $(this).attr('aria-expanded', opening ? 'true' : 'false');
       // Ask again on open: bias_supported turns true the first time Listen is tapped.
       if (opening && bridge) { bridge.callHandler('voiceGetSettings').then(voiceRenderSettings).catch(function () {}); }
+    });
+    $("input[name='voice-source']").on('change', function () {
+      voiceSourceChosen = this.value;
+      try { window.localStorage.setItem(voiceSourceKey, this.value); } catch (err) {}
+      voiceRenderSource();
+      // Changed while listening: carry on listening, the new way.
+      if (voiceCloud.wanted || voiceListening) { voiceStopListening().then(voiceStartListening); }
     });
     {% endif %}
     // On release, not on every input event: a drag is dozens of platform calls.
@@ -868,10 +936,20 @@
       if (voicePending) { voiceInterpret(); }
     });
     if (bridge) {
-      // supported:false is an app build with no voice handlers: no button rather than a dead one.
+      // supported: the app's recognizer can listen here; web_microphone: the app lets this page's own
+      // microphone through, for OpenAI. Neither (an app build with no voice handlers, say): no button
+      // rather than a dead one.
       bridge.callHandler('voiceGetState').then(function (state) {
-        if (!state || !state.supported) { return; }
+        if (!state) { return; }
+        voiceAppRecognizer = !!state.supported;
+        voiceAppMicrophone = !!state.web_microphone;
+        if (!voiceAppRecognizer && voiceSource() !== 'openai') { return; }
         $("#voice-btn").removeClass('d-none');
+        if (voiceAppRecognizer && voiceAppMicrophone && voiceCloudSupported()) {
+          $("#voice-source").removeClass('d-none');
+          $("#voice-settings-btn").removeClass('d-none');
+        }
+        voiceRenderSource();
         voiceRenderState(state);
       }).catch(function () {});
     } else if (voiceCloudSupported()) {
@@ -955,9 +1033,10 @@ $(document).ready(function() {
 {% if voice_config %}
 {% comment %}
   Voice input, hidden until something can listen. In the app that's once it answers voiceGetState() with
-  supported: true -- builds that predate the voice handlers, or phones with no recognizer, would otherwise
-  show a button that does nothing. {supported: true, permission: false} is the normal first visit: the
-  tap is what earns the OS prompt. In a browser it's a microphone and OpenAI listening switched on.
+  supported: true, or with web_microphone: true while OpenAI listening is on -- builds that predate the
+  voice handlers, or phones with no recognizer, would otherwise show a button that does nothing.
+  {supported: true, permission: false} is the normal first visit: the tap is what earns the OS prompt.
+  In a browser it's a microphone and OpenAI listening switched on.
 {% endcomment %}
 <button type="button" id="voice-btn" class="btn btn-sm btn-primary ms-2 d-none"><i class="bi bi-mic"></i> Listen</button>
 {% if request.is_mobile_app %}
@@ -981,9 +1060,27 @@ $(document).ready(function() {
 
   The slider deliberately shows no number. 0.72 means nothing to anyone; "how often do you want to
   retype it" is the actual question, and the ends of the track ask it.
+
+  Listen with is the page's own choice, kept in this browser's storage, and only there for an account
+  OpenAI listening is on for (voice_config.cloud).
 {% endcomment %}
 {% if request.is_mobile_app %}
 <div id="voice-settings" class="voice-settings card card-body mt-2 d-none">
+  {% if voice_config.cloud %}
+  <fieldset id="voice-source" class="mb-3 d-none">
+    <legend class="form-label fs-6 mb-1">Listen with</legend>
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="voice-source" id="voice-source-phone" value="phone">
+      <label class="form-check-label" for="voice-source-phone">This phone</label>
+      <small class="text-muted d-block">Free.</small>
+    </div>
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="voice-source" id="voice-source-openai" value="openai">
+      <label class="form-check-label" for="voice-source-openai">OpenAI</label>
+      <small class="text-muted d-block">Charged to the site per minute of listening.</small>
+    </div>
+  </fieldset>
+  {% endif %}
   <label for="voice-confident" class="form-label mb-1">Filling in fields</label>
   <input type="range" class="form-range" id="voice-confident" min="0.6" max="0.9" step="0.01">
   <div class="d-flex justify-content-between">
@@ -991,16 +1088,18 @@ $(document).ready(function() {
     <small class="text-muted">Only when you're sure</small>
   </div>
   <small class="text-muted mt-1">How certain the app must be before it fills a field without flagging it. Lower catches more, and gets more wrong; higher means retyping more often.</small>
-  <div class="form-check mt-3">
-    <input class="form-check-input" type="checkbox" id="voice-on-device">
-    <label class="form-check-label" for="voice-on-device">Process on this phone</label>
-    <small class="text-muted d-block">Faster and works without a connection. Uncheck for better accuracy.</small>
-  </div>
-  <div class="form-check mt-3">
-    <input class="form-check-input" type="checkbox" id="voice-bias-low">
-    <label class="form-check-label" for="voice-bias-low">Bias towards lower numbers</label>
-    <small class="text-muted d-block">If in doubt, guess 17 instead of 70. Only for sell prices.</small>
-    <small class="text-muted d-block" id="voice-bias-note"></small>
+  <div id="voice-phone-settings">
+    <div class="form-check mt-3">
+      <input class="form-check-input" type="checkbox" id="voice-on-device">
+      <label class="form-check-label" for="voice-on-device">Process on this phone</label>
+      <small class="text-muted d-block">Faster and works without a connection. Uncheck for better accuracy.</small>
+    </div>
+    <div class="form-check mt-3">
+      <input class="form-check-input" type="checkbox" id="voice-bias-low">
+      <label class="form-check-label" for="voice-bias-low">Bias towards lower numbers</label>
+      <small class="text-muted d-block">If in doubt, guess 17 instead of 70. Only for sell prices.</small>
+      <small class="text-muted d-block" id="voice-bias-note"></small>
+    </div>
   </div>
   <small class="text-muted mt-3">Saved on this phone only, not to your account.</small>
 </div>

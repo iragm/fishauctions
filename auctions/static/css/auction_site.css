@@ -1001,6 +1001,14 @@ body.has-unsaved-changes-bar {
 .queue-kiosk-controls { opacity: 0.35; transition: opacity 0.2s; }
 .queue-kiosk-controls:hover, .queue-kiosk-controls:focus-within { opacity: 1; }
 
+/* The lot queue's camera preview. A 3:1 strip on a phone is about 120px tall, so a square QR code had
+   to be held far off to fit; and a phone held upright sends an upright frame, of which the strip
+   showed (and so read) under a fifth. */
+.lot-queue-camera { max-width: 480px; aspect-ratio: 3 / 1; }
+@media (max-width: 575.98px), (orientation: portrait) {
+    .lot-queue-camera { aspect-ratio: 4 / 3; }
+}
+
 /* A button whose htmx request is in flight swaps its icon for a spinner. htmx adds .htmx-request to
    the element making the request; its own indicator style only fades, which would leave a gap. */
 .htmx-busy-show { display: none; }

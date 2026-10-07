@@ -1,4 +1,4 @@
-"""Voice on set lot winners: reading what was heard, opening the browser's OpenAI session, and the log.
+"""Voice on set lot winners: reading what was heard, opening the page's OpenAI session, and the log.
 
 The set-winners page owns the form and the microphone; these answer it. :mod:`auctions.voice_interpreter`
 does the reading, and :mod:`auctions.voice` holds the grammar and the OpenAI session settings.
@@ -159,7 +159,7 @@ class VoiceCloudSessionView(LoginRequiredMixin, AuctionViewMixin, View):
     def post(self, request, *args, **kwargs):
         model = voice.cloud_model(VoiceGrammar.load(), request.user)
         if not model:
-            return JsonResponse({"error": "Listening in the browser is turned off"}, status=404)
+            return JsonResponse({"error": "Listening through OpenAI is turned off"}, status=404)
         key = f"voice-cloud:{request.user.pk}"
         cache.add(key, 0, 3600)
         try:

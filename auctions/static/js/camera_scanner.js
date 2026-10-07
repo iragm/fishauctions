@@ -1,26 +1,33 @@
 // Shared camera barcode scanner used by the quick check-in, quick checkout and lot queue pages.
 //
 // One place owns the barcode reading -- native BarcodeDetector with a ZXing fallback, plus
-// per-frame duplicate suppression -- so it can't drift between the pages. Each page makes its own
+// per-value duplicate suppression -- so it can't drift between the pages. Each page makes its own
 // controller with its <video> element and a callback that decides what a decoded value means:
 // check a member in, or pull up an invoice.
 //
 //   const scanner = window.createCameraScanner({
 //     video: document.getElementById("scanner-video"),
 //     onCode: async (value) => { ... },     // called with each newly-decoded value
-//     onStatus: (message, level) => { ... } // optional; camera state changes
+//     onStatus: (message, level) => { ... }, // optional; camera state changes
+//     formats: ["qr_code"],                  // optional; fewer is faster, ZXing most of all
 //   });
 //   await scanner.start();  // getUserMedia + decode loop
 //   await scanner.stop();   // releases the camera
-//   scanner.resetDuplicate(); // forget the last value so the same code can fire again
+//   scanner.resetDuplicate(); // forget recent values so the same code can fire again
 //
-// onCode is awaited, so a slow handler won't be re-entered for the same frame.
+// onCode is awaited, so a slow handler won't be re-entered -- and the camera reads nothing until it
+// returns. A page that posts every read (the lot queue) returns at once and reports the answer when
+// it lands.
+//
+// Only what the preview shows is read. The previews are object-fit: cover boxes, so most of each
+// frame is cropped off screen, and a code out there is one the operator never aimed at.
 //
 // iPhones take a completely different path through this file: Safari has never shipped
 // BarcodeDetector, so every iOS device decodes in JavaScript with ZXing while Android Chrome
 // decodes natively and never touches that code. Anything marked "fallback" is therefore iOS-only,
-// and so are its bugs. window.cameraScannerDiagnostics() dumps what this device supports -- see
-// the "Camera not working?" panel on the quick check-in page.
+// and so are its bugs. (The app gives its WebView a BarcodeDetector backed by the phone's own
+// reader, so in the app an iPhone takes the native path.) window.cameraScannerDiagnostics() dumps
+// what this device supports -- see the "Camera not working?" panel on the quick check-in page.
 (function () {
   if (window.createCameraScanner) {
     return;
@@ -38,12 +45,22 @@
   })();
   // Formats a membership card / bidder-number / paddle barcode might use.
   var FORMATS = ["code_128", "qr_code", "ean_13", "ean_8", "upc_a", "upc_e"];
+  var ZXING_FORMATS = {
+    code_128: "CODE_128",
+    qr_code: "QR_CODE",
+    ean_13: "EAN_13",
+    ean_8: "EAN_8",
+    upc_a: "UPC_A",
+    upc_e: "UPC_E",
+  };
 
   var userAgent = navigator.userAgent || "";
   var IS_IOS =
     /iPad|iPhone|iPod/.test(userAgent) || (userAgent.indexOf("Macintosh") !== -1 && navigator.maxTouchPoints > 1);
   // Set by whichever scanner last failed, so the diagnostics panel can report it.
   var lastFailure = "";
+  // Set when a native detector refused every frame and ZXing took over.
+  var nativeFailure = "";
 
   // Camera access inside an embedded WebView is up to the host app, and most hosts say no. Only
   // used to make the error message actionable ("open this in Safari"), never to block a scan --
@@ -139,13 +156,20 @@
     });
   }
 
+  function nativeDetectorDiagnosis() {
+    if (!("BarcodeDetector" in window)) {
+      return "no (using the ZXing fallback)";
+    }
+    return nativeFailure ? "yes, but it failed every read (" + nativeFailure + "), so ZXing took over" : "yes";
+  }
+
   // Enough for the reporter of an unreproducible "the camera doesn't work" to screenshot.
   window.cameraScannerDiagnostics = function () {
     return [
       "userAgent: " + userAgent,
       "secure context: " + (window.isSecureContext !== false ? "yes" : "no"),
       "camera API: " + (navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? "available" : "MISSING"),
-      "native detector: " + ("BarcodeDetector" in window ? "yes" : "no (using the ZXing fallback)"),
+      "native detector: " + nativeDetectorDiagnosis(),
       "barcode reader loaded: " + (window.ZXing ? "yes" : "not yet"),
       "embedded browser: " + (embeddedBrowserName() || "no"),
       "last camera error: " + (lastFailure || "none"),
@@ -157,6 +181,7 @@
     var video = options.video;
     var onCode = options.onCode || function () {};
     var onStatus = options.onStatus || function () {};
+    var formats = options.formats && options.formats.length ? options.formats.slice() : FORMATS;
     // How long the same decoded value is suppressed after a *successful* read, so the camera
     // (which decodes the same code on every frame) doesn't fire it dozens of times a second.
     var DUP_WINDOW_MS = options.duplicateWindowMs || 2500;
@@ -167,16 +192,30 @@
     // Gap between ZXing decode attempts. ZXing decodes synchronously on the main thread, so with no
     // gap at all the phone has no time left to paint the preview or handle taps.
     var FALLBACK_INTERVAL_MS = options.fallbackIntervalMs || 120;
+    // Chrome on a phone without Google Play services builds a BarcodeDetector that rejects every
+    // read, while the preview looks alive. This many failures in a row and ZXing takes over.
+    var NATIVE_FAILURES_BEFORE_FALLBACK = 8;
+    // The longest edge ZXing is handed; its work scales with the pixel count. What the preview shows
+    // is usually smaller anyway, but a native stream that fell back is 1080p.
+    var FALLBACK_MAX_EDGE = 1280;
 
     var stream = null;
     var detector = null;
     var animationFrameId = null;
     var fallbackTimerId = null;
-    var zxingReader = null;
+    // A plain reader and a TRY_HARDER one, taking frames in turn.
+    var zxingReaders = null;
     var zxingLib = null;
+    var fallbackFrames = 0;
+    var canvas = null;
+    var canvasContext = null;
     var isScanning = false;
-    var lastValue = "";
-    var lastValueTime = 0;
+    // Bumped by every start() and stop(), so a loop or a camera still opening from a previous run
+    // can tell it's been superseded instead of carrying on beside the new one.
+    var run = 0;
+    // When each value last fired. Per value, because one remembered value let two labels in view
+    // take turns: A, B, A, each of them "new".
+    var recent = new Map();
     var tapToPlayHandler = null;
 
     async function handleCode(rawValue) {
@@ -186,18 +225,51 @@
       }
       var now = Date.now();
       // Suppress rapid repeats of the same value within the active window.
-      if (value === lastValue && now - lastValueTime < DUP_WINDOW_MS) {
+      if (recent.has(value) && now - recent.get(value) < DUP_WINDOW_MS) {
         return;
       }
-      lastValue = value;
-      lastValueTime = now;
+      recent.forEach(function (firedAt, seen) {
+        if (now - firedAt >= DUP_WINDOW_MS) {
+          recent.delete(seen);
+        }
+      });
+      recent.set(value, now);
       var result = await onCode(value);
       // onCode returns false when the value was invalid/unrecognized; back-date the timestamp so the
       // remaining suppression is only RETRY_WINDOW_MS and the operator can immediately re-present the
       // card. A successful read keeps the full DUP_WINDOW_MS.
       if (result === false) {
-        lastValueTime = now - (DUP_WINDOW_MS - RETRY_WINDOW_MS);
+        recent.set(value, now - (DUP_WINDOW_MS - RETRY_WINDOW_MS));
       }
+    }
+
+    // The part of the frame the preview shows, in the video's own pixels. object-fit: cover scales
+    // the frame to fill the box and centres it, and whatever overflows the box is cut off.
+    function visibleRegion() {
+      var width = video.videoWidth;
+      var height = video.videoHeight;
+      var region = { x: 0, y: 0, width: width, height: height };
+      var boxWidth = video.clientWidth;
+      var boxHeight = video.clientHeight;
+      if (!boxWidth || !boxHeight || window.getComputedStyle(video).objectFit !== "cover") {
+        return region;
+      }
+      var scale = Math.max(boxWidth / width, boxHeight / height);
+      region.width = Math.min(width, boxWidth / scale);
+      region.height = Math.min(height, boxHeight / scale);
+      region.x = (width - region.width) / 2;
+      region.y = (height - region.height) / 2;
+      return region;
+    }
+
+    function inRegion(barcode, region) {
+      var box = barcode.boundingBox;
+      if (!box || !(box.width || box.height)) {
+        return true;
+      }
+      var x = box.x + box.width / 2;
+      var y = box.y + box.height / 2;
+      return x >= region.x && x <= region.x + region.width && y >= region.y && y <= region.y + region.height;
     }
 
     // Ask the camera for continuous autofocus once the track is live. Small barcodes and phone-screen
@@ -251,6 +323,21 @@
         }
       }
       throw failure;
+    }
+
+    // Opens the camera for this run. Stopped before it opened (Stop tapped while the permission
+    // prompt was up), the camera is let go at once rather than left running behind a page that
+    // says it's off.
+    async function openCameraFor(thisRun, constraints) {
+      var opened = await openCamera(constraints);
+      if (thisRun !== run) {
+        opened.getTracks().forEach(function (track) {
+          track.stop();
+        });
+        return false;
+      }
+      stream = opened;
+      return true;
     }
 
     function attachStream() {
@@ -338,48 +425,77 @@
       return video && video.readyState >= 2 && video.videoWidth > 0;
     }
 
-    async function startNativeScanner() {
-      detector = new BarcodeDetector({ formats: FORMATS });
-      stream = await openCamera(NATIVE_VIDEO_CONSTRAINTS);
+    async function startNativeScanner(thisRun) {
+      detector = new BarcodeDetector({ formats: formats });
+      if (!(await openCameraFor(thisRun, NATIVE_VIDEO_CONSTRAINTS))) {
+        return;
+      }
       applyTrackEnhancements();
       await startPlaying();
       watchStream();
+      var failures = 0;
       var scanFrame = async function () {
-        if (!isScanning) {
+        if (thisRun !== run) {
           return;
         }
-        try {
-          if (frameIsReady()) {
-            var barcodes = await detector.detect(video);
-            if (barcodes.length) {
-              await handleCode(barcodes[0].rawValue);
+        var barcodes = [];
+        if (frameIsReady()) {
+          try {
+            barcodes = await detector.detect(video);
+            failures = 0;
+          } catch (error) {
+            console.error(error);
+            failures += 1;
+            if (failures >= NATIVE_FAILURES_BEFORE_FALLBACK && thisRun === run) {
+              nativeFailure = (error && error.name) || String(error);
+              switchToFallback(thisRun);
+              return;
             }
           }
-        } catch (error) {
-          console.error(error);
         }
-        if (isScanning) {
+        // Every code in view, not just the first: with several labels in frame the first can be the
+        // same one every time, and the others are never read.
+        if (barcodes.length) {
+          try {
+            var region = visibleRegion();
+            for (var i = 0; i < barcodes.length && thisRun === run; i++) {
+              if (inRegion(barcodes[i], region)) {
+                await handleCode(barcodes[i].rawValue);
+              }
+            }
+          } catch (error) {
+            console.error(error);
+          }
+        }
+        if (thisRun === run) {
           animationFrameId = requestAnimationFrame(scanFrame);
         }
       };
       animationFrameId = requestAnimationFrame(scanFrame);
     }
 
-    function buildZxingHints(ZXing) {
+    // Keeps the stream: the camera is already open and showing.
+    async function switchToFallback(thisRun) {
+      detector = null;
+      try {
+        await prepareZxing();
+      } catch (error) {
+        lastFailure = ((error && error.name) || "Error") + ": " + ((error && error.message) || error);
+        onStatus((error && error.message) || "Couldn't load the barcode reader.", "danger");
+        return;
+      }
+      scanFallbackFrame(thisRun);
+    }
+
+    function buildZxingHints(ZXing, tryHarder) {
       var hints = new Map();
-      // Spend more effort per frame -- worth it for glare/screen reads on iOS.
-      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-      var formatMap = {
-        code_128: "CODE_128",
-        qr_code: "QR_CODE",
-        ean_13: "EAN_13",
-        ean_8: "EAN_8",
-        upc_a: "UPC_A",
-        upc_e: "UPC_E",
-      };
+      // Spend more effort per frame -- worth it for glare/screen reads on iOS. Present at all means on.
+      if (tryHarder) {
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      }
       var possible = [];
-      FORMATS.forEach(function (name) {
-        var zx = formatMap[name];
+      formats.forEach(function (name) {
+        var zx = ZXING_FORMATS[name];
         if (zx && ZXing.BarcodeFormat[zx] !== undefined) {
           possible.push(ZXing.BarcodeFormat[zx]);
         }
@@ -390,12 +506,50 @@
       return hints;
     }
 
+    async function prepareZxing() {
+      zxingLib = await loadZxing();
+      zxingReaders = [false, true].map(function (tryHarder) {
+        var reader = new zxingLib.MultiFormatReader();
+        reader.setHints(buildZxingHints(zxingLib, tryHarder));
+        return reader;
+      });
+    }
+
     function isNotFound(error) {
       // "No barcode in this frame", thrown on nearly every frame -- not worth logging.
       if (zxingLib && error instanceof zxingLib.NotFoundException) {
         return true;
       }
       return !!(error && typeof error.getKind === "function" && error.getKind() === "NotFoundException");
+    }
+
+    // The visible part of the frame, drawn small enough to decode quickly. TRY_HARDER roughly
+    // doubles a frame's cost, so frames take turns with and without it, starting without.
+    //
+    // The luminance is built here, never by ZXing's browser reader: handed a <video>, that inverts
+    // every other buffer it builds (a global toggle, for light-on-dark codes), and a TRY_HARDER frame
+    // with nothing in it builds two. The toggle starts on "inverted", so with TRY_HARDER every frame
+    // it read was the negative, and an iPhone never read a dark-on-light label at all.
+    function decodeFallbackFrame() {
+      var region = visibleRegion();
+      var scale = Math.min(1, FALLBACK_MAX_EDGE / Math.max(region.width, region.height));
+      var width = Math.max(1, Math.round(region.width * scale));
+      var height = Math.max(1, Math.round(region.height * scale));
+      if (!canvas) {
+        canvas = document.createElement("canvas");
+        // ZXing reads the pixels back on every frame.
+        canvasContext = canvas.getContext("2d", { willReadFrequently: true });
+      }
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      canvasContext.drawImage(video, region.x, region.y, region.width, region.height, 0, 0, width, height);
+      var luminance = new zxingLib.HTMLCanvasElementLuminanceSource(canvas);
+      var bitmap = new zxingLib.BinaryBitmap(new zxingLib.HybridBinarizer(luminance));
+      var reader = zxingReaders[fallbackFrames % 2];
+      fallbackFrames += 1;
+      return reader.decodeWithState(bitmap);
     }
 
     // This drives the decode loop itself instead of handing the camera to ZXing's
@@ -411,13 +565,13 @@
     //    `delayBetweenScanAttempts` option that used to be passed here belongs to the separate
     //    @zxing/browser package; @zxing/library's second constructor argument is a plain number of
     //    milliseconds, so it was being read as NaN and throttling nothing.)
-    async function scanFallbackFrame() {
-      if (!isScanning) {
+    async function scanFallbackFrame(thisRun) {
+      if (thisRun !== run) {
         return;
       }
       if (frameIsReady()) {
         try {
-          var result = zxingReader.decode(video);
+          var result = decodeFallbackFrame();
           if (result) {
             await handleCode(result.getText());
           }
@@ -427,20 +581,23 @@
           }
         }
       }
-      if (isScanning) {
-        fallbackTimerId = setTimeout(scanFallbackFrame, FALLBACK_INTERVAL_MS);
+      if (thisRun === run) {
+        fallbackTimerId = setTimeout(function () {
+          scanFallbackFrame(thisRun);
+        }, FALLBACK_INTERVAL_MS);
       }
     }
 
     // Safari has no BarcodeDetector, on any Apple device or version, so this is the iPhone path.
-    async function startFallbackScanner() {
-      zxingLib = await loadZxing();
-      zxingReader = new zxingLib.BrowserMultiFormatReader(buildZxingHints(zxingLib));
-      stream = await openCamera(FALLBACK_VIDEO_CONSTRAINTS);
+    async function startFallbackScanner(thisRun) {
+      await prepareZxing();
+      if (!(await openCameraFor(thisRun, FALLBACK_VIDEO_CONSTRAINTS))) {
+        return;
+      }
       applyTrackEnhancements();
       await startPlaying();
       watchStream();
-      scanFallbackFrame();
+      scanFallbackFrame(thisRun);
     }
 
     async function start() {
@@ -454,6 +611,8 @@
         throw new Error(blocked);
       }
       isScanning = true;
+      run += 1;
+      var thisRun = run;
       onStatus("Starting the camera...", "info");
       try {
         // Some Android WebViews expose BarcodeDetector but can't actually build one for these
@@ -461,19 +620,23 @@
         var useNative = false;
         if ("BarcodeDetector" in window) {
           try {
-            new BarcodeDetector({ formats: FORMATS });
+            new BarcodeDetector({ formats: formats });
             useNative = true;
           } catch (error) {
             useNative = false;
           }
         }
         if (useNative) {
-          await startNativeScanner();
+          await startNativeScanner(thisRun);
         } else {
-          await startFallbackScanner();
+          await startFallbackScanner(thisRun);
         }
       } catch (error) {
         console.error(error);
+        if (thisRun !== run) {
+          // Stopped while it was starting: the failure is about a camera nobody wants any more.
+          return;
+        }
         await stop();
         var message = cameraErrorMessage(error);
         lastFailure = ((error && error.name) || "Error") + ": " + ((error && error.message) || error);
@@ -484,6 +647,7 @@
 
     async function stop() {
       isScanning = false;
+      run += 1;
       removeTapToPlay();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (animationFrameId) {
@@ -494,10 +658,8 @@
         clearTimeout(fallbackTimerId);
         fallbackTimerId = null;
       }
-      if (zxingReader) {
-        zxingReader.reset();
-        zxingReader = null;
-      }
+      detector = null;
+      zxingReaders = null;
       if (stream) {
         stream.getTracks().forEach(function (track) {
           track.removeEventListener("ended", onTrackEnded);
@@ -515,8 +677,7 @@
       start: start,
       stop: stop,
       resetDuplicate: function () {
-        lastValue = "";
-        lastValueTime = 0;
+        recent.clear();
       },
       isScanning: function () {
         return isScanning;

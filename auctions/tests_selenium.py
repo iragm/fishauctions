@@ -6,8 +6,8 @@ To run locally:
 3. docker exec -it django python3 manage.py test auctions.tests_selenium
 
 SELENIUM_HOST/SELENIUM_PORT (selenium:4444) and TEST_SERVER_HOST/TEST_SERVER_PORT (nginx:80)
-override the defaults. Except LiveBiddingTestCase, these hit the running app via nginx, not the
-test database.
+override the defaults. Except LiveBrowserTestCase's subclasses, these hit the running app via nginx,
+not the test database.
 """
 
 import datetime
@@ -19,11 +19,12 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.staticfiles import finders
 from django.contrib.staticfiles.storage import staticfiles_storage
+from django.templatetags.static import static
 from django.test import Client, SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Auction, AuctionTOS, Bid, Category, Lot, PickupLocation
+from auctions.models import Auction, AuctionTOS, Bid, Category, Lot, LotQueueEntry, PickupLocation, UserData
 
 try:
     from channels.testing import ChannelsLiveServerTestCase
@@ -80,7 +81,7 @@ def site_origin():
     return f"https://{domain}", f"MAP {domain} {address}"
 
 
-def get_selenium_driver(host_map=""):
+def get_selenium_driver(host_map="", extra_args=()):
     """Create and return a Selenium WebDriver connected to the remote Chrome instance."""
     selenium_host = os.environ.get("SELENIUM_HOST", "selenium")
     selenium_port = os.environ.get("SELENIUM_PORT", "4444")
@@ -91,6 +92,8 @@ def get_selenium_driver(host_map=""):
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+    for argument in extra_args:
+        chrome_options.add_argument(argument)
     if host_map:
         # Pin the vhost to local nginx and accept its certificate.
         chrome_options.add_argument(f"--host-resolver-rules={host_map}")
@@ -850,8 +853,8 @@ class LiveServerSettingsTests(SimpleTestCase):
 )
 @tag("selenium")
 @override_settings(**LIVE_SERVER_SETTINGS)
-class LiveBiddingTestCase(ChannelsLiveServerTestCase):
-    """Browser bid tests with real websockets and test data.
+class LiveBrowserTestCase(ChannelsLiveServerTestCase):
+    """A real browser against the test database, through an in-process Daphne with real websockets.
 
     host = "web" is in ALLOWED_HOSTS and reachable from the selenium container.
     """
@@ -871,6 +874,42 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
     def setUp(self):
         super().setUp()
         self._drivers = []
+
+    def tearDown(self):
+        for driver in self._drivers:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        super().tearDown()
+
+    def new_browser(self, user=None, extra_args=()):
+        """A fresh browser session, optionally already logged in as `user`."""
+        driver = get_selenium_driver(extra_args=extra_args)
+        self._drivers.append(driver)
+        if user is not None:
+            self.login(driver, user)
+        return driver
+
+    def login(self, driver, user):
+        """Log the browser in by copying a committed session cookie from the test client."""
+        client = Client()
+        client.force_login(user)
+        driver.get(self.live_server_url + "/")  # must be on the domain before add_cookie
+        driver.add_cookie(
+            {
+                "name": settings.SESSION_COOKIE_NAME,
+                "value": client.cookies[settings.SESSION_COOKIE_NAME].value,
+                "path": "/",
+            }
+        )
+
+
+class LiveBiddingTestCase(LiveBrowserTestCase):
+    """Browser bid tests with real websockets and test data."""
+
+    def setUp(self):
+        super().setUp()
         the_future = timezone.now() + datetime.timedelta(days=3)
         self.seller = User.objects.create_user(username="e2e_seller", password="x", email="e2e_seller@example.com")
         self.auction = Auction.objects.create(
@@ -898,14 +937,6 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         # Backdate so the lot isn't too new to bid on.
         Lot.objects.filter(pk=self.lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=2))
 
-    def tearDown(self):
-        for driver in self._drivers:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-        super().tearDown()
-
     def make_bidder(self, username):
         """A user who has joined the auction and whose username is publicly visible."""
         user = User.objects.create_user(username=username, password="x", email=f"{username}@example.com")
@@ -914,27 +945,6 @@ class LiveBiddingTestCase(ChannelsLiveServerTestCase):
         userdata.save()
         AuctionTOS.objects.create(user=user, auction=self.auction, pickup_location=self.location)
         return user
-
-    def new_browser(self, user=None):
-        """A fresh browser session, optionally already logged in as `user`."""
-        driver = get_selenium_driver()
-        self._drivers.append(driver)
-        if user is not None:
-            self.login(driver, user)
-        return driver
-
-    def login(self, driver, user):
-        """Log the browser in by copying a committed session cookie from the test client."""
-        client = Client()
-        client.force_login(user)
-        driver.get(self.live_server_url + "/")  # must be on the domain before add_cookie
-        driver.add_cookie(
-            {
-                "name": settings.SESSION_COOKIE_NAME,
-                "value": client.cookies[settings.SESSION_COOKIE_NAME].value,
-                "path": "/",
-            }
-        )
 
     def page_diagnosis(self, driver):
         """Why a page didn't do what the test expected: not loaded, signed out, or handshake refused."""
@@ -1137,3 +1147,427 @@ class ModalReopenTests(LiveBiddingTestCase):
                 1,
                 f"closing the modal must leave the container behind (attempt {attempt})",
             )
+
+
+# ---------------------------------------------------------------------------
+# The lot queue's camera, through a fake one: a canvas streaming QR labels.
+# ---------------------------------------------------------------------------
+
+#: Stands in for the phone's camera. getUserMedia answers with a 1280x720 canvas stream showing
+#: ``fakeCamera.labels`` -- real QR codes, drawn by ZXing's own writer -- and every lot add the page
+#: posts is recorded in ``fakeCamera.posts``, held back ``fakeCamera.delay`` ms on its way out.
+FAKE_CAMERA_JS = """
+const zxingUrl = arguments[0];
+const done = arguments[arguments.length - 1];
+window.fakeCamera = {labels: [], posts: [], delay: 0};
+function ready() {
+  const camera = document.createElement('canvas');
+  camera.width = 1280;
+  camera.height = 720;
+  const drawn = {};
+  function qr(text) {
+    if (!drawn[text]) {
+      const matrix = new ZXing.QRCodeWriter().encode(text, ZXing.BarcodeFormat.QR_CODE, 200, 200, new Map());
+      const label = document.createElement('canvas');
+      label.width = matrix.getWidth();
+      label.height = matrix.getHeight();
+      const pen = label.getContext('2d');
+      pen.fillStyle = '#fff';
+      pen.fillRect(0, 0, label.width, label.height);
+      pen.fillStyle = '#000';
+      for (let x = 0; x < label.width; x++) {
+        for (let y = 0; y < label.height; y++) { if (matrix.get(x, y)) { pen.fillRect(x, y, 1, 1); } }
+      }
+      drawn[text] = label;
+    }
+    return drawn[text];
+  }
+  function paint() {
+    const pen = camera.getContext('2d');
+    pen.fillStyle = '#ddd';
+    pen.fillRect(0, 0, camera.width, camera.height);
+    pen.fillStyle = '#ccc';
+    pen.fillRect((Date.now() / 10) % camera.width, 0, 2, 2);  // so every frame is a new one
+    fakeCamera.labels.forEach(function (label) { pen.drawImage(qr(label.text), label.x, label.y); });
+    requestAnimationFrame(paint);
+  }
+  requestAnimationFrame(paint);
+  navigator.mediaDevices.getUserMedia = function () { return Promise.resolve(camera.captureStream(30)); };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (url, options) {
+    const body = options && options.body;
+    if (body instanceof FormData && body.has('lot_pk')) {
+      fakeCamera.posts.push(body.get('lot_pk'));
+      if (fakeCamera.delay) {
+        return new Promise(function (wait) { setTimeout(wait, fakeCamera.delay); }).then(function () {
+          return realFetch(url, options);
+        });
+      }
+    }
+    return realFetch(url, options);
+  };
+  done(true);
+}
+if (window.ZXing) {
+  ready();
+} else {
+  const script = document.createElement('script');
+  script.src = zxingUrl;
+  script.onload = ready;
+  script.onerror = function () { done('ZXing did not load from ' + zxingUrl); };
+  document.head.appendChild(script);
+}
+"""
+
+
+class LotQueueCameraTests(LiveBrowserTestCase):
+    """Labels shown to the camera on the lot queue become queue entries, each once, at the camera's pace.
+
+    Chrome on Linux has no BarcodeDetector, so the page reads with ZXing: the path every iPhone takes
+    in Safari. A label's centre at (640, 360) is in view; the preview is a 3:1 box at this window size,
+    which shows the middle rows 148-572 of each 720-row frame.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.admin = User.objects.create_user(username="queue_admin", password="x", email="queue_admin@example.com")
+        self.auction = Auction.objects.create(
+            created_by=self.admin,
+            title="Camera queue auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=1),
+        )
+        location = PickupLocation.objects.create(
+            name="camera hall", auction=self.auction, pickup_time=timezone.now() + datetime.timedelta(days=1)
+        )
+        seller = AuctionTOS.objects.create(user=self.admin, auction=self.auction, pickup_location=location)
+        category = Category.objects.create(name="Camera category")
+        self.lots = [
+            Lot.objects.create(
+                lot_name=f"Camera lot {n}", auction=self.auction, auctiontos_seller=seller, species_category=category
+            )
+            for n in range(3)
+        ]
+
+    def open_queue(self):
+        origin = self.live_server_url
+        driver = self.new_browser(
+            self.admin,
+            # getUserMedia needs a secure context, and the live server is plain http.
+            extra_args=(f"--unsafely-treat-insecure-origin-as-secure={origin}",),
+        )
+        driver.get(origin + reverse("auction_lot_queue", kwargs={"slug": self.auction.slug}))
+        ready = driver.execute_async_script(FAKE_CAMERA_JS, origin + static("js/vendor/zxing.min.js"))
+        self.assertIs(ready, True, ready)
+        return driver
+
+    @staticmethod
+    def label(lot, x=540, y=260):
+        return {"text": f"https://auction.fish/qr/{lot.pk}/", "x": x, "y": y}
+
+    def show(self, driver, *labels):
+        driver.execute_script("fakeCamera.labels = arguments[0];", list(labels))
+
+    def posts(self, driver):
+        return driver.execute_script("return fakeCamera.posts")
+
+    def queued(self):
+        return list(
+            LotQueueEntry.objects.filter(auction=self.auction, passed_at__isnull=True)
+            .order_by("order")
+            .values_list("lot_id", flat=True)
+        )
+
+    def wait_for(self, driver, condition, what, timeout=20):
+        try:
+            WebDriverWait(driver, timeout, poll_frequency=0.1).until(lambda d: condition())
+        except TimeoutException:
+            status = driver.execute_script("return document.getElementById('queue-scan-status').textContent")
+            self.fail(f"{what}: posted {self.posts(driver)}, queued {self.queued()}, camera says {status!r}")
+
+    def start_camera(self, driver):
+        driver.find_element(By.ID, "queue-camera-btn").click()
+
+    def test_a_label_left_in_view_is_added_once(self):
+        """The camera sees a label on every frame; it used to post it again every 2.5s it stayed in view."""
+        lot = self.lots[0]
+        driver = self.open_queue()
+        self.show(driver, self.label(lot))
+        self.start_camera(driver)
+        self.wait_for(driver, lambda: self.queued() == [lot.pk], "the label was never added")
+        time.sleep(6)
+        self.assertEqual(self.posts(driver), [str(lot.pk)])
+        self.assertEqual(self.queued(), [lot.pk])
+
+    def test_a_slow_network_does_not_hold_the_camera(self):
+        """The next label is read while the last one's add is still on its way."""
+        first, second = self.lots[:2]
+        driver = self.open_queue()
+        driver.execute_script("fakeCamera.delay = 6000;")
+        self.show(driver, self.label(first))
+        self.start_camera(driver)
+        self.wait_for(driver, lambda: self.posts(driver) == [str(first.pk)], "the first label was never read")
+        self.show(driver, self.label(second))
+        self.wait_for(
+            driver,
+            lambda: str(second.pk) in self.posts(driver),
+            "the second label wasn't read while the first add was in flight",
+            timeout=3,
+        )
+        self.show(driver)
+        self.wait_for(driver, lambda: self.queued() == [first.pk, second.pk], "both adds should land, in order")
+        self.wait_for(
+            driver,
+            lambda: (
+                driver.execute_script("return document.querySelectorAll('#queue-sortable [data-lot-pk]').length") == 2
+            ),
+            "the list should show both",
+        )
+
+    def test_every_label_in_view_is_read_and_only_those(self):
+        """A native detector's every code, not just the first, but none from the part of the frame the
+        preview crops off: the operator never aimed at those.
+        """
+        in_view, also_in_view, cropped_off = self.lots
+        driver = self.open_queue()
+
+        def found(lot, x, y):
+            return {
+                "rawValue": self.label(lot)["text"],
+                "boundingBox": {"x": x, "y": y, "width": 150, "height": 150},
+            }
+
+        driver.execute_script(
+            """
+            const found = arguments[0];
+            window.BarcodeDetector = function () {};
+            window.BarcodeDetector.prototype.detect = function () { return Promise.resolve(found); };
+            """,
+            [found(in_view, 100, 300), found(also_in_view, 900, 300), found(cropped_off, 500, 0)],
+        )
+        self.start_camera(driver)
+        self.wait_for(
+            driver, lambda: sorted(self.queued()) == sorted([in_view.pk, also_in_view.pk]), "both codes in view"
+        )
+        time.sleep(1)
+        self.assertNotIn(str(cropped_off.pk), self.posts(driver))
+
+    def test_a_removed_lot_goes_back_on_with_its_label(self):
+        lot = self.lots[0]
+        driver = self.open_queue()
+        self.show(driver, self.label(lot))
+        self.start_camera(driver)
+        self.wait_for(driver, lambda: self.queued() == [lot.pk], "the label was never added")
+        added_at = time.time()
+        self.show(driver)
+        # Found and clicked in one go: the list is swapped out as refreshes land.
+        WebDriverWait(driver, 10).until(
+            lambda d: d.execute_script(
+                "const remove = document.querySelector(arguments[0]); if (remove) { remove.click(); } return !!remove;",
+                f'#queue-sortable [data-lot-pk="{lot.pk}"] .btn-danger',
+            )
+        )
+        self.wait_for(driver, lambda: self.queued() == [], "the remove button should take it off")
+        # Just after an add lands the list may not show it yet, so for a moment a label seen again is
+        # taken to be one already in the queue.
+        time.sleep(max(0, added_at + 5.5 - time.time()))
+        self.show(driver, self.label(lot))
+        self.wait_for(driver, lambda: self.queued() == [lot.pk], "showing the label again should put it back")
+        self.assertEqual(self.posts(driver), [str(lot.pk), str(lot.pk)])
+
+
+# ---------------------------------------------------------------------------
+# Voice on set lot winners, in the app: a fake bridge stands in for it.
+# ---------------------------------------------------------------------------
+
+APP_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile FishAuctionsApp/1.0 (Flutter; Android)"
+
+#: The app's JavaScript bridge, installed before the page's own scripts run. Every call is recorded in
+#: ``fakeApp.calls`` and answered with ``fakeApp.state``.
+FAKE_APP_BRIDGE_JS = """
+window.fakeApp = {
+  calls: [],
+  state: {supported: true, listening: false, web_microphone: true,
+          settings: {confident_at: 0.77, prefer_on_device: true, bias_low_prices: false},
+          settings_range: {confident_min: 0.6, confident_max: 0.9}},
+};
+try {
+  const stored = JSON.parse(window.sessionStorage.getItem('fakeAppState') || 'null');
+  if (stored) { Object.assign(fakeApp.state, stored); }
+} catch (err) {}
+window.flutter_inappwebview = {
+  callHandler: function (name) {
+    fakeApp.calls.push(name);
+    if (name === 'voiceStart') { fakeApp.state.listening = true; }
+    if (name === 'voiceStop') { fakeApp.state.listening = false; }
+    return Promise.resolve(Object.assign({}, fakeApp.state));
+  },
+};
+"""
+
+
+@override_settings(OPENAI_API_KEY="sk-test")
+class AppVoiceTests(LiveBrowserTestCase):
+    """The set-winners page reading the app's transcripts, and listening through OpenAI in the app."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = User.objects.create_user(username="voice_admin", password="x", email="voice_admin@example.com")
+        UserData.objects.filter(user=self.admin).update(voice_cloud_enabled=True)
+        self.auction = Auction.objects.create(
+            created_by=self.admin,
+            title="Voice auction",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(hours=1),
+        )
+
+    def open_page(self, app_state=None, stub_openai=True):
+        """Set winners in the app. What's heard (the page's one way to the server) is recorded instead of
+        sent, and so, unless ``stub_openai`` is off, are starts of listening through OpenAI.
+        """
+        origin = self.live_server_url
+        driver = self.new_browser(
+            self.admin,
+            extra_args=(f"--user-agent={APP_USER_AGENT}", f"--unsafely-treat-insecure-origin-as-secure={origin}"),
+        )
+        driver.command_executor.add_command("executeCdpCommand", "POST", "/session/$sessionId/goog/cdp/execute")
+        driver.execute(
+            "executeCdpCommand",
+            {"cmd": "Page.addScriptToEvaluateOnNewDocument", "params": {"source": FAKE_APP_BRIDGE_JS}},
+        )
+        if app_state is not None:
+            driver.execute_script("sessionStorage.setItem('fakeAppState', JSON.stringify(arguments[0]));", app_state)
+        driver.get(origin + reverse("auction_lot_winners_dynamic", kwargs={"slug": self.auction.slug}))
+        self.page_ready(driver, stub_openai)
+        return driver
+
+    def page_ready(self, driver, stub_openai=True):
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return fakeApp.calls.includes('voiceGetState')"))
+        driver.execute_script("window.heard = []; window.voiceHeard = function (text) { heard.push(text); };")
+        if stub_openai:
+            driver.execute_script("window.cloudStarts = 0; window.voiceCloudStart = function () { cloudStarts += 1; };")
+
+    def send(self, driver, **event):
+        driver.execute_script("window.fishauctionsVoice.onEvent(arguments[0]);", event)
+
+    def heard(self, driver):
+        return driver.execute_script("return heard")
+
+    def transcript(self, driver, text, phrase_id=None, final=None, partial=True):
+        event = {"type": "transcript", "text": text, "partial": partial}
+        if phrase_id is not None:
+            event["phrase_id"] = phrase_id
+        if final is not None:
+            event["final"] = final
+        self.send(driver, **event)
+
+    def test_a_phrase_ends_on_its_final_the_next_phrase_or_the_app_stopping(self):
+        driver = self.open_page()
+        self.send(driver, type="state", listening=True)
+        self.transcript(driver, "lot four", phrase_id=1, final=False)
+        self.assertEqual(self.heard(driver), [])
+        # A build that already acted on a phrase's commands still marks its final partial.
+        self.transcript(driver, "lot forty two", phrase_id=1, final=True)
+        self.assertEqual(self.heard(driver), ["lot forty two"])
+        self.transcript(driver, "sold to", phrase_id=2, final=False)
+        self.transcript(driver, "bidder seven", phrase_id=3, final=False)
+        self.assertEqual(self.heard(driver), ["lot forty two", "sold to"])
+        self.send(driver, type="state", listening=True)
+        self.assertEqual(self.heard(driver), ["lot forty two", "sold to", "bidder seven"])
+        self.transcript(driver, "for ten", phrase_id=4, final=False)
+        self.send(driver, type="state", listening=False)
+        self.assertEqual(self.heard(driver), ["lot forty two", "sold to", "bidder seven", "for ten"])
+
+    def test_only_an_app_that_sends_no_final_has_partials_settle(self):
+        driver = self.open_page()
+        self.send(driver, type="state", listening=True)
+        self.transcript(driver, "lot five")
+        time.sleep(1)
+        self.assertEqual(self.heard(driver), [], "a partial waits for its phrase to settle")
+        time.sleep(3.5)
+        self.assertEqual(self.heard(driver), ["lot five"])
+        self.transcript(driver, "lot six", phrase_id=9, final=False)
+        time.sleep(4.5)
+        self.assertEqual(self.heard(driver), ["lot five"], "a phrase that will get its final waits for it")
+
+    def open_settings(self, driver):
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "voice-settings-btn"))).click()
+
+    def test_listen_uses_the_phone_unless_openai_is_chosen(self):
+        driver = self.open_page()
+        self.open_settings(driver)
+        self.assertTrue(driver.find_element(By.ID, "voice-source").is_displayed())
+        self.assertTrue(driver.find_element(By.ID, "voice-source-phone").is_selected())
+        listen = driver.find_element(By.ID, "voice-btn")
+        listen.click()
+        WebDriverWait(driver, 10).until(lambda d: "Stop" in listen.text)
+        self.assertIn("voiceStart", driver.execute_script("return fakeApp.calls"))
+        # Switched while listening, it carries on listening the new way.
+        driver.find_element(By.ID, "voice-source-openai").click()
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return cloudStarts") == 1)
+        self.assertIn("voiceStop", driver.execute_script("return fakeApp.calls"))
+        self.assertFalse(driver.find_element(By.ID, "voice-phone-settings").is_displayed())
+        # Remembered on this device.
+        driver.refresh()
+        self.page_ready(driver)
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "voice-btn"))).click()
+        self.assertEqual(driver.execute_script("return cloudStarts"), 1)
+        self.assertNotIn("voiceStart", driver.execute_script("return fakeApp.calls"))
+
+    def test_an_app_that_keeps_the_microphone_listens_itself(self):
+        driver = self.open_page(app_state={"web_microphone": False})
+        driver.execute_script("localStorage.setItem('voiceListenWith', 'openai');")
+        driver.refresh()
+        self.page_ready(driver)
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "voice-btn"))).click()
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return fakeApp.calls.includes('voiceStart')"))
+        self.assertEqual(driver.execute_script("return cloudStarts"), 0)
+        self.assertFalse(driver.find_element(By.ID, "voice-source").is_displayed())
+
+    def test_a_phone_with_no_recognizer_listens_through_openai(self):
+        driver = self.open_page(app_state={"supported": False})
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "voice-btn"))).click()
+        self.assertEqual(driver.execute_script("return cloudStarts"), 1)
+
+    def test_openai_is_only_offered_to_accounts_it_is_on_for(self):
+        UserData.objects.filter(user=self.admin).update(voice_cloud_enabled=False)
+        driver = self.open_page()
+        self.assertFalse(driver.find_elements(By.ID, "voice-source"))
+        driver.execute_script("localStorage.setItem('voiceListenWith', 'openai');")
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "voice-btn"))).click()
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return fakeApp.calls.includes('voiceStart')"))
+        self.assertEqual(driver.execute_script("return cloudStarts"), 0)
+
+    def test_a_refused_microphone_points_at_the_app(self):
+        """The app has already said where its permission lives; the site has none to allow."""
+        driver = self.open_page(stub_openai=False)
+        driver.execute_script(
+            """
+            const sessionUrl = arguments[0];
+            const realAjax = $.ajax;
+            $.ajax = function (options) {
+              if (options && options.url === sessionUrl) {
+                return $.Deferred().resolve({key: 'k', commit: true}).promise();
+              }
+              return realAjax.apply(this, arguments);
+            };
+            navigator.mediaDevices.getUserMedia = function () {
+              return Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
+            };
+            """,
+            reverse("auction_voice_cloud_session", kwargs={"slug": self.auction.slug}),
+        )
+        self.open_settings(driver)
+        driver.find_element(By.ID, "voice-source-openai").click()
+        driver.find_element(By.ID, "voice-btn").click()
+        WebDriverWait(driver, 10).until(
+            lambda d: "Allow the microphone for the app" in d.find_element(By.ID, "voice-status").text
+        )
+
+    def test_the_apps_events_are_not_about_openai_listening(self):
+        """Letting go of the microphone, the app says it stopped; OpenAI is what's listening by then."""
+        driver = self.open_page()
+        driver.execute_script("voiceCloud.wanted = true; voiceRenderState({listening: true, on_device: false});")
+        self.send(driver, type="state", listening=False)
+        self.send(driver, type="error", code="busy", message="The microphone is in use")
+        self.assertIn("Stop", driver.find_element(By.ID, "voice-btn").text)

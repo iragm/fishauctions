@@ -36,7 +36,7 @@
   </div>
 
   <div id="queue-camera-wrapper" class="mb-2 d-none">
-    <div class="rounded border overflow-hidden w-100" style="max-width:480px;aspect-ratio: 3 / 1;">
+    <div class="lot-queue-camera rounded border overflow-hidden w-100">
       <video id="queue-scanner-video" playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
     </div>
     <div id="queue-scan-status" class="alert alert-info mt-2 mb-0 py-2">Point the camera at a lot's QR code.</div>
@@ -117,6 +117,67 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
       .catch(function () { /* leave the DOM as dragged if the network hiccups */ });
   }
 
+  // One fresh list at most every half second, however many adds and websocket pushes arrive: a stack
+  // of labels scanned in a row otherwise re-fetches the whole list twice per label.
+  var listRefreshTimer = null;
+  var listRefreshedAt = 0;
+  function refreshQueueList() {
+    if (listRefreshTimer || !window.htmx) {
+      return;
+    }
+    listRefreshTimer = setTimeout(function () {
+      listRefreshTimer = null;
+      listRefreshedAt = Date.now();
+      htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
+    }, Math.max(0, 500 - (Date.now() - listRefreshedAt)));
+  }
+
+  // Lots waiting in the queue as the list last showed it: the one selling now and those to come.
+  function waitingLots() {
+    var pks = new Set();
+    document.querySelectorAll('#queue-sortable [data-lot-pk]').forEach(function (item) {
+      pks.add(item.getAttribute('data-lot-pk'));
+    });
+    return pks;
+  }
+
+  {% comment %}
+    The camera doesn't wait for the network: a lot QR beeps the moment it's read, its add is posted in
+    the background, and the camera goes on to the next label; the answer is a toast and a beep when it
+    lands. Each lot is posted once (pk -> when its add landed, 0 while in flight), so the camera seeing a
+    label again sends nothing -- while the add is in flight, just landed (the list may not show it yet),
+    or the lot is waiting in the queue. A lot whose add failed is forgotten, so its label tries again,
+    unless it's waiting anyway ("already in the queue"); and one that has left the waiting part of the
+    list (sold, passed or removed) is posted again, which puts it back on the end.
+  {% endcomment %}
+  var cameraSent = new Map();
+
+  function onCameraCode(value) {
+    var match = String(value).match(/\/qr\/(\d+)/);
+    if (!match) {
+      return window.auctionBarcodeScanner.handleCode(value);
+    }
+    var pk = match[1];
+    if (cameraSent.has(pk)) {
+      var landedAt = cameraSent.get(pk);
+      if (!landedAt || Date.now() - landedAt < 5000 || waitingLots().has(pk)) {
+        return true;
+      }
+    }
+    cameraSent.set(pk, 0);
+    window.auctionBarcodeScanner.beep('scan');
+    window.auctionBarcodeScanner.handleCode(value).then(function (added) {
+      if (added === false && !waitingLots().has(pk)) {
+        cameraSent.delete(pk);
+      } else {
+        cameraSent.set(pk, Date.now());
+      }
+    }, function () {
+      cameraSent.delete(pk);
+    });
+    return true;
+  }
+
   $(document).ready(function () {
     initQueueSortable();
 
@@ -127,11 +188,7 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
     });
 
     // A USB HID or camera scan adds via JSON, then fires this event so we pull the fresh list.
-    document.addEventListener('auction-lot-queued', function () {
-      if (window.htmx) {
-        htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
-      }
-    });
+    document.addEventListener('auction-lot-queued', refreshQueueList);
 
     // Clear + refocus the manual add box after a successful add so scanning/typing flows quickly.
     document.getElementById('queue-add-form').addEventListener('htmx:afterRequest', function (evt) {
@@ -161,7 +218,9 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
       wrapper.classList.remove('d-none');
       queueScanner = window.createCameraScanner({
         video: document.getElementById('queue-scanner-video'),
-        onCode: function (value) { return window.auctionBarcodeScanner.handleCode(value); },
+        // Lot labels are QR codes, and every format ZXing tries costs it time on every frame.
+        formats: ['qr_code'],
+        onCode: onCameraCode,
         onStatus: function (message, level) {
           var box = document.getElementById('queue-scan-status');
           if (box) {
@@ -207,11 +266,7 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
     // queue-updated re-fetches the editable list here and the fullscreen queue through its hx-trigger.
     // Fired by the kiosk Next/Back, and by the admin auction websocket when a winner is set (or the
     // queue is edited) on another device, instead of waiting for the 30s poll fallback.
-    document.body.addEventListener('queue-updated', function () {
-      if (window.htmx) {
-        htmx.ajax('GET', QUEUE_URL + '?partial=list', { target: '#queue-list', swap: 'innerHTML' });
-      }
-    });
+    document.body.addEventListener('queue-updated', refreshQueueList);
     try {
       var wsProtocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
       var queueSocket = new WebSocket(wsProtocol + window.location.host + '/ws/auctions/{{ auction.pk }}/');

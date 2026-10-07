@@ -23,9 +23,10 @@ BACKEND_CHOICES = [
     (BACKEND_SPOTTER, "Keyword spotter"),
 ]
 
-# OpenAI transcription models for listening in a web browser (``VoiceGrammar.cloud_model``). The live
-# model writes words as they're spoken and has no turn detection of its own, so the page commits each
-# turn itself; the others wait for a pause the server hears, which an auctioneer may not leave.
+# OpenAI transcription models the page listens through, in a browser or the app
+# (``VoiceGrammar.cloud_model``). The live model writes words as they're spoken and has no turn detection
+# of its own, so the page commits each turn itself; the others wait for a pause the server hears, which
+# an auctioneer may not leave.
 CLOUD_LIVE = "gpt-live-transcribe"
 CLOUD_MODEL_CHOICES = [
     ("", "Off"),
@@ -283,7 +284,7 @@ def serialize_grammar(grammar):
 
 
 def cloud_model(grammar, user):
-    """The OpenAI model ``user``'s browser listens through, or "" when that's off for the site, off for
+    """The OpenAI model the page listens through for ``user``, or "" when that's off for the site, off for
     them (``UserData.voice_cloud_enabled``), or the site has no key.
     """
     from django.conf import settings
@@ -334,7 +335,7 @@ def cloud_session(model, vocabulary):
 
 def page_config(auction, user, grammar=None):
     """The set-winners page's voice settings: when a field is sure enough to fill green, whether "sold"
-    saves, and whether ``user``'s browser can listen through OpenAI. ``grammar`` is passed when the caller
+    saves, and whether the page can listen through OpenAI for ``user``. ``grammar`` is passed when the caller
     loaded the singleton. Reading what was heard is the server's job (``voice_interpreter``).
     """
     from .models import VoiceGrammar

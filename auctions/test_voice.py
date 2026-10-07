@@ -847,6 +847,51 @@ class VoiceSettingsPanelTests(StandardTestCase):
         self.assertNotIn("confident_at", self.client.get(self.url, HTTP_USER_AGENT=APP_UA).context["voice_config"])
 
 
+class AppVoiceSourceTests(StandardTestCase):
+    """VOICE-APP: the page reads the app's phrase ids and finals, and can listen through OpenAI in the app.
+
+    The behaviour runs in Chrome in auctions.tests_selenium.AppVoiceTests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        UserData.objects.filter(user=self.admin_user).update(voice_cloud_enabled=True)
+        self.client.login(username="admin_user", password="testpassword")
+        self.url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+
+    def app_page(self):
+        return self.client.get(self.url, HTTP_USER_AGENT=APP_UA).content.decode()
+
+    def test_a_phrase_ends_on_its_final_and_its_id(self):
+        page = self.app_page()
+        self.assertIn("event.phrase_id", page)
+        self.assertIn("typeof event.final === 'boolean'", page)
+
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_listen_with_is_offered_in_the_app_when_openai_is_on(self):
+        page = self.app_page()
+        self.assertIn('id="voice-source"', page)
+        self.assertIn('id="voice-source-openai"', page)
+        self.assertIn("state.web_microphone", page)
+
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_not_for_an_account_it_is_off_for(self):
+        UserData.objects.filter(user=self.admin_user).update(voice_cloud_enabled=False)
+        self.assertNotIn('id="voice-source"', self.app_page())
+
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_not_in_a_browser_which_has_only_openai(self):
+        page = self.client.get(self.url).content.decode()
+        self.assertNotIn('id="voice-source"', page)
+        self.assertIn('id="voice-btn"', page)
+
+    def test_a_refused_microphone_in_the_app_points_at_the_app(self):
+        """The app has already pointed at the phone's settings; there's no site permission to allow."""
+        page = self.app_page()
+        self.assertIn("Allow the microphone for the app", page)
+        self.assertIn("Allow it for this site", page)
+
+
 class PriceAnchorCanonicalWordTests(TestCase):
     """VOICE-8: the first word of ``anchors["price"]`` is canonical.
 

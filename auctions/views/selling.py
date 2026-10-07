@@ -80,7 +80,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # Prefill the lot from the in-person queue.
         next_lot = queue_next_to_record(self.auction)
         context["queue_head_lot_number"] = next_lot.lot_number_display if next_lot else ""
-        # Voice: the app listens through its own recognizer, a browser through OpenAI when that's on.
+        # Voice: the app listens through its own recognizer, and through OpenAI when that's on, as a browser does.
         grammar = VoiceGrammar.load()
         user = self.request.user
         if getattr(self.request, "is_mobile_app", False) or voice.cloud_model(grammar, user):
