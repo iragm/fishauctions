@@ -18,6 +18,7 @@
 
 # Vendored third-party libraries, wherever they sit.
 **/vendor/
+auctions/static/fonts/
 
 # Minified builds, including the ones outside a vendor/ directory
 # (auctions/static/js/Chart.min.js, auctions/static/css/print.min.css, bootstrap.min.css4).

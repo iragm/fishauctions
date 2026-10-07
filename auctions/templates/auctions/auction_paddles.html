@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Print paddles for {{ auction }}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" type="text/css" href="{% static 'css/vendor/select2.min.css' %}">
+{% endblock %}
+
+{% block content %}
+{% include 'auction_ribbon.html' %}
+<div class="help-note mt-3">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>One sheet of paper per person: fold it in half and their number is on both sides.</div>
+</div>
+
+{% comment %}No target="_blank", as on the club's Print Barcodes page: the PDF downloads and this page stays where it is, and a refusal comes back here with its message. The PDF view sets a cookie carrying the token below, which is how this page knows to reload and count what just printed.{% endcomment %}
+<form method="get" action="{% url 'auction_paddles_pdf' slug=auction.slug %}" id="paddle-form" data-max="{{ max_paddles }}">
+  <input type="hidden" name="token" id="paddle-token">
+  <div class="mb-3">
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="who" value="unprinted" id="who-unprinted" data-count="{{ unprinted_count }}"{% if not chosen %} checked{% endif %}>
+      <label class="form-check-label" for="who-unprinted">Not printed yet ({{ unprinted_count }})</label>
+    </div>
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="who" value="everyone" id="who-everyone" data-count="{{ everyone_count }}">
+      <label class="form-check-label" for="who-everyone">{% if auction.use_check_in_mode %}Everyone checked in{% else %}Everyone who can bid{% endif %} ({{ everyone_count }})</label>
+    </div>
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="who" value="one" id="who-one"{% if chosen %} checked{% endif %}>
+      <label class="form-check-label" for="who-one">One person</label>
+    </div>
+    <div class="ms-4 mt-1" style="max-width: 22rem;">
+      <select name="tos" id="paddle-person" class="form-select form-select-sm" aria-label="Person to print a paddle for">
+        <option value=""></option>
+        {% for person in people %}<option value="{{ person.pk }}"{% if person.pk == chosen.pk %} selected{% endif %}>{{ person.name }} ({{ person.bidder_number }})</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+  {% if needs_paper_check %}
+  <div class="form-check mb-3">
+    <input class="form-check-input" type="checkbox" name="plain_paper" value="1" id="plain-paper">
+    <label class="form-check-label" for="plain-paper">Plain paper is in the printer, not label sheets</label>
+  </div>
+  {% endif %}
+  <div class="d-flex align-items-center gap-3">
+    <div class="border rounded px-3 py-2 text-center">
+      <div class="fs-2 fw-bold lh-1" id="sheet-count">{% if chosen %}1{% else %}{{ unprinted_count }}{% endif %}</div>
+      <div class="small" id="sheet-unit">sheets of paper</div>
+    </div>
+    <button type="submit" class="btn btn-success text-dark"><i class="bi bi-printer"></i> Print paddles</button>
+  </div>
+  <p class="small text-muted mt-2 mb-0 d-none" id="sheet-cap"></p>
+</form>
+
+{% if barcodes_url %}
+<p class="small text-muted mt-4">Have paddles already? Print <a href="{{ barcodes_url }}">paddle stickers</a> for them instead.</p>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/vendor/select2.min.js' %}"></script>
+<script>
+(function () {
+  const form = document.getElementById('paddle-form');
+  const max = parseInt(form.dataset.max, 10);
+  const person = document.getElementById('paddle-person');
+  const paper = document.getElementById('plain-paper');
+  const count = document.getElementById('sheet-count');
+  const unit = document.getElementById('sheet-unit');
+  const cap = document.getElementById('sheet-cap');
+
+  function choice() {
+    return form.querySelector('input[name="who"]:checked');
+  }
+
+  function wanted() {
+    const who = choice();
+    if (!who) { return 0; }
+    if (who.value === 'one') { return person.value ? 1 : 0; }
+    return parseInt(who.dataset.count, 10) || 0;
+  }
+
+  // The number on the page is the number of sheets that come out of the printer.
+  function update() {
+    const asked = wanted();
+    const sheets = Math.min(asked, max);
+    count.textContent = sheets;
+    unit.textContent = sheets === 1 ? 'sheet of paper' : 'sheets of paper';
+    cap.classList.toggle('d-none', asked <= max);
+    cap.textContent = choice() && choice().value === 'unprinted'
+      ? 'The first ' + max + ' of ' + asked + '. Print again for the rest.'
+      : 'The first ' + max + ' of ' + asked + ', by name.';
+  }
+
+  form.querySelectorAll('input[name="who"]').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+      update();
+      if (radio.value === 'one' && !person.value && window.jQuery.fn.select2) {
+        window.jQuery(person).select2('open');
+      }
+    });
+  });
+
+  // Picking somebody means printing just them.
+  function personPicked() {
+    if (person.value) { document.getElementById('who-one').checked = true; }
+    update();
+  }
+  if (window.jQuery.fn.select2) {
+    window.jQuery(person).select2({placeholder: 'Find a person', allowClear: true, width: '100%'});
+    window.jQuery(person).on('change', personPicked);
+  } else {
+    person.addEventListener('change', personPicked);
+  }
+
+  function reloadOnceDownloaded(token) {
+    const started = Date.now();
+    const timer = setInterval(function () {
+      if (document.cookie.split('; ').indexOf('paddles_printed=' + token) !== -1) {
+        clearInterval(timer);
+        document.cookie = 'paddles_printed=; Max-Age=0; path=/';
+        window.location.reload();
+      } else if (Date.now() - started > 120000) {
+        clearInterval(timer);
+      }
+    }, 500);
+  }
+
+  // The button stays pressable and says why nothing happened (style_reference.md); the PDF view
+  // checks the same things again.
+  form.addEventListener('submit', function (event) {
+    let problem = '';
+    if (!wanted()) {
+      problem = choice() && choice().value === 'one' ? 'Pick who to print a paddle for.' : 'There are no paddles to print.';
+    } else if (paper && !paper.checked) {
+      problem = 'Put plain paper in the printer, then tick the box.';
+    }
+    if (problem) {
+      event.preventDefault();
+      window.jQuery.toast({title: problem, type: 'warning', delay: 6000});
+      return;
+    }
+    const token = Math.random().toString(36).slice(2, 12);
+    document.getElementById('paddle-token').value = token;
+    reloadOnceDownloaded(token);
+  });
+
+  update();
+})();
+</script>
+{% endblock %}

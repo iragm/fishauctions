@@ -40,6 +40,7 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link d-lg-none" href="{% url 'auction_quick_check_in' slug=sidebar_auction.slug %}"><i class="bi bi-upc-scan me-1"></i> Checkin</a>
   <a class="nav-link" href="{% url 'auction_quick_checkout' slug=sidebar_auction.slug %}"><i class="bi bi-bag-heart me-1"></i> Checkout</a>
   <a class="nav-link" href="{% url 'auction_printing' slug=sidebar_auction.slug %}"><i class="bi bi-printer me-1"></i> Print labels</a>
+  <a class="nav-link" href="{% url 'auction_paddles' slug=sidebar_auction.slug %}"><i class="bi bi-123 me-1"></i> Print paddles</a>
   {% endif %}
   {% endif %}
 

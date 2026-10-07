@@ -10,7 +10,7 @@
   <tbody>
     <tr><td><i class="bi bi-qr-code"></i> Lot QR code</td><td>Every lot label</td><td>Opens the lot's page on any phone. On the lot queue, adds the lot to the queue.</td></tr>
     <tr><td><i class="bi bi-person-badge"></i> Membership card</td><td>The club's member barcodes, on phones, in Wallet, or printed</td><td>Adds the member to the auction and checks them in. At checkout, pulls up their invoice.</td></tr>
-    <tr><td><i class="bi bi-123"></i> Bidder paddle</td><td>{% page "club_barcode_labels" "Print Barcodes" %}</td><td>Gives the next person you scan that bidder number.</td></tr>
+    <tr><td><i class="bi bi-123"></i> Bidder paddle</td><td>{% page "auction_paddles" "Print paddles" %}, or a sticker from {% page "club_barcode_labels" "Print Barcodes" %}</td><td>Gives the next person you scan that bidder number.</td></tr>
     <tr><td><i class="bi bi-tag"></i> Item for sale, or discount</td><td>{% page "club_barcode_labels" "Print Barcodes" %}</td><td>Adds the charge or discount to the next person you scan.</td></tr>
   </tbody>
 </table>
@@ -41,13 +41,14 @@
 <div class="table-responsive">
 <table class="table table-sm">
   <tbody>
-    <tr><th>Bidder paddle</th><td>A bidder number. Scan the paddle, then the person, and that's their number.</td></tr>
+    <tr><th>Paddle sticker</th><td>A bidder number, for a paddle you already have. Scan the paddle, then the person, and that's their number.</td></tr>
     <tr><th>Item for sale</th><td>An amount and a name: "$20 Shirt". Scan it, then the person, and it's on their invoice.</td></tr>
     <tr><th>Discount</th><td>The same, taken off.</td></tr>
     <tr><th>User</th><td>A member's card, for someone without a phone.</td></tr>
   </tbody>
 </table>
 </div>
+<p>No paddles to stick them on? {% page "auction_paddles" "Print paddles" %} prints a whole paddle for each person, barcode included.</p>
 <p>The page doesn't save anything. Check the sheet printed correctly before you leave it.</p>
 {% tip %}Print a sheet of your T-shirts, raffle tickets and membership renewals, laminate it, and keep it at the checkout table. It works every month.{% endtip %}
 

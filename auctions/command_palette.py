@@ -392,6 +392,21 @@ def _t_auction_printing(user):
     ]
 
 
+def _t_auction_paddles(user):
+    """Bidder paddles for the user's most recent admin auction, when it's in person."""
+    auction = _last_auction_admin(user)
+    if not auction or auction.is_online:
+        return []
+    return [
+        {
+            "url": reverse("auction_paddles", kwargs={"slug": auction.slug}),
+            "title": f"Print paddles — {auction.title}",
+            "description": "A sheet of paper per person with their bidder number, folded in half",
+            "icon": "bi-123",
+        }
+    ]
+
+
 def _t_print_unprinted_labels(user):
     """Print the user's own unprinted labels in their most recent auction."""
     auction = _last_auction_active(user)
@@ -408,14 +423,14 @@ def _t_print_unprinted_labels(user):
 
 
 def _t_club_barcode_labels(user):
-    """Print membership-card / bidder-paddle barcode labels for the user's club."""
+    """Print membership-card, paddle-sticker and item barcode labels for the user's club."""
     return _clubs_items(
         user,
         "club_barcode_labels",
         "Print barcodes",
         "bi-upc-scan",
         "permission_view",
-        "Print membership cards, bidder paddles and barcode stickers",
+        "Print membership cards, paddle stickers and item barcodes",
     )
 
 
@@ -660,6 +675,7 @@ DYNAMIC_TARGETS = {
     "last_auction:label_setup": _t_label_setup,
     "last_auction:auction_printing": _t_auction_printing,
     "last_auction:print_unprinted": _t_print_unprinted_labels,
+    "last_auction:auction_paddles": _t_auction_paddles,
     "clubs:barcode_labels": _t_club_barcode_labels,
     "last_auction:bap": _t_bap,
     "last_auction:invoice": _t_invoice,

@@ -102,7 +102,7 @@ this only quotes its opening sentence.
 - **`club_matching.py`** (228 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
-- **`command_palette.py`** (1515 lines)
+- **`command_palette.py`** (1531 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
 - **`consumers.py`** (448 lines)
@@ -187,7 +187,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14293 lines)
+- **`models.py`** (14436 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -208,7 +208,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2210 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1958 lines)
+- **`palette_routes.py`** (1967 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -475,6 +475,9 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1702 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`, `CarriedMembershipTests`, `WelcomeLetterTests`
+- **`test_merges.py`** (385 lines)
+  What a merge carries over: everything that points at the participant, club member or account it closes.
+  `relations_to`, `MergeCoverageTests`, `ParticipantMergeTests`, `MemberMergeTests`
 - **`test_mobile_features.py`** (2729 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
@@ -503,6 +506,9 @@ this only quotes its opening sentence.
 - **`test_openai_apps.py`** (226 lines)
   What a plugin directory asks of this server, beyond what an MCP client already asks.
   `with_oidc`, `without_oidc`, `DomainVerificationTests`, `WidgetPointerTests`, `OpenIDTests`
+- **`test_paddles.py`** (227 lines)
+  Printed bidder paddles: who a batch is for, what makes a printed one out of date, and the PDF.
+  `page_texts`, `page_count`, `PaddleTestCase`, `WhatIsPrintedTests`, `OutOfDateTests`, `PlainPaperTests`, `PageTests`, `LayoutTests`, `CrossLinkTests`
 - **`test_page_view_beacon.py`** (158 lines)
   One view per page, recorded on every page, with no timer in front of it.
   `BeaconSourceTests`, `WhatCountsAsViewingAnAuctionTests`, `OneViewPerPageTests`, `RowsFromTheBeaconTests`
@@ -637,7 +643,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1139 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1351 lines)
+- **`urls.py`** (1353 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -944,7 +950,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`bulk_add_lots.py`** (928 lines)
   Getting lots in at once: the bulk table, the quick-add page, and the CSV importer.
   `BulkAddLots`, `BulkAddLotsAuto`, `SaveLotAjax`, `ImportLotsFromCSV`
-- **`club_admin.py`** (1099 lines)
+- **`club_admin.py`** (1035 lines)
   Setting a club up: its details, membership settings, payment accounts, email.
 - **`club_api.py`** (1183 lines)
   The club REST API: ``/api/v1/clubs/<slug>/…``.
@@ -984,6 +990,9 @@ Every view on the site, split by the part of it the view belongs to.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
+- **`paddles.py`** (251 lines)
+  Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
+  `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
 - **`palette.py`** (554 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1075 lines)

@@ -426,6 +426,14 @@ ROUTE_LIST: list[Route] = [
         keywords=["lot list", "print lots", "paper list", "table numbers", "preview lots"],
     ),
     _r(
+        "auction_paddles",
+        "Print bidder paddles",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["paddles", "print paddles", "bidder cards", "bidder number cards", "reprint a paddle"],
+    ),
+    _r(
         "auction_printing_pdf",
         "Download everyone's labels as a PDF",
         "Running an auction",
@@ -842,7 +850,7 @@ ROUTE_LIST: list[Route] = [
         "Club admin",
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
-        keywords=["barcodes", "member cards", "scan"],
+        keywords=["barcodes", "member cards", "scan", "paddle stickers"],
     ),
     _r(
         "club_barcode_labels_pdf",
@@ -1209,6 +1217,7 @@ _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead 
 
 EXCLUDED: dict[str, str] = {
     "add_to_calendar": "Needs a pickup location; the Add to calendar button sits next to each one on the auction page.",
+    "auction_paddles_pdf": "Downloaded from Print bidder paddles, which first asks for plain paper in the printer.",
     # The library: one document's pages. search_documents and read_document answer with its link.
     "document_detail": "One library document; search_documents and read_document answer with its link.",
     "document_file": "A document's original file, served to someone who can see it; opened from its page.",

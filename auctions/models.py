@@ -2428,6 +2428,138 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
         return self.bidder_number
 
+    #: Taken from a merged-away member when this one has none.
+    MERGE_FILLS = (
+        "user",
+        "name",
+        "email",
+        "phone_number",
+        "address",
+        "memo",
+        "bidder_number",
+        "discord_id",
+        "discord_username",
+        "discord_roles",
+        "discord_role_override",
+        "last_discord_role_assigned",
+        "paypal_subscription_id",
+        "bap_points",
+        "hap_points",
+        "culture_points",
+        "bap_points_ytd",
+        "hap_points_ytd",
+        "culture_points_ytd",
+    )
+
+    @transaction.atomic
+    def merge_duplicate(self, duplicate, *, reason="", user=None, can_grant_roles=False, reviewed_fields=()):
+        """Fold *duplicate*, another member of this club, into this one and deactivate it. Not reversible.
+
+        What this member lacks comes from the duplicate, except *reviewed_fields*, which the caller has
+        decided; the later paid-through date wins. Roles carry over only with *can_grant_roles*, since
+        carrying one is granting it. Everything pointing at the duplicate moves here, its participant rows
+        too, which then have this member's details and number, one row per auction.
+        """
+        from .services import set_member_bidder_number, sync_member_to_shadows
+
+        if duplicate.pk == self.pk or duplicate.club_id != self.club_id:
+            msg = "Only two different members of one club can be merged."
+            raise ValueError(msg)
+        changed = set()
+        for field in self.MERGE_FILLS:
+            column = self._meta.get_field(field).attname
+            if field not in reviewed_fields and not getattr(self, column) and getattr(duplicate, column):
+                setattr(self, column, getattr(duplicate, column))
+                changed.add(field)
+        for field in ("membership_last_paid", "membership_expiration_date"):
+            theirs = getattr(duplicate, field)
+            if theirs and (not getattr(self, field) or theirs > getattr(self, field)):
+                setattr(self, field, theirs)
+                changed |= {field, "membership_expiration_reminder_due", "membership_expiration_reminder_30_days_due"}
+        # A club admin having edited either row makes the record the club's (see admin_edited).
+        flags = ["admin_edited"]
+        if can_grant_roles:
+            flags += [field.name for field in self._meta.fields if field.name.startswith("permission_")]
+        for field in flags:
+            if getattr(duplicate, field) and not getattr(self, field):
+                setattr(self, field, True)
+                changed.add(field)
+        if self.is_deleted and not duplicate.is_deleted:
+            self.is_deleted = False
+            changed.add("is_deleted")
+        if self.membership_carried_by_id == duplicate.pk:
+            self.membership_carried_by = None
+            changed.add("membership_carried_by")
+        if "email" in changed:
+            changed.add("email_address_status")
+        if changed:
+            self.save(update_fields=sorted(changed))
+
+        # Carrying is one level deep, so whoever the duplicate carried goes to whoever carries this member.
+        new_carrier = self.membership_carried_by or self
+        for carried in ClubMember.objects.filter(membership_carried_by=duplicate).exclude(pk=new_carrier.pk):
+            carried.membership_carried_by = new_carrier
+            carried.save(update_fields=["membership_carried_by"])
+        # A carried duplicate passes that on, unless this member has its own: a carrier, people it carries,
+        # a PayPal subscription, or dues paid past the carrier's.
+        carrier = duplicate.membership_carried_by
+        if (
+            carrier
+            and not carrier.is_deleted
+            and carrier.pk != self.pk
+            and not self.membership_carried_by_id
+            and not self.paypal_subscription_id
+            and not self.carried_memberships.filter(is_deleted=False).exists()
+        ):
+            own, carried_through = self.effective_expiration_date, carrier.effective_expiration_date
+            if not own or (carried_through and own <= carried_through):
+                self.membership_carried_by = carrier
+                self.save(update_fields=["membership_carried_by"])
+
+        BapAward.objects.filter(club_member=duplicate).update(club_member=self)
+        InvoicePayment.objects.filter(club_member=duplicate).update(club_member=self)
+        # An unpaid dues invoice renews whoever it names.
+        Invoice.objects.filter(club_member=duplicate).update(club_member=self)
+        for column in ("auction_email_member", "contact_email_member", "donation_email_member"):
+            Club.objects.filter(**{column: duplicate}).update(**{column: self})
+
+        moved = list(AuctionTOS.objects.filter(clubmember=duplicate).values_list("pk", flat=True))
+        AuctionTOS.objects.filter(pk__in=moved).update(clubmember=self)
+        for row in AuctionTOS.objects.filter(pk__in=moved):
+            kept_row = (
+                AuctionTOS.objects.filter(auction_id=row.auction_id, clubmember=self)
+                .exclude(pk=row.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if kept_row:
+                kept_row.merge_duplicate(row, reason=reason or "merged club members", user=user)
+
+        duplicate.is_deleted = True
+        duplicate.save(update_fields=["is_deleted"])
+        # update(): save() would link it straight back to the account by its email.
+        cleared = {"user": None, "bidder_number": ""} if "bidder_number" in changed else {"user": None}
+        ClubMember.objects.filter(pk=duplicate.pk).update(**cleared)
+        for column, value in cleared.items():
+            setattr(duplicate, column, value)
+
+        sync_member_to_shadows(self, acting_user=user)
+        if self.bidder_number:
+            set_member_bidder_number(self, self.bidder_number, acting_user=user)
+        if self.user_id:
+            # Linked through the member, as each row's next save would. A save can merge away a later row.
+            for row in AuctionTOS.objects.filter(clubmember=self, user__isnull=True):
+                if AuctionTOS.objects.filter(pk=row.pk).exists():
+                    row.save()
+        if self.bap_awards.exists():
+            BapAward.recalculate_member_points(self)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=user,
+            action=f"Merged member {duplicate} into {self}" + (f": {reason}" if reason else ""),
+            applies_to="MEMBERS",
+        )
+
 
 class AppleDeviceRegistration(models.Model):
     """A device holding a member's Apple Wallet pass; push_token is notified when the pass changes."""
@@ -5236,6 +5368,24 @@ class Auction(CachedPropertiesMixin, models.Model):
         return self.labels_qs.exclude(label_printed=True)
 
     @property
+    def paddle_people_qs(self):
+        """Who a batch of bidder paddles is for: everyone who can bid, which in a check-in auction is whoever
+        has checked in. In name order, the order they're handed out in.
+        """
+        # "ERROR" is AuctionTOS.save()'s placeholder for a number it couldn't generate.
+        return (
+            AuctionTOS.objects.filter(auction=self, bidding_allowed=True)
+            .exclude(bidder_number__in=("", "ERROR"))
+            .order_by("name", "pk")
+        )
+
+    def unprinted_paddles(self):
+        """``paddle_people_qs`` less anyone whose printed paddle still says what their row does. Compared in
+        Python, not SQL: the collation calls "Jose" and "José" the same name, and a fixed accent needs a reprint.
+        """
+        return [tos for tos in self.paddle_people_qs if not tos.paddle_is_current]
+
+    @property
     def percent_unsold_lots(self):
         # No lots means 0% unsold, like the sibling percentages.
         if not self.total_lots:
@@ -6536,6 +6686,29 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     survey_answer = models.CharField(max_length=10, choices=SURVEY_ANSWERS, blank=True, default="")
     survey_comments = models.TextField(blank=True, default="")
     survey_answered_on = models.DateTimeField(blank=True, null=True)
+    # What the last paddle printed for this person says, rather than a "printed" flag: most renumbering
+    # is an update() that no save() hook sees (services.clear_bidder_number_in), and comparing the two
+    # catches every path, including the person moved off a number so somebody else could have it.
+    paddle_printed_number = models.CharField(max_length=20, blank=True, default="")
+    paddle_printed_name = models.CharField(max_length=181, blank=True, default="")
+
+    @property
+    def paddle_is_current(self):
+        """Whether the last paddle printed for this person still has their number and name on it."""
+        return bool(self.paddle_printed_number) and (self.paddle_printed_number, self.paddle_printed_name) == (
+            self.bidder_number,
+            self.name or "",
+        )
+
+    @staticmethod
+    def mark_paddles_printed(people):
+        """Record what *people*'s paddles say, from the rows they were drawn from. update(), not save(): a
+        save sends the row up to its club member as though somebody had edited it.
+        """
+        for tos in people:
+            tos.paddle_printed_number = tos.bidder_number
+            tos.paddle_printed_name = tos.name or ""
+        AuctionTOS.objects.bulk_update(people, ["paddle_printed_number", "paddle_printed_name"])
 
     @property
     def phone_as_string(self):
@@ -6721,6 +6894,14 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             result += html.format_html(item, show_on_mobile_string, self.print_labels_link_html)
         if self.print_unprinted_labels_link_html:
             result += html.format_html(item, show_on_mobile_string, self.print_unprinted_labels_link_html)
+        if not self.auction.is_online:
+            # "Reprint" tells whoever is at the door that this paddle is already in the pile.
+            result += html.format_html(
+                "<span class='dropdown-item'><a href=\"{}?tos={}\"><i class='bi bi-123 me-1'></i>{}</a></span>",
+                reverse("auction_paddles", kwargs={"slug": self.auction.slug}),
+                self.pk,
+                "Reprint paddle" if self.paddle_is_current else "Print paddle",
+            )
         if self.email:
             icon_class = "bi bi-envelope"
             if self.email_address_status == "BAD":
@@ -7263,10 +7444,14 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 user=acting_user,
             )
 
-    def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
-        """Merge a duplicate AuctionTOS into self (the older record): move lots, adjustments and payments,
-        keep missing fields, log history, delete the duplicate. Club-managed auctions also merge ClubMembers.
-        ``user`` for admin-triggered merges.
+    @transaction.atomic
+    def merge_duplicate(self, duplicate, reason="same email", user=None, reviewed_fields=()):
+        """Fold a duplicate AuctionTOS into self (the older record) and delete it. ``user`` for
+        admin-triggered merges.
+
+        Everything pointing at the duplicate moves here, and its lots' accounts follow them. Fields self
+        lacks come from the duplicate, except *reviewed_fields*, which the caller has already decided. In a
+        club-managed auction the two club members become one as well.
         """
         if self.pk is None or duplicate.pk is None:
             # Both must be saved; an unsaved one means a save-time merge already deleted it.
@@ -7278,31 +7463,54 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if duplicate.auction != self.auction:
             msg = "Cannot merge AuctionTOS records from different auctions."
             raise ValueError(msg)
-        # Keep duplicate's values where self has none (explicit None/"" check).
-        if preserve_missing_fields:
-            fields_to_preserve = [
-                "user",
-                "name",
-                "email",
-                "memo",
-                "address",
-                "phone_number",
-                "bidder_number",
-                "clubmember",
-            ]
-            updates = {}
-            for field in fields_to_preserve:
-                self_val = getattr(self, field, None)
-                dup_val = getattr(duplicate, field, None)
-                if (self_val is None or self_val == "") and dup_val:
-                    updates[field] = dup_val
-                    setattr(self, field, dup_val)
-            if updates:
-                AuctionTOS.objects.filter(pk=self.pk).update(**updates)
-        # Move won lots to self
+        kept_member_id, duplicate_member_id = self.clubmember_id, duplicate.clubmember_id
+        # Keep duplicate's values where self has none (explicit None/"" check). Checking in and being
+        # called for a door prize happened to this person, whichever row recorded it.
+        fields_to_preserve = [
+            "user",
+            "name",
+            "email",
+            "memo",
+            "address",
+            "phone_number",
+            "bidder_number",
+            "clubmember",
+            "checked_in",
+            "door_prize_called",
+        ]
+        updates = {}
+        for field in fields_to_preserve:
+            if field in reviewed_fields:
+                continue
+            self_val = getattr(self, field, None)
+            dup_val = getattr(duplicate, field, None)
+            if (self_val is None or self_val == "") and dup_val:
+                updates[field] = dup_val
+                setattr(self, field, dup_val)
+        if "checked_in" in updates and duplicate.bidding_allowed and self.auction.use_check_in_mode:
+            # Checking in is what lets a person bid in check-in mode.
+            updates["bidding_allowed"] = self.bidding_allowed = True
+        if updates:
+            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
+        if duplicate.user_id and self.user_id and duplicate.user_id != self.user_id:
+            # Two accounts, one person, and the duplicate's drops out of this auction: its lots, wins and
+            # bids here become self's account's, so a lot it is winning sells to self.
+            sold = Lot.objects.filter(auctiontos_seller=duplicate)
+            for column in ("user", "added_by", "label_first_printed_by"):
+                sold.filter(**{column: duplicate.user_id}).update(**{column: self.user_id})
+            Lot.objects.filter(auctiontos_winner=duplicate, winner=duplicate.user_id).update(winner=self.user_id)
+            Bid.reassign(duplicate.user_id, self.user_id, lots=Lot.objects.filter(auction_id=self.auction_id))
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
-        # Move sold lots to self
         Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
+        if self.user_id:
+            # Lots added while neither row had an account, as save() claims them when it links one.
+            Lot.objects.filter(auctiontos_seller=self, user__isnull=True).update(user=self.user_id)
+        PickupLocation.objects.filter(contact_person=duplicate).update(contact_person=self)
+        # A signup for a job self already has goes with the duplicate, and its bounty with it: the
+        # invoice below would otherwise pay one job twice.
+        taken = list(VolunteerSignup.objects.filter(auctiontos=self).values_list("job_id", flat=True))
+        VolunteerSignup.objects.filter(auctiontos=duplicate).exclude(job_id__in=taken).update(auctiontos=self)
+        InvoiceAdjustment.objects.filter(volunteersignup__auctiontos=duplicate).delete()
         invoice = Invoice.for_participant(self)
         duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
         if duplicate_invoice:
@@ -7311,40 +7519,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             invoice.absorb(duplicate_invoice)
         invoice.recalculate()
         merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
-        if self.auction.is_club_managed and self.auction.club_id:
-            self_club_member = self.clubmember
-            dup_club_member = duplicate.clubmember
-            if dup_club_member and dup_club_member != self_club_member:
-                if self_club_member:
-                    # Move other TOS rows pointing at the duplicate ClubMember.
-                    AuctionTOS.objects.filter(clubmember=dup_club_member).exclude(pk=duplicate.pk).update(
-                        clubmember=self_club_member
-                    )
-                    # Preserve contact info on the surviving ClubMember
-                    for field in ("name", "email", "phone_number", "address"):
-                        self_val = getattr(self_club_member, field, None)
-                        dup_val = getattr(dup_club_member, field, None)
-                        if (self_val is None or self_val == "") and dup_val:
-                            setattr(self_club_member, field, dup_val)
-                    # Keep the later paid-through date; a merge must never shorten a membership.
-                    for field in ("membership_last_paid", "membership_expiration_date"):
-                        self_val = getattr(self_club_member, field, None)
-                        dup_val = getattr(dup_club_member, field, None)
-                        if dup_val and (self_val is None or dup_val > self_val):
-                            setattr(self_club_member, field, dup_val)
-                    self_club_member.save()
-                    ClubHistory.objects.create(
-                        club=self.auction.club,
-                        user=user,
-                        action=f"Merged club member {dup_club_member} into {self_club_member}: {reason}",
-                        applies_to="MEMBERS",
-                    )
-                    dup_club_member.is_deleted = True
-                    dup_club_member.save()
-                else:
-                    # self TOS has no club member yet — adopt the duplicate's
-                    self.clubmember = dup_club_member
-                    AuctionTOS.objects.filter(pk=self.pk).update(clubmember=dup_club_member)
+        club_managed = self.auction.is_club_managed and self.auction.club_id
+        if club_managed:
             ClubHistory.objects.create(
                 club=self.auction.club,
                 user=user,
@@ -7363,6 +7539,12 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             self.possible_duplicate = None
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
+        if club_managed and kept_member_id and duplicate_member_id and kept_member_id != duplicate_member_id:
+            # Two club members for one person. After the delete, so the member merge never sees this row.
+            kept_member = ClubMember.objects.get(pk=kept_member_id)
+            duplicate_member = ClubMember.objects.get(pk=duplicate_member_id)
+            if kept_member.club_id == duplicate_member.club_id:
+                kept_member.merge_duplicate(duplicate_member, reason=reason, user=user)
 
     @cached_property
     def closest_location_for_this_user(self):
@@ -11062,6 +11244,25 @@ class Bid(InvalidatesRelatedCache, models.Model):
         self.is_deleted = True
         self.save()
 
+    @staticmethod
+    def reassign(from_user, to_user, lots=None):
+        """Give *from_user*'s bids to *to_user*, on *lots* (a Lot queryset) or everywhere, for merges.
+
+        A bid counts by being its bidder's latest, so on a lot both of them bid on, moving the other's
+        could replace the better one. The worse of the two is withdrawn first.
+        """
+        moving = Bid.objects.filter(user=from_user)
+        if lots is not None:
+            moving = moving.filter(lot_number__in=lots)
+        live = Bid.objects.filter(is_deleted=False).order_by("-bid_time", "-pk")
+        theirs = set(live.filter(user=to_user).values_list("lot_number", flat=True))
+        for lot_id in set(moving.filter(is_deleted=False).values_list("lot_number", flat=True)) & theirs:
+            mine, kept = (live.filter(user=user, lot_number=lot_id).first() for user in (from_user, to_user))
+            # As Lot.bids ranks them: highest, then earliest.
+            worse = max((mine, kept), key=lambda bid: (-bid.amount, bid.last_bid_time))
+            Bid.objects.filter(user=worse.user_id, lot_number=lot_id).update(is_deleted=True)
+        moving.update(user=to_user)
+
 
 class Watch(InvalidatesRelatedCache, models.Model):
     """Users can watch lots: listed on their page, with an email before the end."""
@@ -11653,7 +11854,7 @@ class UserData(CachedPropertiesMixin, models.Model):
             Invoice.objects.filter(buyer=source_user).update(buyer=user_to_merge_to)
             Lot.objects.filter(user=source_user).update(user=user_to_merge_to)
             Lot.objects.filter(winner=source_user).update(winner=user_to_merge_to)
-            Bid.objects.filter(user=source_user).update(user=user_to_merge_to)
+            Bid.reassign(source_user, user_to_merge_to)
             PageView.objects.filter(user=source_user).update(user=user_to_merge_to)
             AuctionCampaign.objects.filter(user=source_user).update(user=user_to_merge_to)
             SearchHistory.objects.filter(user=source_user).update(user=user_to_merge_to)
@@ -11682,7 +11883,30 @@ class UserData(CachedPropertiesMixin, models.Model):
             for interest in UserInterestCategory.objects.filter(pk__in=updated_interest_ids):
                 interest.save()
 
-            for source_tos in list(AuctionTOS.objects.filter(user=source_user).select_related("auction")):
+            # Members first: a participant merge below would otherwise merge them without the roles.
+            for source_member in list(ClubMember.objects.filter(user=source_user)):
+                target_member = (
+                    ClubMember.objects.filter(club_id=source_member.club_id, user=user_to_merge_to)
+                    .exclude(pk=source_member.pk)
+                    .order_by("is_deleted", "pk")
+                    .first()
+                )
+                if target_member:
+                    # Signed in to both accounts, so the roles are already this person's.
+                    target_member.merge_duplicate(
+                        source_member,
+                        reason=f"merged from user account {source_user.username}",
+                        can_grant_roles=True,
+                    )
+                else:
+                    source_member.user = user_to_merge_to
+                    source_member.save(update_fields=["user"])
+
+            for pk in list(AuctionTOS.objects.filter(user=source_user).values_list("pk", flat=True)):
+                # Fetched one at a time: a merge can change or delete a later row.
+                source_tos = AuctionTOS.objects.filter(pk=pk, user=source_user).select_related("auction").first()
+                if not source_tos:
+                    continue
                 target_tos = (
                     AuctionTOS.objects.filter(user=user_to_merge_to, auction=source_tos.auction)
                     .exclude(pk=source_tos.pk)
@@ -11697,87 +11921,6 @@ class UserData(CachedPropertiesMixin, models.Model):
                 else:
                     source_tos.user = user_to_merge_to
                     source_tos.save()
-
-            for source_member in list(ClubMember.objects.filter(user=source_user).select_related("club")):
-                target_member = (
-                    ClubMember.objects.filter(club=source_member.club, user=user_to_merge_to)
-                    .exclude(pk=source_member.pk)
-                    .order_by("pk")
-                    .first()
-                )
-                if not target_member:
-                    source_member.user = user_to_merge_to
-                    source_member.save(update_fields=["user"])
-                    continue
-
-                member_updates = set()
-                for field in [
-                    "name",
-                    "email",
-                    "phone_number",
-                    "address",
-                    "discord_id",
-                    "discord_username",
-                    "discord_roles",
-                    "membership_last_paid",
-                    "membership_expiration_date",
-                    "membership_expiration_reminder_due",
-                    "discord_role_override",
-                    "last_discord_role_assigned",
-                    "bidder_number",
-                ]:
-                    source_value = getattr(source_member, field, None)
-                    target_value = getattr(target_member, field, None)
-                    if target_value in (None, "") and source_value not in (None, ""):
-                        setattr(target_member, field, source_value)
-                        member_updates.add(field)
-                for field in [
-                    "permission_admin",
-                    "permission_view",
-                    "permission_export",
-                    "permission_add_edit",
-                    "permission_edit_club",
-                    "permission_money",
-                    "permission_manage_auctions",
-                    "permission_manage_bap",
-                    "permission_manage_donations",
-                    "permission_send_announcements",
-                ]:
-                    if getattr(source_member, field) and not getattr(target_member, field):
-                        setattr(target_member, field, True)
-                        member_updates.add(field)
-                if source_member.bap_points and not target_member.bap_points:
-                    target_member.bap_points = source_member.bap_points
-                    member_updates.add("bap_points")
-                if source_member.hap_points and not target_member.hap_points:
-                    target_member.hap_points = source_member.hap_points
-                    member_updates.add("hap_points")
-                if source_member.culture_points and not target_member.culture_points:
-                    target_member.culture_points = source_member.culture_points
-                    member_updates.add("culture_points")
-                if source_member.bap_points_ytd and not target_member.bap_points_ytd:
-                    target_member.bap_points_ytd = source_member.bap_points_ytd
-                    member_updates.add("bap_points_ytd")
-                if source_member.hap_points_ytd and not target_member.hap_points_ytd:
-                    target_member.hap_points_ytd = source_member.hap_points_ytd
-                    member_updates.add("hap_points_ytd")
-                if source_member.culture_points_ytd and not target_member.culture_points_ytd:
-                    target_member.culture_points_ytd = source_member.culture_points_ytd
-                    member_updates.add("culture_points_ytd")
-                if not source_member.is_deleted and target_member.is_deleted:
-                    target_member.is_deleted = False
-                    member_updates.add("is_deleted")
-                if member_updates:
-                    target_member.save(update_fields=list(member_updates))
-
-                BapAward.objects.filter(club_member=source_member).update(club_member=target_member)
-                InvoicePayment.objects.filter(club_member=source_member).update(club_member=target_member)
-                AuctionTOS.objects.filter(clubmember=source_member).update(clubmember=target_member)
-                if target_member.bap_awards.exists():
-                    BapAward.recalculate_member_points(target_member)
-                source_member.user = None
-                source_member.is_deleted = True
-                source_member.save(update_fields=["user", "is_deleted"])
 
             for model, field_names in [
                 (

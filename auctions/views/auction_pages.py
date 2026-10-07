@@ -220,7 +220,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                             self.auctiontos,
                             reason=f"merged by {request.user.username}",
                             user=request.user,
-                            preserve_missing_fields=False,
+                            reviewed_fields=AuctionTOSMergeReviewForm.Meta.fields,
                         )
                         target = review_form.save()
                     messages.success(request, f"Merged {self.auctiontos.name} into {target.name}.")

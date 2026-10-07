@@ -94,6 +94,15 @@ curl -L -o auctions/static/js/vendor/zxing.min.js \
   "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"
 echo "✓ zxing.min.js downloaded"
 
+echo ""
+echo "11. Downloading Barlow Condensed Bold (SIL Open Font License)..."
+# The number on a printed bidder paddle (auctions/views/paddles.py). WeasyPrint reads it from disk, so
+# it is never served to a browser; the container's own fonts have digits too wide to read across a room.
+BARLOW="https://cdn.jsdelivr.net/gh/google/fonts@60824dce48f7dd28fe7d65559f2da1f6e04e585b/ofl/barlowcondensed"
+curl -L -o auctions/static/fonts/BarlowCondensed-Bold.ttf "$BARLOW/BarlowCondensed-Bold.ttf"
+curl -L -o auctions/static/fonts/BarlowCondensed-OFL.txt "$BARLOW/OFL.txt"
+echo "✓ BarlowCondensed-Bold.ttf downloaded"
+
 # Popper is in the Bootstrap bundle above, so it is not fetched separately.
 
 echo ""

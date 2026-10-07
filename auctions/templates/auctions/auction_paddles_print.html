@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    {% comment %}A sheet is exactly one page, so every person starts on a new page by filling the last one, not by a page-break rule. The two halves are the same, both upright: folded down the middle, the number is on the front and the back.{% endcomment %}
+    <style>
+        @font-face {
+            font-family: "Paddle";
+            src: url("{{ font_url }}");
+        }
+        @page {
+            size: {{ paper }};
+            margin: 0;
+        }
+        html, body {
+            margin: 0;
+        }
+        .sheet {
+            position: relative;
+            width: {{ page_width }}in;
+            height: {{ page_height }}in;
+            overflow: hidden;
+            break-after: page;
+        }
+        .sheet:last-child {
+            break-after: auto;
+        }
+        .half {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: {{ half_width }}in;
+            text-align: center;
+        }
+        .half.back {
+            left: {{ half_width }}in;
+        }
+        .number {
+            font-family: "Paddle", "DejaVu Sans", sans-serif;
+            line-height: 1;
+            white-space: nowrap;
+            margin-top: 0.55in;
+        }
+        .foot {
+            position: absolute;
+            left: {{ side_margin }}in;
+            right: {{ side_margin }}in;
+            bottom: 0.55in;
+        }
+        .foot svg {
+            display: block;
+            margin: 0 auto;
+        }
+        .name {
+            font-family: "Paddle", "DejaVu Sans", sans-serif;
+            line-height: 1.1;
+            margin-top: 0.1in;
+        }
+        .auction {
+            font-family: "DejaVu Sans", sans-serif;
+            font-size: 8pt;
+            color: #666;
+            margin-top: 0.06in;
+        }
+        .fold {
+            position: absolute;
+            left: {{ half_width }}in;
+            height: 0.3in;
+            border-left: 0.5pt solid #999;
+        }
+        .fold.top {
+            top: 0;
+        }
+        .fold.bottom {
+            bottom: 0;
+        }
+    </style>
+    <title>Bidder paddles</title>
+</head>
+<body>
+{% for paddle in paddles %}
+    <div class="sheet">
+        <div class="fold top"></div>
+        <div class="fold bottom"></div>
+        {% for side in sides %}
+        <div class="half {{ side }}">
+            <div class="number" style="font-size: {{ paddle.number_pt }}pt">{{ paddle.number }}</div>
+            <div class="foot">
+                {{ paddle.barcode }}
+                {% if paddle.name %}<div class="name" style="font-size: {{ paddle.name_pt }}pt">{{ paddle.name }}</div>{% endif %}
+                <div class="auction">{{ auction.title }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+{% endfor %}
+</body>
+</html>

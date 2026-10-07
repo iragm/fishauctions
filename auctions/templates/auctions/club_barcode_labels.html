@@ -55,7 +55,9 @@ style_reference.md.{% endcomment %}
   </div>
 </form>
 
-<p class="text-muted small mt-3" id="label-settings-link">
+{% comment %}The other way to print a paddle, so nobody makes stickers wanting the full-page kind, or the reverse; Print paddles links back here.{% endcomment %}
+<p class="text-muted small mt-3 mb-0">Need a paddle with a name on it? Use {% if paddles_url %}<a href="{{ paddles_url }}">Print paddles</a> in your auction{% else %}Print paddles, under More in your auction{% endif %}.</p>
+<p class="text-muted small mt-1" id="label-settings-link">
   Label size: <strong>{{ preset_name }}</strong>.
   <a href="{% url 'printing' %}?next={{ request.path }}">Change label settings</a>
 </p>
@@ -66,7 +68,7 @@ style_reference.md.{% endcomment %}
       <label class="form-label small mb-1">Label type</label>
       <select name="label_type" class="form-select form-select-sm label-type-select" style="width:160px">
         <option value="">— select —</option>
-        <option value="bidder_paddle">Bidder paddle</option>
+        <option value="bidder_paddle">Paddle sticker</option>
         <option value="charge">Item for sale</option>
         <option value="discount">Discount</option>
         <option value="member_card">User</option>
