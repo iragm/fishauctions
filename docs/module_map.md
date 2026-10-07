@@ -392,6 +392,9 @@ this only quotes its opening sentence.
 - **`test_data_leak_penetration.py`** (259 lines)
   Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin.
   `DataLeakPenetrationTests`
+- **`test_data_migrations.py`** (30 lines)
+  Data migrations meet prod's rows, not a fresh database's, and one that raises stops the deploy
+  `DoubledRowsTests`
 - **`test_direct_sales_off.py`** (109 lines)
   Selling outside an auction, switched off by ``ALLOW_USERS_TO_CREATE_LOTS``: nothing user facing offers it,
   `DirectSalesOffTests`
@@ -419,7 +422,7 @@ this only quotes its opening sentence.
 - **`test_form_filter_fixes.py`** (398 lines)
   Regression tests for a batch of form and filter fixes: edit locks and limits on lot forms, the posted
   `BulkAddFormsetEditLockTests`, `CreateLotFormAuctionMoveTests`, `ManageUsersThroughClubPermissionTests`, `EditLotUsesItsOwnAuctionTests`, `PickupLocationFormAuctionTests`, `NumericLimitTests`, `LotFilterTests`, `NumericLookingSearchTests`, `AuctionTOSKeywordBoundaryTests`, `GetClubsTests`
-- **`test_form_friction.py`** (535 lines)
+- **`test_form_friction.py`** (537 lines)
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
 - **`test_free_text_usage.py`** (48 lines)
   `FreeTextUsageTests`

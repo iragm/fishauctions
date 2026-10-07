@@ -3,7 +3,7 @@
 Typing "paddles" used to find only the club's Print Barcodes page, whose paddle option is a sticker for a
 paddle you already own. Now the printed kind has a row of its own, and the barcode row says stickers.
 
-Idempotent get_or_create + synonym refresh, matching 0336/0345.
+Idempotent: rows already there get the new icon and synonyms, as in 0336/0345.
 """
 
 from django.db import migrations
@@ -35,15 +35,11 @@ def _entries():
 def seed(apps, schema_editor):
     CommandPalettePage = apps.get_model("auctions", "CommandPalettePage")
     for entry in _entries():
-        obj, _ = CommandPalettePage.objects.get_or_create(
-            search_term=entry["search_term"],
-            target=entry["target"],
-            url="",
-            defaults={"icon": entry["icon"], "synonyms": entry["synonyms"]},
-        )
-        obj.synonyms = entry["synonyms"]
-        obj.icon = entry["icon"]
-        obj.save()
+        key = {"search_term": entry["search_term"], "target": entry["target"], "url": ""}
+        # Not get_or_create: nothing stops an admin adding the same row twice, and MultipleObjectsReturned
+        # here would stop a deploy.
+        if not CommandPalettePage.objects.filter(**key).update(icon=entry["icon"], synonyms=entry["synonyms"]):
+            CommandPalettePage.objects.create(**key, icon=entry["icon"], synonyms=entry["synonyms"])
 
 
 def unseed(apps, schema_editor):

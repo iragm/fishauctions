@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.staticfiles.storage import staticfiles_storage
-from django.test import Client, RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 
 from auctions import form_friction
@@ -423,6 +423,8 @@ class UnsavedChangesBarTests(StandardTestCase):
         self.assertIsNotNone(match, "no token on the auction settings page")
         self.assertEqual(form_friction.read_abandon_token(match.group(1)), "AuctionEditForm")
 
+    # With the promo page on, / sends a signed-out visitor to /about/.
+    @override_settings(ENABLE_PROMO_PAGE=False)
     def test_a_page_with_no_instrumented_form_still_gets_the_bar_but_no_token(self):
         """The bar is a usability feature; the beacon is an instrument. They are independent."""
         page = self.client.get("/").content.decode()

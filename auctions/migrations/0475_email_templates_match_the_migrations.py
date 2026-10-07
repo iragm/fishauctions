@@ -128,11 +128,11 @@ TEMPLATES = {
 def forwards(apps, schema_editor):
     EmailTemplate = apps.get_model("post_office", "EmailTemplate")
     for name, (subject, content, html_content) in TEMPLATES.items():
-        EmailTemplate.objects.update_or_create(
-            name=name,
-            language="",
-            defaults={"subject": subject, "content": content, "html_content": html_content},
-        )
+        values = {"subject": subject, "content": content, "html_content": html_content}
+        # Not update_or_create: the unique constraint can't stop two rows of one name (its third column is
+        # a nullable FK), and MultipleObjectsReturned here would stop a deploy.
+        if not EmailTemplate.objects.filter(name=name, language="").update(**values):
+            EmailTemplate.objects.create(name=name, language="", **values)
 
 
 class Migration(migrations.Migration):
