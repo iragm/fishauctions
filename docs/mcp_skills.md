@@ -55,12 +55,27 @@ view or service it goes through. This file keeps only choices that look like mis
 
 ## Donation vendors
 
-- **The address book is not what is rationed; the mailbox is.** There is no CSV import and no bulk
-  add, and a club with four hundred sponsors in a spreadsheet loads them one confirmed write at a
+- **The address book is not what is rationed; this site's mailbox is.** There is no CSV import and no
+  bulk add, and a club with four hundred sponsors in a spreadsheet loads them one confirmed write at a
   time. That is friction on purpose, not a security bound: the bound is
   `donations.MAX_DONATION_EMAILS_PER_DAY` a club a day, counted off the stored `DonationEmail` rows
   rather than off who asked, so an agent and the site's own dialog spend one allowance. Adding a row
   sends nothing.
+- **Mail in somebody's own mailbox is recorded, never rationed.** `record_donation_email` files a
+  message an assistant read through the caller's own mail connector (Gmail's, say), either way, as
+  `CHANNEL_OWN_EMAIL`, which `donation_email_quota` doesn't count: no mail left here and no model of
+  ours was paid, the same argument as a webform. It is filed days late and in any order, so the
+  message's own date decides what it does — only the newest message moves `last_contact` and the
+  follow-up clock, only the newest reply moves the status — and its `message_id` is that mailbox's
+  own id, recorded once per vendor, which is what makes going over a mailbox twice harmless. That id
+  is no Message-ID, so `_thread_headers` never threads onto one. Mail from this site's own addresses
+  (`came_through_this_site`: the relay's forwards, the vendor aliases) is refused, because a club
+  that also forwards replies would otherwise get each one twice, and its contact and auction forwards
+  aren't donation mail. The rest of the mailbox is the prompt's to leave alone: nothing here can tell
+  a vendor's receipt from their reply. `describe_donation_vendor` hands the
+  caller `email_footer`, `unsubscribe_footer`'s own text: the postal address and the unsubscribe link
+  are owed whichever way the mail goes, and the `work_donation_list` prompt says to end every draft
+  with it.
 - `contact_donation_vendor` takes a subject and body the **caller** wrote, which is the only part
   this site was writing for itself before. Everything else is still the server's and cannot be
   argued out of it: the club's postal address, the unsubscribe link, the per-vendor reply address

@@ -122,7 +122,7 @@ this only quotes its opening sentence.
 - **`donation_views.py`** (608 lines)
   Donation tracking views: the vendor table, the vendor panel, and the contact dialog.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
-- **`donations.py`** (1033 lines)
+- **`donations.py`** (1163 lines)
   Donation tracking: asking vendors for donations and reading their replies.
 - **`early_adds.py`** (135 lines)
   Do in-person auctions whose lots and people are added early gross more?
@@ -187,7 +187,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14436 lines)
+- **`models.py`** (14441 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -204,7 +204,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (15988 lines)
+- **`palette_actions.py`** (16226 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2210 lines)
   Natural-language orchestration for the command palette.
@@ -403,7 +403,7 @@ this only quotes its opening sentence.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
 - **`test_documents.py`** (1057 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
-- **`test_donations.py`** (2620 lines)
+- **`test_donations.py`** (3015 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
 - **`test_early_adds.py`** (69 lines)
   `EarlyAddsTests`
@@ -466,10 +466,10 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1536 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_permissions.py`** (710 lines)
+- **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
-- **`test_mcp_resources.py`** (308 lines)
+- **`test_mcp_resources.py`** (350 lines)
   The addressable reads and the recipes: ``resources/templates/list``, ``prompts/*``, completions.
   `ResourceCatalogueTests`, `ResourceEndpointTests`, `PromptTests`, `PromptEndpointTests`
 - **`test_mcp_widgets.py`** (197 lines)
@@ -523,7 +523,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (873 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5262 lines)
+- **`test_palette_assist.py`** (5264 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1285 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -815,7 +815,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`oidc.py`** (75 lines)
   OpenID Connect on top of the OAuth 2.1 server, for the one thing OAuth alone can't say: who.
   `Validator`, `sign_with_rs256`
-- **`prompts.py`** (361 lines)
+- **`prompts.py`** (466 lines)
   Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
   `Argument`, `Prompt`, `descriptors`, `prompt_list`, `render`, `complete`, `completes`
 - **`protocol.py`** (252 lines)

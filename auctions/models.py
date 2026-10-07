@@ -2844,9 +2844,10 @@ class DonationVendor(models.Model):
 class DonationEmail(models.Model):
     """One contact with a donation vendor: a record, not a mail client. Outgoing rows on send, on copy, or
     when somebody reports submitting the vendor's own form; incoming from the inbound webhook. Plain
-    text, images stripped.
+    text, images stripped. ``CHANNEL_OWN_EMAIL`` rows, either way, are what an AI assistant read in the
+    admin's own mailbox and filed here (``donations.record_own_email``).
 
-    Still named for email because email is what all but one ``channel`` is, and the table holds every
+    Still named for email because email is what most ``channel`` values are, and the table holds every
     foreign key in the thread.
     """
 
@@ -2857,11 +2858,13 @@ class DonationEmail(models.Model):
         (DIRECTION_OUTGOING, "Outgoing"),
     )
     CHANNEL_EMAIL = "email"
+    CHANNEL_OWN_EMAIL = "own_email"
     CHANNEL_WEBFORM = "webform"
     CHANNEL_PHONE = "phone"
     CHANNEL_IN_PERSON = "in_person"
     CHANNEL_CHOICES = (
         (CHANNEL_EMAIL, "Email"),
+        (CHANNEL_OWN_EMAIL, "Email, in your own mailbox"),
         (CHANNEL_WEBFORM, "Their donation request form"),
         (CHANNEL_PHONE, "Phone"),
         (CHANNEL_IN_PERSON, "In person"),
@@ -2874,7 +2877,9 @@ class DonationEmail(models.Model):
         choices=CHANNEL_CHOICES,
         default=CHANNEL_EMAIL,
         db_index=True,
-        help_text="How this contact happened. Only email rows count against the daily email allowance.",
+        help_text=(
+            "How this contact happened. Only email this site sent or wrote counts against the daily email allowance."
+        ),
     )
     sender = models.CharField(max_length=255, blank=True, default="")
     recipients = models.CharField(max_length=1000, blank=True, default="")

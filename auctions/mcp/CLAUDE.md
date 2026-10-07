@@ -290,10 +290,14 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   type and CSP are already the shared spelling, and a widget that silently doesn't draw is worth
   more than one key on nine tools.
 - **Prompts** (`auctions/mcp/prompts.py`): `run_check_in`, `chase_unpaid`, `set_up_next_year`,
-  `write_announcement`, `build_an_integration`, and the library's `digitize_documents`,
-  `tidy_the_library`, `ask_the_library` — the only safe place for a multi-step recipe, because
-  a person picks it off a menu rather than a model choosing it. Nothing in a prompt body is
-  interpolated except its own arguments (`test_mcp_resources` enforces it).
+  `write_announcement`, `build_an_integration`, the donation desk's `work_donation_list` and
+  `find_donation_vendors`, and the library's `digitize_documents`, `tidy_the_library`,
+  `ask_the_library` — the only safe place for a multi-step recipe, because a person picks it off a
+  menu rather than a model choosing it. Nothing in a prompt body is interpolated except its own
+  arguments, and every tool, parameter or result key a body names still exists
+  (`test_mcp_resources` enforces both). `work_donation_list` makes the assistant the club's mail
+  client, which only works if it has one: checking for a mail connector is its first step, because
+  this server cannot see what else the client is connected to.
 - **Resources** (`auctions/mcp/resources.py`): `auction://`, `lot://`, `club://` templates,
   `me://context`, `me://activity`, `help://faq` — each names a registered **read-only** action, so
   there's no second permission path. **Nothing that names somebody is ever listed**: `resources/list`

@@ -52,7 +52,7 @@ from django.utils.text import Truncator
 from . import command_palette, palette_routes, source_code
 from .documents.models import TOPIC_LABELS, TOPICS
 from .documents.search import can_use_library
-from .models import AuctionTOS, ClubMember, DonationVendor, Lot
+from .models import AuctionTOS, ClubMember, DonationEmail, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
     auction_date_warnings,
@@ -6720,12 +6720,15 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
 #   add_donation_vendor        one row, through the vendor form
 #   update_donation_vendor     status, email, context, follow-up date
 #   contact_donation_vendor    a message the caller wrote, sent or recorded
+#   record_donation_contact    a request made on their own form, by phone or at the counter
+#   record_donation_email      a message in the caller's own mailbox, either way
 #
 # Adding a row sends nothing. What is rationed is contacting, and it already was:
 # ``donations.MAX_DONATION_EMAILS_PER_DAY`` a club a day, counted off the stored messages, so a call
 # here and the site's own dialog draw on one allowance. There is deliberately no bulk add and no
 # import -- a list of four hundred strangers is four hundred confirmed writes, and it buys nothing,
-# since the mailbox is what is bounded and not the address book.
+# since this site's mailbox is what is bounded and not the address book. The caller's own mailbox is
+# not this site's to ration: ``record_donation_email`` files what went through it, and spends nothing.
 
 
 def _donation_club_or_problem(request, params: dict[str, Any], key: str = "club"):
@@ -6856,6 +6859,23 @@ def _dossier_block(club, vendor, asked_by=None) -> dict[str, Any]:
     return rows
 
 
+def _email_footer(vendor) -> str | None:
+    """What an email to *vendor* written in the caller's own mailbox has to end with, or ``None`` when no
+    email may be written to them.
+
+    ``donations.unsubscribe_footer``, the same text this site appends to its own: the club's postal
+    address and the vendor's unsubscribe link don't stop being owed because the mail went another way.
+    """
+    from . import donations
+
+    if vendor.contacted_off_site or not vendor.can_be_contacted:
+        return None
+    try:
+        return donations.unsubscribe_footer(vendor).strip()
+    except donations.MissingMailingAddress:
+        return None
+
+
 def _vendor_status(hint: str) -> str | None:
     """One stored status from what the caller called it, or ``None`` if it's nothing we store."""
     asked = (hint or "").strip().lower().replace(" ", "_").replace("-", "_")
@@ -6869,8 +6889,6 @@ def list_donation_vendors(request, params: dict[str, Any]) -> dict[str, Any]:
     overdue first -- each with what they last said.
     """
     from django.db.models import F, OuterRef, Subquery
-
-    from .models import DonationEmail
 
     club, problem = _donation_club_or_problem(request, params)
     if problem:
@@ -6908,6 +6926,8 @@ def list_donation_vendors(request, params: dict[str, Any]) -> dict[str, Any]:
     return {
         "found": bool(total),
         "club": club.name,
+        # Where "near the club" is, for a caller looking for more businesses to ask.
+        "club_location": (club.location or "").strip() or club.mailing_address_one_line or None,
         "vendors": [_vendor_row(vendor, latest_reply=vendor.latest_reply_summary) for vendor in page],
         "count": total,
         "showing": len(page),
@@ -6943,17 +6963,21 @@ def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
         # Our own footer back out: it is appended on the way out and is not part of what was said.
         body = donations.truncate_for_model(donations.strip_donation_footer(email_row.body), VENDOR_BODY_LIMIT)
         incoming = email_row.is_incoming
-        thread.append(
-            {
-                "direction": "from them" if incoming else "from the club",
-                "date": email_row.date.strftime("%Y-%m-%d"),
-                # Their words are a stranger's; the club's own are not fenced.
-                "subject": untrusted_short(email_row.subject) if incoming else email_row.subject,
-                "summary": untrusted(email_row.summary) or None,
-                "body": untrusted(body) if incoming else body,
-                "bounced": email_row.bounced or None,
-            }
-        )
+        message = {
+            "direction": "from them" if incoming else "from the club",
+            "date": email_row.date.strftime("%Y-%m-%d"),
+            # Their words are a stranger's; the club's own are not fenced.
+            "subject": untrusted_short(email_row.subject) if incoming else email_row.subject,
+            "summary": untrusted(email_row.summary) or None,
+            "body": untrusted(body) if incoming else body,
+            "bounced": email_row.bounced or None,
+        }
+        if email_row.channel == DonationEmail.CHANNEL_OWN_EMAIL and email_row.message_id:
+            # The caller's own mailbox's id for it, which is what a reply in the same thread is drafted
+            # against. Mail that came through this site has a Message-ID instead, no use to anybody's
+            # mail connector.
+            message["message_id"] = email_row.message_id
+        thread.append(message)
     summary = f"{vendor.name} in {club.name}: {vendor.get_status_display().lower()}."
     if vendor.contacted_off_site:
         summary += f" Contacted by {vendor.get_contact_method_display().lower()}, not from this site."
@@ -6963,6 +6987,8 @@ def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d}."
     if not vendor.can_be_contacted:
         summary += f" {vendor.cannot_contact_reason}."
+    elif not vendor.contacted_off_site and not club.can_send_email:
+        summary += " The club has no mailing address yet, and every donation email has to carry one."
     return {
         "found": True,
         "club": club.name,
@@ -6973,6 +6999,8 @@ def describe_donation_vendor(request, params: dict[str, Any]) -> dict[str, Any]:
         "club_sends_the_email": bool(club.sends_donation_email),
         "club_donation_context": club.donation_context.strip() or None,
         "club_mailing_address": club.mailing_address.strip() or None,
+        "club_next_event": club.next_donation_event or None,
+        "email_footer": _email_footer(vendor),
         # Only where it is the thing needed: for an email vendor it is a second copy of the club's
         # settings nobody asked for.
         "what_their_form_asks_for": (
@@ -7237,8 +7265,8 @@ def record_donation_contact(request, params: dict[str, Any]) -> dict[str, Any]:
         return problem
     if not vendor.contacted_off_site:
         return _error(
-            f"{vendor.name} is contacted by email, which this site does itself. "
-            "contact_donation_vendor sends it and records it in one go."
+            f"{vendor.name} is contacted by email. contact_donation_vendor sends it from this site and "
+            "records it in one go; record_donation_email records one sent from your own mailbox."
         )
     try:
         email_row = donations.record_offsite_contact(
@@ -7258,6 +7286,165 @@ def record_donation_contact(request, params: dict[str, Any]) -> dict[str, Any]:
         club=club.name,
         vendor_status=vendor.get_status_display(),
         **_quota_block(club),
+        followups=_donation_followups(club),
+        **_about(club=club),
+    )
+
+
+#: What a message's direction is called. ``sent`` and ``received`` are the two the schema names.
+_MAIL_DIRECTION_WORDS = {
+    DonationEmail.DIRECTION_OUTGOING: ("sent", "send", "outgoing", "out", "from_us", "from_the_club", "to_them"),
+    DonationEmail.DIRECTION_INCOMING: ("received", "incoming", "in", "reply", "from_them", "from_the_vendor"),
+}
+
+#: A reply's ``status`` words that mean "leave them where they are" -- ``summarize_incoming``'s unclear.
+_UNCLEAR_REPLY_WORDS = ("unclear", "unknown", "unsure", "none", "auto_reply", "out_of_office", "bounce", "bounced")
+
+
+def _mail_direction(hint: str) -> str | None:
+    """``DIRECTION_OUTGOING`` or ``DIRECTION_INCOMING`` from what the caller called it, or ``None``."""
+    asked = (hint or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return next((direction for direction, words in _MAIL_DIRECTION_WORDS.items() if asked in words), None)
+
+
+def _message_date(user, said: str):
+    """When a message in somebody's mailbox was sent: ``(datetime, error)``, and now when nothing was said.
+
+    In whatever form the mailbox shows it: ISO 8601 (a naive one on the user's clock), a bare date (its
+    noon, which no time zone moves into another day), a ``Date:`` header's RFC 2822, or epoch seconds or
+    milliseconds.
+    """
+    from datetime import UTC, datetime
+    from email.utils import parsedate_to_datetime
+
+    from django.utils.dateparse import parse_date
+
+    said = (said or "").strip()
+    if not said:
+        return timezone.now(), ""
+    if said.isdigit() and len(said) in (10, 13):
+        return datetime.fromtimestamp(int(said) / (1000 if len(said) == 13 else 1), tz=UTC), ""
+    try:
+        day = parse_date(said)
+        parsed, _ = _parse_when(user, f"{day.isoformat()}T12:00" if day else said)
+    except ValueError:
+        # Well formed and impossible: the 31st of September.
+        parsed = None
+    if parsed is None:
+        try:
+            parsed = parsedate_to_datetime(said)
+        except (TypeError, ValueError, IndexError):
+            parsed = None
+        if parsed is not None and timezone.is_naive(parsed):
+            parsed = parsed.replace(tzinfo=UTC)
+    if parsed is None:
+        return None, f"I couldn't read “{said}” as a date. Use a format like 2026-10-05T14:30-04:00."
+    return parsed, ""
+
+
+def _address_list(value) -> str:
+    """Addresses as one line. A mailbox hands its recipients over as a list as often as a string."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
+
+
+def record_donation_email(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Record one message from the caller's own mailbox against a vendor, through
+    ``donations.record_own_email``.
+
+    For a club working its list from somebody's own email, with an assistant connected to that mailbox:
+    this is the record a reply to the vendor's tracked alias, or a request sent from this site, would
+    have made by itself. Nothing is sent and no model of ours reads anything, so neither of the club's
+    daily allowances is spent.
+    """
+    from . import donations
+
+    club, problem = _donation_club_or_problem(request, params)
+    if problem:
+        return problem
+    vendor, problem = _resolve_vendor(club, _str(params, "vendor") or _str(params, "name"))
+    if problem:
+        return problem
+    direction = _mail_direction(_str(params, "direction"))
+    if direction is None:
+        return _need(
+            f"Did the club send this email to {vendor.name}, or did they send it to the club? "
+            "Say direction='sent' or 'received'."
+        )
+    incoming = direction == DonationEmail.DIRECTION_INCOMING
+    body = _str(params, "body") or _str(params, "message")
+    if not body:
+        return _need(f"What does the email say? Its text is what's kept on {vendor.name}'s record.")
+    when, problem_text = _message_date(request.user, _str(params, "date"))
+    if when is None:
+        return _error(problem_text)
+    status = None
+    said_status = _str(params, "status")
+    asked = said_status.lower().replace(" ", "_").replace("-", "_")
+    if incoming and asked and asked not in _UNCLEAR_REPLY_WORDS:
+        status = _vendor_status(asked)
+        if status not in DonationVendor.LLM_ASSIGNABLE_STATUSES:
+            # Refused before anything is filed, so the retry is one call and not a half-done one.
+            return _error(
+                f"A reply makes a vendor interested, promised or not_interested, or leaves them where they "
+                f"are (unclear), not “{said_status}”. Donation received and do not contact are somebody's "
+                "own word: update_donation_vendor sets them."
+            )
+    yours = (request.user.email or "").strip()
+    sender = _str(params, "sender") or _str(params, "from")
+    to = _address_list(params.get("to") if params.get("to") not in (None, "") else params.get("recipients"))
+    if incoming:
+        sender, to = sender or vendor.email, to or yours
+    else:
+        sender, to = sender or yours, to or vendor.email
+    method_was = vendor.contact_method
+    try:
+        email_row, created = donations.record_own_email(
+            vendor,
+            direction=direction,
+            subject=_str(params, "subject"),
+            body=body,
+            sender=sender,
+            recipients=to,
+            date=when,
+            message_id=_str(params, "message_id"),
+            summary=_str(params, "summary") if incoming else "",
+            status=status,
+            user=request.user,
+            via=via(request),
+        )
+    except donations.DonationSendError as error:
+        return _error(str(error))
+    vendor.refresh_from_db()
+    on = f"{timezone.localtime(email_row.date):%B %-d}"
+    if not created:
+        summary = f"That email of {on} is already on {vendor.name}'s record, so nothing changed."
+    elif email_row.bounced:
+        summary = f"Recorded a bounce of {on}: email to {vendor.name} isn't arriving, so their address may be wrong."
+    elif incoming:
+        summary = f"Recorded {vendor.name}'s reply of {on}."
+        newer = vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING, date__gt=email_row.date)
+        if status and newer.exists():
+            summary += f" A newer reply decides where they stand: “{vendor.get_status_display()}”."
+        else:
+            summary += f" They're “{vendor.get_status_display()}”."
+        if vendor.contact_method != method_was:
+            summary += f" They wrote from {vendor.email}, so they're contacted by email from now on."
+    else:
+        summary = f"Recorded the email the club sent {vendor.name} on {on}."
+    if created and not vendor.can_be_contacted:
+        summary += f" {vendor.cannot_contact_reason}."
+    elif created and vendor.is_followup_due:
+        summary += " It's the club's turn to write to them."
+    elif created and vendor.followup_due:
+        summary += f" Follow up on {timezone.localtime(vendor.followup_due):%B %-d} if they don't reply."
+    return _ok(
+        summary,
+        vendor=vendor.name,
+        club=club.name,
+        vendor_status=vendor.get_status_display(),
+        already_recorded=not created,
         followups=_donation_followups(club),
         **_about(club=club),
     )
@@ -13932,8 +14119,9 @@ register(
             "them, and the emails to and from them with the newest first. This is what their "
             "last message actually said, which list_donation_vendors only summarizes in a line. "
             "It also returns the club's own donation details — its standing description, its "
-            "postal address, and whether this site sends the mail or the club copies it out. "
-            "Club donation staff only."
+            "postal address, its next event, and whether this site sends the mail or the club "
+            "copies it out — and the email_footer that an email to them written in your own "
+            "mailbox has to end with. Club donation staff only."
         ),
         params={
             "vendor": "string, required. The business name, their contact's name, or their email address.",
@@ -14064,7 +14252,8 @@ register(
             "adds the club's postal address, the unsubscribe link and a reply address that brings "
             "their answer back onto their row. A club set up to send its own donation mail gets "
             "the message filed to copy out instead of sent. Counts against the club's daily "
-            "donation-email allowance, which every donation read reports. Club donation staff only."
+            "donation-email allowance, which every donation read reports; an email sent from your "
+            "own mailbox is record_donation_email's, and spends none of it. Club donation staff only."
         ),
         params={
             "vendor": "string, required. The business name, their contact's name, or their email address.",
@@ -14081,6 +14270,54 @@ register(
         aliases={"name", "message"},
         confirm_template="Email a donation vendor",
         examples=["ask the corner pet shop for a raffle donation", "reply to fishy business about the gift card"],
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="record_donation_email",
+        description=(
+            "Record one email from your own mailbox against a donation vendor: one the club sent "
+            "them, or their reply. This is how a club that writes to vendors from its own email, "
+            "through a mail connector such as Gmail's, keeps the list current: it moves the vendor's "
+            "status and follow-up date the way mail through this site does, and it never counts "
+            "against the daily donation-email allowance, because nothing is sent from here. A "
+            "message_id already on file is not recorded again. Club donation staff only."
+        ),
+        params={
+            "vendor": "string, required. The business name, their contact's name, or their email address.",
+            "direction": (
+                "string, required. 'sent' for an email the club sent them, 'received' for one they sent the club."
+            ),
+            "body": "string, required. The message as plain text, without the earlier messages quoted under it.",
+            "subject": "string, optional. Its subject line.",
+            "date": (
+                "string, optional, default now. When it was sent, like 2026-10-05T14:30-04:00. Only the "
+                "newest message on file moves the follow-up date, so give the real one."
+            ),
+            "message_id": (
+                "string, optional. The mailbox's own id for the message, such as Gmail's. Pass it, and "
+                "going over the same mail twice records nothing twice."
+            ),
+            "sender": "string, optional. Who it's from. Defaults to the vendor for 'received', and to you for 'sent'.",
+            "to": "string, optional. Who it went to. Defaults the other way round.",
+            "summary": (
+                "string, optional. For 'received': what they said and what the club has to do next, "
+                "under 200 characters. It's the line the vendor list shows."
+            ),
+            "status": (
+                "string, optional. For 'received': interested, promised, not_interested, or unclear "
+                "(auto-replies, out-of-office, anything else). Received and do_not_contact are "
+                "update_donation_vendor's."
+            ),
+            "club": "string, optional. Club name. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=record_donation_email,
+        aliases={"name", "message", "from", "recipients"},
+        confirm_template="Record a donation email",
+        examples=["record pat's reply from my inbox", "I emailed the corner pet shop from gmail yesterday"],
         needs=NEEDS_CLUB_ADMIN,
     )
 )
@@ -15331,6 +15568,7 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "update_donation_vendor": _DONATION_DESK,
     "record_donation_contact": _DONATION_DESK,
     "contact_donation_vendor": _DONATION_DESK,
+    "record_donation_email": _DONATION_DESK,
     # Writes an agent can target precisely; the palette reaches these pages via go_to_page.
     "remove_lot": _PRECISE_TARGET,
     "queue_lot": _PRECISE_TARGET,

@@ -6120,7 +6120,7 @@ class ClubDonationSettingsForm(forms.ModelForm):
             (
                 Club.DONATION_EMAIL_MODE_COPY,
                 mark_safe(  # noqa: S308 - literal
-                    "Copy/paste to my email<br><small class='text-muted'>No way to track replies</small>"
+                    "Copy/paste to my email<br><small class='text-muted'>Replies come to your own inbox</small>"
                 ),
             ),
         ]

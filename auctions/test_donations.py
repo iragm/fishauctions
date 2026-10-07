@@ -1387,7 +1387,8 @@ class DailyEmailLimitTests(DonationTestMixin, TestCase):
         self.fill_the_day(4)
         self.client.force_login(self.admin)
         response = self.client.get(reverse("club_donation_vendors", kwargs={"slug": self.club.slug}))
-        self.assertContains(response, "Donation emails today")
+        # From this site: what somebody sends from their own mailbox isn't on the bar, nor counted.
+        self.assertContains(response, "Donation emails from this site today")
         self.assertContains(response, f"4 of {donations.MAX_DONATION_EMAILS_PER_DAY}")
 
     def test_a_blocked_vendor_still_says_what_is_wrong_with_the_vendor(self):
@@ -1762,7 +1763,7 @@ class TextHandlingTests(TestCase):
 @isolated_cache("donations")
 @override_settings(**ROUTING_SETTINGS)
 class DonationSkillTests(DonationTestMixin, TestCase):
-    """The five donation skills on ``/mcp/``.
+    """The donation skills on ``/mcp/``.
 
     The club asked for a spreadsheet import. It didn't get one: what these add is the address book a
     row at a time, and the mailbox under the allowance that was already there.
@@ -1775,6 +1776,7 @@ class DonationSkillTests(DonationTestMixin, TestCase):
         "add_donation_vendor": {"name": "Somewhere New"},
         "update_donation_vendor": {"vendor": "Fishy Business", "status": "received"},
         "contact_donation_vendor": {"vendor": "Fishy Business", "subject": "Hi", "body": "Please donate"},
+        "record_donation_email": {"vendor": "Fishy Business", "direction": "received", "body": "Happy to help"},
     }
 
     def _run(self, action, params=None, user=None):
@@ -2618,3 +2620,396 @@ class WebformSkillTests(DonationTestMixin, TestCase):
     def test_the_new_skill_is_an_agents_job_and_not_the_palettes(self):
         self.assertIn("record_donation_contact", palette_actions.MCP_ONLY_SKILLS)
         self.assertTrue(palette_actions.get_action("record_donation_contact").mcp_only)
+
+
+@isolated_cache("donations")
+# Routing on, on a domain nobody's own mailbox is on: it receives through SES, so in life none can be.
+@override_settings(**{**ROUTING_SETTINGS, "EMAIL_ROUTING_DOMAIN": "relay.example.org"})
+class OwnMailboxTests(DonationTestMixin, TestCase):
+    """Working the list from somebody's own email: an assistant reads and writes in that mailbox, and this
+    table is the record (``record_donation_email``, ``donations.record_own_email``).
+    """
+
+    def _run(self, action, params=None, user=None):
+        request = RequestFactory().post("/")
+        request.user = user or self.admin
+        request.palette_page = {}
+        return palette_actions.run_action(request, action, params or {})
+
+    def _record(self, **params):
+        return self._run("record_donation_email", {"vendor": "Fishy Business", **params})
+
+    def _ago(self, **delta):
+        return timezone.now() - datetime.timedelta(**delta)
+
+    def assertSameMoment(self, first, second):
+        self.assertLess(abs((first - second).total_seconds()), 1, f"{first} is not {second}")
+
+    # --- the allowance -------------------------------------------------------
+
+    def test_mail_in_your_own_mailbox_spends_none_of_the_allowance(self):
+        result = self._record(direction="sent", subject="Our raffle", body="Would you donate?", message_id="m1")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(DonationEmail.objects.get(vendor=self.vendor).channel, DonationEmail.CHANNEL_OWN_EMAIL)
+        self.assertEqual(donations.donation_email_quota(self.club).used, 0)
+        self.assertEqual(self._run("list_donation_vendors")["emails_sent_today"], 0)
+
+    def test_a_club_out_of_email_for_the_day_still_records_its_own(self):
+        for index in range(donations.MAX_DONATION_EMAILS_PER_DAY):
+            vendor = DonationVendor.objects.create(club=self.club, name=f"Shop {index}", email=f"s{index}@example.com")
+            donations.send_request(vendor, subject="Hi", body="Please donate", user=self.admin)
+        self.assertTrue(donations.donation_email_quota(self.club).exhausted)
+        result = self._record(direction="sent", body="Would you donate?")
+        self.assertTrue(result["ok"], result)
+
+    def test_nothing_is_sent_and_no_model_of_ours_reads_it(self):
+        from post_office.models import Email as QueuedEmail
+
+        provider = self.use_provider(FakeProvider(payload={"summary": "Ours", "status": "not_interested"}))
+        self._record(direction="received", body="Yes, gladly", summary="Will give a tank", status="promised")
+        self._record(direction="sent", body="Thank you!")
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(QueuedEmail.objects.count(), 0)
+
+    # --- what each direction does ------------------------------------------------
+
+    def test_a_sent_email_starts_the_clock_from_its_own_date(self):
+        sent = self._ago(days=3)
+        self._record(direction="sent", subject="Our raffle", body="Would you donate?", date=sent.isoformat())
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_EMAIL_SENT)
+        self.assertSameMoment(self.vendor.last_contact, sent)
+        self.assertSameMoment(
+            self.vendor.followup_due, sent + datetime.timedelta(days=self.club.donation_followup_days)
+        )
+
+    def test_who_it_was_from_and_to_default_to_you_and_them(self):
+        self._record(direction="sent", body="Would you donate?")
+        sent = DonationEmail.objects.get(vendor=self.vendor)
+        self.assertEqual(
+            (sent.sender, sent.recipients, sent.sent_by), (self.admin.email, self.vendor.email, self.admin)
+        )
+        self._record(direction="received", body="Yes", to=["club@example.com", "admin@example.com"])
+        reply = DonationEmail.objects.filter(vendor=self.vendor, direction=DonationEmail.DIRECTION_INCOMING).get()
+        self.assertEqual(reply.sender, self.vendor.email)
+        self.assertEqual(reply.recipients, "club@example.com, admin@example.com")
+        self.assertIsNone(reply.sent_by)
+
+    def test_a_reply_carries_the_callers_reading_of_it(self):
+        summary = "Will give a $25 gift card; asks where to send it."
+        result = self._record(
+            direction="received", subject="Re: Our raffle", body="Happy to help!", summary=summary, status="promised"
+        )
+        self.assertIn("Donation promised", result["summary"])
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_PROMISED)
+        # The club owes the next move.
+        self.assertTrue(self.vendor.is_followup_due)
+        self.assertEqual(DonationEmail.objects.get(vendor=self.vendor).summary, summary)
+        self.assertIn(summary, self._run("list_donation_vendors")["vendors"][0]["latest_reply"])
+
+    def test_the_vendor_page_shows_a_reply_from_a_mailbox_like_any_other(self):
+        self._record(direction="received", body="Happy to help!", summary="Will give a gift card", status="promised")
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("club_donation_vendors", kwargs={"slug": self.club.slug}))
+        self.assertContains(response, "Will give a gift card")
+
+    def test_a_reply_cannot_say_a_donation_arrived_or_that_they_are_gone(self):
+        """The two statuses withheld from the summarizer are withheld here too: somebody has to say so."""
+        for word in ("received", "do_not_contact"):
+            result = self._record(direction="received", body="It's in the post", status=word)
+            self.assertIn("update_donation_vendor", result["error"])
+        self.assertFalse(DonationEmail.objects.exists())
+
+    def test_an_unclear_reply_moves_nobody(self):
+        self.vendor.status = DonationVendor.STATUS_INTERESTED
+        self.vendor.save()
+        self._record(direction="received", body="I'm out of the office until Monday.", status="unclear")
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_INTERESTED)
+
+    def test_a_bounce_is_kept_but_never_read_as_their_word(self):
+        result = self._record(
+            direction="received",
+            sender="Mail Delivery Subsystem <mailer-daemon@googlemail.com>",
+            body="Address not found",
+            summary="They said yes",
+            status="promised",
+        )
+        self.assertIn("bounce", result["summary"])
+        row = DonationEmail.objects.get(vendor=self.vendor)
+        self.assertTrue(row.bounced)
+        self.assertEqual(row.summary, "")
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_NEW)
+
+    # --- going over the same mail twice ----------------------------------------------
+
+    def test_the_same_message_is_recorded_once(self):
+        first = self._record(direction="received", body="Yes", message_id="18c2f3a4b5d6")
+        again = self._record(direction="received", body="Yes", message_id="18c2f3a4b5d6", status="promised")
+        self.assertFalse(first["already_recorded"])
+        self.assertTrue(again["already_recorded"])
+        self.assertEqual(DonationEmail.objects.count(), 1)
+        # Already on file means nothing changed, status included.
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_NEW)
+
+    # --- a mailbox is recorded late, and in any order ----------------------------------
+
+    def test_an_older_message_does_not_wind_the_clock_back(self):
+        """Their question and the club's answer, recorded answer first: the club still isn't the one owing."""
+        answered = self._ago(days=1)
+        self._record(direction="sent", body="We'd love that.", date=answered.isoformat(), message_id="answer")
+        self._record(
+            direction="received",
+            body="Could we give a tank?",
+            date=self._ago(days=2).isoformat(),
+            status="interested",
+            message_id="question",
+        )
+        self.vendor.refresh_from_db()
+        self.assertFalse(self.vendor.is_followup_due)
+        self.assertSameMoment(self.vendor.last_contact, answered)
+        # Still their newest reply, so it still says where they stand.
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_INTERESTED)
+
+    def test_an_older_reply_does_not_overrule_a_newer_one(self):
+        self._record(
+            direction="received",
+            body="Sorry, not this year.",
+            date=self._ago(days=1).isoformat(),
+            status="not_interested",
+            message_id="no",
+        )
+        self._record(
+            direction="received",
+            body="Maybe!",
+            date=self._ago(days=5).isoformat(),
+            status="interested",
+            message_id="maybe",
+        )
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_NOT_INTERESTED)
+        # Said, so the caller doesn't "correct" it with update_donation_vendor.
+        self.assertIn(
+            "newer reply",
+            self._record(direction="received", body="Maybe", date=self._ago(days=4).isoformat(), status="interested")[
+                "summary"
+            ],
+        )
+
+    def test_a_message_from_the_future_is_from_now(self):
+        self._record(direction="sent", body="Hi", date=(timezone.now() + datetime.timedelta(days=1)).isoformat())
+        self.assertLessEqual(DonationEmail.objects.get(vendor=self.vendor).date, timezone.now())
+
+    def test_a_date_is_read_however_the_mailbox_writes_it(self):
+        expected = datetime.datetime(2026, 10, 5, 18, 3, tzinfo=datetime.UTC)
+        for index, said in enumerate(
+            ("Mon, 05 Oct 2026 14:03:00 -0400", "2026-10-05T14:03:00-04:00", str(int(expected.timestamp() * 1000)))
+        ):
+            result = self._record(direction="received", body="Yes", date=said, message_id=f"date-{index}")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(DonationEmail.objects.get(message_id=f"date-{index}").date, expected, said)
+        self._record(direction="received", body="Yes", date="2026-10-05", message_id="day")
+        self.assertEqual(timezone.localtime(DonationEmail.objects.get(message_id="day").date).date(), expected.date())
+
+    def test_a_date_that_is_not_one_is_refused_before_anything_is_recorded(self):
+        for said in ("last Tuesday", "2026-09-31"):
+            result = self._record(direction="sent", body="Hi", date=said)
+            self.assertIn(said, result["error"])
+        self.assertFalse(DonationEmail.objects.exists())
+
+    def test_which_way_it_went_is_asked_rather_than_guessed(self):
+        self.assertIn("more_info_needed", self._record(body="Hi"))
+        self.assertIn("more_info_needed", self._record(direction="sideways", body="Hi"))
+        self.assertIn("more_info_needed", self._record(direction="sent"))
+        self.assertFalse(DonationEmail.objects.exists())
+
+    # --- the floors --------------------------------------------------------------------
+
+    def test_a_vendor_who_said_stop_never_comes_due(self):
+        donations.unsubscribe_vendor(self.vendor)
+        self._record(direction="received", body="Please take me off your list.", message_id="stop")
+        self.vendor.refresh_from_db()
+        self.assertIsNone(self.vendor.followup_due)
+        self.assertEqual(self.vendor.status, DonationVendor.STATUS_DO_NOT_CONTACT)
+        result = self._record(direction="sent", body="Sorry about that!", message_id="sorry")
+        self.assertIn("cannot be contacted again", result["summary"])
+
+    def test_a_form_vendor_who_writes_back_is_written_to_from_then_on(self):
+        chain = DonationVendor.objects.create(
+            club=self.club,
+            name="Big Box Pets",
+            contact_method=DonationVendor.CONTACT_WEBFORM,
+            contact_url="https://bigbox.example/donations",
+        )
+        result = self._run(
+            "record_donation_email",
+            {
+                "vendor": "Big Box Pets",
+                "direction": "received",
+                "sender": "Giving Team <giving@bigbox.example>",
+                "body": "We'd be glad to help.",
+            },
+        )
+        self.assertIn("contacted by email from now on", result["summary"])
+        chain.refresh_from_db()
+        self.assertEqual(chain.email, "giving@bigbox.example")
+        self.assertEqual(chain.contact_method, DonationVendor.CONTACT_EMAIL)
+
+    def test_a_mailbox_id_is_never_sent_as_a_message_id_header(self):
+        """The id is the mailbox's own; in an In-Reply-To it would thread onto nothing."""
+        self._record(direction="received", body="Yes", message_id="18c2f3a4b5d6")
+        self.assertEqual(donations._thread_headers(self.vendor), {})
+
+    def test_the_history_says_who_recorded_it_and_how(self):
+        self._record(direction="sent", body="Would you donate?")
+        line = ClubHistory.objects.filter(club=self.club, applies_to="DONATIONS", user=self.admin).first()
+        self.assertIn("Fishy Business", line.action)
+        self.assertIn("own mailbox", line.action)
+        self.assertIn(palette_actions.DEFAULT_SURFACE, line.action)
+
+    # --- what the caller needs to write the next one ---------------------------------------
+
+    def test_describing_a_vendor_hands_over_the_footer_every_email_ends_with(self):
+        footer = self._run("describe_donation_vendor", {"vendor": "Fishy"})["email_footer"]
+        self.assertEqual(footer, donations.unsubscribe_footer(self.vendor).strip())
+        self.assertIn("1 Main St", footer)
+        self.assertIn(self.vendor.unsubscribe_url, footer)
+
+    def test_there_is_no_footer_for_a_vendor_nobody_may_email(self):
+        donations.unsubscribe_vendor(self.vendor)
+        self.assertIsNone(self._run("describe_donation_vendor", {"vendor": "Fishy"})["email_footer"])
+
+    def test_a_club_with_no_address_is_told_before_it_writes(self):
+        self.club.mailing_address = ""
+        self.club.save()
+        result = self._run("describe_donation_vendor", {"vendor": "Fishy"})
+        self.assertIsNone(result["email_footer"])
+        self.assertIn("mailing address", result["summary"])
+
+    def test_a_reply_recorded_from_a_mailbox_keeps_its_id_to_answer_in_the_same_thread(self):
+        self._record(direction="received", body="Yes", message_id="18c2f3a4b5d6", date=self._ago(days=1).isoformat())
+        donations.record_incoming(
+            self.vendor, sender=self.vendor.email, recipients="x@y.z", subject="Re", body="Also", message_id="<a@b>"
+        )
+        ids = [
+            message.get("message_id")
+            for message in self._run("describe_donation_vendor", {"vendor": "Fishy"})["messages"]
+        ]
+        self.assertIn("18c2f3a4b5d6", ids)
+        # A Message-ID header is no use to anybody's mail connector.
+        self.assertNotIn("<a@b>", ids)
+
+    def test_the_next_event_is_there_to_ask_for(self):
+        from auctions.models import ClubEvent
+
+        ClubEvent.objects.create(
+            club=self.club, title="Spring Auction", date_start=timezone.now() + datetime.timedelta(days=30)
+        )
+        self.assertIn("Spring Auction", self._run("describe_donation_vendor", {"vendor": "Fishy"})["club_next_event"])
+
+    def test_the_list_says_where_near_the_club_is(self):
+        self.assertIn("Springfield, IL", self._run("list_donation_vendors")["club_location"])
+        self.club.location = "Shelbyville Community Center"
+        self.club.save()
+        self.assertEqual(self._run("list_donation_vendors")["club_location"], "Shelbyville Community Center")
+
+    def test_an_assistant_does_all_of_it_over_the_wire(self):
+        """The recipe, the write and the read through ``/mcp/`` with a key, as a connected assistant does."""
+        from auctions.mcp import protocol
+        from auctions.models import UserAPIKey
+
+        raw, prefix, key_hash = UserAPIKey.generate()
+        UserAPIKey.objects.create(
+            user=self.admin, name="assistant", prefix=prefix, key_hash=key_hash, allow_writes=True
+        )
+
+        def rpc(method, params):
+            response = self.client.post(
+                "/mcp/",
+                data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {raw}",
+                HTTP_MCP_PROTOCOL_VERSION=protocol.LATEST_PROTOCOL_VERSION,
+            )
+            self.assertEqual(response.status_code, 200)
+            return json.loads(response.content)["result"]
+
+        recipe = rpc("prompts/get", {"name": "work_donation_list", "arguments": {"club": self.club.name}})
+        self.assertIn(self.club.name, recipe["messages"][0]["content"]["text"])
+        self.assertIn("record_donation_email", {tool["name"] for tool in rpc("tools/list", {})["tools"]})
+        reply = {
+            "vendor": "Fishy Business",
+            "club": self.club.name,
+            "direction": "received",
+            "body": "Happy to help!",
+            "summary": "Will donate a gift card.",
+            "status": "interested",
+            "message_id": "18c2f3a4b5d6",
+        }
+        recorded = rpc("tools/call", {"name": "record_donation_email", "arguments": reply})
+        self.assertFalse(recorded.get("isError"), recorded)
+        described = rpc(
+            "tools/call",
+            {"name": "describe_donation_vendor", "arguments": {"vendor": "Fishy Business", "club": self.club.name}},
+        )["structuredContent"]
+        self.assertEqual(described["messages"][0]["message_id"], "18c2f3a4b5d6")
+        self.assertEqual(described["status"], "Interested")
+        self.assertIn(self.vendor.unsubscribe_url, described["email_footer"])
+
+    # --- the rest of the inbox -----------------------------------------------------------
+
+    def test_mail_from_somebody_who_is_not_a_vendor_has_no_way_in(self):
+        """Nothing here reads a mailbox for itself. A message is recorded against a vendor named in the
+        call or not at all, so the rest of somebody's mail can't land on the list.
+        """
+        result = self._record(vendor="news@petsupplies.example", direction="received", body="Our fall sale starts now!")
+        self.assertIn("couldn't find", result["error"])
+        self.assertFalse(DonationEmail.objects.exists())
+
+    def test_a_forward_from_this_sites_relay_is_not_recorded_twice(self):
+        """A club that has replies forwarded gets each one twice: recorded on its way through, and in the
+        inbox from the relay. The inbox copy is refused, so neither the reply nor the clock is doubled.
+        """
+        donations.record_incoming(
+            self.vendor,
+            sender=self.vendor.email,
+            recipients=self.vendor.reply_to_address,
+            subject="Re: Our raffle",
+            body="Happy to help!",
+            message_id="<reply@fishybusiness.example>",
+        )
+        self.vendor.refresh_from_db()
+        before = (self.vendor.status, self.vendor.followup_due, self.vendor.last_contact)
+        result = self._record(
+            direction="received",
+            sender="Club Relay <relay@relay.example.org>",
+            subject="[Test Aquarium Society] Re: Our raffle",
+            body="Happy to help!",
+            message_id="18c2f3a4b5d6",
+        )
+        self.assertIn("this site's own mail", result["error"])
+        self.assertEqual(DonationEmail.objects.filter(vendor=self.vendor).count(), 1)
+        self.vendor.refresh_from_db()
+        self.assertEqual((self.vendor.status, self.vendor.followup_due, self.vendor.last_contact), before)
+
+    def test_club_mail_forwarded_from_other_aliases_is_refused_the_same_way(self):
+        """Club contact and auction aliases forward through the same relay. None of it is donation mail."""
+        result = self._record(direction="received", sender="relay@relay.example.org", body="When is the next meeting?")
+        self.assertIn("isn't donation mail", result["error"])
+        self.assertFalse(DonationEmail.objects.exists())
+
+    @override_settings(SES_ROUTE_EMAILS_ENABLED=False, EMAIL_ROUTING_DOMAIN="", SITE_DOMAIN="example.com")
+    def test_without_routing_nobody_is_taken_for_this_sites_relay(self):
+        """The routing domain falls back to the site's own, which can be somebody's real address."""
+        self.assertFalse(donations.came_through_this_site("admin@example.com"))
+        result = self._record(direction="sent", body="Would you donate?")
+        self.assertTrue(result["ok"], result)
+
+    # --- each tool points at the others --------------------------------------------------
+
+    def test_the_tools_that_send_or_record_name_this_one(self):
+        self.assertIn("record_donation_email", palette_actions.get_action("contact_donation_vendor").description)
+        self.assertIn("record_donation_email", self._run("record_donation_contact", {"vendor": "Fishy"})["error"])

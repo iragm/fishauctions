@@ -33,6 +33,7 @@ from auctions.models import (
     ClubMember,
     Document,
     DocumentChunk,
+    DonationEmail,
     DonationVendor,
     Invoice,
     Lot,
@@ -67,6 +68,7 @@ def secrets() -> tuple[str, ...]:
         f"{SENTINEL.lower()}-bidder@example.invalid",
         f"{SENTINEL} Spawning Notes",
         f"{SENTINEL}LIBRARYTEXT",
+        f"{SENTINEL}VENDORREPLY",
     )
 
 
@@ -85,6 +87,7 @@ WATCHED = (
     AuctionDropdown,
     VolunteerJob,
     DonationVendor,
+    DonationEmail,
     Document,
 )
 
@@ -183,6 +186,14 @@ class CrossTenantTestCase(TestCase):
             name=f"{SENTINEL} Big Box",
             contact_method=DonationVendor.CONTACT_WEBFORM,
             contact_url=f"https://{SENTINEL.lower()}.example.invalid/donations",
+        )
+        # What one of them said back, so the reads that return a conversation are audited too.
+        self.their_vendor_reply = DonationEmail.objects.create(
+            vendor=self.their_vendor,
+            direction=DonationEmail.DIRECTION_INCOMING,
+            sender=f"{SENTINEL.lower()}-vendor@example.invalid",
+            subject="Re: your raffle",
+            body=f"{SENTINEL}VENDORREPLY: we can give a tank",
         )
         self.their_volunteer_job = VolunteerJob.objects.create(
             auction=self.their_auction,
@@ -390,6 +401,9 @@ class CrossTenantTestCase(TestCase):
             "followup_due": (timezone.now() + datetime.timedelta(days=14)).strftime("%Y-%m-%d"),
             "subject": "Audit subject",
             "body": "Audit body, sent by nobody who should be able to.",
+            "direction": "received",
+            "summary": "audit summary",
+            "message_id": "audit-message",
             # The library.
             "document": str(self.their_document.pk),
             "author": "Audit Author",
@@ -427,6 +441,7 @@ class CrossTenantTestCase(TestCase):
             "AuctionDropdown": {self.their_dropdown_option.pk},
             "VolunteerJob": {self.their_volunteer_job.pk},
             "DonationVendor": {self.their_vendor.pk, self.their_webform_vendor.pk},
+            "DonationEmail": {self.their_vendor_reply.pk},
             "Document": {self.their_document.pk},
         }
 
@@ -455,6 +470,8 @@ class CrossTenantTestCase(TestCase):
                     ("auctiontos_seller_id", self.their_tos.pk),
                     ("auctiontos_winner_id", self.their_tos.pk),
                     ("auctiontos_user_id", self.their_tos.pk),
+                    ("vendor_id", self.their_vendor.pk),
+                    ("vendor_id", self.their_webform_vendor.pk),
                 ):
                     self.assertNotEqual(row.get(column), value, f"{where} created a {model} inside their tenant")
 

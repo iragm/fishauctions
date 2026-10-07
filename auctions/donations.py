@@ -4,10 +4,12 @@
 * :func:`draft_request`: write the request from the admin's context and the club's details.
 * :func:`send_request` / :func:`record_copied_request`: record an outgoing message, a follow-up date
   and a history line.
+* :func:`record_own_email`: file a message an AI assistant read in the admin's own mailbox, either way.
 
 Model output is validated before it reaches the database, and prompt inputs are truncated. Limits
 are per club per day (it protects the API bill): drafting and sending share one allowance, incoming
-summaries have their own.
+summaries have their own. Mail in the admin's own mailbox spends neither: none of it left here, and
+no model of ours read or wrote it.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .email_routing import sender_with_display_name
+from .email_routing import email_routing_domain, email_routing_enabled, sender_with_display_name
 from .llm import LLMError, get_provider
 from .models import ClubHistory, DonationEmail, DonationUnsubscribe, DonationVendor, LLMUsage, clean_email_address
 from .palette_actions import untrusted, untrusted_short  # noqa: E402
@@ -787,10 +789,13 @@ def _record_outgoing(vendor, *, subject, body, user, sender, recipients, message
 
 def _thread_headers(vendor):
     """``In-Reply-To``/``References`` for the vendor's last message, so replies thread. Ours have no
-    Message-ID to reference.
+    Message-ID to reference, and nor does a reply filed from the admin's own mailbox: its id is that
+    mailbox's own, which means nothing in a header.
     """
     previous = (
-        vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING).exclude(message_id="").first()
+        vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING, channel=DonationEmail.CHANNEL_EMAIL)
+        .exclude(message_id="")
+        .first()
         if vendor.pk
         else None
     )
@@ -974,6 +979,131 @@ def record_copied_request(vendor, *, subject, body, user):
         applies_to="DONATIONS",
     )
     return email_row
+
+
+# --- the admin's own mailbox -------------------------------------------------
+#
+# The other way to work the list: an AI assistant connected to the admin's own email (Gmail's connector,
+# say) writes the requests there and reads the answers, and the vendor table is the record of both. A
+# connector's draft can't set Reply-To, so the vendor's tracked alias never sees the answer: the
+# assistant reads it in that mailbox and files it here, which is the whole of what this section does.
+
+#: Characters kept of one message filed from a mailbox. Enough for any email; what runs long is the
+#: quoted thread under it, which the caller is asked to leave off.
+OWN_EMAIL_BODY_LIMIT = 20000
+
+
+def came_through_this_site(address):
+    """Whether *address* is one of this site's own: the inbound relay, or an alias like a vendor's.
+
+    In somebody's own mailbox, mail from one of those is this site's forward or its own send. A donation
+    reply among them was recorded on the way through, and the rest -- club contact, auction mail -- is
+    not donation mail. Only asked when routing is on: with it off nothing comes through here, and the
+    fallback domain is whatever the site is called, which can be somebody's own.
+    """
+    domain = email_routing_domain() if email_routing_enabled() else ""
+    return bool(domain) and sender_address(address).rsplit("@", 1)[-1] == domain
+
+
+def record_own_email(
+    vendor,
+    *,
+    direction,
+    subject,
+    body,
+    sender="",
+    recipients="",
+    date=None,
+    message_id="",
+    summary="",
+    status=None,
+    user=None,
+    via="",
+):
+    """File one message from the admin's own mailbox against *vendor*: ``(email_row, created)``.
+
+    Filed after the fact -- days late, a whole inbox at once, in any order -- so the message's own *date*
+    decides what it does. Only the newest message on file moves ``last_contact`` and the follow-up clock,
+    and only the newest reply moves the status; the clock then runs as it does for this site's own mail.
+
+    A *message_id* this vendor already has is the same message, so going back over a mailbox files
+    nothing twice. *summary* and *status* are the caller's reading of a reply, held to what
+    :func:`summarize_incoming` may write: a bounce gets neither, and a status goes through
+    :func:`apply_incoming_status` and its floors.
+
+    Raises :class:`DonationSendError` for a message from :func:`came_through_this_site`.
+    """
+    if came_through_this_site(sender):
+        msg = (
+            "That one came through this site's own mail, as a forward or as an email it sent. A donation "
+            "reply among those is on the record already, and the rest isn't donation mail. Nothing was recorded."
+        )
+        raise DonationSendError(msg)
+    incoming = direction == DonationEmail.DIRECTION_INCOMING
+    sender = sender_address(sender)
+    now = timezone.now()
+    # A mailbox whose clock runs ahead of ours has not received a message from the future.
+    when = min(date or now, now)
+    message_id = (message_id or "").strip()[:500]
+    with transaction.atomic():
+        # Read again under the lock: an assistant files a whole inbox in parallel calls, and "is this the
+        # newest message?" has no answer while another call is filing one.
+        vendor = DonationVendor.objects.select_for_update().select_related("club").get(pk=vendor.pk)
+        if message_id:
+            existing = vendor.emails.filter(message_id=message_id).first()
+            if existing:
+                return existing, False
+        newest = not vendor.emails.filter(date__gt=when).exists()
+        newest_reply = (
+            incoming and not vendor.emails.filter(direction=DonationEmail.DIRECTION_INCOMING, date__gt=when).exists()
+        )
+        bounced = incoming and is_a_delivery_failure(sender)
+        if incoming:
+            # A webform vendor answering the address somebody typed into their form becomes an email
+            # vendor, exactly as when the answer arrives on their tracked alias.
+            adopt_replying_address(vendor, sender, user=user)
+        email_row = DonationEmail.objects.create(
+            vendor=vendor,
+            direction=direction,
+            channel=DonationEmail.CHANNEL_OWN_EMAIL,
+            sender=(sender or "")[:255],
+            recipients=(recipients or "")[:1000],
+            subject=(subject or "")[:500],
+            body=(strip_email_html(body) if incoming else (body or "").strip())[:OWN_EMAIL_BODY_LIMIT],
+            summary=" ".join((summary or "").split())[:SUMMARY_LENGTH] if incoming and not bounced else "",
+            message_id=message_id,
+            date=when,
+            bounced=bounced,
+            sent_by=None if incoming else user,
+        )
+        changed = []
+        if newest:
+            vendor.last_contact = when
+            changed.append("last_contact")
+            # Nobody may write to a vendor who said stop, so nothing comes due for them either.
+            if vendor.status != DonationVendor.STATUS_DO_NOT_CONTACT:
+                if incoming:
+                    vendor.followup_due = when
+                else:
+                    vendor.schedule_followup(from_time=when)
+                changed.append("followup_due")
+        if not incoming and vendor.status == DonationVendor.STATUS_NEW:
+            vendor.status = DonationVendor.STATUS_EMAIL_SENT
+            changed.append("status")
+        if changed:
+            vendor.save(update_fields=changed)
+        if status and newest_reply and not bounced:
+            apply_incoming_status(vendor, status, user=user)
+        if not incoming:
+            action = f"Recorded a donation email to {vendor.name}, sent from their own mailbox"
+        elif bounced:
+            action = f"Recorded that an email to {vendor.name} bounced"
+        else:
+            action = f"Recorded a donation reply from {vendor.name}, from their own mailbox"
+        ClubHistory.objects.create(
+            club=vendor.club, user=user, action=f"{action} {via}".strip(), applies_to="DONATIONS"
+        )
+    return email_row, True
 
 
 # --- unsubscribing -----------------------------------------------------------

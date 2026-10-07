@@ -153,6 +153,111 @@ PROMPTS: tuple[Prompt, ...] = (
         "until I have read the draft back.",
     ),
     Prompt(
+        "work_donation_list",
+        "Work the donation list from your email",
+        "Run a club's donation requests from your own mailbox: record vendors' replies and what you sent, "
+        "see who is due a nudge, and draft the next emails there.",
+        (_CLUB,),
+        "Work the donation list for {club} from my own email. You are my mail client and this site is "
+        "the record: you read and write in my mailbox, and keep each vendor's row here up to date.\n"
+        "\n"
+        "First, check your tools. You need to search my email, read whole messages, and save drafts in "
+        "it; Gmail's connector does all three. If you can't, stop and tell me how to connect my email "
+        "to you (in Claude: Settings, Connectors, Gmail), and do none of what follows: a list that half "
+        "matches my inbox is worse than one that doesn't. You only read my mail and save drafts in it. "
+        "Don't label, archive, move, mark as read or delete anything, so the rest of my mail stays exactly "
+        "where it arrived.\n"
+        "\n"
+        "1. my_context, then list_donation_vendors for the club, every page. Tell me which club you have "
+        "landed on.\n"
+        "2. Catch up. Search my mail, sent mail included, for messages to or from each vendor's email "
+        "address, from a few days before their last_contact on (all of them, if they have none); one "
+        "search can hold many addresses joined with OR. record_donation_email each one that is about "
+        "asking them for a donation: direction 'sent' or 'received', its date with its offset, who it "
+        "was from and to, its subject, its text without the earlier messages quoted under it, and the "
+        "mailbox's message_id. A message_id already on file is not recorded twice, so going over the "
+        "same mail again is harmless. For a reply, add a summary of what they said and what the club has "
+        "to do next, under 200 characters, and a status: interested, promised, not_interested, or "
+        "unclear. Auto-replies and out-of-office messages are unclear.\n"
+        "   - Leave everything else out, even from a vendor's own address. Plenty of vendors are shops I "
+        "buy from, and their receipts, orders and newsletters aren't donation mail. Nor is anything this "
+        "site forwarded to me, which comes from its relay address with the club's name in brackets at "
+        "the start of the subject: a donation reply among those is on the record already.\n"
+        "   - Somebody not on the list who is plainly answering one of our requests, from a colleague's "
+        "address, say: ask me which vendor it belongs to.\n"
+        "   - If they ask not to be contacted again, update_donation_vendor with status do_not_contact, "
+        "and tell me.\n"
+        "   - If they say a donation is on its way or was dropped off, ask me whether it arrived before "
+        "you mark it received. Somebody has to have it in hand.\n"
+        "3. Tell me where things stand, briefly: who replied and what they said, who is due a follow-up "
+        "(list_donation_vendors with status 'due'), and who is new and has never been asked. Then ask me "
+        "which of them to write to.\n"
+        "4. For each one I pick, describe_donation_vendor, then write the email and save it as a draft "
+        "in my mailbox, to their address, as a reply in the same thread when there is one. End every "
+        "one with the email_footer exactly as it comes: the club's postal address and the vendor's "
+        "unsubscribe link go on every donation email. Skip anyone it says can't be contacted. For a "
+        "vendor who takes requests through a form on their own site, give me what_their_form_asks_for "
+        "and the link instead, and once I've filled it in, record_donation_contact. Don't send them "
+        "unless I tell you to. List the drafts with a link to each.\n"
+        "5. Once they've gone, find each one in my sent mail and record_donation_email it as 'sent', "
+        "with the sent copy's own message_id. Whatever I send later is recorded the next time we do "
+        "this.\n"
+        "\n"
+        "How to write them. Use only what describe_donation_vendor gives you (club_donation_context, the "
+        "club's mailing address, club_next_event, the context on the vendor and the messages so far) and "
+        "what I tell you. Never invent a name, a phone number, a date or a value. Never say a donation is "
+        "tax deductible, or that the club is a registered charity, unless the club's own details say so. "
+        "Warm and direct, no emoji, signed off from the club.\n"
+        "   - A first approach: who the club is, what the event is, one modest ask with no dollar figure, "
+        "and what the business gets, which is its name in front of local hobbyists who buy what it "
+        "sells. Under 250 words.\n"
+        "   - A nudge, when our last email had no answer: refer back to it in the first sentence, don't "
+        "repeat the pitch, and make it easy to say no. Under 120 words.\n"
+        "   - An answer to them: reply to what they asked in the first sentence, and don't introduce the "
+        "club or ask again. If they asked where or how to send something, put the club's mailing "
+        "address in the body. If they said no, thank them and say the club won't ask again. Under 150 "
+        "words.\n"
+        "\n"
+        "None of this counts against the club's daily donation-email limit, which is only for mail this "
+        "site sends.",
+    ),
+    Prompt(
+        "find_donation_vendors",
+        "Find vendors to ask",
+        "Search the web for businesses that might donate to a club's raffle or auction, and add the ones "
+        "you pick to its donation list.",
+        (
+            _CLUB,
+            Argument(
+                "looking_for",
+                "What kind of businesses, and where, e.g. 'fish stores and pet shops within 30 miles'.",
+                False,
+                unsaid="I haven't said, so ask me what kind of businesses and how far away",
+            ),
+        ),
+        "Find businesses to ask for a donation to a raffle or auction run by {club}. What I'm looking "
+        "for: {looking_for}.\n"
+        "\n"
+        "1. my_context, then list_donation_vendors for that club, every page, so you know who is already "
+        "on the list. Tell me which club you have landed on and how many vendors it has. Unless I said "
+        "where, search near its club_location.\n"
+        "2. Search the web. For each business that fits, get from its own website or its own social "
+        "media page: its name, the email address it gives for enquiries or donation requests, the "
+        "person to ask if one is named, and whether it takes donation requests only through a form on "
+        "its site. Chains usually do, and for them the form's address is what you need.\n"
+        "3. Leave out anyone already on the list. Never guess an email address (info@ their domain is a "
+        "guess unless they print it), and never take one from a directory or somebody else's list: the "
+        "club only writes to addresses a business gave out itself.\n"
+        "4. Show me a table: the name, why it fits, how it takes requests, the email address or the "
+        "form's link, and where you found it. Wait for me to say which to add.\n"
+        "5. add_donation_vendor for each one I pick, with the email address, or with contact_method "
+        "'webform' and the contact_url; the contact's name if you found one; and as context, what they "
+        "sell, why they fit, and the page you found them on. That note is what makes the email to them "
+        "worth reading.\n"
+        "\n"
+        "Don't contact anyone. Adding a vendor sends nothing, and that is all this is.",
+    ),
+    Prompt(
         "digitize_documents",
         "Digitize old club papers",
         "Read a folder of scans or photos of old newsletters and breeder reports, and add each article to a club's library.",

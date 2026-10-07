@@ -2220,6 +2220,8 @@ class DriftTests(PaletteAssistTestCase):
         "cancel_volunteer_request": "request_volunteers",
         "undo_check_in": "check_in",
         "update_donation_vendor": "add_donation_vendor",
+        # The Contact dialog's Copy & record is a person recording mail sent from their own mailbox.
+        "record_donation_email": "contact_donation_vendor",
     }
 
     def test_every_mcp_only_write_is_still_reachable_as_a_page(self):
