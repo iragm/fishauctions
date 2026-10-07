@@ -1,26 +1,24 @@
 {% load help_tags %}
 {% comment %}See HELP.md for the voice. The club calendar, Google Calendar, the website snippets and the club API: everything that puts the club somewhere other than this site.{% endcomment %}
 <p>Your club page has a calendar. Your auctions go on it by themselves, and you add meetings, swaps and talks. From there it feeds your members' own calendars, a Google calendar, your Discord and your club's website, so you only ever type an event once.</p>
+{% tip %}Facebook doesn't allow any way for us to create events, so you still need to create those manually on your club's Facebook page. Some third party connectors like <a href="https://ifttt.com/facebook_pages" target="_blank" rel="noopener">IFTTT</a> allow creating posts.{% endtip %}
 
 <h2 class="h5 mt-4" id="events">Events</h2>
-<p>{% page "club_event_add" "Add event" %}, on your club page, needs a {% ui "Title" %} and when it {% ui "Starts" %}. {% ui "Ends" %}, {% ui "Location" %} and {% ui "Description" %} are optional; with no end, it's two hours long.</p>
-<ul>
-  <li><strong>Auctions add themselves</strong> once they're promoted, along with the pickup time of an online auction with one pickup location. They're marked {% ui "Automatic" %}, and they move when the auction does.</li>
-  <li><strong>Want the auction's event to say more?</strong> Click {% ui "Edit" %} on it and change its title and description: "Monthly meeting and auction, doors at 6:30". It still follows the auction's date.</li>
-  <li><strong>Called off?</strong> Edit it and tick {% ui "This event is cancelled" %}. It stays on the calendar, crossed out, so nobody drives to a locked hall.</li>
-</ul>
-<h3 class="h6 mt-3">Members' own calendars</h3>
-<p>Above the events on your club page, {% ui "Google Calendar" %} and {% ui "Apple Calendar or Outlook" %} add your club's calendar to a member's phone. It's a subscription, not a copy: a meeting you move here moves in their calendar too.</p>
-{% tip %}Tell members about those two buttons once, at a meeting. It's the difference between "I didn't know it was this week" and a full room.{% endtip %}
+<p>{% page "club_event_add" "Add event" %}, on your club page, adds a meeting, swap or talk.</p>
+{% tip %}If your auction is the same as your monthly meeting, {% ui "Edit" %} its event and change the title and description: "Monthly meeting and auction, doors at 6:30". It still follows the auction's date.{% endtip %}
 {% aitip %}Ask "add the March meeting to the club's events, 7pm at the library".{% endaitip %}
 
+<h2 class="h5 mt-4" id="member-calendars">Members' own calendars</h2>
+<p>Above the events on your club page, {% ui "Google Calendar" %} and {% ui "Apple Calendar or Outlook" %} add your club's calendar to a member's phone. It's a subscription, not a copy: a meeting you move here moves in their calendar too.</p>
+{% tip %}Tell members about those two buttons once, at a meeting. It's the difference between "I didn't know it was this week" and a full room.{% endtip %}
+
 <h2 class="h5 mt-4" id="google-calendar">Google Calendar</h2>
+{% if help.club and help.is_club_admin %}{% helptip "calendar-check" %}{% if help.club.google_calendar_connected %}{{ help.club.name }} has connected a calendar{% if help.club.google_calendar_is_public %}, and it's public{% else %}, but it's still private{% endif %}.{% else %}{{ help.club.name }} hasn't connected a calendar yet.{% endif %}{% endhelptip %}{% endif %}
 <p>If your club already keeps a Google calendar, or wants one, {% page "club_google_calendar_config" "Google Calendar" %} under Setup keeps it and this site in step, both ways, every 15 minutes.</p>
 <ol>
   <li>Click {% page "google_calendar_connect" "Connect Google Calendar" %} and sign in with the club's Google account, not your own.</li>
-  <li>Google's permission screen has a box for calendars that's easy to miss. Tick it.</li>
-  <li>The site makes a new calendar, "Your Club events", and can only see that one. Events you add to it in Google show up on your club page.</li>
-  <li>To let members subscribe to it in Google, open that calendar's settings in Google and tick {% ui "Make available to public" %}. The page says when it's public.</li>
+  <li>The site makes a new calendar, "Your Club events", rather than reading one you already have. Reading yours would give it access to every calendar and event in your Google account. Events you add to the new one show up on your club page.</li>
+  <li>To let members subscribe to it in Google, open that calendar's settings in Google and tick {% ui "Make available to public" %}.</li>
 </ol>
 <p>The same page has two switches:</p>
 <div class="table-responsive">
@@ -48,24 +46,11 @@
   </tbody>
 </table>
 </div>
-{% tip %}Put the current auction snippet on your home page once and never touch it again. Between auctions it says there's nothing on.{% endtip %}
+{% tip %}Put the current auction snippet on your home page once and never touch it again. Between auctions it says "No auction running right now."{% endtip %}
 {% aitip %}Ask "what can I put on our website?" and it hands you the code to paste.{% endaitip %}
 
 <h2 class="h5 mt-4" id="api">API keys</h2>
 <p>For anything the snippets don't do, there's an API. {% page "club_api_keys" "API keys" %}, under Setup, lists your club's keys. {% page "club_api_key_create" "Create new key" %} makes one, with only the permissions you tick, and shows its instructions.</p>
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>A sign-up form on your site adds members</th><td>{% ui "Can add club members" %}</td></tr>
-    <tr><th>Your own renewal form, or your old membership system, renews people</th><td>{% ui "Can renew memberships" %}</td></tr>
-    <tr><th>A page on your site lists your auction's lots</th><td>{% ui "Read auction info" %} and {% ui "Read public lot info" %}</td></tr>
-    <tr><th>Your breeder award spreadsheet or program reads and adds points</th><td>{% ui "Can use BAP points and lots" %}</td></tr>
-  </tbody>
-</table>
-</div>
 <p>Keep a key to one job, and give each one a name that says where it's used, "WordPress sign-up form". When the job goes away, {% ui "Revoke" %} the key.</p>
-<ul>
-  <li>{% ui "Read private lot info" %} adds buyers' and sellers' names. Never use a key with it on a public page.</li>
-  <li>Your form calls the email field "your-email"? Open the key and add it under {% ui "Field mappings" %}, so the form doesn't have to change.</li>
-</ul>
-{% tip %}You don't have to write the code yourself. Paste the key's instructions into an AI assistant and ask it to write the form.{% endtip %}
+<p>Your form calls the email field "your-email"? Open the key and add it under {% ui "Field mappings" %}, so the form doesn't have to change.</p>
+{% aitip %}You don't have to write the code yourself. Paste the key's instructions into an AI assistant and ask it to write the form.{% endaitip %}

@@ -1,34 +1,15 @@
 {% load help_tags %}
 {% comment %}See HELP.md for the voice. The club as a whole: finding one, setting one up, who can do what, and its auctions. Each big job (members, email, events, BAP, donations, money) has its own guide in the Clubs group; this one points at them.{% endcomment %}
-<p>A club here has a public page, a member list, and its auctions. It can also take dues, send announcements, keep a calendar, run a breeder award program and track donations. Use as much or as little as you like: plenty of clubs only run auctions.</p>
+<p>In addition to auction tools, this site offers everything you need to manage your club, from tracking dues to running a breeder award program. Use as much or as little as you like.</p>
+{% tip %}The information in this guide is intended for people running a club. Because each club runs things differently, there isn't a guide for being a club member.{% endtip %}
 {% if help.club and help.is_club_admin %}{% helptip %}You're an admin of {{ help.club.name }}. Its settings are all on {% page "club_setup" "Setup" %}.{% endhelptip %}{% endif %}
-
-<h2 class="h5 mt-4" id="members">Being a member</h2>
-<p>{% page "clubs" "Find a club" %}, under {% ui "Clubs" %} at the top of the page, shows clubs on a map and in a list. Filter for ones with something coming up, or taking new members.</p>
-<p>Each club has a {% page "club_detail" "page" %} with its next events, its latest announcement, and links to its website, Facebook and Discord. If it takes members through the site, there's a {% ui "Join" %} button. Once you're in, {% ui "Membership" %} on that page has your card, and a button to pay your dues. <a href="{% url 'help_guide' slug='club-membership' %}#for-members">Members and dues</a> has the rest.</p>
-{% tip %}Your club isn't listed? Anyone can <a href="{% url 'support' %}">get in touch</a> to have it added.{% endtip %}
 
 <h2 class="h5 mt-4" id="setup">Setting up your club</h2>
 <ol>
-  <li><a href="{% url 'support' %}">Get in touch</a> with the club's name and website, and who should run it here. We add it.</li>
-  <li>Open the club's menu: the button with your club's name, on the left.</li>
-  <li>{% page "club_setup" "Setup" %} lists every settings page, with a line on what each is for.</li>
-  <li>Start with {% page "club_edit" "General" %}.</li>
+  <li>Click {% page "clubs" "Clubs" %} in the menu, then pick your club.
+    {% tip %}Your club isn't listed? You can <a href="{% url 'support' %}">get in touch</a> to have it added.{% endtip %}</li>
+  <li>Set up the {% page "club_edit" "General" %} settings.</li>
 </ol>
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>{% ui "Name" %}</th><td>The club's name is also its page's link, so changing it changes the link. Do it early.</td></tr>
-    <tr><th>{% ui "Icon" %}</th><td>Your logo, square. It goes on the club page, your emails and members' wallet cards.</td></tr>
-    <tr><th>{% ui "Homepage" %}, {% ui "Facebook page" %}, {% ui "Discord invite link" %}</th><td>Each one is a button on your club page.</td></tr>
-    <tr><th>{% ui "Allow joining" %}</th><td>Puts a {% ui "Join" %} button on your club page. Anyone signed in can click it and they're on your member list.</td></tr>
-    <tr><th>{% ui "Enable breeder award program" %}</th><td>Turns on points and leaderboards. See <a href="{% url 'help_guide' slug='breeder-award-programs' %}">Breeder award programs</a>.</td></tr>
-    <tr><th>{% ui "About this club" %}</th><td>A paragraph at the top of your club page: when you meet, and why somebody should come.</td></tr>
-    <tr><th>{% ui "Location" %} and {% ui "Map" %}</th><td>Where you meet. Type the address and drag the pin. This is how the club finder and the member map know where you are.</td></tr>
-    <tr><th>{% ui "Mailing address" %}</th><td>The law wants a postal address on every email a club sends, so the club can't send any until this is filled in. It's also where vendors mail donations.</td></tr>
-  </tbody>
-</table>
-</div>
 {% aitip %}Ask "what can this site do for my club that we're not using?"{% endaitip %}
 
 <h2 class="h5 mt-4" id="permissions">Who can do what</h2>

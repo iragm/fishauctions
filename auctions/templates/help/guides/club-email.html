@@ -1,37 +1,25 @@
 {% load help_tags %}
 {% comment %}See HELP.md for the voice. Everything a club says to its members, and where their replies go: the club's own addresses, membership emails, announcements, Mailchimp and Brevo, and Discord.{% endcomment %}
-<p>Your club can talk to its members four ways here: automatic membership emails, announcements, a mailing list in Mailchimp or Brevo, and your Discord server. Replies come back to whoever you pick, not to this site.</p>
-{% tip %}Membership and donation emails wait until the club has a {% ui "Mailing address" %} in its {% page "club_edit" "General" %} settings. The law wants one on every email a club sends.{% endtip %}
+<p>Your club can talk to its members four ways here: automatic membership emails, announcements, a mailing list in Mailchimp or Brevo, and your Discord server.</p>
+{% if help.club and help.is_club_admin and not help.club.can_send_email %}{% helptip "envelope-exclamation" %}Membership and donation emails wait until {{ help.club.name }} has a {% ui "Mailing address" %} in its {% page "club_edit" "General" %} settings. The law wants one on every email a club sends.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="addresses">Where replies go</h2>
-<p>Emails about your club's auctions and memberships come from the club's own addresses on this site. They never change, however often your officers do. {% page "club_email_settings" "Emails" %}, under {% page "club_setup" "Setup" %}, lists them, and says who each one reaches:</p>
+<p>Emails about your club's auctions and memberships come from the club's own addresses on this site. They never change, however often your officers do. {% page "club_email_settings" "Emails" %}, under {% page "club_setup" "Setup" %}, lists them, and says who each one reaches.</p>
 {% if help.club and help.is_club_admin and help.club.auction_sender_email %}{% helptip %}{{ help.club.name }}'s addresses are {{ help.club.auction_sender_email }} and {{ help.club.contact_sender_email }}.{% endhelptip %}{% endif %}
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>{% ui "Auction replies" %}</th><td>A seller replying to "thanks for joining" to ask about drop-off. Goes to your auction chair.</td></tr>
-    <tr><th>{% ui "Contact replies" %}</th><td>A member replying to their renewal email. Goes to your membership chair.</td></tr>
-    <tr><th>{% ui "Donation replies" %}</th><td>Leave it blank. Vendors' replies are filed on the donation page either way. See <a href="{% url 'help_guide' slug='club-donations' %}#replies">Donations from vendors</a>.</td></tr>
-  </tbody>
-</table>
-</div>
-<p>Left blank, replies go to the first club admin, or the first person with the matching permission, who has an email address.</p>
-{% tip %}Got a shared club Gmail? Add it as a member, give it the auction and membership permissions, and pick it for both. Next year's officers just need the password.{% endtip %}
+<p>Pick your auction chair for {% ui "Auction replies" %} and your membership chair for {% ui "Contact replies" %}. Leave {% ui "Donation replies" %} blank: vendors' replies are filed on the donation page either way. See <a href="{% url 'help_guide' slug='club-donations' %}#replies">Donations from vendors</a>.</p>
 <p>If the page asks for a {% ui "Membership email address" %} instead, replies to membership emails go to that address.</p>
 
 <h2 class="h5 mt-4" id="membership-emails">Membership emails</h2>
-<p>Also on {% page "club_email_settings" "Emails" %}. Each one is off until you tick it:</p>
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>{% ui "Send welcome letter to new club members" %}</th><td>When somebody joins or you add them, with a link to their membership, and their card if you use barcodes.</td></tr>
-    <tr><th>{% ui "Send membership renewal confirmation" %}</th><td>When somebody renews, however they paid. A receipt, with the new date.</td></tr>
-    <tr><th>{% ui "Send expiration reminder 30 days before membership expires" %}</th><td rowspan="2">With a button to pay. So they need a membership fee and a payment account connected; until then you can't tick them. Only for people who've paid at least once.</td></tr>
-    <tr><th>{% ui "Send expiration reminder the day before membership expires" %}</th></tr>
-  </tbody>
-</table>
-</div>
-<p>Below the boxes is each email as a member will see it. Click into the preview and type your own opening and closing: "Our next meeting is the second Tuesday, and the pizza's on us." Links and HTML aren't allowed in them. {% ui "Also include information about the next event" %} adds whatever's next on your club calendar.</p>
+<p>On {% page "club_email_settings" "Emails" %}, below the boxes, each email is shown as a member will see it. Click into the preview and type your own opening and closing: "Our next meeting is the second Tuesday, and the pizza's on us." Then (probably) tick all four boxes:</p>
+<ul>
+  <li>{% ui "Send welcome letter to new club members" %}</li>
+  <li>{% ui "Send membership renewal confirmation" %}</li>
+  <li>{% ui "Send expiration reminder 30 days before membership expires" %}</li>
+  <li>{% ui "Send expiration reminder the day before membership expires" %}</li>
+</ul>
+{% if help.club and help.is_club_admin and help.membership_emails_off %}{% helptip "envelope" %}Still off for {{ help.club.name }}: {{ help.membership_emails_off|join:", " }}.{% endhelptip %}{% endif %}
+<p>{% ui "Also include information about the next event" %} adds whatever's next on your {% page "club_google_calendar_config" "club calendar" %}.</p>
+{% if help.club and help.is_club_admin and not help.club.google_calendar_connected %}{% helptip "calendar-x" %}{{ help.club.name }} hasn't connected a calendar yet.{% endhelptip %}{% endif %}
 <ul>
   <li>People you import from a spreadsheet don't get the welcome letter. Adding one person by hand, untick {% ui "Send welcome letter" %} on them to hold it until they first pay dues.</li>
   <li>Somebody added without one, say from an auction with {% rule "send_club_welcome_letter" %} off, gets it when they first pay dues.</li>
@@ -58,16 +46,15 @@
 <div class="table-responsive">
 <table class="table table-sm">
   <tbody>
-    <tr><th>Mailchimp</th><td>{% page "club_mailchimp_config" "Mailchimp settings" %}, then {% page "mailchimp_connect" "Connect" %} and sign in to Mailchimp. {% page "mailchimp_select_audience" "Choose an audience" %}, or have one made for you. The free plan got small.</td></tr>
+    <tr><th>Mailchimp</th><td>{% page "club_mailchimp_config" "Mailchimp settings" %}, then {% page "mailchimp_connect" "Connect" %} and sign in to Mailchimp. {% page "mailchimp_select_audience" "Choose an audience" %}, or have one made for you.</td></tr>
     <tr><th>Brevo</th><td>{% page "club_brevo_config" "Brevo settings" %}. In Brevo, make an API key (it starts <code>xkeysib-</code>), paste it, and {% page "brevo_connect" "Connect" %}. Then {% page "brevo_select_list" "choose a list" %}. The free plan is decent, with no logo on your emails.</td></tr>
   </tbody>
 </table>
 </div>
 <ul>
-  <li>Every member with an email is on it, and each change goes across as it's saved, and again every night. {% page "mailchimp_sync_now" "Sync now" %} ({% page "brevo_sync_now" "Brevo's" %}) does it straight away.</li>
+  <li>Every member with an email is on it, and each change goes across as it's saved, and again every night.</li>
   <li>It only goes one way. Edit people here, not there. The one thing that comes back is an unsubscribe.</li>
   <li>{% ui "No non-essential emails" %} counts as unsubscribed; {% ui "Do not contact" %} takes them off.</li>
-  <li>{% page "mailchimp_disconnect" "Disconnect" %} ({% page "brevo_disconnect" "Brevo's" %}) stops the syncing. The list stays in your account.</li>
 </ul>
 <h3 class="h6 mt-3">Tags, for sending to some members</h3>
 <p>Each member is tagged, so you can write to just the right people. In Mailchimp they're tags; in Brevo they're in the MEMBER_TAGS field.</p>
@@ -97,4 +84,4 @@
   <li>Type <code>/announcements_here</code> in the channel for announcements, and <code>/auctions_here</code> in the one for auction news.</li>
 </ol>
 <p>Tick {% ui "Automatically create a Discord scheduled event for each promoted auction" %} and each auction shows up in Discord's events, too. Meetings and other calendar events can do the same; see <a href="{% url 'help_guide' slug='club-events' %}#google-calendar">Events and your website</a>.</p>
-{% tip %}The join button believes whatever email people type, so don't put anything private behind the paid-member role.{% endtip %}
+{% tip %}Emails people enter in Discord aren't verified in any way, so don't put anything private behind the paid-member role.{% endtip %}

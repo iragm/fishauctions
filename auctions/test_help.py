@@ -11,7 +11,7 @@ from django.utils.html import escape
 
 from auctions import help_guides, palette_actions, palette_routes
 from auctions.field_adoption import FieldAdoption
-from auctions.models import Auction, AuctionTOS, Club, Lot, LotImage, MobileDevice
+from auctions.models import Auction, AuctionTOS, Club, ClubMember, Lot, LotImage, MobileDevice, User
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -269,7 +269,10 @@ class HelpIsAboutYourAuctionTests(StandardTestCase):
         self.user.userdata.paypal_enabled = True
         self.user.userdata.save()
         self.client.force_login(self.user)
-        self.assertContains(self.client.get(url), "Enter your club's PayPal credentials")
+        response = self.client.get(url)
+        self.assertContains(response, "Connected a PayPal account of your own")
+        # Their own account is not their club: the credentials line is for a club that enters its own.
+        self.assertNotContains(response, "Enter your club's PayPal credentials")
 
     def test_paypal_invoice_counts_are_about_your_auction(self):
         from auctions.help_stats import paypal_invoices
@@ -668,3 +671,149 @@ class PaymentPagesAreHelpTests(StandardTestCase):
 
     def test_ai_redirects_into_the_guide(self):
         self.assertRedirects(self.client.get("/ai/"), "/help/ai-agents/#connect", fetch_redirect_response=False)
+
+
+class HelpKnowsYourClubTests(StandardTestCase):
+    """The club guides quote the reader's club back to its admins, and say nothing to anyone else."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Chart Test Club")
+        self.member = ClubMember.objects.create(club=self.club, user=self.user, name="Admin", permission_admin=True)
+        self.user.userdata.last_club_used = self.club
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+
+    def guide(self, slug):
+        return self.client.get(help_guides.GUIDES[slug].url)
+
+    def test_the_member_count_is_paid_up_members_when_the_club_charges_dues(self):
+        ClubMember.objects.create(club=self.club, name="Lapsed", email="lapsed@example.com")
+        self.assertContains(self.guide("club-membership"), "Chart Test Club has 2 active members.")
+        self.club.membership_system = "rolling"
+        self.club.membership_annual_fee = 20
+        self.club.save()
+        self.member.membership_expiration_date = timezone.localdate() + datetime.timedelta(days=30)
+        self.member.save()
+        response = self.guide("club-membership")
+        self.assertContains(response, "Chart Test Club has 1 active member.")
+        self.assertContains(response, "Rolling annual membership, $20 a year.")
+
+    def test_it_says_whether_an_api_key_can_renew_memberships(self):
+        from auctions.models import ClubAPIKey
+
+        self.assertContains(self.guide("club-membership"), "doesn't have an API key that can renew memberships")
+        key = ClubAPIKey(club=self.club, name="Renewal form", can_renew_memberships=True)
+        key.prefix, key.key_hash = "ck_test", "x"
+        key.save()
+        self.assertContains(self.guide("club-membership"), "has an API key that can renew memberships: Renewal form")
+
+    def test_the_auction_rule_says_whether_it_is_on_in_your_auction(self):
+        self.online_auction.club = self.club
+        self.online_auction.save()
+        self.user.userdata.last_auction_used = self.online_auction
+        self.user.userdata.save()
+        self.assertContains(self.guide("club-membership"), f"That rule is off in {self.online_auction.title}")
+        Auction.objects.filter(pk=self.online_auction.pk).update(
+            add_membership_fee_to_invoices_for_expired_members=True
+        )
+        self.assertContains(self.guide("club-membership"), f"That rule is on in {self.online_auction.title}")
+
+    def test_the_mailing_address_tip_is_only_for_a_club_without_one(self):
+        self.assertContains(self.guide("club-email"), "Membership and donation emails wait until Chart Test Club")
+        self.club.mailing_address = "PO Box 1, Springfield"
+        self.club.save()
+        self.assertNotContains(self.guide("club-email"), "Membership and donation emails wait")
+
+    def test_it_lists_the_membership_emails_still_off(self):
+        self.assertContains(
+            self.guide("club-email"), "Still off for Chart Test Club: welcome letter, renewal confirmation."
+        )
+        self.club.send_welcome_email_to_new_members = True
+        self.club.send_membership_renewal_confirmation = True
+        self.club.save()
+        self.assertNotContains(self.guide("club-email"), "Still off for")
+
+    def test_it_says_whether_a_calendar_is_connected_and_public(self):
+        self.assertContains(self.guide("club-events"), "Chart Test Club hasn't connected a calendar yet")
+        self.club.google_calendar_refresh_token = "token"
+        self.club.google_calendar_id = "abc@group.calendar.google.com"
+        self.club.save()
+        self.assertContains(self.guide("club-events"), "has connected a calendar, but it's still private")
+        self.club.google_calendar_is_public = True
+        self.club.save()
+        self.assertContains(self.guide("club-events"), "has connected a calendar, and it's public")
+
+    def test_own_paypal_credentials_are_only_mentioned_to_a_club_that_enters_them(self):
+        self.user.userdata.paypal_enabled = True
+        self.user.userdata.save()
+        self.assertNotContains(self.guide("payments"), "Enter your club's PayPal credentials")
+        self.assertNotContains(self.guide("club-money"), "PayPal credentials")
+        self.club.allow_non_oauth_paypal = True
+        self.club.save()
+        self.assertContains(self.guide("payments"), "Enter your club's PayPal credentials")
+        self.assertContains(self.guide("club-money"), "PayPal credentials")
+
+    def test_a_signed_out_reader_and_a_plain_member_get_none_of_it(self):
+        member = User.objects.create_user("plain", "plain@example.com", "pw")
+        ClubMember.objects.create(club=self.club, user=member, name="Plain")
+        member.userdata.last_club_used = self.club
+        member.userdata.save()
+        for logged_in in (None, member):
+            self.client.logout()
+            if logged_in:
+                self.client.force_login(logged_in)
+            for slug in ("club-membership", "club-email", "club-events"):
+                html = self.guide(slug).content.decode()
+                for phrase in ("active member", "connected a calendar", "Still off for", "API key that can renew"):
+                    self.assertNotIn(phrase, html, slug)
+                self.assertNotIn("help-tip", html, slug)
+
+
+class HelpKnowsYourAiAgentsTests(StandardTestCase):
+    def connect(self, name, count=1):
+        import secrets
+
+        from oauth2_provider.models import get_access_token_model, get_application_model, get_refresh_token_model
+
+        application = get_application_model().objects.create(
+            name=name,
+            client_type="public",
+            authorization_grant_type="authorization-code",
+            redirect_uris="https://claude.ai/api/mcp/auth_callback",
+        )
+        for _ in range(count):
+            access = get_access_token_model().objects.create(
+                user=self.user,
+                application=application,
+                token=secrets.token_hex(20),
+                expires=timezone.now() + datetime.timedelta(hours=1),
+                scope="read write",
+            )
+            get_refresh_token_model().objects.create(
+                user=self.user, application=application, access_token=access, token=secrets.token_hex(20)
+            )
+
+    def test_two_connections_from_one_client_are_called_out(self):
+        self.connect("Claude", count=2)
+        self.connect("ChatGPT")
+        self.client.force_login(self.user)
+        response = self.client.get(help_guides.GUIDES["ai-agents"].url)
+        self.assertContains(response, "Claude is connected 2 times")
+        self.assertNotContains(response, "ChatGPT is connected")
+
+    def test_a_single_connection_says_nothing(self):
+        self.connect("Claude")
+        self.client.force_login(self.user)
+        self.assertNotContains(self.client.get(help_guides.GUIDES["ai-agents"].url), "is connected 1 times")
+        self.assertEqual(help_guides.HelpContext(user=self.user).ai_duplicates, [])
+
+    def test_signed_out_there_is_nothing_to_call_out(self):
+        self.assertEqual(help_guides.HelpContext().ai_duplicates, [])
+
+    def test_the_curl_example_is_inside_the_keys_panel(self):
+        self.client.force_login(self.user)
+        html = self.client.get(help_guides.GUIDES["ai-agents"].url).content.decode()
+        panel = html[html.index('id="api-key-panel"') :]
+        self.assertIn("Authorization: Bearer ak_your_key_here", panel)
+        self.assertNotIn("Authorization: Bearer ak_your_key_here", html[: html.index('id="api-key-panel"')])

@@ -1,17 +1,6 @@
 {% load help_tags %}
-{% comment %}See HELP.md for the voice. /square/ and /paypal/ redirect here (the two sections below), so the reader's own connection is shown in each: help_tags.square_account and paypal_account. Square is open to everyone; the PayPal pay button is a handful of clubs we set up, with their own credentials; PayPal invoices from a CSV are open to everyone.{% endcomment %}
-<p>Connect a payment account and every invoice gets a pay button. People pay by card, the money goes straight to your club, and the invoice marks itself paid. Nobody chases anybody.</p>
-<div class="table-responsive">
-<table class="table table-sm">
-  <thead><tr><th></th><th>Square</th>{% if help.paypal %}<th>PayPal</th>{% endif %}</tr></thead>
-  <tbody>
-    <tr><th>Who can use it</th><td>Everyone</td>{% if help.paypal %}<td>A few clubs we've set up</td>{% endif %}</tr>
-    <tr><th>How it's connected</th><td>Sign in to Square from this site</td>{% if help.paypal %}<td>The club's PayPal credentials, in its settings</td>{% endif %}</tr>
-    <tr><th>Tap to Pay on your phone</th><td>Yes, with the phone app</td>{% if help.paypal %}<td>No</td>{% endif %}</tr>
-    <tr><th>Fees</th><td{% if help.paypal %} colspan="2"{% endif %}>Only their standard fees. This site takes nothing.</td></tr>
-  </tbody>
-</table>
-</div>
+{% comment %}See HELP.md for the voice. /square/ and /paypal/ redirect here (the two sections below), so the reader's own connection is shown in each: help_tags.square_account and paypal_account. Square is open to everyone; the PayPal pay button is a handful of clubs we set up, with their own credentials (help.club_own_paypal); PayPal invoices from a CSV are open to everyone.{% endcomment %}
+<p>Connect a payment account and every invoice gets a pay button. People pay by card, the money goes straight to your club, and the invoice marks itself paid.</p>
 {% tip %}The first time you run an auction, we have to OK you before it can take payments. Your auction page has a {% ui "Contact us and request access" %} button.{% endtip %}
 
 <h2 class="h5 mt-4" id="square">Square</h2>
@@ -67,7 +56,8 @@
 <h2 class="h5 mt-4" id="paypal">PayPal</h2>
 {% if help.paypal %}
 {% paypal_account %}
-<p>Enter your club's PayPal credentials on {% page "club_membership_settings" "Membership and payments" %}. After that it works like Square, without Tap to Pay. Connected a PayPal account of your own in the past? It's shown above, and you can {% page "paypal_seller_delete" "disconnect" %} it.</p>
+{% if help.club_own_paypal %}<p>Enter your club's PayPal credentials on {% page "club_membership_settings" "Membership and payments" %}. After that it works like Square, without Tap to Pay.</p>{% endif %}
+<p>Connected a PayPal account of your own in the past? It's shown above, and you can {% page "paypal_seller_delete" "disconnect" %} it.</p>
 {% endif %}
 <p>No pay button? You can still bill everyone through PayPal after an online auction, from any PayPal account:</p>
 {% if help.is_admin and help.paypal_invoices %}{% helptip "receipt" %}{{ help.paypal_invoices.auction.title }} has {{ help.paypal_invoices.ready }} Ready invoice{{ help.paypal_invoices.ready|pluralize }} for the file and {{ help.paypal_invoices.open }} open. <a href="{% url 'auction_tos_list' slug=help.paypal_invoices.auction.slug %}">Users tab</a>{% for chunk in help.paypal_invoices.chunks %}, <a href="{% url 'paypal_csv' slug=help.paypal_invoices.auction.slug chunk=chunk %}">PayPal Invoice CSV{% if help.paypal_invoices.chunks|length > 1 %} #{{ chunk }}{% endif %}</a>{% endfor %}{% if help.paypal_invoices.ready %}, <a href="https://www.paypal.com/invoice/batch">PayPal Batch Invoice Upload</a>{% endif %}.{% endhelptip %}{% endif %}

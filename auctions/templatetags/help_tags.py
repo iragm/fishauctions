@@ -429,6 +429,7 @@ def ai_connections(context, part):
         "signed_in": signed_in,
         "csrf_token": context.get("csrf_token"),
         "guide_path": request.path if request else "",
+        "mcp_address": mcp_url(context),
     }
     if signed_in and part == "apps":
         values["connected_apps"] = connected_apps(user)

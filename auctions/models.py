@@ -571,7 +571,10 @@ class Club(CloudflareImageMixin, models.Model):
     latitude = models.FloatField(blank=True, null=True)
     longitude = models.FloatField(blank=True, null=True)
     location = models.CharField(max_length=500, blank=True, null=True)
-    location.help_text = "Search Google maps with this address"
+    location.help_text = (
+        "Where you meet. Search Google maps with this address, then drag the pin. "
+        "This is how the club finder knows where you are."
+    )
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
     MEMBERSHIP_SYSTEM_CHOICES = (
         ("none", "No membership fees"),
@@ -657,8 +660,14 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
     )
     send_membership_expiration_reminders_30_days = models.BooleanField(default=False)
-    send_membership_renewal_confirmation = models.BooleanField(default=False)
-    send_welcome_email_to_new_members = models.BooleanField(default=False)
+    send_membership_renewal_confirmation = models.BooleanField(
+        default=False,
+        help_text="A receipt with the new date, sent whenever somebody renews, however they paid.",
+    )
+    send_welcome_email_to_new_members = models.BooleanField(
+        default=False,
+        help_text="Sent when somebody joins or you add them, with a link to their membership, and their card if you use barcodes.",
+    )
     membership_email_template = models.TextField(blank=True, default="")
     include_next_auction_in_emails = models.BooleanField(
         default=True,
@@ -765,7 +774,12 @@ class Club(CloudflareImageMixin, models.Model):
         related_name="+",
         help_text="The auction whose admin links are surfaced in the club sidebar.",
     )
-    description = models.TextField(verbose_name="About this club", default="", blank=True)
+    description = models.TextField(
+        verbose_name="About this club",
+        default="",
+        blank=True,
+        help_text="Shown at the top of your club page: when you meet, and why somebody should come.",
+    )
     enable_breeder_award_program = models.BooleanField(
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
@@ -810,12 +824,15 @@ class Club(CloudflareImageMixin, models.Model):
     )
     separate_hap = models.BooleanField(
         default=False,
-        help_text="Track HAP (Horticultural Award Program) points separately from BAP.",
+        help_text="Plants earn HAP (Horticultural Award Program) points, with their own leaderboard, instead of BAP.",
         verbose_name="Separate Horticultural Award Program (HAP)",
     )
     separate_cap = models.BooleanField(
         default=False,
-        help_text="Track CAP (Culture Award Program) points separately from BAP.",
+        help_text=(
+            "Live food cultures, snails and other inverts earn CAP (Culture Award Program) points instead of BAP. "
+            "Without this, live food earns nothing."
+        ),
         verbose_name="Separate Live Food Culture Award Program (CAP)",
     )
     auto_add_points = models.BooleanField(
@@ -828,22 +845,28 @@ class Club(CloudflareImageMixin, models.Model):
     )
     min_quantity = models.IntegerField(
         default=5,
-        help_text="Minimum quantity in a lot to be eligible for BAP points.",
+        help_text=(
+            "Minimum quantity in a lot to be eligible for BAP points. Stops one fry in a bag earning points. "
+            "Plants, snails and live food are exempt."
+        ),
     )
     points_for_custom_checkbox = models.IntegerField(
         default=0,
-        help_text="Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable.",
+        help_text=(
+            "Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable. "
+            "For example, call the checkbox “CARES species” and give it 5."
+        ),
     )
     only_donation_lots = models.BooleanField(
         default=False,
-        help_text="Require all BAP lots to be a donation.",
+        help_text="Require all BAP lots to be a donation. For clubs whose program is “breed it and donate it to the auction”.",
     )
     only_sold_lots = models.BooleanField(
         default=False,
         help_text=(
             "Require lots to be sold for points to be awarded. "
             "Uncheck to give points for submitted and unsold lots. "
-            "If automatically award points is on, they will only be automatically awarded to sold lots."
+            "With Auto add points on, unsold lots get theirs a day after the auction ends."
         ),
         verbose_name="Only sold lots",
     )
@@ -1032,6 +1055,10 @@ class Club(CloudflareImageMixin, models.Model):
         choices=DONATION_EMAIL_MODE_CHOICES,
         default=DONATION_EMAIL_MODE_ROUTED,
         verbose_name="How to send donation emails",
+        help_text=(
+            "From this site, the email comes from an address that files the vendor's reply against them. "
+            "With copy/paste, you send it from your own email and record replies yourself, by hand or with an AI assistant."
+        ),
     )
     donation_email_member = models.ForeignKey(
         "ClubMember",
@@ -1048,7 +1075,8 @@ class Club(CloudflareImageMixin, models.Model):
         verbose_name="Club information for donation emails",
         help_text=(
             "Passed to the language model with every donation email it writes, so it doesn't have "
-            "to be retyped for each vendor."
+            "to be retyped for each vendor. For example: “We're a non-profit club of 120 members. "
+            "Our spring auction raises money for our speaker program.”"
         ),
     )
     mailing_address = models.TextField(
@@ -1122,7 +1150,7 @@ class Club(CloudflareImageMixin, models.Model):
         default=7,
         choices=DONATION_FOLLOWUP_CHOICES,
         verbose_name="Follow up after",
-        help_text="How long to wait for a reply before a vendor shows up as due for a follow-up.",
+        help_text="How long to wait for a reply before a vendor shows up as due for a follow-up. A week is about right.",
     )
 
     objects = ClubQuerySet.as_manager()

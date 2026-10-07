@@ -1,4 +1,4 @@
-{% comment %}The reader's own AI connections (part="apps") or keys (part="keys"), on the AI agents guide. This used to be the /ai/ page; its forms still post there (UserAPIKeyView), which redirects back here. A new key's secret is in the session once, and the keys panel is only drawn open when there is one to read.{% endcomment %}
+{% comment %}The reader's own AI connections (part="apps") or keys (part="keys"), on the AI agents guide. This used to be the /ai/ page; its forms still post there (UserAPIKeyView), which redirects back here. A new key's secret is in the session once, and the keys panel is only drawn open when there is one to read. The curl example is inside that panel, so it is not on the page for a signed-out reader.{% endcomment %}
 {% if not signed_in %}
 <p class="text-muted small"><a href="{% url 'account_login' %}?next={{ guide_path|urlencode }}">Sign in</a> to see {% if part == "apps" %}what you've connected{% else %}your keys, or make one{% endif %}.</p>
 {% elif part == "apps" %}
@@ -90,5 +90,10 @@
       </table>
     </div>
     {% endif %}
+    <p class="mb-2">Send it as a bearer token on every request:</p>
+    <pre class="bg-dark text-white p-2 rounded small" style="overflow-x:auto"><code>curl -X POST {{ mcp_address }} \
+  -H "Authorization: Bearer ak_your_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
   </div>
 {% endif %}

@@ -476,6 +476,111 @@ class HelpContext:
         return get_refresh_token_model().objects.filter(user=self.user, revoked__isnull=True).exists()
 
     @cached_property
+    def ai_duplicates(self) -> list[dict]:
+        """AI agents the reader has connected more than once, as ``{"name", "count"}``.
+
+        A connection is a live refresh token (they rotate, so one connection holds one). Counted by the
+        client's name, not its row: Claude's connector is one client however many times it's added, but a
+        client that registers itself each time (DCR) is a new row per connection.
+        """
+        if not self.signed_in:
+            return []
+        from auctions.mcp import auth as mcp_auth
+
+        if not mcp_auth.oauth_enabled():
+            return []
+        from collections import Counter
+
+        from oauth2_provider.models import get_refresh_token_model
+
+        names = (
+            get_refresh_token_model()
+            .objects.filter(user=self.user, revoked__isnull=True)
+            .values_list("application__name", flat=True)
+        )
+        counts = Counter(name for name in names if name)
+        return [{"name": name, "count": count} for name, count in counts.items() if count > 1]
+
+    @cached_property
+    def club_active_members(self) -> int:
+        """How many members of the reader's club are active: paid up when it charges dues, else everyone on
+        its list. Zero unless the reader is a club admin.
+        """
+        club = self.club
+        if club is None or not self.is_club_admin:
+            return 0
+        from auctions.filters import membership_paid_q
+        from auctions.models import ClubMember
+
+        members = ClubMember.objects.filter(club=club, is_deleted=False)
+        if club.charges_dues:
+            members = members.filter(membership_paid_q(timezone.localdate()))
+        return members.count()
+
+    @cached_property
+    def club_currency_symbol(self) -> str:
+        """The symbol the reader's club bills dues in, chosen as ``Invoice.currency`` does: its payment
+        account holder's currency, else the reader's own. Empty unless the reader is a club admin.
+        """
+        club = self.club
+        if club is None or not self.is_club_admin:
+            return ""
+        from auctions.helper_functions import get_currency_symbol
+
+        seller = club.effective_paypal_seller or club.effective_square_seller
+        userdata = getattr(getattr(seller, "user", None), "userdata", None) or getattr(self.user, "userdata", None)
+        return get_currency_symbol(userdata.currency) if userdata else "$"
+
+    @cached_property
+    def club_renewal_keys(self) -> list[str]:
+        """Names of the reader's club's live API keys that can renew memberships. Empty unless the reader is
+        a club admin, so check ``is_club_admin`` to tell "none yet" from "not yours to see".
+        """
+        club = self.club
+        if club is None or not self.is_club_admin:
+            return []
+        from auctions.models import ClubAPIKey
+
+        keys = ClubAPIKey.objects.filter(club=club, is_active=True, can_renew_memberships=True)
+        return list(keys.order_by("name").values_list("name", flat=True))
+
+    @cached_property
+    def membership_emails_off(self) -> list[str]:
+        """The membership emails the reader's club hasn't switched on, as its email settings name them. The
+        reminders are left out until the club can send them: their boxes can't be ticked before then.
+        """
+        club = self.club
+        if club is None or not self.is_club_admin:
+            return []
+        emails = [
+            ("welcome letter", club.send_welcome_email_to_new_members),
+            ("renewal confirmation", club.send_membership_renewal_confirmation),
+        ]
+        if club.membership_payment_emails_enabled:
+            emails += [
+                ("30-day expiration reminder", club.send_membership_expiration_reminders_30_days),
+                ("day-before expiration reminder", club.send_membership_expiration_reminders),
+            ]
+        return [name for name, switched_on in emails if not switched_on]
+
+    @cached_property
+    def club_own_paypal(self) -> bool:
+        """Whether the reader's club enters its own PayPal credentials (``allow_non_oauth_paypal``), as its
+        Membership and payments page offers. Narrower than :attr:`paypal`, which also follows the reader's
+        own account.
+        """
+        club = self.club
+        return bool(club is not None and self.is_club_admin and club.allow_non_oauth_paypal)
+
+    @cached_property
+    def club_paypal_subscriptions(self) -> bool:
+        """Whether the reader's club can take PayPal subscriptions, the way its Membership and payments page
+        decides to offer the webhook set-up (``Club.supports_paypal_subscriptions``).
+        """
+        club = self.club
+        return bool(club is not None and self.is_club_admin and club.supports_paypal_subscriptions)
+
+    @cached_property
     def label_fields(self) -> list[str]:
         """What the auction's labels print, in the words its label settings page uses."""
         if not self.auction:
@@ -675,17 +780,41 @@ def club_setting_labels(club) -> dict[str, str]:
 
 
 #: Club settings no guide names, and why.
-CLUB_SETTINGS_NOT_IN_HELP: dict[str, str] = dict.fromkeys(
-    (
-        "welcome_opening",
-        "welcome_closing",
-        "renewal_opening",
-        "renewal_closing",
-        "expiring_soon_opening",
-        "expiring_soon_closing",
+CLUB_SETTINGS_NOT_IN_HELP: dict[str, str] = {
+    **dict.fromkeys(
+        (
+            "welcome_opening",
+            "welcome_closing",
+            "renewal_opening",
+            "renewal_closing",
+            "expiring_soon_opening",
+            "expiring_soon_closing",
+        ),
+        "Typed into the email preview, which the guide describes as a whole.",
     ),
-    "Typed into the email preview, which the guide describes as a whole.",
-)
+    # What a setting does belongs in its help text, on the form, not in a guide.
+    **dict.fromkeys(
+        (
+            "name",
+            "icon",
+            "homepage",
+            "facebook_page",
+            "discord_invite_link",
+            "description",
+            "location",
+            "location_coordinates",
+            "auto_add_points",
+            "points_per_lot",
+            "points_for_custom_checkbox",
+            "days_between_same_name_lots",
+            "days_between_same_species_lots",
+            "only_active_members_can_participate",
+            "separate_hap",
+            "separate_cap",
+        ),
+        "Its help text on the form says all there is to say.",
+    ),
+}
 
 
 #: Pages that are deliberately in no guide.
@@ -729,6 +858,10 @@ NOT_IN_HELP: dict[str, str] = {
     "user_api_keys": "Redirects into the AI agents guide, and takes that guide's forms.",
     "paypal_seller": "Redirects into the Card payments guide.",
     "square_seller": "Redirects into the Card payments guide.",
+    "mailchimp_sync_now": "A button on the Mailchimp settings page, which says what it does.",
+    "mailchimp_disconnect": "A button on the Mailchimp settings page, which says what it does.",
+    "brevo_sync_now": "A button on the Brevo settings page, which says what it does.",
+    "brevo_disconnect": "A button on the Brevo settings page, which says what it does.",
     "square_connect": "The connect button in the Card payments guide is drawn by help_tags.square_account, only for someone Square will take.",
     "paypal_connect": "PayPal is set up for a few clubs with their own credentials; the guides don't offer the older connect-your-own-account flow.",
     "auction_printable_lot_list": "Every lot on one page, under More; the page says what it is.",

@@ -6,41 +6,27 @@
 <h2 class="h5 mt-4" id="setup">Turning it on</h2>
 <ol>
   <li>Make sure the club has a {% ui "Mailing address" %} in its {% page "club_edit" "General" %} settings. It goes at the bottom of every donation email, and it's where vendors mail things.</li>
-  <li>Open {% page "club_donation_settings" "Donation tracking settings" %}, under Setup. Read the terms, then tick {% ui "Enable donation tracking" %}.</li>
+  <li>Open {% page "club_donation_settings" "Donation tracking settings" %}, under Setup. Read the terms, tick {% ui "Enable donation tracking" %}, and choose {% ui "How to send donation emails" %}.</li>
   <li>Give whoever does the asking the {% ui "Manage donations" %} permission. It sends mail in the club's name, so it isn't part of any other permission.</li>
 </ol>
 <p>Asking businesses for donations is regulated, and the rules vary by state. Some want a club to be a registered non-profit before it asks. That's your club's job to check.</p>
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>{% ui "How to send donation emails" %}</th><td>{% ui "Send mail from this site" %}: the email comes from an address that files the vendor's reply against them. {% ui "Copy/paste to my email" %}: you send it from your own email, and record replies by hand, or have <a href="#own-email">an AI assistant</a> record them.</td></tr>
-    <tr><th>{% ui "Follow up after" %}</th><td>How long before a vendor who hasn't answered is due a nudge. A week is about right.</td></tr>
-    <tr><th>{% ui "Club information for donation emails" %}</th><td>What every email should know about you: "We're a non-profit club of 120 members. Our spring auction raises money for our speaker program." Written once, used in every email.</td></tr>
-  </tbody>
-</table>
-</div>
 <h3 class="h6 mt-3">Your details, for their form</h3>
 <p>Big businesses only take requests through a form on their own site, and every form asks the same things. Fill these in once: {% ui "Legal name" %}, {% ui "Tax ID" %}, {% ui "Tax status" %} ("501(c)(3) public charity"), {% ui "Contact name" %}, {% ui "Phone" %}, {% ui "Website" %} and {% ui "Expected attendance" %}. When you contact one of those vendors, they're laid out with a copy button each.</p>
 
 <h2 class="h5 mt-4" id="vendors">Your vendor list</h2>
 <p>{% page "club_donation_vendors" "Donation Tracking" %}, in the club's menu. {% ui "Add vendor" %} for each one. There's no importing a list, on purpose: this is for businesses you know, not a mailing list.</p>
-<div class="table-responsive">
-<table class="table table-sm">
-  <tbody>
-    <tr><th>{% ui "Contact them by" %}</th><td>{% ui "Email" %}, {% ui "Their donation request form" %}, {% ui "Phone" %} or {% ui "In person" %}. The local fish store is in person; the big pet chain is a form.</td></tr>
-    <tr><th>{% ui "Context" %}</th><td>What they sell, and what they gave last time. "Gave two $25 gift cards in 2025. Owner is a killifish nut." The email uses it.</td></tr>
-    <tr><th>{% ui "Status" %}</th><td>Where it's got to: {% ui "Initial request sent" %}, {% ui "Interested" %}, {% ui "Donation promised" %}, {% ui "Donation received" %}, {% ui "Not interested" %}.</td></tr>
-  </tbody>
-</table>
-</div>
-<p>Search the list, or pick a status from the menu. The banner at the top counts vendors due for a follow-up; click it to see them.</p>
+<ul>
+  <li>The local fish store is {% ui "In person" %}; the big pet chain is {% ui "Their donation request form" %}. Pick which in {% ui "Contact them by" %}.</li>
+  <li>Put what they sell and what they gave last time in {% ui "Context" %}: "Gave two $25 gift cards in 2025. Owner is a killifish nut." The email uses it.</li>
+</ul>
+<p>Search the list, or pick a status from the menu. The banner at the top counts vendors due for a follow-up ({% ui "Follow up after" %} in the settings sets when); click it to see them.</p>
 {% aitip %}Ask "find pet shops and breeders near the club that might donate a raffle prize" and then "add the ones that look good to our vendor list".{% endaitip %}
 
 <h2 class="h5 mt-4" id="asking">Asking</h2>
 <p>Click {% ui "Contact" %} on a vendor's row.</p>
 <h3 class="h6 mt-3">By email</h3>
 <ol>
-  <li>Add anything this email should mention, and paste in their last message if you've been emailing them somewhere else.</li>
+  <li>Add anything this email should mention, and paste in their last message if you've been emailing them somewhere else. What every email should say about your club goes once in {% ui "Club information for donation emails" %}.</li>
   <li>Click {% ui "Next" %}, and the email is written for you. (On a site without automatic writing, you write it.)</li>
   <li>Read it, and change anything. What you send is what you approved, not what was written for you.</li>
   <li>{% ui "Send" %}, or <strong>Copy &amp; record</strong> if you send them yourself: it copies the email to paste into your own mail, and records that you asked.</li>
@@ -68,13 +54,14 @@
   <li>Connect your email to it too. In Claude, that's <strong>Settings</strong>, <strong>Connectors</strong>, then <strong>Gmail</strong>. Any assistant that can search your email and save drafts in it will do.</li>
   <li>Start a chat and pick {% ui "Work the donation list from your email" %} from this site's prompts. In Claude, they're under this site's name in the <strong>+</strong> menu.</li>
 </ol>
-<p>First it checks that it can reach your email, and stops if it can't. Then it records what's new, tells you who replied and who's due a nudge, and asks who to write to. Those emails wait in Gmail as drafts: read them, and send them yourself. Next time, it records what you sent.</p>
 <ul>
   <li>It only reads your email and saves drafts in it. Nothing in your inbox is moved, labelled or marked read, and only mail about the donation goes on the list: a vendor's receipts and newsletters stay out.</li>
   <li>Email from your own address doesn't count against the daily limit. That's only for email sent or written here.</li>
   <li>Every draft ends with your club's address and the vendor's unsubscribe link, the same as email sent from here.</li>
   <li>Nothing tells it a reply came in. Ask it to check once a week or so.</li>
 </ul>
+{% tip %}Because you asked for this feature, here it is. The power to spam a thousand vendors an hour, follow up with them perfectly, and have no human interaction in any of it. Just remember that donations are the goose that laid the golden egg and they keep every club running. Abuse this and you're hurting the entire hobby in the long run.{% endtip %}
+{% tip %}I know you can mess with this system and create your own prompts to send emails automatically, add a daily task in Claude to work the queue, and remove the unsubscribe link in the footer. Please don't.{% endtip %}
 {% aitip %}Pick {% ui "Find vendors to ask" %}, or ask "find fish stores within 30 miles that might donate a raffle prize, and add the ones I like to our list".{% endaitip %}
 
 <h2 class="h5 mt-4" id="auction">When the donations arrive</h2>

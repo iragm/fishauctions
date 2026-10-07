@@ -59,7 +59,7 @@
     </ol>
   </div></div></div>
 </div>
-{% tip %}Connect once. Two connections means everything happens twice. Remove extras <a href="#connected">below</a>.{% endtip %}
+{% if help.ai_duplicates %}{% helptip "robot" %}{% for agent in help.ai_duplicates %}{{ agent.name }} is connected {{ agent.count }} times, so everything it does happens {{ agent.count }} times. {% endfor %}{% ui "Disconnect" %} it <a href="#connected">below</a>, then connect it once.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="connected">What's connected</h2>
 <p>Everything you've connected is listed here, with a {% ui "Disconnect" %} button. Disconnecting stops it straight away.</p>
@@ -78,11 +78,6 @@
 <h2 class="h5 mt-4" id="keys">Keys, for scripts</h2>
 <p>You don't need a key for Claude, ChatGPT or Grok. A key is for a script, a cron job, or a connector your organisation's administrator adds once for everybody. Anyone with the key is you, so treat it like a password.</p>
 {% ai_connections "keys" %}
-<p>Send it as a bearer token on every request:</p>
-<pre class="bg-dark text-white p-2 rounded small" style="overflow-x:auto"><code>curl -X POST {{ mcp_address }} \
-  -H "Authorization: Bearer ak_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
 
 <h2 class="h5 mt-4" id="no-ai">No AI account?</h2>
 <p>Click the site's name at the top left of any page and type what you want to do. This is slower and doesn't have every feature, but is a great way to find the page you're looking for.</p>

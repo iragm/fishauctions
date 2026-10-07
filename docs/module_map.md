@@ -146,7 +146,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6427 lines)
+- **`forms.py`** (6428 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -162,7 +162,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (850 lines)
+- **`help_guides.py`** (983 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (907 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -187,7 +187,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14442 lines)
+- **`models.py`** (14470 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -426,7 +426,7 @@ this only quotes its opening sentence.
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
 - **`test_free_text_usage.py`** (48 lines)
   `FreeTextUsageTests`
-- **`test_help.py`** (670 lines)
+- **`test_help.py`** (819 lines)
   The help guides: that they cover every page and rule, that they are public, and that they talk about your auction.
 - **`test_helpers.py`** (1385 lines)
   Tests for helper functions, model utilities, template tags and context processors.
@@ -911,7 +911,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `convert_distance`, `distance_display`
 - **`email_tags.py`** (188 lines)
   Tags for emailed templates: the footer, the club header, the button and the greeting's first name.
-- **`help_tags.py`** (438 lines)
+- **`help_tags.py`** (439 lines)
   Tags for writing help guides (``auctions/templates/help/guides/``).
 - **`membership_tags.py`** (115 lines)
   `membership_barcode`, `google_wallet_save_url`

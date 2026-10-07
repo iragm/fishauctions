@@ -4865,7 +4865,8 @@ class ClubEmailSettingsForm(forms.ModelForm):
         ].label = "Send expiration reminder the day before membership expires"
         self.fields["send_membership_renewal_confirmation"].label = "Send membership renewal confirmation"
         reminder_help = (
-            "Requires integrated membership payments so the email can link members back to their renewal page."
+            "Each reminder has a button to pay, so it needs integrated membership payments. "
+            "Only sent to members who have paid at least once."
         )
         self.fields["send_membership_expiration_reminders_30_days"].help_text = reminder_help
         self.fields["send_membership_expiration_reminders"].help_text = reminder_help

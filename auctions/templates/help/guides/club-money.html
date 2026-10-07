@@ -40,8 +40,8 @@
 <p>With a card account connected, members pay their dues on your club page and every club auction gets a pay button. It's on {% page "club_membership_settings" "Membership and payments" %}, under Setup.</p>
 <ul>
   <li><strong>Square</strong>, for any club: {% ui "Connect a Square account for this club" %}. {% page "club_link_payment_account" "Linking" %} uses the Square account of the person clicking, so the treasurer should do it. Already connected Square for your own auctions? {% ui "Use my connected Square account" %}.</li>
-  {% if help.paypal %}<li><strong>PayPal</strong>: the club enters its own {% page "club_paypal_credentials" "PayPal credentials" %} on the same page.</li>{% endif %}
-  <li>The first time, card payments have to be switched on for you. Click {% ui "Contact us and request access" %}; it's usually the same day.</li>
+  {% if help.club_own_paypal %}<li><strong>PayPal</strong>: the club enters its own {% page "club_paypal_credentials" "PayPal credentials" %} on the same page.</li>{% endif %}
+  <li>The first time, card payments have to be switched on for you. Click {% ui "Contact us and request access" %}.</li>
 </ul>
 <p>The money goes straight into that account; this site takes nothing. <a href="{% url 'help_guide' slug='payments' %}">Card payments</a> has the details, Tap to Pay, and <a href="{% url 'help_guide' slug='payments' %}#seller-payouts">why there's no button to pay sellers</a>.</p>
 
