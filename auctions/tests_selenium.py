@@ -1360,11 +1360,12 @@ class LotQueueCameraTests(LiveBrowserTestCase):
         self.wait_for(driver, lambda: self.queued() == [lot.pk], "the label was never added")
         added_at = time.time()
         self.show(driver)
-        # Found and clicked in one go: the list is swapped out as refreshes land.
+        # Found and clicked in one go: the list is swapped out as refreshes land. Only in a settled list:
+        # htmx wires a swapped-in button up when it settles, 20ms on, and a click before that does nothing.
         WebDriverWait(driver, 10).until(
             lambda d: d.execute_script(
                 "const remove = document.querySelector(arguments[0]); if (remove) { remove.click(); } return !!remove;",
-                f'#queue-sortable [data-lot-pk="{lot.pk}"] .btn-danger',
+                f'#queue-list:not(.htmx-settling) #queue-sortable [data-lot-pk="{lot.pk}"] .btn-danger',
             )
         )
         self.wait_for(driver, lambda: self.queued() == [], "the remove button should take it off")
