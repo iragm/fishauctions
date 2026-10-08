@@ -42,6 +42,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from auctions.client_ip import client_ip
+from auctions.crawlers import is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -50,7 +51,9 @@ from auctions.form_friction import (
     MAX_ABANDONED_FIELDS,
     read_abandon_token,
 )
+from auctions.friction_models import BID_STAGE_ORDER
 from auctions.models import (
+    AbandonedBid,
     Auction,
     AuctionCampaign,
     AuctionTOS,
@@ -399,6 +402,32 @@ class FormAbandonedBeacon(APIView):
         return JsonResponse({"recorded": True}, status=201)
 
 
+class AbandonedBidBeacon(APIView):
+    """Record a bid somebody started on a lot page and didn't place, posted by the page via sendBeacon.
+
+    Signed-in people only: nobody else can bid. One row per person per lot, moved on to a further stage
+    (``friction_models.BID_STAGES``) but never back. 204 for anything not worth a row.
+    """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, pk):
+        stage = request.POST.get("stage", "")
+        if not request.user.is_authenticated or stage not in BID_STAGE_ORDER:
+            return HttpResponse(status=204)
+        if beacon_over_the_limit(request, "bid-abandoned", ABANDONED_FORMS_PER_ADDRESS_PER_MINUTE):
+            return HttpResponse(status=204)
+        lot = beacon_subject(Lot, pk, is_deleted=False)
+        if lot is None:
+            return HttpResponse(status=204)
+        row, created = AbandonedBid.objects.get_or_create(lot=lot, user=request.user, defaults={"stage": stage})
+        if not created and BID_STAGE_ORDER.index(stage) > BID_STAGE_ORDER.index(row.stage):
+            row.stage = stage
+            row.save(update_fields=["stage", "updatedon"])
+        return HttpResponse(status=204)
+
+
 def beacon_subject(model, pk, **extra):
     """The lot or auction a page view names, or None. Empty or junk pks mean not given, not a 500."""
     if not pk:
@@ -416,7 +445,7 @@ class PageViewCreate(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        if beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
+        if is_crawler(request) or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
             return HttpResponse(status=204)
         data = request.POST
         auction = beacon_subject(Auction, data.get("auction"))
@@ -461,23 +490,22 @@ class PageViewCreate(APIView):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            if "Googlebot" not in user_agent and "Baiduspider" not in user_agent:
-                PageView.objects.create(
-                    lot_number=lot_number,
-                    url=url,
-                    auction=auction,
-                    session_id=session_id,
-                    user=user,
-                    user_agent=user_agent,
-                    ip_address=ip[:100],
-                    platform=parsed_ua.os.family,
-                    os=os,
-                    referrer=referrer[:600],
-                    title=data.get("title", "")[:600],
-                    source=source,
-                )
-                if user:
-                    UserData.objects.filter(user=user).update(last_activity=timezone.now())
+            PageView.objects.create(
+                lot_number=lot_number,
+                url=url,
+                auction=auction,
+                session_id=session_id,
+                user=user,
+                user_agent=user_agent,
+                ip_address=ip[:100],
+                platform=parsed_ua.os.family,
+                os=os,
+                referrer=referrer[:600],
+                title=data.get("title", "")[:600],
+                source=source,
+            )
+            if user:
+                UserData.objects.filter(user=user).update(last_activity=timezone.now())
             if user and lot_number and lot_number.species_category:
                 # create/increment interest in this category for this view
                 UserInterestCategory.add_interest(user, lot_number.species_category, settings.VIEW_WEIGHT)
@@ -610,6 +638,8 @@ class InvoiceRenewalNeededToggleView(APIView):
         if invoice.renewal_processed:
             return HttpResponseBadRequest("Renewal already processed for this invoice.")
         renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
+        if renewal_needed and invoice.member_membership_carried_by:
+            return HttpResponseBadRequest("This membership is carried with another member's.")
         invoice.renewal_needed = renewal_needed
         invoice.renewal_manually_set = True
         invoice.save(update_fields=["renewal_needed", "renewal_manually_set"])
@@ -666,35 +696,60 @@ class UpdateLotPushNotificationsView(APIPostView):
         return JsonResponse({"result": "success"})
 
 
+def _send_test_push(user, *, title, body, url, tag, icon=None, auction_pk=None):
+    """A test push by the channel the real one will use: the app, else this account's browsers. False if neither."""
+    if user_has_app_push(user):
+        send_push_to_user.delay(
+            user.pk,
+            title=title,
+            body=body,
+            url=url,
+            category=CATEGORY_LOT_SELLING,
+            collapse_key=tag,
+            auction_pk=auction_pk,
+        )
+        return True
+    if not PushInformation.objects.filter(user=user).exists():
+        return False
+    payload = {"head": title, "body": body, "url": url, "tag": tag}
+    if icon:
+        payload["icon"] = icon
+    send_user_notification(user=user, payload=payload, ttl=10000)
+    return True
+
+
 class LotPushTestNotificationView(APIPostView):
     def post(self, request, *args, **kwargs):
         lot = get_object_or_404(Lot, pk=kwargs["pk"], is_deleted=False)
         if not Watch.objects.filter(lot_number=lot, user=request.user).exists():
             return JsonResponse({"result": "error", "message": "You must watch this lot first."}, status=403)
-        # Use the channel the real notification will use.
-        if user_has_app_push(request.user):
-            send_push_to_user.delay(
-                request.user.pk,
-                title=f"{lot.lot_name} test notification",
-                body=f"Lot {lot.lot_number_display} test notification for this watched lot.",
-                url=f"https://{lot.full_lot_link}",
-                category=CATEGORY_LOT_SELLING,
-                collapse_key=f"lot_sell_notification_test_{lot.pk}",
-                auction_pk=lot.auction_id,
-            )
-            return JsonResponse({"result": "success"})
-        if not PushInformation.objects.filter(user=request.user).exists():
+        sent = _send_test_push(
+            request.user,
+            title=f"{lot.lot_name} test notification",
+            body=f"Lot {lot.lot_number_display} test notification for this watched lot.",
+            url=f"https://{lot.full_lot_link}",
+            tag=f"lot_sell_notification_test_{lot.pk}",
+            icon=lot.thumbnail.display_url if lot.thumbnail else None,
+            auction_pk=lot.auction_id,
+        )
+        if not sent:
             return JsonResponse({"result": "error", "message": "No push subscription found."}, status=400)
+        return JsonResponse({"result": "success"})
 
-        payload = {
-            "head": f"{lot.lot_name} test notification",
-            "body": f"Lot {lot.lot_number_display} test notification for this watched lot.",
-            "url": f"https://{lot.full_lot_link}",
-            "tag": f"lot_sell_notification_test_{lot.pk}",
-        }
-        if lot.thumbnail:
-            payload["icon"] = lot.thumbnail.display_url
-        send_user_notification(user=request.user, payload=payload, ttl=10000)
+
+class PushTestNotificationView(APIPostView):
+    """The help's Test notification button: no lot needed."""
+
+    def post(self, request, *args, **kwargs):
+        sent = _send_test_push(
+            request.user,
+            title="Test notification",
+            body="This is what you'll get when a lot you watch is about to sell.",
+            url=request.build_absolute_uri(reverse("help_guide", kwargs={"slug": "in-person-auctions"}) + "#coming-up"),
+            tag="lot_sell_notification_test",
+        )
+        if not sent:
+            return JsonResponse({"result": "error", "message": "No push subscription found."}, status=400)
         return JsonResponse({"result": "success"})
 
 

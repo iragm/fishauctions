@@ -24,6 +24,7 @@ from django.views.generic.edit import (
     FormMixin,
 )
 
+from auctions import auction_survey
 from auctions.filters import (
     InvoiceFilter,
 )
@@ -265,6 +266,12 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 },
             )
         context["is_auction_admin"] = self.auction and self.is_auction_admin
+        is_owner = self.using_no_login_link or (
+            invoice.auctiontos_user is not None and invoice.auctiontos_user.user_id == self.request.user.pk
+        )
+        # The survey on the page too: app users and people who skip the email see it here.
+        if context["show_links"] and is_owner and auction_survey.on_invoice_page(invoice):
+            context["survey_answers"] = AuctionTOS.SURVEY_ANSWERS
         context["website_focus"] = settings.WEBSITE_FOCUS
         club = invoice.auction.club if invoice.auction else None
         context["viewer_has_bap"] = club is not None and check_club_permission(
@@ -348,10 +355,7 @@ class InvoiceNoLoginView(InvoiceView):
     def dispatch(self, request, *args, **kwargs):
         self.uuid = kwargs.get("uuid", None)
         invoice = self.get_object()
-        invoice.opened = True
-        # Only this column: a payment webhook marking the invoice PAID runs concurrently with this
-        # page load, and a full-row save would write our stale status back over it.
-        invoice.save(update_fields=["opened"])
+        invoice.mark_opened()
         if invoice.auctiontos_user:
             invoice.auctiontos_user.email_address_status = "VALID"
             invoice.auctiontos_user.save(update_fields=["email_address_status"])
@@ -372,10 +376,8 @@ class SquarePaymentSuccessView(InvoiceNoLoginView):
     def dispatch(self, request, *args, **kwargs):
         self.uuid = kwargs.get("uuid", None)
         invoice = self.get_object()
-        # Mark invoice as opened but don't verify email. Only this column: Square's webhook marks the
-        # same invoice PAID at the same moment as this redirect, and a full-row save undoes it.
-        invoice.opened = True
-        invoice.save(update_fields=["opened"])
+        # Opened, but the email isn't verified: people scan these QR codes.
+        invoice.mark_opened()
         # Skip the parent's dispatch, which marks the email VALID, and call InvoiceView's.
         return InvoiceView.dispatch(self, request, *args, **kwargs)
 

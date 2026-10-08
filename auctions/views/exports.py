@@ -411,6 +411,8 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 address=tos.address or "",
                 source=str(auction.title)[:200],
                 added_by=request.user,
+                # Participants, not people who asked to join; they're welcomed when they first pay.
+                send_welcome_email=False,
             )
             # Keep the maps current, so two rows with one email aren't both added.
             if tos.email:

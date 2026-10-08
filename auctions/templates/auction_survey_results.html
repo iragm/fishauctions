@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Feedback for {{ auction }}{% endblock %}
+{% block content %}
+  {% include "auction_ribbon.html" %}
+  <div class="container mt-3">
+    <h4><i class="bi bi-emoji-smile"></i> Feedback</h4>
+    {% if not auction.post_auction_survey %}
+      <p>The post auction survey is off in <a href="{% url 'edit_auction' slug=auction.slug %}">this auction's rules</a>.</p>
+    {% endif %}
+    <p>{{ stats.answered }} gave feedback: {{ stats.great }} great, {{ stats.not_fun }} not so fun.</p>
+    {% if responses %}
+    <div class="table-responsive">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Answer</th>
+            <th>Comments</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for tos in responses %}
+            <tr>
+              <td><a href="#" hx-get="{% url 'auctiontosadmin' tos.pk %}" hx-target="#modals-here" hx-trigger="click">{{ tos.name }}</a></td>
+              <td>{% if tos.survey_answer == "great" %}<span class="badge bg-success text-dark">{{ tos.get_survey_answer_display }}</span>{% elif tos.survey_answer %}<span class="badge bg-danger">{{ tos.get_survey_answer_display }}</span>{% endif %}</td>
+              <td>{{ tos.survey_comments|linebreaksbr }}</td>
+              <td><small>{{ tos.survey_answered_on|default:"" }}</small></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+{% endblock %}

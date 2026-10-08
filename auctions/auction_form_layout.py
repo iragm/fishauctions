@@ -165,12 +165,15 @@ def build_layout(form, currency_symbol):
             # Check-in mode only; shown and hidden by update_club_fields() in auction_edit_form.html.
             col("allow_self_checkin", "col-md-6"),
             money("club_member_discount", "col-md-6"),
+            # Club-managed only, by update_self_checkin_field().
+            col("send_club_welcome_letter", "col-md-6"),
             css_class="row",
         ),
         HTML("<h4>General</h4>"),
         Div(
             col("require_phone_number"),
             col("email_users_when_invoices_ready"),
+            col("post_auction_survey"),
             col("add_membership_fee_to_invoices_for_expired_members"),
             col("invoice_rounding"),
             col("only_whole_dollar_bids"),

@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from asgiref.sync import sync_to_async
 from django.contrib import messages
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import redirect_to_login
 from django.db.models import (
     Count,
     Max,
@@ -41,8 +41,10 @@ from .base import AdminOnlyViewMixin
 logger = logging.getLogger(__name__)
 
 
-class UserAPIKeyView(LoginRequiredMixin, TemplateView):
-    """How to connect an AI agent to this site, and the keys for doing it.
+class UserAPIKeyView(View):
+    """/ai/: how to connect an AI agent, and the keys for doing it. The page itself is the AI agents help
+    guide now (``help_tags.ai_connections`` draws this person's connections and keys there), so a GET
+    redirects to it. The forms there still post here.
 
     Signing in (OAuth) is how Claude, Grok and ChatGPT connect; keys are for scripts and fixed-header
     connectors. Either way tools re-check the owner's permissions on every call, and ``allow_writes``
@@ -52,51 +54,10 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
     Open to everyone signed in, with or without ``use_llm_search`` or a site LLM key.
     """
 
-    template_name = "user_api_keys.html"
+    def get(self, request, *args, **kwargs):
+        from auctions import help_guides
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["active_tab"] = "api_keys"
-        context["keys"] = UserAPIKey.objects.filter(user=self.request.user).order_by("-created_at")
-        context["new_raw_key"] = self.request.session.pop("new_user_api_key", None)
-        context["mcp_url"] = self.request.build_absolute_uri(reverse("mcp"))
-        context["connected_apps"] = self.connected_apps()
-        return context
-
-    def connected_apps(self):
-        """Applications this person has signed in from, grouped by application rather than token."""
-        from auctions.mcp import auth as mcp_auth
-
-        if not mcp_auth.oauth_enabled():
-            return []
-        from oauth2_provider.models import get_access_token_model
-
-        rows = {}
-        tokens = (
-            get_access_token_model()
-            .objects.filter(user=self.request.user)
-            .select_related("application")
-            .order_by("-created")
-        )
-        for token in tokens:
-            application = token.application
-            if application is None:
-                continue
-            row = rows.setdefault(
-                application.pk,
-                {
-                    "pk": application.pk,
-                    "name": application.name or "An AI agent",
-                    "connected": token.created,
-                    "live": False,
-                    "writes": False,
-                },
-            )
-            row["connected"] = max(row["connected"], token.created)
-            if not token.is_expired():
-                row["live"] = True
-                row["writes"] = row["writes"] or mcp_auth.SCOPE_WRITE in (token.scope or "").split()
-        return sorted(rows.values(), key=lambda row: row["connected"], reverse=True)
+        return redirect(help_guides.GUIDES["ai-agents"].url + "#connect")
 
     def disconnect_app(self, request, application_pk):
         """End every session this person has with one application: access tokens, refresh tokens and
@@ -119,6 +80,8 @@ class UserAPIKeyView(LoginRequiredMixin, TemplateView):
         return bool(removed)
 
     def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect_to_login(request.get_full_path())
         disconnect = request.POST.get("disconnect")
         if disconnect:
             if self.disconnect_app(request, disconnect):

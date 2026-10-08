@@ -68,7 +68,8 @@ window.onload = function() {
         <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}"/>
         {% endif %}
         <link rel="manifest" href="{% url 'site_webmanifest' %}"/>
-        <meta name="description" content="" />
+        <meta name="description" content="{% block meta_description %}{% endblock %}" />
+        {% if not allow_search_indexing %}<meta name="robots" content="noindex, nofollow" />{% endif %}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}
 
@@ -355,6 +356,8 @@ window.onload = function() {
                     <a class="dropdown-item" href="{% url 'admin_usability' %}?days=30">Usability</a>
                     <a class="dropdown-item" href="{% url 'admin_club_health' %}">Club health</a>
                     <a class="dropdown-item" href="{% url 'admin_lifecycle' %}">Lifecycle</a>
+                    <a class="dropdown-item" href="{% url 'admin_early_adds' %}">Early lots and gross</a>
+                    <a class="dropdown-item" href="{% url 'admin_free_text' %}">Adjustments and custom fields</a>
                     <a class="dropdown-item" href="{% url 'admin_session_replay' %}">Session replay</a>
                     <a class="dropdown-item" href="{% url 'admin_user_signups' %}?days=90">User signups</a>
                     <a class="dropdown-item" href="{% url 'command_palette_analytics' %}">Command palette searches</a>
@@ -370,10 +373,8 @@ window.onload = function() {
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
-                      {% if enable_promo_page %}
-                      <a class="dropdown-item" href="{% url 'promo' %}">About site</a>
-                      {% endif %}
-                      <a class="dropdown-item" href="{% url 'faq' %}">FAQ</a>
+                      {% if enable_promo_page %}<a class="dropdown-item" href="{% url 'promo' %}">About site</a>{% endif %}
+                      <a class="dropdown-item" href="{% url 'help' %}">Help</a>
                       <a class="dropdown-item" href="{% url 'tos' %}">Terms and Conditions</a>
                       <a class="dropdown-item" href="{% url 'privacy_policy' %}">Privacy policy</a>
                       {% if dmca_configured %}<a class="dropdown-item" href="{% url 'dmca' %}">Copyright / DMCA</a>{% endif %}
@@ -385,6 +386,7 @@ window.onload = function() {
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Clubs</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="{% url 'clubs' %}">Find a club</a>
+                      {% if request.user.userdata.library_enabled %}<a class="dropdown-item" href="{% url 'library' %}">Library</a>{% endif %}
                       <div class="dropdown-divider"></div>
                       {% for club in user_clubs %}
                       <a class="dropdown-item d-flex align-items-center gap-2" href="{% url 'club_detail' club.slug %}">{% if club.icon %}<img src="{{ club.icon_thumbnail_url }}" alt="" width="18" height="18" class="rounded-1 flex-shrink-0" style="object-fit:cover;">{% endif %}{{ club.name }}</a>
@@ -503,8 +505,10 @@ window.onload = function() {
               {% elif account_nav_active %}
               {% comment %}The account pages stay in the narrow `container` above: they are forms, not the wide tables the club sidebar's container-fluid is for.{% endcomment %}
               <div class="col-lg-3 mb-3 min-w-0">{% include "account_sidebar.html" %}</div>
+              {% elif help_nav_active %}
+              <div class="col-lg-3 mb-3 min-w-0">{% include "help/sidebar.html" %}</div>
               {% endif %}
-              <div class="{% if view.club_sidebar_can_view %}col-lg-9 col-xl-10{% elif account_nav_active %}col-lg-9{% else %}col-md-12{% endif %}">
+              <div class="{% if view.club_sidebar_can_view %}col-lg-9 col-xl-10{% elif account_nav_active or help_nav_active %}col-lg-9{% else %}col-md-12{% endif %}">
                 {% block content %}{% endblock %}
                 {% block extra_content %}{% endblock %}
               </div>
@@ -515,7 +519,7 @@ window.onload = function() {
         {% if not request.is_mobile_app %}
         {% comment %}17 U.S.C. 512(c)(2) wants the designated agent's details "available to the public" on the site; the footer is where a rightsholder looks, and it is the one line that renders on every page. The link is hidden when no agent is configured, because /dmca/ 404s without one.{% endcomment %}
         <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">{% if show_footer_icon %}<img src="{% static 'icon-footer.png' %}" alt="" class="me-1" style="height:1.2em;width:auto;vertical-align:text-bottom;">{% endif %}{{ copyright_message | safe }}</small></div>
-        <div class="mb-3 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen"><a class="text-muted" href="{% url 'tos' %}">Terms</a> &middot; <a class="text-muted" href="{% url 'privacy_policy' %}">Privacy</a>{% if dmca_configured %} &middot; <a class="text-muted" href="{% url 'dmca' %}">Copyright / DMCA</a>{% endif %} &middot; <a class="text-muted" href="{% url 'support' %}">Help</a></small></div>
+        <div class="mb-3 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen"><a class="text-muted" href="{% url 'tos' %}">Terms</a> &middot; <a class="text-muted" href="{% url 'privacy_policy' %}">Privacy</a>{% if dmca_configured %} &middot; <a class="text-muted" href="{% url 'dmca' %}">Copyright / DMCA</a>{% endif %} &middot; <a class="text-muted" href="{% url 'help' %}">Help</a> &middot; <a class="text-muted" href="{% url 'support' %}">Contact</a></small></div>
         {% endif %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}

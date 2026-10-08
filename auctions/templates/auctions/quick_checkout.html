@@ -216,7 +216,7 @@ $(document).ready(function() {
       try {
         await scanner.start();
       } catch (e) {
-        setStatus('Unable to start the camera: ' + (e.message || e), 'danger');
+        // The scanner already said why, in words the cashier can act on.
       }
     }
 

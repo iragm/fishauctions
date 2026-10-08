@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Library{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Library</h1>
+
+  <form method="get" action="{% url 'library' %}" class="mb-2" role="search">
+    {% if club %}<input type="hidden" name="club" value="{{ club.slug }}">{% endif %}
+    {% if topic %}<input type="hidden" name="topic" value="{{ topic }}">{% endif %}
+    {% if species %}<input type="hidden" name="species" value="{{ species.pk }}">{% endif %}
+    <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Ask a question or search: spawning Apistogramma, brine shrimp hatchery..." aria-label="Search the library">
+  </form>
+
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <div class="dropdown">
+      <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{% if topic %}{% for slug, label in topics %}{% if slug == topic %}{{ label }}{% endif %}{% endfor %}{% else %}Topic{% endif %}</button>
+      <div class="dropdown-menu dropdown-menu-scroll">
+        <a class="dropdown-item" href="?{% querystring topic=None %}">Any topic</a>
+        {% for slug, label in topics %}
+        <a class="dropdown-item{% if slug == topic %} active{% endif %}" href="?{% querystring topic=slug %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% if user_clubs %}
+    <div class="dropdown">
+      <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{% if club %}{{ club.name }}{% else %}Any club{% endif %}</button>
+      <div class="dropdown-menu dropdown-menu-scroll">
+        <a class="dropdown-item" href="?{% querystring club=None %}">Any club</a>
+        {% for each in user_clubs %}
+        <a class="dropdown-item{% if each.pk == club.pk %} active{% endif %}" href="?{% querystring club=each.slug %}">{{ each.name }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if species %}<a class="btn btn-sm btn-secondary" href="?{% querystring species=None %}"><i class="bi bi-x"></i> <i>{{ species.scientific_name }}</i></a>{% endif %}
+  </div>
+
+  {% if query %}
+    <div class="card mb-3">
+      <div class="card-body" hx-get="{% url 'library_answer' %}?{{ request.GET.urlencode }}" hx-trigger="load" hx-swap="innerHTML">
+        <span class="spinner-border spinner-border-sm" role="status"></span> Reading the best matches...
+      </div>
+    </div>
+    {% for hit in hits %}
+      <div class="mb-3">
+        <a href="{% url 'document_detail' hit.document.pk %}{% if hit.chunk.start %}#at-{{ hit.chunk.start }}{% endif %}" class="fw-bold">{{ hit.document.display_title }}</a>
+        <span class="text-muted small">{% if hit.document.author %}{{ hit.document.author }}{% endif %}{% if hit.document.year %} {{ hit.document.year }}{% endif %}{% if hit.chunk.heading %} &middot; {{ hit.chunk.heading }}{% endif %}{% if hit.chunk.page %} &middot; page {{ hit.chunk.page }}{% endif %}</span>
+        <div class="small">{{ hit.chunk.text|truncatechars:400 }}</div>
+      </div>
+    {% empty %}
+      <p>Nothing in the library matches that.</p>
+    {% endfor %}
+  {% else %}
+    <div class="row">
+      <div class="col-12 col-lg-8">
+        {% for batch in batches %}
+          <div class="mb-2"><a href="{% url 'document_batch' batch.pk %}">{{ batch }}</a> <span class="badge bg-secondary">{{ batch.get_status_display }}</span></div>
+        {% endfor %}
+        {% for document in page_obj %}
+          <div class="mb-2">
+            <a href="{% url 'document_detail' document.pk %}">{{ document.display_title }}</a>
+            <span class="text-muted small">{% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %}{% if document.club %} &middot; {{ document.club.name }}{% endif %}</span>
+            {% if document.status != "ready" %}<span class="badge bg-secondary">{{ document.get_status_display }}</span>{% endif %}
+          </div>
+        {% empty %}
+          <p>Nothing here yet. Old newsletters, BAP reports, care sheets: scans and photos of pages are fine.</p>
+        {% endfor %}
+        {% if page_obj.has_other_pages %}
+          <nav class="my-3" aria-label="Pages">
+            {% if page_obj.has_previous %}<a class="btn btn-sm btn-secondary" href="?{% querystring page=page_obj.previous_page_number %}">Newer</a>{% endif %}
+            <span class="small text-muted mx-2">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+            {% if page_obj.has_next %}<a class="btn btn-sm btn-secondary" href="?{% querystring page=page_obj.next_page_number %}">Older</a>{% endif %}
+          </nav>
+        {% endif %}
+        {% for document in removed %}
+          <div class="mb-2 text-muted">{{ document.display_title }} <span class="badge bg-secondary">Removed</span> <span class="small">{{ document.removed_reason }}</span></div>
+        {% endfor %}
+      </div>
+      <div class="col-12 col-lg-4">
+        <h2 class="h6">Add documents</h2>
+        <form method="post" enctype="multipart/form-data" action="{% url 'library' %}" data-max-bytes="{{ max_request_bytes }}">
+          {% csrf_token %}
+          {{ form|crispy }}
+          <p class="small text-muted">Text and pictures are read by an AI model.</p>
+          <button type="submit" class="btn btn-primary">Upload</button>
+        </form>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% include "documents/_size_check.html" %}
+{% endblock %}

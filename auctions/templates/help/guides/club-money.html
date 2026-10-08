@@ -1,0 +1,49 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. The treasurer's side of a club: the report, the ledger behind it, and the club's payment accounts. The ledger is ClubMoney, booked from paid invoices by Invoice.sync_club_money (cash basis).{% endcomment %}
+<p>Auction sales, seller payouts, dues and sales tax are recorded here by themselves as invoices are paid. You add everything else: hall rent, a speaker's fee, a raffle. The treasurer's report adds it up for any dates you like.</p>
+{% tip %}It's a record, not accounting software. Check it against the bank.{% endtip %}
+
+<h2 class="h5 mt-4" id="report">The treasurer's report</h2>
+<p>{% page "club_treasurer_report" "Treasurer's Report" %}, in the club's menu, for anyone with {% ui "Manage membership and payments" %}. Pick a {% ui "Start date" %} and {% ui "End date" %}, and {% ui "Get report" %}:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% ui "Cash flow" %}</th><td>Money in, money out, and how much the balance moved.</td></tr>
+    <tr><th>Membership and donations</th><td>How many renewals, the dues they brought in, and donations.</td></tr>
+    <tr><th>{% ui "Auctions" %}</th><td>What buyers paid, what sellers were paid, and the club's cut: the difference.</td></tr>
+    <tr><th>{% ui "Sales tax collected" %}</th><td>Money you're holding for the tax authority. It isn't the club's.</td></tr>
+    <tr><th>{% ui "Outstanding invoices" %}</th><td>Auction invoices nobody's settled yet. They aren't in the balance until they're paid.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Below that is every record in the date range, and the club's current balance.</p>
+<h3 class="h6 mt-3">What's recorded by itself</h3>
+<p>Money is recorded when it changes hands, which here means when an invoice is marked {% ui "Paid" %}:</p>
+<ul>
+  <li>A buyer's invoice: their payment, and any sales tax on it.</li>
+  <li>A seller's invoice, where the club owes them: their payout. So mark it paid when you mail the check, not before.</li>
+  <li>Dues, whether a member paid online, you clicked {% ui "Renew" %}, or it was on their auction invoice.</li>
+</ul>
+<p>Unmark an invoice and its records are reversed. Nothing is ever deleted, so the report always adds up.</p>
+{% mike %}Mike, as treasurer, marked every seller paid on auction night "to keep things tidy", then mailed the checks three weeks later. For three weeks the report said the club had $2,000 less than the bank did.{% endmike %}
+{% aitip %}Ask "what's our balance?"{% endaitip %}
+
+<h2 class="h5 mt-4" id="records">Everything else</h2>
+<ul>
+  <li>{% page "club_money_add" "Add record" %}: money in or out that isn't an invoice. A negative {% ui "Amount" %} is an expense. Pick a {% ui "Category" %}: {% ui "Donation" %}, {% ui "Speaker costs" %}, {% ui "Meeting location cost" %}, {% ui "Refund" %}.</li>
+  <li>{% page "club_money_balance" "Balance books" %}: when you start, type what's actually in the bank, and the difference is recorded as one {% ui "Balance adjustment" %}. Needing it twice means something is going unrecorded.</li>
+  <li>{% page "club_treasurer_report_export" "Export CSV" %}: the records in the date range, for QuickBooks or your accountant.</li>
+</ul>
+{% aitip %}Ask "put $40 in for the raffle prizes". If your accounting software has a connector, connect it too and ask "copy this month's hall rent and speaker fees from QuickBooks into the club's records", or "what's in our books that isn't in the report?"{% endaitip %}
+
+<h2 class="h5 mt-4" id="payment-accounts">The club's payment accounts</h2>
+<p>With a card account connected, members pay their dues on your club page and every club auction gets a pay button. It's on {% page "club_membership_settings" "Membership and payments" %}, under Setup.</p>
+<ul>
+  <li><strong>Square</strong>, for any club: {% ui "Connect a Square account for this club" %}. {% page "club_link_payment_account" "Linking" %} uses the Square account of the person clicking, so the treasurer should do it. Already connected Square for your own auctions? {% ui "Use my connected Square account" %}.</li>
+  {% if help.club_own_paypal %}<li><strong>PayPal</strong>: the club enters its own {% page "club_paypal_credentials" "PayPal credentials" %} on the same page.</li>{% endif %}
+  <li>The first time, card payments have to be switched on for you. Click {% ui "Contact us and request access" %}.</li>
+</ul>
+<p>The money goes straight into that account; this site takes nothing. <a href="{% url 'help_guide' slug='payments' %}">Card payments</a> has the details, Tap to Pay, and <a href="{% url 'help_guide' slug='payments' %}#seller-payouts">why there's no button to pay sellers</a>.</p>
+
+<h2 class="h5 mt-4" id="stats">Year to year</h2>
+<p>{% page "club_stats" "Club stats" %} charts your auctions and your membership over the years. It's what to show the board when somebody asks whether the auction is worth the effort.</p>

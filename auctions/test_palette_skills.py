@@ -3,6 +3,7 @@
 import datetime
 import json
 import re
+from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, override_settings
@@ -226,6 +227,33 @@ class InvoiceStatusTests(SkillTestCase):
         )
         self.assertIn("already", result["summary"])
 
+    def test_a_memo_goes_on_with_the_payment_and_find_invoice_reads_it_back(self):
+        result = self._run(
+            "set_invoice_status",
+            {"person": "555", "auction": self.in_person_auction.title, "status": "paid", "memo": "Venmo 10/2"},
+            user=self.admin_user,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.buyer_invoice.refresh_from_db()
+        self.assertEqual(self.buyer_invoice.status, "PAID")
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.memo, "Venmo 10/2")
+        found = self._run(
+            "find_invoice", {"person": "555", "auction": self.in_person_auction.title}, user=self.admin_user
+        )
+        self.assertIn("Venmo 10/2", found["memo"])
+
+    def test_a_memo_can_change_on_an_invoice_that_is_already_paid(self):
+        Invoice.objects.filter(pk=self.buyer_invoice.pk).update(status="PAID")
+        result = self._run(
+            "set_invoice_status",
+            {"person": "555", "auction": self.in_person_auction.title, "memo": "Zelle, not cash"},
+            user=self.admin_user,
+        )
+        self.assertIn("already", result["summary"])
+        self.in_person_buyer.refresh_from_db()
+        self.assertEqual(self.in_person_buyer.memo, "Zelle, not cash")
+
     def test_a_participant_cannot_change_invoices(self):
         result = self._run(
             "set_invoice_status",
@@ -366,6 +394,28 @@ class ClubMemberSkillTests(ClubSkillTestCase):
         self.club_member.refresh_from_db()
         self.assertIsNotNone(self.club_member.membership_expiration_date)
 
+    def test_editing_a_member_keeps_their_carried_membership(self):
+        self.club.membership_annual_fee = Decimal(25)
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.club_member.membership_carried_by = self.club_admin
+        self.club_member.save()
+        result = self._run(
+            "update_club_member",
+            {"person": "Renewable Rita", "club": self.club.name, "email": "newrita@example.com"},
+            user=self.admin_user,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.club_member.refresh_from_db()
+        self.assertEqual(self.club_member.membership_carried_by, self.club_admin)
+
+    def test_a_carried_membership_is_not_renewed_on_its_own(self):
+        self.club_member.membership_carried_by = self.club_admin
+        self.club_member.save()
+        result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user)
+        self.assertIn("error", result)
+        self.club_member.refresh_from_db()
+        self.assertIsNone(self.club_member.membership_expiration_date)
+
     def test_a_stranger_cannot_renew_anybody(self):
         result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.userB)
         self.assertIn("error", result)
@@ -468,6 +518,9 @@ class SkillPromptTests(StandardTestCase):
 
         self.admin_user.is_superuser = True
         self.admin_user.save()
+        # Switched on per account, not by any permission.
+        self.admin_user.userdata.library_enabled = True
+        self.admin_user.userdata.save(update_fields=["library_enabled"])
         offered = {tool["name"] for tool in palette_assist.tools_for(self.admin_user)}
         over_mcp = {tool["name"] for tool in mcp_tools.tool_descriptors(self.admin_user)}
         for name, action in palette_actions.ACTIONS.items():
@@ -871,6 +924,7 @@ class MembershipCardTests(ClubSkillTestCase):
     def setUp(self):
         super().setUp()
         self.club.show_member_barcode = True
+        self.club.membership_system = "rolling"
         self.club.membership_annual_fee = 20
         self.club.save()
         self.mine = ClubMember.objects.create(
@@ -2298,6 +2352,8 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
             "remove_lot",
             "queue_lot",
             "unqueue_lot",
+            "move_queued_lot",
+            "step_queue",
             "remove_bid",
             "remove_award",
             "set_member_active",
@@ -2404,6 +2460,66 @@ class LotQueueSkillTests(SkillTestCase):
 
     def test_a_participant_cannot_change_the_running_order(self):
         result = self._run("queue_lot", {"lot": "101-1", "auction": self.in_person_auction.title}, user=self.userB)
+        self.assertIn("error", result)
+        result = self._run(
+            "move_queued_lot", {"lot": "101-1", "auction": self.in_person_auction.title}, user=self.userB
+        )
+        self.assertIn("error", result)
+        result = self._run("step_queue", {"auction": self.in_person_auction.title}, user=self.userB)
+        self.assertIn("error", result)
+
+    def _queue_three(self):
+        """Lots Alpha, Beta and Gamma queued in that order, Alpha on the block."""
+        for name in ("Queue Alpha", "Queue Beta", "Queue Gamma"):
+            Lot.objects.create(
+                lot_name=name, auction=self.in_person_auction, auctiontos_seller=self.in_person_tos, quantity=1
+            )
+            result = self._run(
+                "queue_lot", {"lot": name, "auction": self.in_person_auction.title}, user=self.admin_user
+            )
+            self.assertTrue(result.get("ok"), result)
+
+    def _order(self):
+        from auctions.models import LotQueueEntry
+
+        entries = LotQueueEntry.objects.filter(auction=self.in_person_auction, passed_at__isnull=True)
+        return [entry.lot.lot_name for entry in entries.order_by("order")]
+
+    def test_a_bump_puts_a_lot_next(self):
+        self._queue_three()
+        result = self._run(
+            "move_queued_lot", {"lot": "Queue Gamma", "auction": self.in_person_auction.title}, user=self.admin_user
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["position"], 2)
+        self.assertEqual(self._order(), ["Queue Alpha", "Queue Gamma", "Queue Beta"])
+
+    def test_a_lot_not_in_the_queue_is_queued_and_moved(self):
+        self._queue_three()
+        result = self._run(
+            "move_queued_lot",
+            {"lot": "101-1", "position": 1, "auction": self.in_person_auction.title},
+            user=self.admin_user,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(self._order()[0], self.in_person_lot.lot_name)
+
+    def test_stepping_the_queue_forward_and_back(self):
+        self._queue_three()
+        result = self._run("step_queue", {"auction": self.in_person_auction.title}, user=self.admin_user)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(self._order(), ["Queue Beta", "Queue Gamma"])
+        result = self._run(
+            "step_queue", {"direction": "back", "auction": self.in_person_auction.title}, user=self.admin_user
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(self._order(), ["Queue Alpha", "Queue Beta", "Queue Gamma"])
+
+    def test_there_is_no_going_back_past_the_first_lot(self):
+        self._queue_three()
+        result = self._run(
+            "step_queue", {"direction": "back", "auction": self.in_person_auction.title}, user=self.admin_user
+        )
         self.assertIn("error", result)
 
 

@@ -57,18 +57,26 @@ docker exec -it django python3 manage.py backfill_lot_species --review --include
 
 ## The name cache
 
-Written by three places: bulk add-lot's first save (≤5 suggestions), the auction admin's lot editor,
-and the LLM. Read before the token search, so `_is_somebody_elses_name` must keep a club-scoped name
-from being served site-wide.
+Written by the LLM (including a misspelling it respelled into an exact name), the auction admin's lot
+editor, the palette for admins, and three lots agreeing on a species for a remembered "not a species".
+Never for a name `exact_matches` answers: the row would never be read. The bulk pages don't teach it;
+they have no picker. Read before the token search, so `_is_somebody_elses_name` must keep a
+club-scoped name from being served site-wide.
 
-- `record_choice` counts accepts and rejects per **lot**, not per save.
-- Retiring needs 1-in-10 rejections **and** `MIN_REJECTS_TO_RETIRE` (3). It writes a
-  `SpeciesNameRejection` that vetoes the pair for `remember()` and the LLM shortlist only.
+- `record_choice(lot, previous=, offered=)` keeps one `SpeciesNameVote` per lot on the species the page
+  **offered** for its name (`species_offered`, posted by all three lot pages), else the lot's earlier
+  vote, else a remembered answer that is or was on the lot. A lot offered nothing and saved blank says
+  nothing; a strain of the answer agrees with it.
+- Three lots against **and** more than one in ten retire a pair: a `SpeciesNameRejection` that vetoes it
+  for the cache, the token search and the LLM, never for exact matching (so names the list answers are
+  never retired). The votes stay as the evidence; the gaps page shows them, and "Allow it again"
+  deletes the ones against.
 
 ## Matching, categories and display
 
 - `species_matching.py`: exact, token/phrase, then LLM. "No match" beats a plausible one.
-- A single word answers only if it names ≤5 species and isn't part of >40 other names.
+- A single word answers only if it names ≤5 species and isn't part of >40 other names. Two words naming
+  as few but different species answer nothing; a strain beats its own species.
 - Club API `/api/v1/clubs/<slug>/species-lookup/` (`can_look_up_species`). LLM budget is
   `SPECIES_LOOKUP_LLM_CALLS_PER_CLUB_PER_DAY` per club; over it is a 429. Only an `answered` result
   reaches `remember()`.

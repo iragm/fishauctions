@@ -134,3 +134,55 @@ def email_club_header(context):
     domain = context.get("domain") or Site.objects.get_current().domain
     icon_url = club_icon_url(club, domain)
     return {"club": club if icon_url else None, "icon_url": icon_url}
+
+
+#: The survey's two buttons. Success needs dark text and danger white, as on the site (style_reference.md).
+SURVEY_BUTTON_COLORS = {"great": ("#00bc8c", "#222222"), "not_fun": ("#a93226", "#ffffff")}
+
+
+def _survey_links(context, mode):
+    from auctions.auction_survey import email_links
+
+    domain = context.get("domain") or Site.objects.get_current().domain
+    return email_links(context.get("invoice"), mode, domain)
+
+
+@register.simple_tag(takes_context=True)
+def email_survey(context, mode):
+    """``{% email_survey "invoice" %}``: "How was <auction>?" and its two buttons, when the auction asks
+    that way (``Auction.post_auction_survey``) and the person hasn't answered; nothing otherwise.
+    """
+    links = _survey_links(context, mode)
+    if not links:
+        return ""
+    from auctions.models import AuctionTOS
+
+    cells = []
+    for answer, label in AuctionTOS.SURVEY_ANSWERS:
+        fill, text = SURVEY_BUTTON_COLORS[answer]
+        style = BUTTON_LINK_STYLE.replace(
+            "background-color:#375a7f;color:#ffffff;", f"background-color:{fill};color:{text};"
+        )
+        cells.append(
+            f'<td style="border-radius:6px;background-color:{fill};">'
+            f'<a href="{escape(links[answer])}" style="{style}">{escape(label)}</a></td><td style="width:12px;"></td>'
+        )
+    return mark_safe(  # noqa: S308 - every value is escaped above
+        f'<p style="font-weight:600;margin:24px 0 8px;">{escape(links["question"])}</p>'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;"><tr>'
+        + "".join(cells)
+        + "</tr></table>"
+    )
+
+
+@register.simple_tag(takes_context=True)
+def email_survey_text(context, mode):
+    """:func:`email_survey` for the plain-text part."""
+    links = _survey_links(context, mode)
+    if not links:
+        return ""
+    from auctions.models import AuctionTOS
+
+    lines = [links["question"], *(f"{label} {links[answer]}" for answer, label in AuctionTOS.SURVEY_ANSWERS)]
+    # Safe: plain text, where escaping would turn the query string's & into &amp;.
+    return mark_safe("\n".join(lines) + "\n\n")  # noqa: S308

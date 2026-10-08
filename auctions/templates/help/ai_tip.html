@@ -1,0 +1,2 @@
+{% comment %}At the top of every help page, for anyone who hasn't connected an AI agent (help.has_ai_agent). Drawn as help-ai, the same as every {% aitip %} in the guides.{% endcomment %}
+{% if not help.has_ai_agent and guide.slug != "ai-agents" %}<div class="help-note help-ai"><i class="bi bi-robot"></i><div><span class="help-ai-label">AI:</span> <a href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI agent</a> and have it search and summarize the help for you.</div></div>{% endif %}

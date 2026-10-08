@@ -257,3 +257,35 @@ def throttle_registration(view):
         return view(request, *args, **kwargs)
 
     return guarded
+
+
+def connected_apps(user) -> list[dict]:
+    """Applications ``user`` has signed in from, grouped by application rather than token, newest first.
+
+    ``{"pk", "name", "connected", "live", "writes"}`` each; ``live`` once any token is unexpired.
+    """
+    if not oauth_enabled():
+        return []
+    from oauth2_provider.models import get_access_token_model
+
+    rows = {}
+    tokens = get_access_token_model().objects.filter(user=user).select_related("application").order_by("-created")
+    for token in tokens:
+        application = token.application
+        if application is None:
+            continue
+        row = rows.setdefault(
+            application.pk,
+            {
+                "pk": application.pk,
+                "name": application.name or "An AI agent",
+                "connected": token.created,
+                "live": False,
+                "writes": False,
+            },
+        )
+        row["connected"] = max(row["connected"], token.created)
+        if not token.is_expired():
+            row["live"] = True
+            row["writes"] = row["writes"] or SCOPE_WRITE in (token.scope or "").split()
+    return sorted(rows.values(), key=lambda row: row["connected"], reverse=True)

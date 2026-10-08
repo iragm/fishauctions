@@ -47,6 +47,7 @@ from auctions.models import (
     Lot,
     LotQueueEntry,
     MobileDevice,
+    VoiceGrammar,
     VolunteerJob,
     VolunteerSignup,
     Watch,
@@ -79,10 +80,11 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         # Prefill the lot from the in-person queue.
         next_lot = queue_next_to_record(self.auction)
         context["queue_head_lot_number"] = next_lot.lot_number_display if next_lot else ""
-        # Voice (app only): score cutoffs, grammar and vocabulary, so the page can match a transcript
-        # itself (voice.page_config). Skipped outside the app: this page is hot during an auction.
-        if getattr(self.request, "is_mobile_app", False):
-            context["voice_config"] = voice.page_config(self.auction)
+        # Voice: the app listens through its own recognizer, and through OpenAI when that's on, as a browser does.
+        grammar = VoiceGrammar.load()
+        user = self.request.user
+        if getattr(self.request, "is_mobile_app", False) or voice.cloud_model(grammar, user):
+            context["voice_config"] = voice.page_config(self.auction, user, grammar or VoiceGrammar())
         return context
 
     def advance_queue_and_set_next(self, lot, result, double_check=False):
@@ -486,60 +488,6 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return self.http_method_not_allowed(request, *args, **kwargs)
 
 
-class VoiceCommandLogView(LoginRequiredMixin, AuctionViewMixin, View):
-    """Log what voice heard on the set-winners page, and any correction.
-
-    The page writes it because only the page sees the match and the operator's fix; posting the
-    returned ``id`` with ``corrected_to`` updates the row. Corrections are how the grammar gets tuned.
-    No ``slot`` means an unmatched utterance, rate-limited in :func:`voice.log_unmatched`. Admin-only,
-    fire-and-forget: ``{"id": <pk or null>}``, never an error that interrupts a sale.
-    """
-
-    def post(self, request, *args, **kwargs):
-        if not request.POST.get("slot", ""):
-            return JsonResponse(
-                {
-                    "id": voice.log_unmatched(
-                        request.user,
-                        self.auction,
-                        heard=request.POST.get("heard", ""),
-                        confidence=request.POST.get("confidence"),
-                        session_key=request.session.session_key or "",
-                    )
-                }
-            )
-        log_id = request.POST.get("id")
-        try:
-            log_id = int(log_id) if log_id else None
-        except (TypeError, ValueError):
-            log_id = None
-        result_id = voice.log_command(
-            request.user,
-            self.auction,
-            log_id=log_id,
-            slot=request.POST.get("slot", ""),
-            heard=request.POST.get("heard", ""),
-            chosen=request.POST.get("chosen", ""),
-            confidence=request.POST.get("confidence"),
-            corrected_to=request.POST.get("corrected_to", ""),
-        )
-        return JsonResponse({"id": result_id})
-
-    def get(self, request, *args, **kwargs):
-        return self.http_method_not_allowed(request, *args, **kwargs)
-
-
-class VoiceVocabularyView(LoginRequiredMixin, AuctionViewMixin, View):
-    """Current lot and bidder numbers for voice matching. The page never reloads, so its rendered
-    vocabulary goes stale mid-auction; the mobile endpoint is JWT-only, so this serves the session.
-    """
-
-    def get(self, request, *args, **kwargs):
-        from auctions.mobile.services import voice as voice_service
-
-        return JsonResponse(voice_service.build_vocabulary(self.auction))
-
-
 #: A lot already announced "about to be sold" is announced again only when it comes up again at least
 #: this long afterwards: the first was a mistyped lot number, or the room passed it and came back.
 #: Shorter than that is Next pressed once too often, or the same lot pulled up twice.
@@ -846,6 +794,30 @@ def add_lot_to_queue(auction, lot, user):
     return None
 
 
+def reorder_queue(auction, ordered_ids):
+    """Persist a new order given a list of entry ids (top first). Passed entries stay in front, and
+    entries not mentioned keep their relative order after the ones that are.
+    """
+    entries = LotQueueEntry.objects.filter(auction=auction).order_by("order")
+    passed = [entry for entry in entries if entry.passed_at]
+    to_come = {entry.pk: entry for entry in entries if not entry.passed_at}
+    moved = []
+    for raw in ordered_ids:
+        try:
+            pk = int(raw)
+        except (ValueError, TypeError):
+            continue
+        entry = to_come.pop(pk, None)
+        if entry:
+            moved.append(entry)
+    rest = sorted(to_come.values(), key=lambda e: e.order)
+    for order, entry in enumerate(passed + moved + rest, start=1):
+        if entry.order != order:
+            entry.order = order
+            entry.save(update_fields=["order"])
+    process_queue_notifications(auction)
+
+
 class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
     """Helpers for the in-person lot queue (LotQueueEntry), built by scanning or typing lots."""
 
@@ -897,26 +869,7 @@ class LotQueueMixin(LoginRequiredMixin, AuctionViewMixin):
         return add_lot_to_queue(self.auction, lot, self.request.user)
 
     def apply_reorder(self, ordered_ids):
-        """Persist a new order given a list of entry ids (top first). Passed entries stay in front."""
-        entries = LotQueueEntry.objects.filter(auction=self.auction).order_by("order")
-        passed = [entry for entry in entries if entry.passed_at]
-        to_come = {entry.pk: entry for entry in entries if not entry.passed_at}
-        moved = []
-        for raw in ordered_ids:
-            try:
-                pk = int(raw)
-            except (ValueError, TypeError):
-                continue
-            entry = to_come.pop(pk, None)
-            if entry:
-                moved.append(entry)
-        # Unmentioned entries keep their relative order after.
-        rest = sorted(to_come.values(), key=lambda e: e.order)
-        for order, entry in enumerate(passed + moved + rest, start=1):
-            if entry.order != order:
-                entry.order = order
-                entry.save(update_fields=["order"])
-        process_queue_notifications(self.auction)
+        reorder_queue(self.auction, ordered_ids)
 
     def render_list(self, error=None):
         return render(self.request, "auctions/lot_queue_list.html", {**self.queue_context(), "error": error})

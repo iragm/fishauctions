@@ -1,0 +1,40 @@
+{% load static %}
+{% comment %}How much people bid, from help_stats.bid_amounts: the share of top bids at each whole dollar, and a 4-dollar running average that irons out the round numbers. Was the blog post "How much should you bid?".{% endcomment %}
+{% with chart=help.bid_amounts %}{% if chart.percents %}
+<figure class="mb-3" style="max-width: 40em;">
+  <figcaption class="small text-muted mb-1">Each person's top bid on each lot, at online auctions here: {{ chart.bids|floatformat:"0g" }} of them.</figcaption>
+  <div style="position: relative; height: 260px;"><canvas id="bid-amounts-chart" role="img" aria-label="The share of bids at each dollar amount from $1 to ${{ chart.percents|length }}. Bids cluster on multiples of $5; ${{ chart.favourite }} is the most common."></canvas></div>
+</figure>
+{{ chart.percents|json_script:"bid-amounts-percents" }}
+<script src="{% static 'js/Chart.min.js' %}"></script>
+<script>
+(function () {
+  var percents = JSON.parse(document.getElementById('bid-amounts-percents').textContent);
+  var labels = percents.map(function (_p, i) { return '$' + (i + 1); });
+  var smoothed = percents.map(function (_p, i) {
+    var window = percents.slice(Math.max(0, i - 3), i + 1);
+    return Math.round(100 * window.reduce(function (a, b) { return a + b; }, 0) / window.length) / 100;
+  });
+  var ink = '#adb5bd', grid = 'rgba(255, 255, 255, 0.08)';
+  Chart.defaults.global.defaultFontFamily = getComputedStyle(document.body).fontFamily;
+  new Chart(document.getElementById('bid-amounts-chart').getContext('2d'), {
+    type: 'bar',
+    data: {labels: labels, datasets: [
+      {type: 'line', label: 'Smoothed (4-dollar average)', data: smoothed, borderColor: '#00bc8c', borderWidth: 2, pointRadius: 0, fill: false},
+      {label: 'Share of bids', data: percents, backgroundColor: 'rgba(47, 164, 231, 0.7)'}
+    ]},
+    options: {
+      maintainAspectRatio: false,
+      legend: {labels: {fontColor: ink, boxWidth: 12}},
+      scales: {
+        xAxes: [{ticks: {fontColor: ink, autoSkip: false, maxRotation: 0, callback: function (label, i) { return (i + 1) % 5 ? null : label; }}, gridLines: {display: false}}],
+        yAxes: [{ticks: {fontColor: ink, beginAtZero: true, callback: function (v) { return v + '%'; }}, gridLines: {color: grid, zeroLineColor: grid}}]
+      },
+      tooltips: {mode: 'index', intersect: false, callbacks: {label: function (item, data) {
+        return data.datasets[item.datasetIndex].label + ': ' + item.yLabel + '%';
+      }}}
+    }
+  });
+})();
+</script>
+{% endif %}{% endwith %}

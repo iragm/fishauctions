@@ -4,6 +4,7 @@ flex container sizes its line to the widest item's max-content width, so the now
 below stretches past the sidebar instead of being clipped by text-truncate.{% endcomment %}
 <nav class="nav flex-column flex-nowrap">
   <a class="nav-link {% if active_tab == 'home' %}active{% endif %}" href="{% url 'club_detail' club.slug %}"><i class="bi bi-house-fill me-1"></i> Club Home</a>
+  {% if show_library %}<a class="nav-link" href="{% url 'library' %}?club={{ club.slug }}"><i class="bi bi-book me-1"></i> Library</a>{% endif %}
 
   {% if not members_through_auction and can_access_admin %}
   <a class="nav-link {% if active_tab == 'members' %}active{% endif %}" href="{% url 'club_admin' club.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
@@ -39,6 +40,7 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link d-lg-none" href="{% url 'auction_quick_check_in' slug=sidebar_auction.slug %}"><i class="bi bi-upc-scan me-1"></i> Checkin</a>
   <a class="nav-link" href="{% url 'auction_quick_checkout' slug=sidebar_auction.slug %}"><i class="bi bi-bag-heart me-1"></i> Checkout</a>
   <a class="nav-link" href="{% url 'auction_printing' slug=sidebar_auction.slug %}"><i class="bi bi-printer me-1"></i> Print labels</a>
+  <a class="nav-link" href="{% url 'auction_paddles' slug=sidebar_auction.slug %}"><i class="bi bi-123 me-1"></i> Print paddles</a>
   {% endif %}
   {% endif %}
 

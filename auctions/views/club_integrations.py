@@ -28,12 +28,12 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from django.views.generic import TemplateView, View
+from django.views.generic import View
 from django.views.generic.edit import (
     DeleteView,
 )
 
-from auctions import club_events, discord_events
+from auctions import club_events, discord_events, help_guides
 from auctions.forms import (
     ClubEventForm,
 )
@@ -1227,18 +1227,13 @@ class SquareSuccessView(View):
         return redirect(reverse("home"))
 
 
-class SquareInfoView(TemplateView):
-    template_name = "auctions/square_seller.html"
+class SquareInfoView(View):
+    """/square/ is written up in the help now, with the reader's own connect, reconnect and disconnect
+    buttons (``help_tags.square_account``). Square's onboarding comes back here, so it lands there too.
+    """
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        if self.request.user.is_authenticated:
-            context["seller"] = SquareSeller.objects.filter(user=self.request.user).first()
-            context["auction"] = self.request.user.userdata.last_auction_created
-        else:
-            context["seller"] = None
-            context["auction"] = None
-        return context
+    def get(self, request, *args, **kwargs):
+        return redirect(help_guides.GUIDES["payments"].url + "#square")
 
 
 class SquareSellerDeleteView(LoginRequiredMixin, DeleteView):

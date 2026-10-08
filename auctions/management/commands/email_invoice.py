@@ -1,5 +1,6 @@
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 from post_office import mail
 
 from auctions.email_routing import email_routing_enabled
@@ -38,5 +39,6 @@ class Command(BaseCommand):
                     send_kwargs["headers"] = {"Reply-to": contact_email}
                     send_kwargs["context"]["reply_to_email"] = contact_email
                 mail.send(email, **send_kwargs)
+                invoice.email_sent_on = timezone.now()
             invoice.email_sent = True
             invoice.save()

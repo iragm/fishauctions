@@ -198,6 +198,8 @@ _AREA_OVERRIDES = {
     "auctions_near_me": AREA_GENERAL,
     "clubs_near_me": AREA_GENERAL,
     "search_help": AREA_GENERAL,
+    # Personal documents too, not only a club's, though it takes a ``club``.
+    "search_documents": AREA_GENERAL,
     "find_page": AREA_GENERAL,
     "go_to_page": AREA_GENERAL,
     "update_preferences": AREA_GENERAL,

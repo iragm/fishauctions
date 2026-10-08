@@ -25,7 +25,7 @@ from typing import NamedTuple
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import F, Q
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from .llm import LLMError, get_provider
@@ -35,6 +35,7 @@ from .models import (
     Species,
     SpeciesCommonName,
     SpeciesNameRejection,
+    SpeciesNameVote,
     SpeciesSearchCache,
     normalize_species_name,
 )
@@ -465,9 +466,12 @@ def _single_word_matches(words, user=None, club=None):
        cory" answers the copper shark.
     3. It names a fish, not a kind of fish (:data:`MAX_NAMES_USING_A_WORD`).
 
-    Several qualifying words: fewest species, then longest word, wins.
+    Several qualifying words: fewest species wins. Two naming as few but different species answer nothing
+    ("neos w stardust gene"): the lot name doesn't say which, so the model gets asked. A strain and its own
+    species don't disagree ("sunkist neos"): the strain is the answer.
     """
     best = None
+    rival = False
     for word in words:
         # DISTINCT ... LIMIT n+1 gives the count when small without counting 143 rows. order_by()
         # first, or Meta.ordering puts `name` in the DISTINCT and counts names, not species.
@@ -481,7 +485,7 @@ def _single_word_matches(words, user=None, club=None):
         )
         if not species_ids or len(species_ids) > MAX_SINGLE_WORD_MATCHES:
             continue
-        if best is not None and (len(species_ids), -len(word)) >= (len(best[1]), -len(best[0])):
+        if best is not None and (len(species_ids) > len(best[1]) or set(species_ids) == set(best[1])):
             continue
         # Three LIKEs with a leading wildcard; only for a word that got this far.
         component = Q(name_normalized__startswith=f"{word} ") | Q(name_normalized__endswith=f" {word}")
@@ -494,10 +498,23 @@ def _single_word_matches(words, user=None, club=None):
         )
         if len(list(used_inside)) > MAX_NAMES_USING_A_WORD:
             continue
+        if best is not None and len(species_ids) == len(best[1]):
+            plain = _plain_species_ids(species_ids)
+            if plain != _plain_species_ids(best[1]):
+                rival = True
+            elif plain != set(species_ids):
+                best = (word, species_ids)
+            continue
         best = (word, species_ids)
-    if best is None:
+        rival = False
+    if best is None or rival:
         return []
     return list(visible_species(user, club).filter(pk__in=best[1]))
+
+
+def _plain_species_ids(species_ids):
+    """The nominal species behind these ids, a strain counting as its parent."""
+    return {parent or pk for pk, parent in Species.objects.filter(pk__in=species_ids).values_list("pk", "parent_id")}
 
 
 def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=None):
@@ -801,9 +818,7 @@ def llm_match(text, user=None, club=None, budget=None, reading=""):
         _record_usage(user, None, text, "error", success=False)
         return Identification()
     raw = result.data.get("id")
-    try:
-        chosen_pk = int(raw)
-    except (TypeError, ValueError):
+    if raw is None:
         spoken = str(result.data.get("scientific_name") or "").strip()
         named = _species_named(spoken, user=user, club=club)
         if named and named.pk in vetoed:
@@ -812,12 +827,20 @@ def llm_match(text, user=None, club=None, budget=None, reading=""):
         gap = spoken if not named and _looks_like_a_binomial(spoken) else ""
         _record_usage(user, result, text, "species" if named else ("gap" if gap else "no_species"))
         return Identification(named, True, gap)
+    try:
+        chosen_pk = int(raw)
+    except (TypeError, ValueError):
+        chosen_pk = None
     if chosen_pk in vetoed:
         # It named a retired pairing from memory rather than from the list it was given.
         return _retired_answer(user, result, text)
-    # Never trust the id: it has to be one we offered.
+    # Never trust the id: it has to be one we offered. Any other is a garbled reply, not "no species",
+    # which round one's verdict would turn into a permanent negative.
     chosen = next((species for species in candidates if species.pk == chosen_pk), None)
-    _record_usage(user, result, text, "species" if chosen else "no_species")
+    if chosen is None:
+        _record_usage(user, result, text, "invalid_id")
+        return Identification()
+    _record_usage(user, result, text, "species")
     return Identification(chosen, True, "")
 
 
@@ -826,26 +849,30 @@ def remember(text, species, source="llm", user=None, scientific_name=""):
 
     *scientific_name* with no species makes the row a **gap** that answers once the species is
     imported (``SpeciesSearchCache.is_a_gap``). *user* is recorded because every row is served site-wide
-    and a wrong one must be traceable.
+    and a wrong one must be traceable. Nothing is written for a name the list answers exactly: the cache
+    is read after the list, so the row would never be served. True when a row was written.
     """
     normalized = normalize(text)
     if not normalized:
-        return
+        return False
     # Global table: an unapproved species can't teach the site a name.
     if species is not None and not species.approved:
-        return
-    # A retired pairing is not re-learned, or accept/reject would loop. The gaps page can undo it.
+        return False
+    # A retired pairing is not re-learned. The gaps page can undo it.
     if species is not None and is_rejected(normalized, species):
-        return
-    defaults = {"species": species, "source": source, "scientific_name": (scientific_name or "")[:120]}
-    if user is not None and getattr(user, "is_authenticated", False):
-        defaults["created_by"] = user
-    existing = SpeciesSearchCache.objects.filter(search_text=normalized).first()
-    if existing is not None and existing.species_id != (species.pk if species is not None else None):
-        # Counters score an answer, not a name; a different answer starts at zero.
-        defaults["accepts"] = 0
-        defaults["rejects"] = 0
+        return False
+    if exact_matches(normalized):
+        return False
+    authenticated = user is not None and getattr(user, "is_authenticated", False)
+    defaults = {
+        "species": species,
+        "source": source,
+        "scientific_name": (scientific_name or "")[:120],
+        # Always written: a model answer replacing a person's must not keep their name on it.
+        "created_by": user if authenticated else None,
+    }
     SpeciesSearchCache.objects.update_or_create(search_text=normalized, defaults=defaults)
+    return True
 
 
 def _retired_answer(user, result, text):
@@ -870,68 +897,116 @@ def rejected_species_ids(normalized):
     return set(SpeciesNameRejection.objects.filter(search_text=normalized).values_list("species_id", flat=True))
 
 
-def record_choice(text, species, *, first_save=False, changed=False, user=None):
-    """Score what a person did with this name's remembered answer. One indexed lookup; usually a no-op.
+def _is_or_strain_of(species, answer):
+    """True when *species* is *answer* or one of its strains: a Koi angelfish is still Pterophyllum scalare."""
+    return species is not None and answer is not None and answer.pk in (species.pk, species.parent_id)
 
-    The cache is written by sellers and served site-wide, so the same forms report back. Both counters
-    count **lots**, not saves: an accept only on the lot's first save; a reject on the first save or a
-    save that changed the species.
 
-    A remembered "not a species" is scored too: a lot saved with no species is agreement, and nobody
-    is ever shown a negative, so a deliberate species pick is the disagreement.
-    ``MIN_REJECTS_TO_RETIRE`` picks on different lots replace it with what they chose.
+def _as_species(value, queryset=None):
+    """A Species from a Species or a pk, looked up in *queryset*; None for anything else."""
+    if isinstance(value, Species):
+        return value
+    try:
+        pk = int(value)
+    except (TypeError, ValueError):
+        return None
+    return (Species.objects if queryset is None else queryset).filter(pk=pk).first()
+
+
+def record_choice(lot, *, previous=None, offered=None, user=None):
+    """Keep this lot's :class:`~auctions.models.SpeciesNameVote` current: one vote per lot, rewritten as
+    the lot changes, so a lot counts once however often it is saved.
+
+    *offered* is what the page filled in for the lot's name; *previous* is the lot's species before this
+    save (either may be a pk). The answer voted on is what the page offered, else what the lot voted on
+    before, else a remembered answer that is or was on the lot. A strain of the answer agrees with it.
+
+    No vote for a lot that was offered nothing and carries nothing: the bulk pages leave the box empty
+    whenever they aren't sure, and an autosave can beat the lookup. Nobody is ever shown a remembered "not
+    a species", so a lot carrying any species disagrees with it and a blank one says nothing.
     """
-    normalized = normalize(text)
+    normalized = normalize(lot.lot_name)
+    vote = SpeciesNameVote.objects.filter(lot=lot).first()
+    if vote is not None and vote.search_text != normalized:
+        # Renamed: what it said was about another name.
+        vote.delete()
+        vote = None
     if not normalized:
         return
-    row = SpeciesSearchCache.objects.filter(search_text=normalized).first()
-    if row is None:
-        # Nothing was remembered, so there is nothing to score.
+    chosen = lot.species
+    if offered in (None, ""):
+        offered = None
+    else:
+        club = lot.auction.club if lot.auction_id and lot.auction.club_id else None
+        offered = _as_species(offered, visible_species(user, club))
+    if offered is not None:
+        answer = offered
+    elif vote is not None:
+        answer = vote.species
+    else:
+        row = SpeciesSearchCache.objects.filter(search_text=normalized).select_related("species").first()
+        if row is None:
+            return
+        answer = row.species
+        # A remembered answer nobody was shown says nothing about it.
+        if answer is not None and not (
+            _is_or_strain_of(chosen, answer) or _is_or_strain_of(_as_species(previous), answer)
+        ):
+            return
+    if answer is None and chosen is None:
+        if vote is not None:
+            vote.delete()
         return
-    chosen_pk = getattr(species, "pk", species)
-    if row.species_id is None:
-        _reject_a_negative(row, text, species, chosen_pk, first_save=first_save, changed=changed, user=user)
+    agrees = _is_or_strain_of(chosen, answer)
+    instead = None if agrees else chosen
+    if vote is not None and (vote.species_id, vote.agrees, vote.chosen_id) == (
+        getattr(answer, "pk", None),
+        agrees,
+        getattr(instead, "pk", None),
+    ):
         return
-    if chosen_pk and str(chosen_pk) == str(row.species_id):
-        if first_save:
-            # F(): two concurrent saves count twice.
-            SpeciesSearchCache.objects.filter(pk=row.pk).update(accepts=F("accepts") + 1)
-        return
-    if not (first_save or changed):
-        # Already mismatched before this save (a price edit); already counted.
-        return
-    SpeciesSearchCache.objects.filter(pk=row.pk).update(rejects=F("rejects") + 1)
-    # Re-read: a concurrent save may have retired the row, and a lot save must not fail over it.
-    row = SpeciesSearchCache.objects.filter(pk=row.pk).first()
-    if row and row.is_discredited:
-        logger.info(
-            "Retiring remembered species %r -> %s after %s reject(s) and %s accept(s)",
-            row.search_text,
-            row.species,
-            row.rejects,
-            row.accepts,
-        )
-        row.retire()
+    authenticated = user is not None and getattr(user, "is_authenticated", False)
+    SpeciesNameVote.objects.update_or_create(
+        lot=lot,
+        defaults={
+            "search_text": normalized,
+            "species": answer,
+            "agrees": agrees,
+            "chosen": instead,
+            "user": user if authenticated else None,
+        },
+    )
+    if not agrees:
+        _judge(normalized, answer, chosen, user)
 
 
-def _reject_a_negative(row, text, species, chosen_pk, *, first_save, changed, user):
-    """Score a species put on a lot the cache calls "not a species". See :func:`record_choice`. A lot
-    saved with no species counts for nothing: most just weren't filled in.
+def _judge(normalized, answer, chosen, user):
+    """After a lot disagreed: retire *answer* for this name, or give a remembered "not a species" up for
+    *chosen*, once ``SpeciesNameVote.ENOUGH_TO_DECIDE`` lots say so.
+
+    Retiring also needs the lots taking it off to outnumber those keeping it one to
+    ``KEPT_PER_TAKEN_OFF``; a negative gives way only to lots that agree on the species.
     """
-    if not (chosen_pk and (first_save or changed)):
+    votes = SpeciesNameVote.objects.filter(search_text=normalized, species=answer)
+    if answer is None:
+        if votes.filter(agrees=False, chosen=chosen).count() >= SpeciesNameVote.ENOUGH_TO_DECIDE:
+            logger.info("Replacing remembered %r -> no species with %s", normalized, chosen)
+            # Through remember() for its guards: approval, retirement, the list.
+            remember(normalized, chosen, source="user", user=user)
         return
-    SpeciesSearchCache.objects.filter(pk=row.pk).update(rejects=F("rejects") + 1)
-    # Re-read, as in record_choice.
-    row = SpeciesSearchCache.objects.filter(pk=row.pk).first()
-    if row and row.is_discredited:
-        logger.info(
-            "Replacing remembered %r -> no species with %s after %s pick(s)",
-            row.search_text,
-            species,
-            row.rejects,
-        )
-        # Through remember() for its guards (approval, retirement), and it resets the counters.
-        remember(text, species, source="user", user=user)
+    tally = votes.aggregate(kept=Count("pk", filter=Q(agrees=True)), against=Count("pk", filter=Q(agrees=False)))
+    if tally["against"] < SpeciesNameVote.ENOUGH_TO_DECIDE:
+        return
+    if tally["against"] * SpeciesNameVote.KEPT_PER_TAKEN_OFF <= tally["kept"]:
+        return
+    # A veto never reaches exact matching, so it would change nothing.
+    if any(species.pk == answer.pk for species in exact_matches(normalized)):
+        return
+    logger.info(
+        "Retiring %r -> %s: %s lot(s) took it off, %s kept it", normalized, answer, tally["against"], tally["kept"]
+    )
+    SpeciesNameRejection.objects.get_or_create(search_text=normalized, species=answer)
+    SpeciesSearchCache.objects.filter(search_text=normalized, species=answer).delete()
 
 
 def _is_somebody_elses_name(normalized, species, user=None, club=None):
@@ -993,6 +1068,10 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
 
     found = search_matches(text, category=category, user=user, club=club)
     if found:
+        # The search can be wrong about a name, and the lots that retired a pairing said so.
+        vetoed = rejected_species_ids(normalized)
+        found = [species for species in found if species.pk not in vetoed]
+    if found:
         return found, "search"
 
     if use_llm:
@@ -1000,12 +1079,19 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
         answer = identify(text, user=user, club=club, budget=budget)
         if not answer.settled and answer.corrected_name and normalize(answer.corrected_name) != normalized:
             # A corrected spelling with no species ("red ludwigia"): run it through exact and search.
-            # Not remembered: often several species, and the cache's name guard checks the typed
-            # misspelling, so a club-scoped match could leak. The lot form writes its own row on save.
-            corrected = _rank(exact_matches(answer.corrected_name, user=user, club=club), category) or search_matches(
-                answer.corrected_name, category=category, user=user, club=club
-            )
+            named = _rank(exact_matches(answer.corrected_name, user=user, club=club), category)
+            corrected = named or search_matches(answer.corrected_name, category=category, user=user, club=club)
+            # Vetoed by the typed name: a respelling must not bring a retired pairing back.
+            vetoed = rejected_species_ids(normalized)
+            corrected = [species for species in corrected if species.pk not in vetoed]
             if corrected:
+                # Remembered, so the next seller to misspell it costs no call, only when the respelling is
+                # a name on the list that gives everybody this one species: the cache is global and its
+                # name guard checks the typed misspelling, so a club's word could leak, and a search's
+                # genus-level guess isn't an answer to keep.
+                if named and len(corrected) == 1:
+                    if [species.pk for species in exact_matches(answer.corrected_name)] == [corrected[0].pk]:
+                        remember(text, corrected[0], source="llm")
                 return corrected, "llm"
         # Whether round two ran and answered: required before a bare negative is written.
         confirmed = False

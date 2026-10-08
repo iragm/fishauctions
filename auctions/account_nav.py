@@ -28,8 +28,8 @@ LANDING = "contact_info"
 SESSION_KEY = "last_account_page"
 
 #: Pages never remembered as somewhere to send a person back to: landing on "Delete account"
-#: because that's where they were last would read as an accusation.
-NOT_REMEMBERED = frozenset({"account_delete"})
+#: because that's where they were last would read as an accusation, and a merge is done once.
+NOT_REMEMBERED = frozenset({"account_delete", "account_merge"})
 
 
 @dataclass(frozen=True)
@@ -116,6 +116,7 @@ GROUPS = (
             # /account/ redirects to the reader's own public page -- what other people see. One row:
             # the navbar's "Account information" and the ribbon's "My account" were one URL.
             Row("account", "Public user page", "bi-person-fill"),
+            Row("account_merge", "Merge accounts", "bi-union"),
             Row("account_data_export", "Download my data", "bi-download"),
             # Not `text-danger`: painting one nav row red makes it the loudest thing in the menu.
             # The page itself is where the red lives.

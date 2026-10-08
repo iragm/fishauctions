@@ -684,11 +684,22 @@ class NotifyUserTests(TestCase):
         sent = []
         with patch("auctions.tasks.send_push_to_user.delay") as delay:
             pushed = notifications.notify_user(
-                self.user, category="invoice", title="t", body="b", url="u", send_email=lambda: sent.append(1)
+                self.user, category="watched", title="t", body="b", url="u", send_email=lambda: sent.append(1)
             )
         self.assertTrue(pushed)
         self.assertEqual(sent, [])
         delay.assert_called_once()
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
+    def test_invoices_are_always_emailed(self):
+        sent = []
+        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+            pushed = notifications.notify_user(
+                self.user, category="invoice", title="t", body="b", url="u", send_email=lambda: sent.append(1)
+            )
+        self.assertFalse(pushed)
+        self.assertEqual(sent, [1])
+        delay.assert_not_called()
 
     @override_settings(FIREBASE_CREDENTIALS_JSON="")
     def test_falls_back_to_email_when_unconfigured(self):

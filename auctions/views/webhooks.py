@@ -420,6 +420,11 @@ def _apply_paypal_subscription_event(club, subscription):
             club.pk,
         )
         return
+    # A carried membership can't subscribe from here; one that slipped through renews its carrier, unless
+    # the carrier pays by a subscription of its own, which this mustn't overwrite.
+    carrier = member.membership_carried_by
+    if carrier and carrier.paypal_subscription_id in ("", subscription_id):
+        member = carrier
     # Cash first, outside the date guard: the booking is idempotent on the payment.
     _book_paypal_subscription_payment(club, member, subscription)
     next_date = _parse_paypal_datetime_date((subscription.get("billing_info") or {}).get("next_billing_time"))
@@ -434,11 +439,13 @@ def _apply_paypal_subscription_event(club, subscription):
         )
         return
     old_expiration = member.membership_expiration_date
+    had_paid = member.has_ever_paid
     member.paypal_subscription_id = subscription_id
     member.membership_last_paid = timezone.localdate()
     if advanced:
         member.membership_expiration_date = next_date
     member.save()
+    member.welcome_after_first_payment(had_paid)
     old_exp_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
     new_exp_str = (
         member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"

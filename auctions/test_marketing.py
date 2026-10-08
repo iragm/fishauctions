@@ -57,6 +57,9 @@ class MailchimpHelperTests(TestCase):
         self.assertEqual(mc._desired_status(self.member), "archived")
 
     def test_lifecycle_tags(self):
+        self.club.membership_system = "rolling"
+        self.club.membership_annual_fee = 25
+        self.club.save()
         today = timezone.localdate()
         self.member.membership_expiration_date = today + datetime.timedelta(days=10)
         tags = self.member.compute_mailchimp_tags()

@@ -18,7 +18,6 @@ from auctions.tests import StandardTestCase
 
 STATS_ENDPOINTS = (
     "auction_stats_activity",
-    "auction_stats_pictures",
     "auction_stats_distance_traveled",
     "auction_stats_previous_auctions",
     "auction_stats_lots_submitted",

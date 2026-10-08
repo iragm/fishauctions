@@ -155,7 +155,8 @@ ensure_permissions() {
     local pgid
     # Only dirs the containers WRITE to. auctions/static is no longer listed: the
     # container just reads it (collectstatic source); STATIC_ROOT is a named volume.
-    local writable_paths=(./mediafiles ./logs)
+    # privatefiles/ holds library uploads (settings.DOCUMENT_ROOT); back it up with mediafiles/.
+    local writable_paths=(./mediafiles ./privatefiles ./logs)
     puid="$(get_env_value "PUID")"
     pgid="$(get_env_value "PGID")"
     puid="${puid:-1000}"

@@ -347,6 +347,8 @@ $(document).ready(function() {
                   once chose it by hand is how "Blue dream shrimp" renamed to "Sponge filter" goes
                   to the printer as Neocaridina davidi.
                 {% endcomment %}
+                {% comment %}What the save reports the seller kept or changed: see species_matching.record_choice.{% endcomment %}
+                $('#id_species_offered').val(choices.length === 1 ? String(choices[0].id) : '');
                 var stillThere = choices.some(function(choice) { return String(choice.id) === previous; });
                 if (previous && stillThere) {
                     select.value = previous;
@@ -364,6 +366,11 @@ $(document).ready(function() {
                 refreshSpeciesUI();
             }
         });
+    });
+    {% comment %}An offer was for the name it was looked up from.{% endcomment %}
+    $('#id_lot_name').on('input', function() {
+        var select = document.getElementById('id_species');
+        if (!select || select.dataset.lastQuery !== this.value.trim()) { $('#id_species_offered').val(''); }
     });
     $('#id_species').on('change', function() {
         this.dataset.userChosen = '1';

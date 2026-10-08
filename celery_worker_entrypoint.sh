@@ -28,4 +28,9 @@ END
 
 echo "Starting Celery worker..."
 cd /home/app/web
+# CELERY_WORKER_QUEUES picks the queue; the celery_documents service sets it to "documents" (see
+# fishauctions/celery.py), with one task per process so a big file's memory goes back afterwards.
+if [ "${CELERY_WORKER_QUEUES:-}" = "documents" ]; then
+    exec celery -A fishauctions worker --loglevel=info -Q documents --concurrency=1 --max-tasks-per-child=1 -n documents@%h
+fi
 exec celery -A fishauctions worker --loglevel=info --concurrency=2

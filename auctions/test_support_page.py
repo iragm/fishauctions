@@ -41,7 +41,7 @@ class SupportUrlWorksSignedOutTests(TestCase):
 
 class SupportPageIsTheHelpPageTests(TestCase):
     """/support/ is where somebody goes when stuck, and the message form is the last resort on it: an agent
-    answers a question about their own auction in seconds, the FAQ answers the common ones, and the
+    answers a question about their own auction in seconds, the help guides answer the common ones, and the
     videos cover running an auction. All four are on one page, so a reader with no session gets them.
     """
 
@@ -52,8 +52,8 @@ class SupportPageIsTheHelpPageTests(TestCase):
         self.assertIn(reverse("user_api_keys"), self.html)
         self.assertIn("connect an AI agent", self.html)
 
-    def test_it_links_the_faq(self):
-        self.assertIn(reverse("faq"), self.html)
+    def test_it_links_the_help(self):
+        self.assertIn(reverse("help"), self.html)
 
     def test_both_tutorial_videos_are_on_it(self):
         self.assertIn(settings.ONLINE_TUTORIAL_YOUTUBE_ID, self.html)
@@ -264,10 +264,9 @@ class SupportFormSignedInTests(StandardTestCase):
         self.assertNotIn(settings.ADMINS[0][1], html)
         self.assertIn(reverse("support"), html)
 
-    @override_settings(ENABLE_HELP=True)
     def test_the_auction_help_page_sends_them_here_instead(self):
-        # ENABLE_HELP is off by default, and off the page redirects home.
         self.client.force_login(self.user)
-        html = self.client.get(reverse("auction_help", kwargs={"slug": self.online_auction.slug})).content.decode()
+        response = self.client.get(reverse("auction_help", kwargs={"slug": self.online_auction.slug}), follow=True)
+        html = response.content.decode()
         self.assertNotIn(settings.ADMINS[0][1], html)
         self.assertIn(reverse("support"), html)

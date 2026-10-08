@@ -12,7 +12,7 @@
   {% endif %}
   </p>
 
-  {{ formset.management_form }}
+  {% comment %}The management form is rendered inside the form by bulk_add_lots_row.html.  A second copy out here took the id, so Add row raised the wrong TOTAL_FORMS and new rows were dropped on save.{% endcomment %}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
     {% crispy formset helper %}
     {% comment %}One wrapping row: float-* is Bootstrap 4 and did nothing here, so on a phone these three ran together with no gap.{% endcomment %}
@@ -34,6 +34,8 @@ function cloneMore(selector, type) {
     var newElement = $(selector).clone(true);
     var total = $('#id_' + type + '-TOTAL_FORMS').val();
     newElement.find(':input').each(function() {
+        // :input includes buttons, and the species line's clear button has no name.
+        if (!$(this).attr('name')) return;
         var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
         var id = 'id_' + name;
         $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values
@@ -50,12 +52,7 @@ function cloneMore(selector, type) {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
         $(this).attr('for', newFor);
     });
-    {% comment %}A new row keeps the last row's values on purpose, but not its species: that was worked out from a different lot name.{% endcomment %}
-    newElement.find('input[name$="-species"]').each(function() {
-        this.value = '';
-        delete this.dataset.lastQuery;
-    });
-    newElement.find('.species-hint').html('');
+    {% comment %}A new row keeps the last row's values on purpose, its species included: that was worked out from the lot name the new row also keeps, and editing the name clears it.{% endcomment %}
     total++;
     $('#id_' + type + '-TOTAL_FORMS').val(total);
     $(selector).after(newElement);
@@ -102,10 +99,22 @@ function showSpecies(row, label) {
     clear.innerHTML = '<i class="bi bi-x-lg"></i>';
     hint.appendChild(clear);
 }
+{% comment %}What was offered stays when the seller clears it, so the save reports it as declined.{% endcomment %}
 $(document).on('click', '.species-clear', function() {
     var row = this.closest('.lot-form');
     var input = row.querySelector('input[name$="-species"]');
     if (input) { input.value = ''; }
+    showSpecies(row, '');
+});
+{% comment %}A species belongs to the name it was worked out from: editing the name drops it, and what was offered, until the new name has been looked up.{% endcomment %}
+$(document).on('input', 'input[name$="-lot_name"]', function() {
+    var row = this.closest('.lot-form');
+    var input = row && row.querySelector('input[name$="-species"]');
+    var offered = row && row.querySelector('input[name$="-species_offered"]');
+    if (!input || input.dataset.lastQuery === this.value.trim()) return;
+    input.value = '';
+    if (offered) { offered.value = ''; }
+    delete input.dataset.lastQuery;
     showSpecies(row, '');
 });
 $(document).on('blur', 'input[name$="-lot_name"]', function() {
@@ -123,6 +132,8 @@ $(document).on('blur', 'input[name$="-lot_name"]', function() {
         success: function(response) {
             if (input.dataset.lastQuery !== response.name) return;
             var choices = response.choices || [];
+            var offered = row.querySelector('input[name$="-species_offered"]');
+            if (offered) { offered.value = choices.length === 1 ? choices[0].id : ''; }
             // Exactly one, or nothing: a shortlist means the matcher cannot tell two species
             // apart, and there is nobody being asked to choose on this page.
             if (choices.length === 1) {

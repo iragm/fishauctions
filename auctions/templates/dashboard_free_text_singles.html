@@ -1,0 +1,10 @@
+{% if section.singles %}
+<details class="small mb-3">
+  <summary>Used by one auction ({{ section.singles|length }} terms)</summary>
+  <ul class="mt-2">
+    {% for group in section.singles %}
+    <li><strong>{{ group.term|default:"(no words)" }}</strong> ({{ group.uses }}): {% for text, n in group.phrases %}{{ text }} ({{ n }}){% if not forloop.last %}; {% endif %}{% endfor %}{% if group.columns.options %}. Options: {% for text, n in group.columns.options %}{{ text }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}

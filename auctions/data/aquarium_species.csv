@@ -103,7 +103,7 @@ Micranthemum micranthemoides,,pearlweed|micranthemum micranthemoides,Linderniace
 Pogostemon helferi,,downoi|pogostemon helferi,Lamiaceae,Lamiales,plant,fresh
 Pogostemon stellatus,,pogostemon stellatus|eusteralis stellata,Lamiaceae,Lamiales,plant,fresh
 Pogostemon erectus,,pogostemon erectus,Lamiaceae,Lamiales,plant,fresh
-Alternanthera reineckii,,alternanthera reineckii|ar|scarlet temple|alternanthera,Amaranthaceae,Caryophyllales,plant,fresh
+Alternanthera reineckii,,alternanthera reineckii|ar|scarlet temple|alternanthera|telanthera,Amaranthaceae,Caryophyllales,plant,fresh
 Alternanthera reineckii,Mini,ar mini|alternanthera reineckii mini,Amaranthaceae,Caryophyllales,plant,fresh
 Alternanthera reineckii,Rosanervig,ar rosanervig|pink rosanervig,Amaranthaceae,Caryophyllales,plant,fresh
 Myriophyllum aquaticum,,parrot feather|myriophyllum aquaticum,Haloragaceae,Saxifragales,plant,fresh
@@ -168,7 +168,7 @@ Neocaridina davidi,Blue Velvet,blue velvet shrimp|blue velvet,Atyidae,Decapoda,i
 Neocaridina davidi,Blue Jelly,blue jelly shrimp|blue jelly,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Green Jade,green jade shrimp|green jade|jade shrimp,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Chocolate,chocolate shrimp|chocolate neocaridina,Atyidae,Decapoda,invert,fresh
-Neocaridina davidi,Orange Sakura,orange sakura shrimp|orange shrimp|sunkist shrimp,Atyidae,Decapoda,invert,fresh
+Neocaridina davidi,Orange Sakura,orange sakura shrimp|orange shrimp|sunkist shrimp|orange sunkist|sunkist,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Yellow Golden Back,yellow shrimp|golden back yellow shrimp|yellow neocaridina,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Snowball,snowball shrimp|white pearl shrimp,Atyidae,Decapoda,invert,fresh
 Neocaridina davidi,Red Rili,red rili shrimp|red rili,Atyidae,Decapoda,invert,fresh
@@ -287,7 +287,7 @@ Symphysodon aequifasciatus,Red Turquoise,red turquoise discus,,,fish,fresh
 # lists were read for these rows; where the two disagreed about a species, neither was invented
 # past what they say.  A cultivar nobody outside one nursery's catalogue asks for is left out: the
 # test is whether somebody would write it on a bag.
-Alternanthera reineckii,Pink,ar pink|pink alternanthera|telanthera,Amaranthaceae,Caryophyllales,plant,fresh
+Alternanthera reineckii,Pink,ar pink|pink alternanthera,Amaranthaceae,Caryophyllales,plant,fresh
 Anubias barteri,Caladiifolia,anubias caladiifolia|caladiifolia,Araceae,Alismatales,plant,fresh
 Anubias barteri,Glabra,anubias glabra,Araceae,Alismatales,plant,fresh
 Anubias barteri,Coin Leaf,anubias coin leaf|coin leaf anubias,Araceae,Alismatales,plant,fresh
@@ -436,7 +436,7 @@ Asellus aquaticus,,freshwater isopod|asellus|asellus aquaticus|water louse,Asell
 # know "yellow lab", and before this file could reach its rows there was no way to teach it one.
 Labidochromis caeruleus,,yellow lab|electric yellow|electric yellow lab|yellow labidochromis,,,,
 Carinotetraodon travancoricus,,pea puffer|dwarf puffer|indian dwarf puffer|pygmy puffer,,,,
-Poecilia wingei,,endler|endlers livebearer|endler livebearer,,,,
+Poecilia wingei,,endler|endlers livebearer|endler livebearer|blue star endler,,,,
 Mikrogeophagus altispinosus,,bolivian ram|bolivian butterfly|bolivian butterfly ram,,,,
 Mikrogeophagus ramirezi,,german blue ram|gbr|blue ram|german ram,,,,
 Pterophyllum scalare,,angel|silver angel|silver angelfish|freshwater angel,,,,

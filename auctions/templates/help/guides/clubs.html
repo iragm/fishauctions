@@ -1,0 +1,72 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. The club as a whole: finding one, setting one up, who can do what, and its auctions. Each big job (members, email, events, BAP, donations, money) has its own guide in the Clubs group; this one points at them.{% endcomment %}
+<p>In addition to auction tools, this site offers everything you need to manage your club, from tracking dues to running a breeder award program. Use as much or as little as you like.</p>
+{% tip %}The information in this guide is intended for people running a club. Because each club runs things differently, there isn't a guide for being a club member.{% endtip %}
+{% if help.club and help.is_club_admin %}{% helptip %}You're an admin of {{ help.club.name }}. Its settings are all on {% page "club_setup" "Setup" %}.{% endhelptip %}{% endif %}
+
+<h2 class="h5 mt-4" id="setup">Setting up your club</h2>
+<ol>
+  <li>Click {% page "clubs" "Clubs" %} in the menu, then pick your club.
+    {% tip %}Your club isn't listed? You can <a href="{% url 'support' %}">get in touch</a> to have it added.{% endtip %}</li>
+  <li>Set up the {% page "club_edit" "General" %} settings.</li>
+</ol>
+{% aitip %}Ask "what can this site do for my club that we're not using?"{% endaitip %}
+
+<h2 class="h5 mt-4" id="permissions">Who can do what</h2>
+<p>Everyone who helps run the club is on the member list with their own permissions. On {% page "club_admin" "Members" %}, open the menu at the end of a member's row, click {% ui "Permissions" %}, and tick what they need:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>View members</th><td>See the member list.</td></tr>
+    <tr><th>Manage membership</th><td>Add, edit and renew members. {% ui "CSV import/export" %} is separate.</td></tr>
+    <tr><th>Manage membership and payments</th><td>Dues, the club's card payments, and the treasurer's report.</td></tr>
+    <tr><th>Manage auctions</th><td>Run the club's auctions.</td></tr>
+    <tr><th>Award points</th><td>The breeder award program.</td></tr>
+    <tr><th>Manage donations</th><td>Add and email donation vendors.</td></tr>
+    <tr><th>Send announcements</th><td>Post to Discord, the app, email and the club page.</td></tr>
+    <tr><th>Edit club settings</th><td>Setup, Discord and API keys. Nearly as powerful as admin.</td></tr>
+    <tr><th>Club admin</th><td>Everything, including giving other people permissions. Give it to as few people as you can.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>So your BAP chair can approve points without touching auctions, and your membership chair can add members without seeing the money.</p>
+{% mike %}Mike was made club admin in 2019, "just for the auction". He still is. Last week he tidied up the member list and deactivated the treasurer. Give people the permission their job needs, and take it back when the job's done.{% endmike %}
+
+<h2 class="h5 mt-4" id="auctions">Club auctions</h2>
+<p>An auction belongs to the club when you pick the club in its rules. Anyone with {% ui "Manage auctions" %} can run it, and it takes payments into the club's account.</p>
+<p>Set {% ui "Manage users through club" %} in the rules and the auction's people <em>are</em> your member list:</p>
+<ul>
+  <li>Members keep their club bidder number at every auction.</li>
+  <li>A new person at the door becomes a club member.</li>
+  <li>Edit somebody once, and it's changed everywhere.</li>
+  <li>With check-in on, nobody can bid until they've been checked in.</li>
+  <li>The rules can add your membership fee to the invoice of anyone whose membership has lapsed, and renew them when they pay.</li>
+</ul>
+<p>Your club page lists your auctions. {% ui "Make current" %} next to one pins it: the club's menu then has shortcuts for auction day, {% ui "Add user" %}, {% ui "Set lot winners" %}, {% ui "Checkin" %}, {% ui "Checkout" %} and {% ui "Print labels" %}, and the auction snippet on your website shows it. <a href="{% url 'help_guide' slug='run-an-in-person-auction' %}">Running an in-person auction</a> explains each one.</p>
+<p>{% page "club_barcode_labels" "Print Barcodes" %} also prints barcodes for things you sell at the desk. Scan the T-shirt, then the person's card, and it's on their invoice. <a href="{% url 'help_guide' slug='scanning' %}">Barcodes and scanners</a> has the rest.</p>
+<p>After an auction, {% page "auction_add_users_to_club" "Add all users to your club" %} on the Users tab puts everyone from it on your member list.</p>
+
+<h2 class="h5 mt-4" id="history">History and stats</h2>
+<ul>
+  <li>{% page "club_history" "Club history" %}: every change to members, settings, points and announcements, and who made it. Look here first when something changed and nobody knows why.</li>
+  <li>{% page "club_stats" "Club stats" %}: your auctions and your membership, charted over the years.</li>
+</ul>
+
+{% if help.user.userdata.library_enabled %}
+<h2 class="h5 mt-4" id="library">The library</h2>
+<p>The {% page "library" "Library" %}, under {% ui "Clubs" %}, keeps old newsletters, BAP reports and articles where people can search them and ask them questions. Upload a whole pile of page photos or scans at once: they're read, put back together into one document per article, and filed by subject and by the species they name. Choose who can read them: everyone on the site, only your club's members, or only you. Whoever uploaded a document, or can edit the club, can correct what was read off it.</p>
+{% aitip %}Ask "what did the club write about spawning Apistogramma?"{% endaitip %}
+{% endif %}
+
+<h2 class="h5 mt-4" id="more">Everything else</h2>
+<div class="list-group mb-3">
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-membership' %}"><strong>Members and dues</strong><div class="small text-muted">The member list, membership cards, and taking dues.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-email' %}"><strong>Club email and announcements</strong><div class="small text-muted">Your club's email addresses, membership emails, announcements, mailing lists and Discord.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-events' %}"><strong>Events and your website</strong><div class="small text-muted">The club calendar, Google Calendar, and putting all of it on your own site.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='breeder-award-programs' %}"><strong>Breeder award programs</strong><div class="small text-muted">BAP, HAP and CAP points, from the member's side and the chair's.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-donations' %}"><strong>Donations from vendors</strong><div class="small text-muted">Asking businesses to donate, and keeping track of who said yes.</div></a>
+  <a class="list-group-item list-group-item-action" href="{% url 'help_guide' slug='club-money' %}"><strong>Club money</strong><div class="small text-muted">The treasurer's report, and the club's payment accounts.</div></a>
+</div>
+
+<h2 class="h5 mt-4" id="speakers">Speakers</h2>
+<p>Some regional councils share a {% page "speaker_list" "speaker directory" %}: who gives talks, on what, and how far they'll travel. Each speaker has {% page "speaker_detail" "a page" %} to send your program chair. Anyone who can see the directory can {% page "speaker_add" "add a speaker" %}, themselves included.</p>

@@ -36,6 +36,7 @@ from django.views.generic.edit import (
     FormView,
 )
 
+from auctions import help_stats
 from auctions.filters import (
     AuctionFilter,
     LotFilter,
@@ -51,6 +52,7 @@ from auctions.models import (
     BlogPost,
     Invoice,
     Lot,
+    LotImage,
     SearchHistory,
     UserData,
 )
@@ -103,7 +105,7 @@ class SupportView(FormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # The same two videos and chapter lists as the promo page: one online, one in person.
+        # The same two videos and chapter lists as the help: one online, one in person.
         context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
         context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
         context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
@@ -169,20 +171,39 @@ class SupportView(FormView):
         return super().form_valid(form)
 
 
+def promo_lot_photos() -> list[dict]:
+    """The promo page's photo strip, as last counted by ``help_stats``, less any photo or lot taken down
+    since: the count is daily, and a removed lot must not sit on the landing page until tomorrow.
+    """
+    photos = help_stats.promo_photos().get("photos", [])
+    if not photos:
+        return []
+    still_up = set(
+        LotImage.objects.filter(
+            pk__in=[photo["image"] for photo in photos], lot_number__is_deleted=False, lot_number__banned=False
+        ).values_list("pk", flat=True)
+    )
+    photos = [photo for photo in photos if photo["image"] in still_up]
+    return photos if len(photos) >= help_stats.PROMO_MIN_PHOTOS else []
+
+
 class PromoSite(TemplateView):
+    """The marketing page at ``/about/``, where ``/`` sends a signed-out visitor, when ``ENABLE_PROMO_PAGE``
+    is on: one address for everyone, so a link copied from it works for whoever it's sent to. Every feature on it links to the help section that explains it, and
+    ``PromoPageTests`` fails when one of those sections is gone.
+    """
+
     template_name = "promo.html"
 
     def dispatch(self, request, *args, **kwargs):
         if not settings.ENABLE_PROMO_PAGE:
-            return redirect(reverse("home"))
+            return redirect(reverse("help"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
-        context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
-        context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
-        context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
+        context["photos"] = promo_lot_photos()
+        context["site"] = help_stats.site_stats()
         return context
 
 
@@ -195,7 +216,10 @@ class ToDefaultLandingPage(View):
                 return AllLots.as_view()(request)
             else:
                 if settings.ENABLE_PROMO_PAGE:
-                    return PromoSite.as_view()(request)
+                    # A redirect, not the page drawn here, so its address is the one signed-in users see.
+                    # Browsers carry a #section across it; the query string (utm_*) is carried here.
+                    query = request.META.get("QUERY_STRING")
+                    return redirect(reverse("promo") + (f"?{query}" if query else ""))
                 else:
                     return AllAuctions.as_view()(request)
         # Only check TOS if authenticated
@@ -529,11 +553,25 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
+#: Blog posts that moved into the help, as slug: (guide, section). Their old links go there.
+MOVED_TO_HELP = {
+    "how-much-should-you-bid": ("online-auctions", "how-much"),
+    "online-payments-suck": ("payments", "paypal"),
+}
+
+
 class BlogPostView(DetailView):
     """Render a blog post"""
 
     model = BlogPost
     template_name = "blog_post.html"
+
+    def get(self, request, *args, **kwargs):
+        moved = MOVED_TO_HELP.get(kwargs.get("slug"))
+        if moved:
+            guide, section = moved
+            return redirect(f"{reverse('help_guide', kwargs={'slug': guide})}#{section}", permanent=True)
+        return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

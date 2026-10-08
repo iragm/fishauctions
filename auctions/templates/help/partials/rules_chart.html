@@ -1,0 +1,44 @@
+{% load static %}
+{% comment %}The rules guide's scatter plot, from help_stats.rules_chart: one point per auction, no names. Nothing at all until there are enough auctions to plot.{% endcomment %}
+{% with chart=help.rules_chart %}{% if chart.points %}
+<figure class="mb-3" style="max-width: 36em;">
+  <figcaption class="mb-2"><em>&ldquo;It doesn't matter how long your rules are, no one will read them anyway.&rdquo;</em></figcaption>
+  <div style="position: relative; height: 260px;"><canvas id="rules-reading-chart" role="img" aria-label="Words in an auction's rules against the average time people spend on its rules page before joining, {{ chart.auctions }} auctions"></canvas></div>
+</figure>
+{{ chart.points|json_script:"rules-reading-points" }}
+<script src="{% static 'js/Chart.min.js' %}"></script>
+<script>
+(function () {
+  var points = JSON.parse(document.getElementById('rules-reading-points').textContent);
+  var ink = '#adb5bd', grid = 'rgba(255, 255, 255, 0.08)';
+  Chart.defaults.global.defaultFontFamily = getComputedStyle(document.body).fontFamily;
+  function axis(label) {
+    return {
+      scaleLabel: {display: true, labelString: label, fontColor: ink},
+      ticks: {beginAtZero: true, fontColor: ink, precision: 0},
+      gridLines: {color: grid, zeroLineColor: grid}
+    };
+  }
+  new Chart(document.getElementById('rules-reading-chart').getContext('2d'), {
+    type: 'scatter',
+    data: {datasets: [{
+      data: points.map(function (p) { return {x: p[0], y: p[1]}; }),
+      backgroundColor: 'rgba(47, 164, 231, 0.7)',
+      borderColor: '#222',
+      borderWidth: 1,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      pointHitRadius: 8
+    }]},
+    options: {
+      maintainAspectRatio: false,
+      legend: {display: false},
+      scales: {xAxes: [axis('Words in the rules')], yAxes: [axis('Average seconds on the rules before joining')]},
+      tooltips: {displayColors: false, callbacks: {label: function (item) {
+        return item.xLabel + ' words, ' + item.yLabel + ' seconds';
+      }}}
+    }
+  });
+})();
+</script>
+{% endif %}{% endwith %}

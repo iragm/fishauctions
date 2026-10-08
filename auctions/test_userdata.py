@@ -203,8 +203,19 @@ class UserDataMergeIntoTests(TestCase):
         self.source_user.userdata.is_trusted = True
         self.source_user.userdata.paypal_enabled = True
         self.source_user.userdata.square_enabled = True
+        self.source_user.userdata.library_enabled = True
+        self.source_user.userdata.voice_cloud_enabled = True
         self.source_user.userdata.save(
-            update_fields=["phone_number", "address", "credit", "is_trusted", "paypal_enabled", "square_enabled"]
+            update_fields=[
+                "phone_number",
+                "address",
+                "credit",
+                "is_trusted",
+                "paypal_enabled",
+                "square_enabled",
+                "library_enabled",
+                "voice_cloud_enabled",
+            ]
         )
 
     def test_merge_into_moves_domain_data_and_empties_source_userdata(self):
@@ -270,6 +281,8 @@ class UserDataMergeIntoTests(TestCase):
         self.assertTrue(self.target_user.userdata.is_trusted)
         self.assertTrue(self.target_user.userdata.paypal_enabled)
         self.assertTrue(self.target_user.userdata.square_enabled)
+        self.assertTrue(self.target_user.userdata.library_enabled)
+        self.assertTrue(self.target_user.userdata.voice_cloud_enabled)
         self.assertIsNone(self.source_user.userdata.phone_number)
         self.assertIsNone(self.source_user.userdata.address)
         self.assertEqual(self.source_user.userdata.credit, 0)

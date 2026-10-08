@@ -1,7 +1,7 @@
 """Email to mobile-push routing.
 
 App users can opt into push (Firebase Cloud Messaging) instead of email for everything except
-account mail. :func:`notify_user` is the single choke point: it sends the email or enqueues a push,
+invoices and account mail. :func:`notify_user` is the single choke point: it sends the email or enqueues a push,
 never both, and falls back to email whenever push isn't available.
 
 This module owns the decision and the FCM send; the fan-out to a user's devices runs in the
@@ -60,9 +60,10 @@ PUSH_ONLY_CATEGORIES = frozenset(
 
 # Always emailed, never pushed:
 #   account       - a wrong or signed-out phone must never get password resets
+#   invoice       - a searchable record of what was bought, sold and paid
 #   membership    - club correspondence, often to people who aren't site users
 #   auction_admin - desk work done from an inbox, with detail a notification can't hold
-PUSH_EXEMPT_CATEGORIES = frozenset({CATEGORY_ACCOUNT, CATEGORY_MEMBERSHIP, CATEGORY_AUCTION_ADMIN})
+PUSH_EXEMPT_CATEGORIES = frozenset({CATEGORY_ACCOUNT, CATEGORY_INVOICE, CATEGORY_MEMBERSHIP, CATEGORY_AUCTION_ADMIN})
 
 # Result of a single-token FCM send.
 SEND_OK = "sent"

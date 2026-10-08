@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}How was {{ auction }}?{% endblock %}
+{% block content %}
+  <div class="container mt-3" style="max-width:520px;">
+    <h4 class="mb-3">How was {{ auction }}?</h4>
+    {% comment %}The emailed buttons land here with ?answer=, and the script below sends it: a GET never records, because mail scanners open every link in a message and don't run scripts.{% endcomment %}
+    <form method="post" id="survey-answer" class="d-flex flex-wrap gap-2 mb-4">
+      {% csrf_token %}
+      {% if token %}<input type="hidden" name="uuid" value="{{ token }}">{% endif %}
+      {% for value, label in answers %}
+        {% if value == "great" %}
+          <button type="submit" name="answer" value="{{ value }}" class="btn btn-lg {% if tos.survey_answer == value %}btn-success{% else %}btn-outline-success{% endif %}"><i class="bi bi-emoji-smile"></i> {{ label }}</button>
+        {% else %}
+          <button type="submit" name="answer" value="{{ value }}" class="btn btn-lg {% if tos.survey_answer == value %}btn-danger{% else %}btn-outline-danger{% endif %}"><i class="bi bi-emoji-frown"></i> {{ label }}</button>
+        {% endif %}
+      {% endfor %}
+    </form>
+    <form method="post">
+      {% csrf_token %}
+      {% if token %}<input type="hidden" name="uuid" value="{{ token }}">{% endif %}
+      <label for="survey-comments" class="form-label">Anything else the organizers should know?</label>
+      <textarea id="survey-comments" name="comments" class="form-control mb-3" rows="5" maxlength="{{ max_length }}">{{ tos.survey_comments }}</textarea>
+      <button type="submit" class="btn btn-primary">Send</button>
+    </form>
+  </div>
+{% endblock %}
+{% block extra_js %}
+{% if pending_answer %}
+<script>
+(function () {
+  var button = document.querySelector('#survey-answer button[value="{{ pending_answer }}"]');
+  if (button) { button.click(); }
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,56 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. The club calendar, Google Calendar, the website snippets and the club API: everything that puts the club somewhere other than this site.{% endcomment %}
+<p>Your club page has a calendar. Your auctions go on it by themselves, and you add meetings, swaps and talks. From there it feeds your members' own calendars, a Google calendar, your Discord and your club's website, so you only ever type an event once.</p>
+{% tip %}Facebook doesn't allow any way for us to create events, so you still need to create those manually on your club's Facebook page. Some third party connectors like <a href="https://ifttt.com/facebook_pages" target="_blank" rel="noopener">IFTTT</a> allow creating posts.{% endtip %}
+
+<h2 class="h5 mt-4" id="events">Events</h2>
+<p>{% page "club_event_add" "Add event" %}, on your club page, adds a meeting, swap or talk.</p>
+{% tip %}If your auction is the same as your monthly meeting, {% ui "Edit" %} its event and change the title and description: "Monthly meeting and auction, doors at 6:30". It still follows the auction's date.{% endtip %}
+{% aitip %}Ask "add the March meeting to the club's events, 7pm at the library".{% endaitip %}
+
+<h2 class="h5 mt-4" id="member-calendars">Members' own calendars</h2>
+<p>Above the events on your club page, {% ui "Google Calendar" %} and {% ui "Apple Calendar or Outlook" %} add your club's calendar to a member's phone. It's a subscription, not a copy: a meeting you move here moves in their calendar too.</p>
+{% tip %}Tell members about those two buttons once, at a meeting. It's the difference between "I didn't know it was this week" and a full room.{% endtip %}
+
+<h2 class="h5 mt-4" id="google-calendar">Google Calendar</h2>
+{% if help.club and help.is_club_admin %}{% helptip "calendar-check" %}{% if help.club.google_calendar_connected %}{{ help.club.name }} has connected a calendar{% if help.club.google_calendar_is_public %}, and it's public{% else %}, but it's still private{% endif %}.{% else %}{{ help.club.name }} hasn't connected a calendar yet.{% endif %}{% endhelptip %}{% endif %}
+<p>If your club already keeps a Google calendar, or wants one, {% page "club_google_calendar_config" "Google Calendar" %} under Setup keeps it and this site in step, both ways, every 15 minutes.</p>
+<ol>
+  <li>Click {% page "google_calendar_connect" "Connect Google Calendar" %} and sign in with the club's Google account, not your own.</li>
+  <li>The site makes a new calendar, "Your Club events", rather than reading one you already have. Reading yours would give it access to every calendar and event in your Google account. Events you add to the new one show up on your club page.</li>
+  <li>To let members subscribe to it in Google, open that calendar's settings in Google and tick {% ui "Make available to public" %}.</li>
+</ol>
+<p>The same page has two switches:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% ui "Add auctions to the calendar" %}</th><td>On unless you turn it off. Untick it if your auctions are already on your calendar some other way.</td></tr>
+    <tr><th>{% ui "Create Discord events for calendar events" %}</th><td>Meetings and swaps get a Discord event too. Auctions have their own switch on the Discord page, so they never show up twice.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>{% page "google_calendar_sync_now" "Sync now" %} doesn't wait for the 15 minutes. {% page "google_calendar_disconnect" "Disconnect" %} stops the syncing and leaves the calendar in your Google account. Without Google, your club page still has a {% page "club_events_ical" "calendar feed" %} that any calendar app can read.</p>
+{% mike %}Mike connected Google Calendar with his own Gmail. Then he stepped down, deleted his account, and the club's calendar went with it. Use the club's Google account.{% endmike %}
+
+<h2 class="h5 mt-4" id="website">Your club's website</h2>
+<p>{% page "club_website_integration" "Website integration" %}, under Setup, has snippets to paste into your own site: WordPress (in a Custom HTML block), Wix, Squarespace or anything else that takes HTML. They update themselves, use your site's fonts and colours, and never show anything about your members.</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% page "club_events_embed" "Upcoming events" %}</th><td>Your calendar. Pick how many to show.</td></tr>
+    <tr><th>{% page "club_past_events_embed" "Past events" %}</th><td>What you've been doing lately. The one that tells a visitor your club is alive.</td></tr>
+    <tr><th>{% page "club_auction_embed" "Current auction" %}</th><td>The auction you've made current, or the next promoted one. It clears itself a day after the auction ends.</td></tr>
+    <tr><th>{% page "club_announcements_embed" "Latest announcement" %}</th><td>The last announcement you sent with {% ui "Website" %} ticked. One line at the top of your home page.</td></tr>
+    <tr><th>{% page "bap_embed" "Breeder Award leaderboard" %}</th><td>Your top ten, names and points only. Only with the breeder award program on.</td></tr>
+    <tr><th>Calendar links</th><td>Not a snippet: the subscribe link and the calendar feed, for a button or menu your site already has.</td></tr>
+  </tbody>
+</table>
+</div>
+{% tip %}Put the current auction snippet on your home page once and never touch it again. Between auctions it says "No auction running right now."{% endtip %}
+{% aitip %}Ask "what can I put on our website?" and it hands you the code to paste.{% endaitip %}
+
+<h2 class="h5 mt-4" id="api">API keys</h2>
+<p>For anything the snippets don't do, there's an API. {% page "club_api_keys" "API keys" %}, under Setup, lists your club's keys. {% page "club_api_key_create" "Create new key" %} makes one, with only the permissions you tick, and shows its instructions.</p>
+<p>Keep a key to one job, and give each one a name that says where it's used, "WordPress sign-up form". When the job goes away, {% ui "Revoke" %} the key.</p>
+<p>Your form calls the email field "your-email"? Open the key and add it under {% ui "Field mappings" %}, so the form doesn't have to change.</p>
+{% aitip %}You don't have to write the code yourself. Paste the key's instructions into an AI assistant and ask it to write the form.{% endaitip %}

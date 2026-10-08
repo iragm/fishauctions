@@ -80,6 +80,13 @@ class CSVContactImportMixin:
     DISCORD_ID_FIELD_NAMES = ["discord id", "discord_id", "discord"]
     CONTACT_STATUS_FIELD_NAMES = ["contact status", "contact_status", "contact"]
     DATE_JOINED_FIELD_NAMES = ["date joined", "createdon", "created on", "joined", "join date", "date_joined"]
+    SEND_WELCOME_LETTER_FIELD_NAMES = [
+        "send welcome letter",
+        "send_welcome_letter",
+        "send welcome email",
+        "send_welcome_email",
+        "welcome letter",
+    ]
 
     # Lowercased contact status values -> model values.
     CONTACT_STATUS_MAP = {

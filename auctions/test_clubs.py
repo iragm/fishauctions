@@ -302,7 +302,8 @@ class ClubViewTests(TestCase):
         self.assertIn("deactivated", keys)
 
     def test_club_admin_membership_filters_shown_with_fee(self):
-        """Paid club member / Unpaid chips appear once the club has a membership fee."""
+        """The membership chips appear once the club tracks membership."""
+        self.club.membership_system = "rolling"
         self.club.membership_annual_fee = 20
         self.club.save()
         self.client.login(username="club_owner2", password="testpass")
@@ -310,13 +311,14 @@ class ClubViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         filters = response.context["possible_filters"]
-        self.assertIn(("<i class='bi bi-person-badge'></i> Paid club member", "current"), filters)
-        self.assertIn(("<i class='bi bi-person'></i> Unpaid", "expired"), filters)
+        self.assertIn(("<i class='bi bi-person-badge'></i> Paid", "current"), filters)
+        self.assertIn(("<i class='bi bi-person'></i> Lapsed", "expired"), filters)
+        self.assertIn(("<i class='bi bi-person-x'></i> Never paid", "never"), filters)
         # The shared HTMX template renders the chips as toggleable checkboxes.
         content = response.content.decode(response.charset or "utf-8")
         self.assertIn('data-filter-key="current"', content)
         self.assertIn('data-filter-key="expired"', content)
-        self.assertIn("Paid club member", content)
+        self.assertIn("Never paid", content)
 
     def test_club_edit_owner_can_access(self):
         """permission_admin grants permission_edit_club, so a club admin can open the edit page."""
@@ -1067,8 +1069,9 @@ class ClubMemberUpdateTests(CsvImportTestMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(ClubMember.objects.filter(club=self.club, email="newmember@example.com").exists())
         imported = ClubMember.objects.get(club=self.club, email="newmember@example.com")
+        # Held until their first payment, like anyone added without the letter.
         self.assertFalse(imported.send_welcome_email)
-        self.assertTrue(imported.welcome_email_sent)
+        self.assertFalse(imported.welcome_email_sent)
 
     def test_csv_import_skips_rows_without_name_or_email(self):
         """Rows with neither a name nor an email are skipped: there's no way to identify the person."""

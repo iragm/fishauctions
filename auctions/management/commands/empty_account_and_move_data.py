@@ -1,9 +1,14 @@
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
+from auctions.account_merge import merge_accounts
+
 
 class Command(BaseCommand):
-    help = "Move application data from one user account to another without deleting the source account"
+    help = (
+        "Merge one account into another: everything moves to the second account and the first is closed. "
+        "What the account merge page does, without its request or its refusal of staff accounts."
+    )
 
     def add_arguments(self, parser):
         help_text = "Username or numeric id of the account (all-digit values are treated as ids first)"
@@ -29,7 +34,6 @@ class Command(BaseCommand):
             msg = "Source and target users must be different."
             raise CommandError(msg)
 
-        user_to_empty.userdata.merge_into(user_where_it_should_go)
-        self.stdout.write(
-            self.style.SUCCESS(f"Moved data from {user_to_empty.username} to {user_where_it_should_go.username}.")
-        )
+        old_username = user_to_empty.username
+        merge_accounts(user_to_empty, user_where_it_should_go)
+        self.stdout.write(self.style.SUCCESS(f"Moved data from {old_username} to {user_where_it_should_go.username}."))

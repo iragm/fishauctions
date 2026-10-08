@@ -161,7 +161,7 @@ def _resources_read(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | 
 
 
 def _prompts_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
-    return {"prompts": prompts.descriptors()}
+    return {"prompts": prompts.descriptors(caller.user)}
 
 
 def _prompts_get(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:

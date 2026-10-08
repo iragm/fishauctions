@@ -258,6 +258,56 @@ class AccountDeleteView(TemplateView):
         return redirect(f"{reverse('account_logout')}?next={quote(target)}")
 
 
+class AccountMergeView(TemplateView):
+    """Merge two accounts: requested from the one being closed, accepted from the one being kept.
+
+    One URL for both halves: ``?from=<username>`` is the kept account's confirmation page, for a live
+    request from that account. See :mod:`auctions.account_merge` for why it takes both sign-ins.
+    """
+
+    template_name = "account_merge.html"
+
+    def get_context_data(self, **kwargs):
+        from auctions.account_merge import REQUEST_HOURS, merge_summary, pending_against, pending_request
+
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        context["outgoing"] = pending_request(user)
+        context["incoming"] = pending_against(user)
+        context["request_hours"] = REQUEST_HOURS
+        asked_for = (self.request.GET.get("from") or "").strip().casefold()
+        review = next((source for source in context["incoming"] if source.username.casefold() == asked_for), None)
+        if review:
+            context["review"] = review
+            context["summary"] = merge_summary(review)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        from auctions.account_merge import (
+            MergeRefused,
+            accept_merge,
+            cancel_request,
+            decline_request,
+            request_merge,
+        )
+
+        action = request.POST.get("action")
+        try:
+            if action == "request":
+                target = request_merge(request.user, request.POST.get("username"))
+                messages.success(request, f"Now sign in as {target.username} and open Merge accounts to finish.")
+            elif action == "cancel":
+                cancel_request(request.user)
+            elif action == "decline":
+                decline_request(request.user, request.POST.get("source"))
+            elif action == "accept":
+                accept_merge(request.user, request.POST.get("source"))
+                messages.success(request, "Merged. Everything is in this account now.")
+        except MergeRefused as refusal:
+            messages.error(request, str(refusal))
+        return redirect(reverse("account_merge"))
+
+
 class AccountDataExportView(TemplateView):
     """ "Download my data": the page that says what is in the file, and the file itself.
 

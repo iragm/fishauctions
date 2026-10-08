@@ -109,6 +109,16 @@ document.addEventListener("DOMContentLoaded", function() {
 <h5>{{location}}</h5>
 {% endif %}
 {% endif %}
+{% if survey_answers %}
+<form method="post" action="{% url 'auction_survey' slug=invoice.auction.slug %}" id="invoice-survey" class="d-flex flex-wrap align-items-center gap-2 mt-2">
+  {% csrf_token %}
+  {% if using_no_login_link %}<input type="hidden" name="uuid" value="{{ invoice.no_login_link }}">{% endif %}
+  <span class="fw-semibold">How was {{ invoice.auction }}?</span>
+  {% for value, label in survey_answers %}
+    <button type="submit" name="answer" value="{{ value }}" class="btn btn-sm {% if value == 'great' %}btn-outline-success{% else %}btn-outline-danger{% endif %}"><i class="bi {% if value == 'great' %}bi-emoji-smile{% else %}bi-emoji-frown{% endif %}"></i> {{ label }}</button>
+  {% endfor %}
+</form>
+{% endif %}
 <br>
 <div class="row g-2">
   <div class="col-12 col-md-auto d-flex flex-wrap gap-2">

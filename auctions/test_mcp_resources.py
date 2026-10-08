@@ -10,6 +10,8 @@ list of which auctions exist handed to whoever asked.
 """
 
 import json
+import re
+from pathlib import Path
 
 from django.test import SimpleTestCase
 from django.utils import timezone
@@ -206,6 +208,46 @@ class PromptTests(SimpleTestCase):
             for chunk in prompt.body.split("{")[1:]:
                 placeholder = chunk.split("}")[0]
                 self.assertIn(placeholder, names, f"{prompt.name} interpolates {placeholder}")
+
+    def test_everything_a_prompt_names_still_exists(self):
+        """A prompt is a recipe written in tool names, and a renamed tool leaves it pointing at nothing,
+        which no other test notices: the prompt still renders.
+
+        Every snake_case word in a body is a tool, a parameter one takes, another prompt, or a key or
+        value ``palette_actions`` itself spells out in quotes -- what some tool returns or reads.
+        """
+        source = Path(palette_actions.__file__).read_text(encoding="utf-8")
+        known = set(palette_actions.ACTIONS) | set(prompts.BY_NAME)
+        for action in palette_actions.ACTIONS.values():
+            known |= set(action.params) | set(action.aliases)
+        for prompt in prompts.PROMPTS:
+            own = {argument.name for argument in prompt.arguments}
+            for word in sorted(set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", prompt.body)) - known - own):
+                self.assertIn(f'"{word}"', source, f"{prompt.name} names {word}, which no tool has any more")
+
+    def test_the_donation_email_prompt_checks_for_a_mailbox_before_it_does_anything(self):
+        """This server can't see the client's other connectors, so the prompt is the only place to ask.
+        A list that half matches somebody's inbox is worse than one that doesn't."""
+        body = prompts.BY_NAME["work_donation_list"].body
+        first_step = body.index("my_context")
+        self.assertIn("check your tools", body[:first_step])
+        self.assertIn("stop", body[:first_step])
+
+    def test_the_donation_email_prompt_leaves_the_rest_of_the_mailbox_alone(self):
+        """Only mail about the donation goes on the list, and nothing in the mailbox is moved. A vendor is
+        often a shop the club buys from, and a tidied inbox is mail somebody can't find."""
+        body = prompts.BY_NAME["work_donation_list"].body
+        self.assertIn("Don't label, archive, move, mark as read or delete anything", body)
+        self.assertIn("receipts, orders and newsletters aren't donation mail", body)
+        self.assertIn("relay address", body)
+
+    def test_the_donation_email_prompt_owes_what_the_sites_own_drafts_owe(self):
+        """The same promises ``donations.draft_system_prompt`` makes, and nothing sent without a person."""
+        body = prompts.BY_NAME["work_donation_list"].body
+        self.assertIn("tax deductible", body)
+        self.assertIn("Never invent", body)
+        self.assertIn("email_footer exactly as it comes", body)
+        self.assertIn("Don't send them unless I tell you to", body)
 
 
 @isolated_cache("mcp-prompts")

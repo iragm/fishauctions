@@ -462,7 +462,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "<li><code>ENABLE_PROMO_PAGE</code> &mdash; True shows a marketing landing page instead of the "
                     "auctions list as the home page.</li>"
                     "<li><code>ENABLE_CLUB_FINDER</code> &mdash; True adds the &ldquo;find a club&rdquo; map to the menu.</li>"
-                    "<li><code>ENABLE_HELP</code> &mdash; True shows the in-auction help button and auction.fish tutorial videos.</li>"
+                    "<li><code>ENABLE_HELP</code> &mdash; True shows the auction.fish tutorial videos in the help guides.</li>"
                     "</ul>"
                 ),
                 "snippets": [

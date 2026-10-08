@@ -13,6 +13,7 @@ import datetime
 import logging
 import re
 import secrets
+import statistics
 import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
@@ -68,6 +69,14 @@ from webpush.models import PushInformation
 from . import cloudflare_images, history, printer_programs, voice
 from .club_health import ClubHealth, ClubLadderSnapshot  # noqa: F401
 from .club_matching import derived_abbreviation
+from .documents.models import (  # noqa: F401
+    BatchPage,
+    Document,
+    DocumentBatch,
+    DocumentChunk,
+    DocumentFeedback,
+    DocumentImageText,
+)
 from .email_routing import (
     admin_routing_email,
     build_routed_sender_address,
@@ -75,7 +84,7 @@ from .email_routing import (
     email_routing_enabled,
     sender_with_display_name,
 )
-from .friction_models import FormFailure  # noqa: F401
+from .friction_models import AbandonedBid, FormFailure  # noqa: F401
 from .helper_functions import bin_data, get_currency_symbol, static_html
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
@@ -562,7 +571,10 @@ class Club(CloudflareImageMixin, models.Model):
     latitude = models.FloatField(blank=True, null=True)
     longitude = models.FloatField(blank=True, null=True)
     location = models.CharField(max_length=500, blank=True, null=True)
-    location.help_text = "Search Google maps with this address"
+    location.help_text = (
+        "Where you meet. Search Google maps with this address, then drag the pin. "
+        "This is how the club finder knows where you are."
+    )
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
     MEMBERSHIP_SYSTEM_CHOICES = (
         ("none", "No membership fees"),
@@ -648,8 +660,14 @@ class Club(CloudflareImageMixin, models.Model):
         help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
     )
     send_membership_expiration_reminders_30_days = models.BooleanField(default=False)
-    send_membership_renewal_confirmation = models.BooleanField(default=False)
-    send_welcome_email_to_new_members = models.BooleanField(default=False)
+    send_membership_renewal_confirmation = models.BooleanField(
+        default=False,
+        help_text="A receipt with the new date, sent whenever somebody renews, however they paid.",
+    )
+    send_welcome_email_to_new_members = models.BooleanField(
+        default=False,
+        help_text="Sent when somebody joins or you add them, with a link to their membership, and their card if you use barcodes.",
+    )
     membership_email_template = models.TextField(blank=True, default="")
     include_next_auction_in_emails = models.BooleanField(
         default=True,
@@ -756,7 +774,12 @@ class Club(CloudflareImageMixin, models.Model):
         related_name="+",
         help_text="The auction whose admin links are surfaced in the club sidebar.",
     )
-    description = models.TextField(verbose_name="About this club", default="", blank=True)
+    description = models.TextField(
+        verbose_name="About this club",
+        default="",
+        blank=True,
+        help_text="Shown at the top of your club page: when you meet, and why somebody should come.",
+    )
     enable_breeder_award_program = models.BooleanField(
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
@@ -801,12 +824,15 @@ class Club(CloudflareImageMixin, models.Model):
     )
     separate_hap = models.BooleanField(
         default=False,
-        help_text="Track HAP (Horticultural Award Program) points separately from BAP.",
+        help_text="Plants earn HAP (Horticultural Award Program) points, with their own leaderboard, instead of BAP.",
         verbose_name="Separate Horticultural Award Program (HAP)",
     )
     separate_cap = models.BooleanField(
         default=False,
-        help_text="Track CAP (Culture Award Program) points separately from BAP.",
+        help_text=(
+            "Live food cultures, snails and other inverts earn CAP (Culture Award Program) points instead of BAP. "
+            "Without this, live food earns nothing."
+        ),
         verbose_name="Separate Live Food Culture Award Program (CAP)",
     )
     auto_add_points = models.BooleanField(
@@ -819,22 +845,28 @@ class Club(CloudflareImageMixin, models.Model):
     )
     min_quantity = models.IntegerField(
         default=5,
-        help_text="Minimum quantity in a lot to be eligible for BAP points.",
+        help_text=(
+            "Minimum quantity in a lot to be eligible for BAP points. Stops one fry in a bag earning points. "
+            "Plants, snails and live food are exempt."
+        ),
     )
     points_for_custom_checkbox = models.IntegerField(
         default=0,
-        help_text="Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable.",
+        help_text=(
+            "Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable. "
+            "For example, call the checkbox “CARES species” and give it 5."
+        ),
     )
     only_donation_lots = models.BooleanField(
         default=False,
-        help_text="Require all BAP lots to be a donation.",
+        help_text="Require all BAP lots to be a donation. For clubs whose program is “breed it and donate it to the auction”.",
     )
     only_sold_lots = models.BooleanField(
         default=False,
         help_text=(
             "Require lots to be sold for points to be awarded. "
             "Uncheck to give points for submitted and unsold lots. "
-            "If automatically award points is on, they will only be automatically awarded to sold lots."
+            "With Auto add points on, unsold lots get theirs a day after the auction ends."
         ),
         verbose_name="Only sold lots",
     )
@@ -1023,6 +1055,10 @@ class Club(CloudflareImageMixin, models.Model):
         choices=DONATION_EMAIL_MODE_CHOICES,
         default=DONATION_EMAIL_MODE_ROUTED,
         verbose_name="How to send donation emails",
+        help_text=(
+            "From this site, the email comes from an address that files the vendor's reply against them. "
+            "With copy/paste, you send it from your own email and record replies yourself, by hand or with an AI assistant."
+        ),
     )
     donation_email_member = models.ForeignKey(
         "ClubMember",
@@ -1039,7 +1075,8 @@ class Club(CloudflareImageMixin, models.Model):
         verbose_name="Club information for donation emails",
         help_text=(
             "Passed to the language model with every donation email it writes, so it doesn't have "
-            "to be retyped for each vendor."
+            "to be retyped for each vendor. For example: “We're a non-profit club of 120 members. "
+            "Our spring auction raises money for our speaker program.”"
         ),
     )
     mailing_address = models.TextField(
@@ -1113,7 +1150,7 @@ class Club(CloudflareImageMixin, models.Model):
         default=7,
         choices=DONATION_FOLLOWUP_CHOICES,
         verbose_name="Follow up after",
-        help_text="How long to wait for a reply before a vendor shows up as due for a follow-up.",
+        help_text="How long to wait for a reply before a vendor shows up as due for a follow-up. A week is about right.",
     )
 
     objects = ClubQuerySet.as_manager()
@@ -1443,8 +1480,16 @@ class Club(CloudflareImageMixin, models.Model):
         return self.uses_site_paypal or self.uses_own_paypal_credentials
 
     @property
+    def charges_dues(self):
+        """The club tracks membership on the site. Either field turned off means it doesn't: the settings
+        form requires a fee for a membership system and zeroes it under "No membership fees".
+        ``filters.dues_club_q`` is the same in SQL.
+        """
+        return self.membership_system != "none" and (self.membership_annual_fee or 0) > 0
+
+    @property
     def membership_payment_emails_enabled(self):
-        return bool((self.membership_annual_fee or 0) > 0 and (self.can_accept_paypal or self.can_accept_square))
+        return bool(self.charges_dues and (self.can_accept_paypal or self.can_accept_square))
 
 
 class ClubDiscordRole(models.Model):
@@ -1598,6 +1643,18 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             "and the invoice membership-renewal box is disabled."
         ),
     )
+    membership_carried_by = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="carried_memberships",
+        verbose_name="Membership carried with",
+        help_text=(
+            "A household or family membership: this member's dates are copied from that member's on every "
+            "save, and every way to renew or pay dues is closed to this member. One level deep."
+        ),
+    )
     membership_number = models.BigIntegerField(
         default=_default_membership_number,
         unique=True,
@@ -1606,6 +1663,9 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
     membership_expiration_reminder_30_days_due = models.DateTimeField(null=True, blank=True)
+    # send_welcome_email False with welcome_email_sent False is a letter held until the first payment
+    # (welcome_after_first_payment). welcome_email_sent True means the nightly job is done with the row,
+    # whether or not it sent anything.
     send_welcome_email = models.BooleanField(default=True)
     welcome_email_sent = models.BooleanField(default=False)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
@@ -1772,8 +1832,15 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         return bool(self.paypal_subscription_id)
 
     @property
+    def renews_through(self):
+        """The member whose renewal this membership rides on: its carrier, else itself."""
+        return self.membership_carried_by or self
+
+    @property
     def is_paid_member(self) -> bool:
-        """True when dues are current. The single source of truth for UI gates and wallet passes."""
+        """True when dues are current. The single source of truth for UI gates and wallet passes;
+        ``filters.membership_paid_q`` is the same in SQL.
+        """
         today = timezone.localdate()
         if self.membership_expiration_date:
             return self.membership_expiration_date >= today
@@ -1782,6 +1849,42 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 return self.membership_last_paid >= datetime.date(today.year, 1, 1)
             return self.membership_last_paid >= today - datetime.timedelta(days=365)
         return False
+
+    @property
+    def has_ever_paid(self) -> bool:
+        return bool(self.membership_last_paid or self.membership_expiration_date)
+
+    @property
+    def renew_label(self) -> str:
+        """The admin's renew button: recording somebody's first dues isn't renewing them."""
+        return "Renew" if self.has_ever_paid else "Mark paid"
+
+    @property
+    def membership_status(self) -> str:
+        """``paid``, ``lapsed`` (paid once, not now), ``never_paid``, or ``no_dues`` when the club doesn't
+        track membership, whatever dates the row carries. ``filters.membership_status_q`` is the same in SQL.
+        """
+        if not self.club.charges_dues:
+            return "no_dues"
+        if self.is_paid_member:
+            return "paid"
+        return "lapsed" if self.has_ever_paid else "never_paid"
+
+    def welcome_after_first_payment(self, had_paid_before):
+        """Queue the welcome letter that was held back at creation (an auction participant, an import) now
+        that this member, and so anyone their membership carries, has paid for the first time. The nightly
+        ``send_club_member_welcome_emails`` sends it, if the club sends welcome letters at all.
+        """
+        if had_paid_before:
+            return
+        held_back = type(self).objects.filter(
+            Q(pk=self.pk) | Q(membership_carried_by=self, is_deleted=False),
+            send_welcome_email=False,
+            welcome_email_sent=False,
+        )
+        if held_back.update(send_welcome_email=True, welcome_email_sent=False) and not self.send_welcome_email:
+            self.send_welcome_email = True
+            self.welcome_email_sent = False
 
     @property
     def effective_expiration_date(self):
@@ -1811,7 +1914,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if not self.is_paid_member:
             if expiration:
                 return f"Expired {expiration.strftime('%-d %b %Y')}"
-            return "Unpaid/expired"
+            return "Expired" if self.has_ever_paid else "Not paid yet"
         if expiration:
             return f"Valid through {expiration.strftime('%-d %b %Y')}"
         return "Valid"
@@ -1826,7 +1929,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         """Wallet pass type line: "Active Paid Membership"/"Unpaid Membership" for clubs with dues, else
         "Membership".
         """
-        if self.club.membership_system != "none" and (self.club.membership_annual_fee or 0) > 0:
+        if self.club.charges_dues:
             return "Active Paid Membership" if self.is_paid_member else "Unpaid Membership"
         return "Membership"
 
@@ -1845,19 +1948,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if not roles_qs:
             return None
 
-        today = timezone.localdate()
-        if self.membership_expiration_date:
-            membership_valid = self.membership_expiration_date >= today
-        elif self.membership_last_paid:
-            club = self.club
-            if club.membership_system == "january_first":
-                membership_valid = self.membership_last_paid >= datetime.date(today.year, 1, 1)
-            else:
-                membership_valid = self.membership_last_paid >= today - datetime.timedelta(days=365)
-        else:
-            membership_valid = False
-
-        if not membership_valid:
+        if not self.is_paid_member:
             unpaid_role = next((r for r in roles_qs if r.is_unpaid_role), None)
             if unpaid_role:
                 return unpaid_role
@@ -2051,6 +2142,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
     MAILCHIMP_TAGS = (
         "expiring-soon",
         "expired",
+        "never-paid",
         "long-term-member",
         "new-member",
         "admin",
@@ -2078,14 +2170,15 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
     @property
     def is_expired(self):
-        if self.membership_expiration_date:
-            return self.membership_expiration_date < timezone.localdate()
-        return bool(self.club.membership_annual_fee) and not self.is_paid_member
+        """Paid once and not now. Somebody who never paid hasn't expired; see ``membership_status``."""
+        return self.membership_status == "lapsed"
 
     @property
     def is_expiring_soon(self):
-        """Membership expires within the next 30 days (and is not already expired)."""
-        if not self.membership_expiration_date:
+        """Membership expires within the next 30 days (and is not already expired). Never for a carried
+        membership: this drives renewal reminders, and those go to the carrier.
+        """
+        if not self.membership_expiration_date or self.membership_carried_by_id or not self.club.charges_dues:
             return False
         today = timezone.localdate()
         return today <= self.membership_expiration_date <= today + datetime.timedelta(days=30)
@@ -2149,7 +2242,10 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         """{tag_name: is_active} for every tag, so sync can add and remove."""
         return {
             "expiring-soon": self.is_expiring_soon,
-            "expired": self.is_expired,
+            # The club's renewal letters go by this tag; a carried membership is renewed by its carrier.
+            "expired": self.is_expired and not self.membership_carried_by_id,
+            # Joined, never paid: the people to invite to pay, not to remind to renew.
+            "never-paid": self.membership_status == "never_paid" and not self.membership_carried_by_id,
             "long-term-member": self.is_long_term_member,
             "new-member": self.is_new_member,
             "admin": self.has_any_permission,
@@ -2172,7 +2268,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
             if days_before == 30
             else self.club.send_membership_expiration_reminders
         )
-        if not send_reminder or not self.club.membership_payment_emails_enabled:
+        if not send_reminder or not self.club.membership_payment_emails_enabled or self.membership_carried_by_id:
             return None
         expiration_date = self.effective_expiration_date
         if not expiration_date:
@@ -2212,6 +2308,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         previous_email = None
         previous_reminder_due = None
         previous_reminder_30_days_due = None
+        previous_carried_by_id = None
         if self.pk:
             prev = (
                 ClubMember.objects.filter(pk=self.pk)
@@ -2221,20 +2318,47 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                     "email",
                     "membership_expiration_reminder_due",
                     "membership_expiration_reminder_30_days_due",
+                    "membership_carried_by",
                 )
                 .first()
             )
             if prev:
+                previous_carried_by_id = prev["membership_carried_by"]
                 previous_membership_last_paid = prev["membership_last_paid"]
                 previous_expiration_date = prev["membership_expiration_date"]
                 previous_email = prev["email"]
                 previous_reminder_due = prev["membership_expiration_reminder_due"]
                 previous_reminder_30_days_due = prev["membership_expiration_reminder_30_days_due"]
+        if self.membership_carried_by_id:
+            carrier = (
+                ClubMember.objects.filter(pk=self.membership_carried_by_id)
+                .values("membership_last_paid", "membership_expiration_date")
+                .first()
+            )
+            if carrier:
+                self.membership_last_paid = carrier["membership_last_paid"]
+                self.membership_expiration_date = carrier["membership_expiration_date"]
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {
+                    *kwargs["update_fields"],
+                    "membership_last_paid",
+                    "membership_expiration_date",
+                    "membership_expiration_reminder_due",
+                    "membership_expiration_reminder_30_days_due",
+                }
         expiration_changed = (
             self.membership_last_paid != previous_membership_last_paid
             or self.membership_expiration_date != previous_expiration_date
         )
-        if expiration_changed and not getattr(self, "_preserve_membership_email_schedule", False):
+        # No longer carried: its own reminders start again.
+        released = bool(previous_carried_by_id and not self.membership_carried_by_id)
+        if released and kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = {
+                *kwargs["update_fields"],
+                "membership_expiration_reminder_due",
+                "membership_expiration_reminder_30_days_due",
+            }
+        if (expiration_changed or released) and not getattr(self, "_preserve_membership_email_schedule", False):
             new_reminder = self.calculate_membership_expiration_reminder_due(days_before=1)
             new_reminder_30_days = self.calculate_membership_expiration_reminder_due(days_before=30)
             min_reminder = timezone.now() + datetime.timedelta(days=30)
@@ -2246,6 +2370,9 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 new_reminder_30_days = max(new_reminder_30_days, min_reminder)
             self.membership_expiration_reminder_due = new_reminder
             self.membership_expiration_reminder_30_days_due = new_reminder_30_days
+        if self.membership_carried_by_id:
+            self.membership_expiration_reminder_due = None
+            self.membership_expiration_reminder_30_days_due = None
         if self.email and self.email != previous_email:
             self.email_address_status = "UNKNOWN"
         if self.email and self.email_address_status == "UNKNOWN":
@@ -2276,10 +2403,23 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                 self.possible_duplicate_id = None
             ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
             super().save(*args, **kwargs)
+            # Whoever this carried could otherwise never renew again: every way to is closed to them.
+            for carried in ClubMember.objects.filter(membership_carried_by=self.pk):
+                carried.membership_carried_by = None
+                carried.save(update_fields=["membership_carried_by"])
+                ClubHistory.objects.create(
+                    club=self.club,
+                    action=f"{carried}'s membership is no longer carried with {self}'s, who was deactivated",
+                    applies_to="MEMBERSHIP",
+                )
             if _discord_changed or (_is_new and self.discord_id):
                 self.maybe_assign_discord_role()
             return
         super().save(*args, **kwargs)
+        if expiration_changed and not _is_new:
+            for carried in self.carried_memberships.filter(is_deleted=False):
+                # Its own save copies the dates just written here.
+                carried.save(update_fields=["membership_last_paid", "membership_expiration_date"])
         if _discord_changed or (_is_new and self.discord_id):
             self.maybe_assign_discord_role()
         if self.name:
@@ -2315,6 +2455,138 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
         if save:
             ClubMember.objects.filter(pk=self.pk).update(bidder_number=self.bidder_number)
         return self.bidder_number
+
+    #: Taken from a merged-away member when this one has none.
+    MERGE_FILLS = (
+        "user",
+        "name",
+        "email",
+        "phone_number",
+        "address",
+        "memo",
+        "bidder_number",
+        "discord_id",
+        "discord_username",
+        "discord_roles",
+        "discord_role_override",
+        "last_discord_role_assigned",
+        "paypal_subscription_id",
+        "bap_points",
+        "hap_points",
+        "culture_points",
+        "bap_points_ytd",
+        "hap_points_ytd",
+        "culture_points_ytd",
+    )
+
+    @transaction.atomic
+    def merge_duplicate(self, duplicate, *, reason="", user=None, can_grant_roles=False, reviewed_fields=()):
+        """Fold *duplicate*, another member of this club, into this one and deactivate it. Not reversible.
+
+        What this member lacks comes from the duplicate, except *reviewed_fields*, which the caller has
+        decided; the later paid-through date wins. Roles carry over only with *can_grant_roles*, since
+        carrying one is granting it. Everything pointing at the duplicate moves here, its participant rows
+        too, which then have this member's details and number, one row per auction.
+        """
+        from .services import set_member_bidder_number, sync_member_to_shadows
+
+        if duplicate.pk == self.pk or duplicate.club_id != self.club_id:
+            msg = "Only two different members of one club can be merged."
+            raise ValueError(msg)
+        changed = set()
+        for field in self.MERGE_FILLS:
+            column = self._meta.get_field(field).attname
+            if field not in reviewed_fields and not getattr(self, column) and getattr(duplicate, column):
+                setattr(self, column, getattr(duplicate, column))
+                changed.add(field)
+        for field in ("membership_last_paid", "membership_expiration_date"):
+            theirs = getattr(duplicate, field)
+            if theirs and (not getattr(self, field) or theirs > getattr(self, field)):
+                setattr(self, field, theirs)
+                changed |= {field, "membership_expiration_reminder_due", "membership_expiration_reminder_30_days_due"}
+        # A club admin having edited either row makes the record the club's (see admin_edited).
+        flags = ["admin_edited"]
+        if can_grant_roles:
+            flags += [field.name for field in self._meta.fields if field.name.startswith("permission_")]
+        for field in flags:
+            if getattr(duplicate, field) and not getattr(self, field):
+                setattr(self, field, True)
+                changed.add(field)
+        if self.is_deleted and not duplicate.is_deleted:
+            self.is_deleted = False
+            changed.add("is_deleted")
+        if self.membership_carried_by_id == duplicate.pk:
+            self.membership_carried_by = None
+            changed.add("membership_carried_by")
+        if "email" in changed:
+            changed.add("email_address_status")
+        if changed:
+            self.save(update_fields=sorted(changed))
+
+        # Carrying is one level deep, so whoever the duplicate carried goes to whoever carries this member.
+        new_carrier = self.membership_carried_by or self
+        for carried in ClubMember.objects.filter(membership_carried_by=duplicate).exclude(pk=new_carrier.pk):
+            carried.membership_carried_by = new_carrier
+            carried.save(update_fields=["membership_carried_by"])
+        # A carried duplicate passes that on, unless this member has its own: a carrier, people it carries,
+        # a PayPal subscription, or dues paid past the carrier's.
+        carrier = duplicate.membership_carried_by
+        if (
+            carrier
+            and not carrier.is_deleted
+            and carrier.pk != self.pk
+            and not self.membership_carried_by_id
+            and not self.paypal_subscription_id
+            and not self.carried_memberships.filter(is_deleted=False).exists()
+        ):
+            own, carried_through = self.effective_expiration_date, carrier.effective_expiration_date
+            if not own or (carried_through and own <= carried_through):
+                self.membership_carried_by = carrier
+                self.save(update_fields=["membership_carried_by"])
+
+        BapAward.objects.filter(club_member=duplicate).update(club_member=self)
+        InvoicePayment.objects.filter(club_member=duplicate).update(club_member=self)
+        # An unpaid dues invoice renews whoever it names.
+        Invoice.objects.filter(club_member=duplicate).update(club_member=self)
+        for column in ("auction_email_member", "contact_email_member", "donation_email_member"):
+            Club.objects.filter(**{column: duplicate}).update(**{column: self})
+
+        moved = list(AuctionTOS.objects.filter(clubmember=duplicate).values_list("pk", flat=True))
+        AuctionTOS.objects.filter(pk__in=moved).update(clubmember=self)
+        for row in AuctionTOS.objects.filter(pk__in=moved):
+            kept_row = (
+                AuctionTOS.objects.filter(auction_id=row.auction_id, clubmember=self)
+                .exclude(pk=row.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if kept_row:
+                kept_row.merge_duplicate(row, reason=reason or "merged club members", user=user)
+
+        duplicate.is_deleted = True
+        duplicate.save(update_fields=["is_deleted"])
+        # update(): save() would link it straight back to the account by its email.
+        cleared = {"user": None, "bidder_number": ""} if "bidder_number" in changed else {"user": None}
+        ClubMember.objects.filter(pk=duplicate.pk).update(**cleared)
+        for column, value in cleared.items():
+            setattr(duplicate, column, value)
+
+        sync_member_to_shadows(self, acting_user=user)
+        if self.bidder_number:
+            set_member_bidder_number(self, self.bidder_number, acting_user=user)
+        if self.user_id:
+            # Linked through the member, as each row's next save would. A save can merge away a later row.
+            for row in AuctionTOS.objects.filter(clubmember=self, user__isnull=True):
+                if AuctionTOS.objects.filter(pk=row.pk).exists():
+                    row.save()
+        if self.bap_awards.exists():
+            BapAward.recalculate_member_points(self)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=user,
+            action=f"Merged member {duplicate} into {self}" + (f": {reason}" if reason else ""),
+            applies_to="MEMBERS",
+        )
 
 
 class AppleDeviceRegistration(models.Model):
@@ -2600,9 +2872,10 @@ class DonationVendor(models.Model):
 class DonationEmail(models.Model):
     """One contact with a donation vendor: a record, not a mail client. Outgoing rows on send, on copy, or
     when somebody reports submitting the vendor's own form; incoming from the inbound webhook. Plain
-    text, images stripped.
+    text, images stripped. ``CHANNEL_OWN_EMAIL`` rows, either way, are what an AI assistant read in the
+    admin's own mailbox and filed here (``donations.record_own_email``).
 
-    Still named for email because email is what all but one ``channel`` is, and the table holds every
+    Still named for email because email is what most ``channel`` values are, and the table holds every
     foreign key in the thread.
     """
 
@@ -2613,11 +2886,13 @@ class DonationEmail(models.Model):
         (DIRECTION_OUTGOING, "Outgoing"),
     )
     CHANNEL_EMAIL = "email"
+    CHANNEL_OWN_EMAIL = "own_email"
     CHANNEL_WEBFORM = "webform"
     CHANNEL_PHONE = "phone"
     CHANNEL_IN_PERSON = "in_person"
     CHANNEL_CHOICES = (
         (CHANNEL_EMAIL, "Email"),
+        (CHANNEL_OWN_EMAIL, "Email, in your own mailbox"),
         (CHANNEL_WEBFORM, "Their donation request form"),
         (CHANNEL_PHONE, "Phone"),
         (CHANNEL_IN_PERSON, "In person"),
@@ -2630,7 +2905,9 @@ class DonationEmail(models.Model):
         choices=CHANNEL_CHOICES,
         default=CHANNEL_EMAIL,
         db_index=True,
-        help_text="How this contact happened. Only email rows count against the daily email allowance.",
+        help_text=(
+            "How this contact happened. Only email this site sent or wrote counts against the daily email allowance."
+        ),
     )
     sender = models.CharField(max_length=255, blank=True, default="")
     recipients = models.CharField(max_length=1000, blank=True, default="")
@@ -3428,6 +3705,9 @@ class Species(models.Model):
         rejected_texts = set(SpeciesNameRejection.objects.filter(species=self).values_list("search_text", flat=True))
         SpeciesNameRejection.objects.filter(species=duplicate, search_text__in=rejected_texts).delete()
         SpeciesNameRejection.objects.filter(species=duplicate).update(species=self)
+        # The evidence follows too. Unique per lot only, so nothing collides.
+        SpeciesNameVote.objects.filter(species=duplicate).update(species=self)
+        SpeciesNameVote.objects.filter(chosen=duplicate).update(chosen=self)
         # Nothing points at either row as a duplicate any more.
         Species.objects.filter(Q(possible_duplicate=duplicate) | Q(possible_duplicate=self)).update(
             possible_duplicate=None
@@ -3641,43 +3921,11 @@ class SpeciesSearchCache(models.Model):
     createdon = models.DateTimeField(auto_now_add=True)
     hits = models.PositiveIntegerField(default=0)
     hits.help_text = "How many times this cached answer has been served instead of asking again."
-    # What people did with the answer: the only evidence it is right.
-    accepts = models.PositiveIntegerField(default=0)
-    accepts.help_text = (
-        "Lots saved with this answer left alone.  Counted once per lot, on the save that created "
-        "it -- re-saving a lot without touching the species is not new evidence."
-    )
-    rejects = models.PositiveIntegerField(default=0)
-    rejects.help_text = (
-        "Lots this answer was cleared from or changed on.  Counted once per lot, like accepts.  "
-        "Enough of them retires the row; see is_discredited."
-    )
-
-    #: Rejections allowed: one in ten.
-    MAX_REJECT_RATIO = 0.1
-
-    #: ...and at least this many, so one stray clear doesn't retire an answer.
-    MIN_REJECTS_TO_RETIRE = 3
 
     @property
     def is_a_gap(self):
         """True when the lot was identified but the list lacks the species."""
         return self.species_id is None and bool(self.scientific_name)
-
-    @property
-    def is_discredited(self):
-        """True when rejections exceed :attr:`MAX_REJECT_RATIO` and :attr:`MIN_REJECTS_TO_RETIRE`
-        (``9 * rejects > accepts``, integer arithmetic, read on every lot save).
-        """
-        return self.rejects >= self.MIN_REJECTS_TO_RETIRE and self.rejects * 9 > self.accepts
-
-    def retire(self):
-        """Discard this answer and record a :class:`SpeciesNameRejection` for the pair, so the model can't write
-        it straight back. The name is left unanswered, not "not a species".
-        """
-        if self.species_id:
-            SpeciesNameRejection.objects.get_or_create(search_text=self.search_text, species_id=self.species_id)
-        self.delete()
 
     def __str__(self):
         return f"{self.search_text} -> {self.species or 'no species'}"
@@ -3686,8 +3934,9 @@ class SpeciesSearchCache(models.Model):
 class SpeciesNameRejection(models.Model):
     """ "This lot name is **not** that species": keeps a retired answer from coming back.
 
-    Vetoes a pair only, read only by the cache and the model shortlist, never by exact or token matching
-    (so people clearing fields can't outvote the list). Deletable on the gaps page.
+    Vetoes a pair only, for the cache, the token search and the model, never for exact matching (so
+    people clearing fields can't outvote the list). The :class:`SpeciesNameVote` rows that retired it
+    stay, as the evidence. Deletable on the gaps page.
     """
 
     search_text = models.CharField(max_length=120, db_index=True)
@@ -3700,6 +3949,40 @@ class SpeciesNameRejection(models.Model):
 
     class Meta:
         unique_together = ("search_text", "species")
+
+
+class SpeciesNameVote(models.Model):
+    """What one lot says about the species offered for its name: kept it, or took it off.
+
+    One per lot, rewritten when the lot changes, so a lot counts once however often it is saved. Kept when
+    the answer is retired: these are the evidence, and the gaps page shows them. ``species`` null is a vote
+    on a remembered "not a species". See species_matching.record_choice.
+    """
+
+    #: Lots that must take an answer off before it is retired, or pick the same species before a
+    #: remembered "not a species" gives way to it...
+    ENOUGH_TO_DECIDE = 3
+
+    #: ...and, to retire, they must outnumber the lots that kept it one to this many.
+    KEPT_PER_TAKEN_OFF = 9
+
+    lot = models.OneToOneField("Lot", on_delete=models.CASCADE, related_name="species_name_vote")
+    search_text = models.CharField(max_length=120)
+    search_text.help_text = "The lot's name, normalised the way SpeciesSearchCache keys it."
+    species = models.ForeignKey(Species, null=True, blank=True, on_delete=models.CASCADE, related_name="name_votes")
+    species.help_text = 'The answer the lot was offered.  Blank for a remembered "not a species".'
+    agrees = models.BooleanField()
+    chosen = models.ForeignKey(Species, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    chosen.help_text = "What the lot carried instead, when it disagreed.  Blank for a lot it was taken off."
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    user.help_text = "Whose save decided it."
+    updatedon = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.search_text}: {'kept' if self.agrees else 'not'} {self.species or 'no species'}"
+
+    class Meta:
+        indexes = [models.Index(fields=["search_text", "species"])]
 
 
 def _slugify_auction_title(value):
@@ -3791,6 +4074,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         default=False,
         help_text="And create membership if they don't have one.  You can turn this off on each invoice.",
     )
+    send_club_welcome_letter = models.BooleanField(
+        default=True,
+        verbose_name="Send club welcome letter",
+        help_text="To people this auction adds to the club. Off, they get it when they first pay dues.",
+    )
     MANAGE_USERS_CHOICES = [
         ("", "Off"),
         ("all", "Automatically add all club members"),
@@ -3861,6 +4149,9 @@ class Auction(CachedPropertiesMixin, models.Model):
     exact_location_set = models.BooleanField(default=False)
     exact_location_set.help_text = "The location was pinned from a phone at the venue (or confirmed exact)."
     email_users_when_invoices_ready = models.BooleanField(default=True)
+    post_auction_survey = models.BooleanField(default=True, verbose_name="Ask for feedback")
+    post_auction_survey.help_text = "Ask people how the auction went"
+    survey_emails_sent = models.BooleanField(default=False)
     invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
     invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
     invoice_rounding = models.BooleanField(default=True)
@@ -3911,16 +4202,6 @@ class Auction(CachedPropertiesMixin, models.Model):
     alternative_split_label.help_text = (
         "Label used for people getting alternate fees.  For example, club member, vendor, etc."
     )
-    SET_LOT_WINNER_URLS = (
-        ("", "Standard, bidder number/lot number only"),
-        ("presentation", "Show a picture of the lot"),
-        ("autocomplete", "Autocomplete, search by name or bidder number"),
-    )
-    set_lot_winners_url = models.CharField(
-        max_length=20, choices=SET_LOT_WINNER_URLS, blank=True, default="presentation"
-    )
-    set_lot_winners_url.verbose_name = "Set lot winners"
-
     BUY_NOW_CHOICES = (
         ("disable", "Don't allow"),
         ("allow", "Allow"),
@@ -5035,6 +5316,75 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"sellers": counts["sellers"], "admins": counts["total"] - counts["sellers"]}
 
     @cached_property
+    def bid_recorder_accuracy(self):
+        """In person: of the sold lots with a recorded sale, how many were recorded once and never edited.
+        ``{"lots", "unchanged", "percent"}``, or None with nothing counted (online, or sold before counting).
+        """
+        if self.is_online:
+            return None
+        counts = self.lots_qs.filter(
+            banned=False, winning_price__isnull=False, auctiontos_winner__isnull=False, sales_recorded__gte=1
+        ).aggregate(lots=Count("pk"), unchanged=Count("pk", filter=Q(sales_recorded=1)))
+        if not counts["lots"]:
+            return None
+        return {**counts, "percent": round(100 * counts["unchanged"] / counts["lots"])}
+
+    @cached_property
+    def voice_accuracy(self):
+        """Set lot winners by voice: ``{"commands", "right", "percent"}``, where right is matched and not
+        corrected before saving. None if nobody used it.
+        """
+        counts = VoiceCommandLog.objects.filter(auction=self).aggregate(
+            commands=Count("pk"), right=Count("pk", filter=~Q(slot="") & Q(corrected_to=""))
+        )
+        if not counts["commands"]:
+            return None
+        return {**counts, "percent": round(100 * counts["right"] / counts["commands"])}
+
+    @cached_property
+    def invoice_opening(self):
+        """Invoice emails sent since their send time was kept: ``{"sent", "opened", "percent", "median_hours"}``,
+        or None. Opened means the emailed link, after it was sent.
+        """
+        sent = list(
+            Invoice.objects.filter(auction=self, email_sent_on__isnull=False).values_list("email_sent_on", "opened_on")
+        )
+        if not sent:
+            return None
+        hours = sorted(
+            (opened - emailed).total_seconds() / 3600 for emailed, opened in sent if opened and opened >= emailed
+        )
+        return {
+            "sent": len(sent),
+            "opened": len(hours),
+            "percent": round(100 * len(hours) / len(sent)),
+            "median_hours": statistics.median(hours) if hours else None,
+        }
+
+    @cached_property
+    def abandoned_bids(self):
+        """Bids people started on this auction's lots and didn't place: ``{"total", "came_back", by stage}``.
+        Came back means they bid on that lot afterwards. None if nobody gave up.
+        """
+        rows = list(
+            AbandonedBid.objects.filter(lot__auction=self).values_list("lot_id", "user_id", "stage", "updatedon")
+        )
+        if not rows:
+            return None
+        bids = {
+            (lot, user): when
+            for lot, user, when in Bid.objects.filter(
+                lot_number__auction=self, user__in={user for _lot, user, _stage, _when in rows}
+            ).values_list("lot_number_id", "user_id", "last_bid_time")
+        }
+        result = {"total": len(rows), "came_back": 0, "typed": 0, "blocked": 0, "confirm": 0}
+        for lot, user, stage, when in rows:
+            result[stage] += 1
+            if bids.get((lot, user)) and bids[(lot, user)] >= when:
+                result["came_back"] += 1
+        return result
+
+    @cached_property
     def number_of_lots_added_to_queue(self):
         # Lots ever queued (sticky Lot.added_to_queue).
         return self.lots_qs.filter(added_to_queue=True).count()
@@ -5049,6 +5399,24 @@ class Auction(CachedPropertiesMixin, models.Model):
     @cached_property
     def unprinted_labels_qs(self):
         return self.labels_qs.exclude(label_printed=True)
+
+    @property
+    def paddle_people_qs(self):
+        """Who a batch of bidder paddles is for: everyone who can bid, which in a check-in auction is whoever
+        has checked in. In name order, the order they're handed out in.
+        """
+        # "ERROR" is AuctionTOS.save()'s placeholder for a number it couldn't generate.
+        return (
+            AuctionTOS.objects.filter(auction=self, bidding_allowed=True)
+            .exclude(bidder_number__in=("", "ERROR"))
+            .order_by("name", "pk")
+        )
+
+    def unprinted_paddles(self):
+        """``paddle_people_qs`` less anyone whose printed paddle still says what their row does. Compared in
+        Python, not SQL: the collation calls "Jose" and "José" the same name, and a fixed accent needs a reprint.
+        """
+        return [tos for tos in self.paddle_people_qs if not tos.paddle_is_current]
 
     @property
     def percent_unsold_lots(self):
@@ -5177,6 +5545,17 @@ class Auction(CachedPropertiesMixin, models.Model):
     @cached_property
     def preregistered_users(self):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
+
+    @cached_property
+    def survey_stats(self):
+        """How many people answered the post-auction survey, and how."""
+        answers = AuctionTOS.objects.filter(auction=self.pk).filter(~Q(survey_answer="") | ~Q(survey_comments=""))
+        return answers.aggregate(
+            answered=Count("pk"),
+            great=Count("pk", filter=Q(survey_answer=AuctionTOS.SURVEY_GREAT)),
+            not_fun=Count("pk", filter=Q(survey_answer=AuctionTOS.SURVEY_NOT_FUN)),
+            comments=Count("pk", filter=~Q(survey_comments="")),
+        )
 
     @cached_property
     def campaigns_qs(self):
@@ -5669,44 +6048,6 @@ class Auction(CachedPropertiesMixin, models.Model):
         }
 
     @property
-    def get_stat_images(self):
-        """Get images chart data from cached stats"""
-        if self.cached_stats and "images" in self.cached_stats:
-            return self.cached_stats["images"]
-        return {"labels": [], "providers": [], "data": []}
-
-    def set_stat_images(self):
-        """Calculate and return images chart data"""
-        from django.db.models import Avg
-
-        # Exclude banned lots, as the other money stats.
-        lots = (
-            self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).annotate(num_images=Count("lotimage"))
-        )
-        lots_with_no_images = lots.filter(num_images=0)
-        lots_with_one_image = lots.filter(num_images=1)
-        lots_with_one_or_more_images = lots.filter(num_images__gt=1)
-        medians = []
-        averages = []
-        counts = []
-        for lots_subset in [
-            lots_with_no_images,
-            lots_with_one_image,
-            lots_with_one_or_more_images,
-        ]:
-            try:
-                medians.append(median_value(lots_subset, "winning_price"))
-            except Exception:
-                medians.append(0)
-            averages.append(lots_subset.aggregate(avg_value=Avg("winning_price"))["avg_value"])
-            counts.append(lots_subset.count())
-        return {
-            "labels": ["No images", "One image", "More than one image"],
-            "providers": ["Median sell price", "Average sell price", "Number of lots"],
-            "data": [medians, averages, counts],
-        }
-
-    @property
     def get_stat_travel_distance(self):
         """Get travel distance chart data from cached stats"""
         if self.cached_stats and "travel_distance" in self.cached_stats:
@@ -6007,6 +6348,7 @@ class Auction(CachedPropertiesMixin, models.Model):
             "reminder_email_click_rate": reminder_email_click_rate,
             "reminder_email_join_rate": reminder_email_join_rate,
             "number_of_lots_with_scanned_qr": qr_scans,
+            "bid_recorder_accuracy": self.bid_recorder_accuracy,
             "club_stats": {
                 "gross": self.gross,
                 "total_lots": self.total_lots,
@@ -6034,7 +6376,6 @@ class Auction(CachedPropertiesMixin, models.Model):
         stats["auctioneer_speed"] = self.set_stat_auctioneer_speed()
         stats["lot_sell_prices"] = self.set_stat_lot_sell_prices()
         stats["referrers"] = self.set_stat_referrers()
-        stats["images"] = self.set_stat_images()
         stats["travel_distance"] = self.set_stat_travel_distance()
         stats["previous_auctions"] = self.set_stat_previous_auctions()
         stats["lots_submitted"] = self.set_stat_lots_submitted()
@@ -6369,6 +6710,38 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         related_name="auction_tos_records",
         help_text="When the auction is managed through its club, links this record to the ClubMember that owns the bidder_number and permissions.",
     )
+    SURVEY_GREAT = "great"
+    SURVEY_NOT_FUN = "not_fun"
+    SURVEY_ANSWERS = (
+        (SURVEY_GREAT, "Great!"),
+        (SURVEY_NOT_FUN, "Not so fun"),
+    )
+    survey_answer = models.CharField(max_length=10, choices=SURVEY_ANSWERS, blank=True, default="")
+    survey_comments = models.TextField(blank=True, default="")
+    survey_answered_on = models.DateTimeField(blank=True, null=True)
+    # What the last paddle printed for this person says, rather than a "printed" flag: most renumbering
+    # is an update() that no save() hook sees (services.clear_bidder_number_in), and comparing the two
+    # catches every path, including the person moved off a number so somebody else could have it.
+    paddle_printed_number = models.CharField(max_length=20, blank=True, default="")
+    paddle_printed_name = models.CharField(max_length=181, blank=True, default="")
+
+    @property
+    def paddle_is_current(self):
+        """Whether the last paddle printed for this person still has their number and name on it."""
+        return bool(self.paddle_printed_number) and (self.paddle_printed_number, self.paddle_printed_name) == (
+            self.bidder_number,
+            self.name or "",
+        )
+
+    @staticmethod
+    def mark_paddles_printed(people):
+        """Record what *people*'s paddles say, from the rows they were drawn from. update(), not save(): a
+        save sends the row up to its club member as though somebody had edited it.
+        """
+        for tos in people:
+            tos.paddle_printed_number = tos.bidder_number
+            tos.paddle_printed_name = tos.name or ""
+        AuctionTOS.objects.bulk_update(people, ["paddle_printed_number", "paddle_printed_name"])
 
     @property
     def phone_as_string(self):
@@ -6554,6 +6927,14 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             result += html.format_html(item, show_on_mobile_string, self.print_labels_link_html)
         if self.print_unprinted_labels_link_html:
             result += html.format_html(item, show_on_mobile_string, self.print_unprinted_labels_link_html)
+        if not self.auction.is_online:
+            # "Reprint" tells whoever is at the door that this paddle is already in the pile.
+            result += html.format_html(
+                "<span class='dropdown-item'><a href=\"{}?tos={}\"><i class='bi bi-123 me-1'></i>{}</a></span>",
+                reverse("auction_paddles", kwargs={"slug": self.auction.slug}),
+                self.pk,
+                "Reprint paddle" if self.paddle_is_current else "Print paddle",
+            )
         if self.email:
             icon_class = "bi bi-envelope"
             if self.email_address_status == "BAD":
@@ -6626,7 +7007,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             club = self.auction.club
             cm = self.clubmember
             result += static_html("<div class='dropdown-divider'></div>")
-            if club.membership_annual_fee:
+            # A carried membership renews only with its carrier's.
+            if club.charges_dues and not cm.membership_carried_by_id:
                 renew_url = reverse("club_member_renew", kwargs={"pk": cm.pk})
                 set_expiry_url = reverse("club_member_renew_page", kwargs={"slug": club.slug, "pk": cm.pk})
                 result += html.format_html(
@@ -7095,10 +7477,14 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 user=acting_user,
             )
 
-    def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
-        """Merge a duplicate AuctionTOS into self (the older record): move lots, adjustments and payments,
-        keep missing fields, log history, delete the duplicate. Club-managed auctions also merge ClubMembers.
-        ``user`` for admin-triggered merges.
+    @transaction.atomic
+    def merge_duplicate(self, duplicate, reason="same email", user=None, reviewed_fields=()):
+        """Fold a duplicate AuctionTOS into self (the older record) and delete it. ``user`` for
+        admin-triggered merges.
+
+        Everything pointing at the duplicate moves here, and its lots' accounts follow them. Fields self
+        lacks come from the duplicate, except *reviewed_fields*, which the caller has already decided. In a
+        club-managed auction the two club members become one as well.
         """
         if self.pk is None or duplicate.pk is None:
             # Both must be saved; an unsaved one means a save-time merge already deleted it.
@@ -7110,31 +7496,54 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if duplicate.auction != self.auction:
             msg = "Cannot merge AuctionTOS records from different auctions."
             raise ValueError(msg)
-        # Keep duplicate's values where self has none (explicit None/"" check).
-        if preserve_missing_fields:
-            fields_to_preserve = [
-                "user",
-                "name",
-                "email",
-                "memo",
-                "address",
-                "phone_number",
-                "bidder_number",
-                "clubmember",
-            ]
-            updates = {}
-            for field in fields_to_preserve:
-                self_val = getattr(self, field, None)
-                dup_val = getattr(duplicate, field, None)
-                if (self_val is None or self_val == "") and dup_val:
-                    updates[field] = dup_val
-                    setattr(self, field, dup_val)
-            if updates:
-                AuctionTOS.objects.filter(pk=self.pk).update(**updates)
-        # Move won lots to self
+        kept_member_id, duplicate_member_id = self.clubmember_id, duplicate.clubmember_id
+        # Keep duplicate's values where self has none (explicit None/"" check). Checking in and being
+        # called for a door prize happened to this person, whichever row recorded it.
+        fields_to_preserve = [
+            "user",
+            "name",
+            "email",
+            "memo",
+            "address",
+            "phone_number",
+            "bidder_number",
+            "clubmember",
+            "checked_in",
+            "door_prize_called",
+        ]
+        updates = {}
+        for field in fields_to_preserve:
+            if field in reviewed_fields:
+                continue
+            self_val = getattr(self, field, None)
+            dup_val = getattr(duplicate, field, None)
+            if (self_val is None or self_val == "") and dup_val:
+                updates[field] = dup_val
+                setattr(self, field, dup_val)
+        if "checked_in" in updates and duplicate.bidding_allowed and self.auction.use_check_in_mode:
+            # Checking in is what lets a person bid in check-in mode.
+            updates["bidding_allowed"] = self.bidding_allowed = True
+        if updates:
+            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
+        if duplicate.user_id and self.user_id and duplicate.user_id != self.user_id:
+            # Two accounts, one person, and the duplicate's drops out of this auction: its lots, wins and
+            # bids here become self's account's, so a lot it is winning sells to self.
+            sold = Lot.objects.filter(auctiontos_seller=duplicate)
+            for column in ("user", "added_by", "label_first_printed_by"):
+                sold.filter(**{column: duplicate.user_id}).update(**{column: self.user_id})
+            Lot.objects.filter(auctiontos_winner=duplicate, winner=duplicate.user_id).update(winner=self.user_id)
+            Bid.reassign(duplicate.user_id, self.user_id, lots=Lot.objects.filter(auction_id=self.auction_id))
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
-        # Move sold lots to self
         Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
+        if self.user_id:
+            # Lots added while neither row had an account, as save() claims them when it links one.
+            Lot.objects.filter(auctiontos_seller=self, user__isnull=True).update(user=self.user_id)
+        PickupLocation.objects.filter(contact_person=duplicate).update(contact_person=self)
+        # A signup for a job self already has goes with the duplicate, and its bounty with it: the
+        # invoice below would otherwise pay one job twice.
+        taken = list(VolunteerSignup.objects.filter(auctiontos=self).values_list("job_id", flat=True))
+        VolunteerSignup.objects.filter(auctiontos=duplicate).exclude(job_id__in=taken).update(auctiontos=self)
+        InvoiceAdjustment.objects.filter(volunteersignup__auctiontos=duplicate).delete()
         invoice = Invoice.for_participant(self)
         duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
         if duplicate_invoice:
@@ -7143,40 +7552,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             invoice.absorb(duplicate_invoice)
         invoice.recalculate()
         merge_action = f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}"
-        if self.auction.is_club_managed and self.auction.club_id:
-            self_club_member = self.clubmember
-            dup_club_member = duplicate.clubmember
-            if dup_club_member and dup_club_member != self_club_member:
-                if self_club_member:
-                    # Move other TOS rows pointing at the duplicate ClubMember.
-                    AuctionTOS.objects.filter(clubmember=dup_club_member).exclude(pk=duplicate.pk).update(
-                        clubmember=self_club_member
-                    )
-                    # Preserve contact info on the surviving ClubMember
-                    for field in ("name", "email", "phone_number", "address"):
-                        self_val = getattr(self_club_member, field, None)
-                        dup_val = getattr(dup_club_member, field, None)
-                        if (self_val is None or self_val == "") and dup_val:
-                            setattr(self_club_member, field, dup_val)
-                    # Keep the later paid-through date; a merge must never shorten a membership.
-                    for field in ("membership_last_paid", "membership_expiration_date"):
-                        self_val = getattr(self_club_member, field, None)
-                        dup_val = getattr(dup_club_member, field, None)
-                        if dup_val and (self_val is None or dup_val > self_val):
-                            setattr(self_club_member, field, dup_val)
-                    self_club_member.save()
-                    ClubHistory.objects.create(
-                        club=self.auction.club,
-                        user=user,
-                        action=f"Merged club member {dup_club_member} into {self_club_member}: {reason}",
-                        applies_to="MEMBERS",
-                    )
-                    dup_club_member.is_deleted = True
-                    dup_club_member.save()
-                else:
-                    # self TOS has no club member yet — adopt the duplicate's
-                    self.clubmember = dup_club_member
-                    AuctionTOS.objects.filter(pk=self.pk).update(clubmember=dup_club_member)
+        club_managed = self.auction.is_club_managed and self.auction.club_id
+        if club_managed:
             ClubHistory.objects.create(
                 club=self.auction.club,
                 user=user,
@@ -7195,6 +7572,12 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             self.possible_duplicate = None
         # Delete the duplicate (cascades to delete its now-empty invoice)
         duplicate.delete()
+        if club_managed and kept_member_id and duplicate_member_id and kept_member_id != duplicate_member_id:
+            # Two club members for one person. After the delete, so the member merge never sees this row.
+            kept_member = ClubMember.objects.get(pk=kept_member_id)
+            duplicate_member = ClubMember.objects.get(pk=duplicate_member_id)
+            if kept_member.club_id == duplicate_member.club_id:
+                kept_member.merge_duplicate(duplicate_member, reason=reason, user=user)
 
     @cached_property
     def closest_location_for_this_user(self):
@@ -7541,6 +7924,10 @@ class Lot(CachedPropertiesMixin, models.Model):
     # In-person auctions charge unsold_lot_fee only for these: a lot that never came in is just
     # deactivated at wind-down, and costs its seller nothing. Cleared by _do_save on a sale or reopen.
     ended_unsold = models.BooleanField(default=False)
+    # Counted by add_winner_message; above 1 means the sale was corrected. Lots sold before this was
+    # counted were backfilled from their history by ``manage.py backfill_sales_recorded``.
+    sales_recorded = models.PositiveSmallIntegerField(default=0)
+    sales_recorded.help_text = "How many times a winner or sell price was recorded for this lot"
     refunded = models.BooleanField(default=False)
     refunded.help_text = "Don't charge the winner or pay the seller for this lot."
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
@@ -7905,6 +8292,10 @@ class Lot(CachedPropertiesMixin, models.Model):
         message = (
             f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
         )
+        if self.pk:
+            Lot.objects.filter(pk=self.pk).update(sales_recorded=F("sales_recorded") + 1)
+            # A later full save() must not write the old count back.
+            self.sales_recorded = (self.sales_recorded or 0) + 1
         try:
             LotHistory.objects.create(
                 lot=self,
@@ -8051,6 +8442,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.active = True
         self.winner = None
         self.winning_price = None
+        self.sales_recorded = 0
         self.seller_invoice = None
         self.buyer_invoice = None
         self.buy_now_used = False
@@ -8636,17 +9028,7 @@ class Lot(CachedPropertiesMixin, models.Model):
             return "not_club_member"
         seller_user = seller_user or member.user
         if club.only_active_members_can_participate:
-            today = timezone.localdate()
-            if member.membership_expiration_date:
-                valid = member.membership_expiration_date >= today
-            elif member.membership_last_paid:
-                if club.membership_system == "january_first":
-                    valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
-                else:
-                    valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
-            else:
-                valid = False
-            if not valid:
+            if not member.is_paid_member:
                 return "not_active_member"
         return None
 
@@ -9746,8 +10128,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
         "then; recorded online payments (InvoicePayment) take precedence over this as the cash date."
     )
     opened = models.BooleanField(default=False)
+    opened_on = models.DateTimeField(null=True, blank=True)
+    opened_on.help_text = "When the emailed link was first opened. Unset on invoices opened before 2026-10-02."
     printed = models.BooleanField(default=False)
     email_sent = models.BooleanField(default=False)
+    email_sent_on = models.DateTimeField(null=True, blank=True)
+    email_sent_on.help_text = "When the invoice email or push actually went. Unset before 2026-10-02."
     invoice_notification_due = models.DateTimeField(null=True, blank=True)
     invoice_notification_due.help_text = (
         "When set, a celery task will send an invoice notification email after this time"
@@ -9776,6 +10162,17 @@ class Invoice(CachedPropertiesMixin, models.Model):
             # NULLs never collide, so any number of those. Make one with ``for_participant``.
             models.UniqueConstraint(fields=["auctiontos_user", "auction"], name="invoice_one_per_participant"),
         ]
+
+    def mark_opened(self):
+        """Somebody opened this invoice's link. Saves only these columns: a payment webhook marking it PAID
+        can be saving the same row at the same moment, and a full save would write the old status back.
+        """
+        self.opened = True
+        fields = ["opened"]
+        if not self.opened_on:
+            self.opened_on = timezone.now()
+            fields.append("opened_on")
+        self.save(update_fields=fields)
 
     @classmethod
     def for_participant(cls, tos, auction=None):
@@ -10015,6 +10412,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return bool(member and member.paypal_subscription_id)
 
     @cached_property
+    def member_membership_carried_by(self):
+        """The member whose membership this one's is carried with, or None. Disables the renewal checkbox."""
+        member = self.club_member_for_auction
+        return member.membership_carried_by if member and member.membership_carried_by_id else None
+
+    @cached_property
     def treat_as_club_member(self):
         """True when club member benefits apply: membership current, or this invoice renews it."""
         if not self.auction or not self.auction.club:
@@ -10033,9 +10436,9 @@ class Invoice(CachedPropertiesMixin, models.Model):
         member = self.club_member_for_auction
         if not member:
             return "No membership"
-        if not member.membership_last_paid:
-            return "Expired"
-        expiration_date = member.membership_expiration_date
+        if not member.has_ever_paid:
+            return "Not a member"
+        expiration_date = member.effective_expiration_date
         if not expiration_date:
             return "Unknown"
         days_until_expiration = (expiration_date - timezone.localdate()).days
@@ -10874,6 +11277,25 @@ class Bid(InvalidatesRelatedCache, models.Model):
         self.is_deleted = True
         self.save()
 
+    @staticmethod
+    def reassign(from_user, to_user, lots=None):
+        """Give *from_user*'s bids to *to_user*, on *lots* (a Lot queryset) or everywhere, for merges.
+
+        A bid counts by being its bidder's latest, so on a lot both of them bid on, moving the other's
+        could replace the better one. The worse of the two is withdrawn first.
+        """
+        moving = Bid.objects.filter(user=from_user)
+        if lots is not None:
+            moving = moving.filter(lot_number__in=lots)
+        live = Bid.objects.filter(is_deleted=False).order_by("-bid_time", "-pk")
+        theirs = set(live.filter(user=to_user).values_list("lot_number", flat=True))
+        for lot_id in set(moving.filter(is_deleted=False).values_list("lot_number", flat=True)) & theirs:
+            mine, kept = (live.filter(user=user, lot_number=lot_id).first() for user in (from_user, to_user))
+            # As Lot.bids ranks them: highest, then earliest.
+            worse = max((mine, kept), key=lambda bid: (-bid.amount, bid.last_bid_time))
+            Bid.objects.filter(user=worse.user_id, lot_number=lot_id).update(is_deleted=True)
+        moving.update(user=to_user)
+
 
 class Watch(InvalidatesRelatedCache, models.Model):
     """Users can watch lots: listed on their page, with an email before the end."""
@@ -11106,6 +11528,14 @@ def get_default_square_enabled():
     return getattr(settings, "SQUARE_ENABLED_FOR_USERS", False)
 
 
+def get_default_library_enabled():
+    return getattr(settings, "LIBRARY_ENABLED_FOR_USERS", False)
+
+
+def get_default_voice_cloud_enabled():
+    return getattr(settings, "VOICE_CLOUD_ENABLED_FOR_USERS", False)
+
+
 def get_default_is_trusted():
     return settings.USERS_ARE_TRUSTED_BY_DEFAULT
 
@@ -11195,7 +11625,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     push_notifications_instead_of_email = models.BooleanField(default=False, blank=True)
     push_notifications_instead_of_email.help_text = (
         "Get notifications in the app instead of emails, for everything "
-        "except account emails like password resets. Requires the app to be installed "
+        "except invoices and account emails like password resets. Requires the app to be installed "
         "and signed in. Auctions near you arrive as notifications too."
     )
     paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
@@ -11207,6 +11637,11 @@ class UserData(CachedPropertiesMixin, models.Model):
         "When the user asked us to delete their account.  The account keeps working until the grace "
         "period is up (see auctions.account_deletion); signing in again cancels the request."
     )
+    merge_into_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    merge_into_user.help_text = (
+        "Another account this user asked to be merged into. That account finishes it; see auctions.account_merge."
+    )
+    merge_requested_on = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
@@ -11215,6 +11650,15 @@ class UserData(CachedPropertiesMixin, models.Model):
     can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
     paypal_enabled = models.BooleanField(default=get_default_paypal_enabled)
     square_enabled = models.BooleanField(default=get_default_square_enabled)
+    library_enabled = models.BooleanField(default=get_default_library_enabled)
+    library_enabled.help_text = "Show this user /library/ and the library's tools on /mcp/."
+    voice_cloud_enabled = models.BooleanField(
+        default=get_default_voice_cloud_enabled, verbose_name="Listen through OpenAI"
+    )
+    voice_cloud_enabled.help_text = (
+        "Let this user listen through OpenAI on Set lot winners, in a web browser or in the app (Voice "
+        "grammar's cloud model, on this site's key). The app's own recognizer needs neither."
+    )
     is_trusted = models.BooleanField(default=get_default_is_trusted)
     is_trusted.help_text = "Trusted users can promote auctions, accept payments, and send invoice notification emails"
     dismissed_cookies_tos = models.BooleanField(default=False)
@@ -11428,6 +11872,8 @@ class UserData(CachedPropertiesMixin, models.Model):
                 "can_create_club_auctions",
                 "paypal_enabled",
                 "square_enabled",
+                "library_enabled",
+                "voice_cloud_enabled",
                 "is_trusted",
             ]:
                 if getattr(self, field) and not getattr(target_userdata, field):
@@ -11441,7 +11887,7 @@ class UserData(CachedPropertiesMixin, models.Model):
             Invoice.objects.filter(buyer=source_user).update(buyer=user_to_merge_to)
             Lot.objects.filter(user=source_user).update(user=user_to_merge_to)
             Lot.objects.filter(winner=source_user).update(winner=user_to_merge_to)
-            Bid.objects.filter(user=source_user).update(user=user_to_merge_to)
+            Bid.reassign(source_user, user_to_merge_to)
             PageView.objects.filter(user=source_user).update(user=user_to_merge_to)
             AuctionCampaign.objects.filter(user=source_user).update(user=user_to_merge_to)
             SearchHistory.objects.filter(user=source_user).update(user=user_to_merge_to)
@@ -11470,7 +11916,30 @@ class UserData(CachedPropertiesMixin, models.Model):
             for interest in UserInterestCategory.objects.filter(pk__in=updated_interest_ids):
                 interest.save()
 
-            for source_tos in list(AuctionTOS.objects.filter(user=source_user).select_related("auction")):
+            # Members first: a participant merge below would otherwise merge them without the roles.
+            for source_member in list(ClubMember.objects.filter(user=source_user)):
+                target_member = (
+                    ClubMember.objects.filter(club_id=source_member.club_id, user=user_to_merge_to)
+                    .exclude(pk=source_member.pk)
+                    .order_by("is_deleted", "pk")
+                    .first()
+                )
+                if target_member:
+                    # Signed in to both accounts, so the roles are already this person's.
+                    target_member.merge_duplicate(
+                        source_member,
+                        reason=f"merged from user account {source_user.username}",
+                        can_grant_roles=True,
+                    )
+                else:
+                    source_member.user = user_to_merge_to
+                    source_member.save(update_fields=["user"])
+
+            for pk in list(AuctionTOS.objects.filter(user=source_user).values_list("pk", flat=True)):
+                # Fetched one at a time: a merge can change or delete a later row.
+                source_tos = AuctionTOS.objects.filter(pk=pk, user=source_user).select_related("auction").first()
+                if not source_tos:
+                    continue
                 target_tos = (
                     AuctionTOS.objects.filter(user=user_to_merge_to, auction=source_tos.auction)
                     .exclude(pk=source_tos.pk)
@@ -11485,87 +11954,6 @@ class UserData(CachedPropertiesMixin, models.Model):
                 else:
                     source_tos.user = user_to_merge_to
                     source_tos.save()
-
-            for source_member in list(ClubMember.objects.filter(user=source_user).select_related("club")):
-                target_member = (
-                    ClubMember.objects.filter(club=source_member.club, user=user_to_merge_to)
-                    .exclude(pk=source_member.pk)
-                    .order_by("pk")
-                    .first()
-                )
-                if not target_member:
-                    source_member.user = user_to_merge_to
-                    source_member.save(update_fields=["user"])
-                    continue
-
-                member_updates = set()
-                for field in [
-                    "name",
-                    "email",
-                    "phone_number",
-                    "address",
-                    "discord_id",
-                    "discord_username",
-                    "discord_roles",
-                    "membership_last_paid",
-                    "membership_expiration_date",
-                    "membership_expiration_reminder_due",
-                    "discord_role_override",
-                    "last_discord_role_assigned",
-                    "bidder_number",
-                ]:
-                    source_value = getattr(source_member, field, None)
-                    target_value = getattr(target_member, field, None)
-                    if target_value in (None, "") and source_value not in (None, ""):
-                        setattr(target_member, field, source_value)
-                        member_updates.add(field)
-                for field in [
-                    "permission_admin",
-                    "permission_view",
-                    "permission_export",
-                    "permission_add_edit",
-                    "permission_edit_club",
-                    "permission_money",
-                    "permission_manage_auctions",
-                    "permission_manage_bap",
-                    "permission_manage_donations",
-                    "permission_send_announcements",
-                ]:
-                    if getattr(source_member, field) and not getattr(target_member, field):
-                        setattr(target_member, field, True)
-                        member_updates.add(field)
-                if source_member.bap_points and not target_member.bap_points:
-                    target_member.bap_points = source_member.bap_points
-                    member_updates.add("bap_points")
-                if source_member.hap_points and not target_member.hap_points:
-                    target_member.hap_points = source_member.hap_points
-                    member_updates.add("hap_points")
-                if source_member.culture_points and not target_member.culture_points:
-                    target_member.culture_points = source_member.culture_points
-                    member_updates.add("culture_points")
-                if source_member.bap_points_ytd and not target_member.bap_points_ytd:
-                    target_member.bap_points_ytd = source_member.bap_points_ytd
-                    member_updates.add("bap_points_ytd")
-                if source_member.hap_points_ytd and not target_member.hap_points_ytd:
-                    target_member.hap_points_ytd = source_member.hap_points_ytd
-                    member_updates.add("hap_points_ytd")
-                if source_member.culture_points_ytd and not target_member.culture_points_ytd:
-                    target_member.culture_points_ytd = source_member.culture_points_ytd
-                    member_updates.add("culture_points_ytd")
-                if not source_member.is_deleted and target_member.is_deleted:
-                    target_member.is_deleted = False
-                    member_updates.add("is_deleted")
-                if member_updates:
-                    target_member.save(update_fields=list(member_updates))
-
-                BapAward.objects.filter(club_member=source_member).update(club_member=target_member)
-                InvoicePayment.objects.filter(club_member=source_member).update(club_member=target_member)
-                AuctionTOS.objects.filter(clubmember=source_member).update(clubmember=target_member)
-                if target_member.bap_awards.exists():
-                    BapAward.recalculate_member_points(target_member)
-                source_member.user = None
-                source_member.is_deleted = True
-                source_member.save(update_fields=["user", "is_deleted"])
 
             for model, field_names in [
                 (
@@ -11619,6 +12007,8 @@ class UserData(CachedPropertiesMixin, models.Model):
             self.can_create_club_auctions = get_default_can_create_auctions()
             self.paypal_enabled = get_default_paypal_enabled()
             self.square_enabled = get_default_square_enabled()
+            self.library_enabled = get_default_library_enabled()
+            self.voice_cloud_enabled = get_default_voice_cloud_enabled()
             self.is_trusted = get_default_is_trusted()
             self.save(
                 update_fields=[
@@ -11638,6 +12028,8 @@ class UserData(CachedPropertiesMixin, models.Model):
                     "can_create_club_auctions",
                     "paypal_enabled",
                     "square_enabled",
+                    "library_enabled",
+                    "voice_cloud_enabled",
                     "is_trusted",
                 ]
             )
@@ -13613,8 +14005,8 @@ class LotQueueEntry(models.Model):
 
 
 class VoiceGrammar(models.Model):
-    """The grammar the app listens with on set winners: one row, site-wide, served in ``/api/mobile/config/``
-    and merged over the app's defaults (:mod:`auctions.voice`).
+    """The words voice listens for on set winners: one row, site-wide. :mod:`auctions.voice_interpreter`
+    reads with it, and ``/api/mobile/config/`` serves it to the app (:mod:`auctions.voice`).
 
     ``save()`` pins the pk (singleton). No row means app defaults. ``enabled=False`` hides the microphone.
     """
@@ -13650,6 +14042,15 @@ class VoiceGrammar(models.Model):
         "if early values misbehave. Under 200 the app raises it to 200."
     )
 
+    cloud_model = models.CharField(
+        max_length=40, blank=True, default=voice.CLOUD_LIVE, choices=voice.CLOUD_MODEL_CHOICES
+    )
+    cloud_model.help_text = (
+        "Listen through OpenAI, in a web browser (a laptop at the auction, or a phone's browser) or in the "
+        "app. Charged to this site's OpenAI key per minute of listening. Off leaves only the app's own "
+        "recognizer, which needs neither this nor the account setting."
+    )
+
     auto_submit_on_sold = models.BooleanField(default=True)
     auto_submit_on_sold.help_text = "Saying 'sold' saves the lot, instead of only filling the fields."
     block_auto_submit_when_unsure = models.BooleanField(default=True)
@@ -13679,10 +14080,10 @@ class VoiceGrammar(models.Model):
 
 
 class VoiceCommandLog(models.Model):
-    """One voice command the set-winners page acted on, and any operator correction: the tuning data.
+    """One thing voice did on set winners -- a field filled, a lot sold -- and any correction a person made.
 
-    A blank ``slot`` is an utterance that matched nothing; group those by ``heard`` to find words to add
-    to ``anchors``. Written by the page, session-authenticated, auction admins only.
+    A blank ``slot`` is a sale heard but not recorded. Written by ``VoiceInterpretView``; corrections by
+    the page. Shown on the auction's voice log page.
     """
 
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)

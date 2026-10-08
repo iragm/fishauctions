@@ -109,6 +109,29 @@ class SendSiteTests(StandardTestCase):
         email = self.sent("jamie@example.com")
         self.check(email, "Hey Jamie,", club_header=True)
         self.assertIn(f"/invoices/{self.invoice.no_login_link}/", email.html_message)
+        self.invoice.refresh_from_db()
+        self.assertIsNotNone(self.invoice.email_sent_on)
+
+    def test_a_paid_invoice_email_is_a_receipt_not_a_bill(self):
+        """People who paid cash at the door read "You owe a total of" in the paid email as a demand."""
+        from auctions.tasks import send_invoice_notification
+
+        userdata = self.online_auction.created_by.userdata
+        userdata.is_trusted = True
+        userdata.save()
+        self.online_auction.email_users_when_invoices_ready = True
+        self.online_auction.invoice_payment_instructions = "Send money to paypal.me/tfcb"
+        self.online_auction.save()
+        self.invoice.status = "PAID"
+        self.invoice.save()
+        self.online_tos.email = "jamie@example.com"
+        self.online_tos.save()
+        send_invoice_notification(self.invoice.pk)
+        email = self.sent("jamie@example.com")
+        for body in (email.message, email.html_message):
+            self.assertIn("this is your receipt", body)
+            self.assertNotIn("You owe", body)
+            self.assertNotIn("paypal.me", body)
 
     def test_outbid(self):
         # bidding.py: {"name", "domain", "lot"}

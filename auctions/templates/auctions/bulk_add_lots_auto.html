@@ -63,7 +63,8 @@
                       </div>
                       {% comment %}The scientific name is worked out from the lot name and shown here as text: no dropdown to read on every one of forty rows.  Wrong, or not a species at all?  Clear it.  Changing it is a job for the full editor, on a lot that has already been saved.{% endcomment %}
                       {% if use_scientific_name %}
-                      <input type="hidden" class="lot-input species-input" name="species" data-field="species" value="{{ lot.species_id|default_if_none:'' }}">
+                      <input type="hidden" class="lot-input species-input" name="species" data-field="species" value="{{ lot.species_id|default_if_none:'' }}" data-last-query="{{ lot.lot_name }}">
+                      <input type="hidden" class="lot-input species-offered" name="species_offered" data-field="species_offered" value="">
                       <div class="form-text small species-hint">{% if lot.species %}<i>{{ lot.species.full_scientific_name }}</i>{% if lot.can_be_edited %}<button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline species-clear text-muted" title="Not this species" aria-label="Remove this scientific name"><i class="bi bi-x-lg"></i></button>{% endif %}{% endif %}</div>
                       {% endif %}
                       <div class="invalid-feedback"></div>
@@ -196,6 +197,7 @@
                       </div>
                       {% if use_scientific_name %}
                       <input type="hidden" class="lot-input species-input" name="species" data-field="species" value="">
+                      <input type="hidden" class="lot-input species-offered" name="species_offered" data-field="species_offered" value="">
                       <div class="form-text small species-hint"></div>
                       {% endif %}
                       <div class="invalid-feedback"></div>
@@ -344,24 +346,17 @@
 }
 </style>
 <script>
-let saveTimeouts = {};
-let savingInProgress = {}; // Track which rows are currently saving
+// Keyed by the row itself: a new row has no lot id, and a random key per call meant it was never
+// debounced at all.
+const saveTimeouts = new WeakMap();
 const SAVE_DELAY = 1000; // Save after 1 second of no typing
 
 // Debounced save function
 function saveLot(lotRow) {
-    const lotId = lotRow.dataset.lotId;
-    const timeoutKey = lotRow.dataset.lotId || Math.random().toString();
-
-    // Clear existing timeout for this lot
-    if (saveTimeouts[timeoutKey]) {
-        clearTimeout(saveTimeouts[timeoutKey]);
-    }
-
-    // Set new timeout
-    saveTimeouts[timeoutKey] = setTimeout(() => {
+    clearTimeout(saveTimeouts.get(lotRow));
+    saveTimeouts.set(lotRow, setTimeout(() => {
         performSave(lotRow);
-    }, SAVE_DELAY);
+    }, SAVE_DELAY));
 }
 
 function performSave(lotRow) {
@@ -370,16 +365,11 @@ function performSave(lotRow) {
     const actionsMenu = lotRow.querySelector('.actions-menu');
     const errorBanner = lotRow.querySelector('.error-banner');
 
-    // Prevent concurrent saves for the same row to avoid duplicate lot creation
-    // This addresses the race condition where multiple save requests are triggered
-    // before the first one completes and sets the lot_id (e.g., rapid typing)
-    const rowKey = lotId || lotRow.dataset.tempId || `temp-${Math.random().toString(36).slice(2, 11)}`;
-    if (!lotRow.dataset.tempId && !lotId) {
-        lotRow.dataset.tempId = rowKey; // Assign a temporary ID for unsaved lots
-    }
-
-    // If a save is already in progress for this row, skip this save
-    if (savingInProgress[rowKey]) {
+    // One save per row at a time, or a new row is created twice.  A change made while one is on its
+    // way is saved after it, not dropped: on a slow connection, dropping lost whatever was typed just
+    // after the lot name -- the species, the price -- while the row said it was saved.
+    if (lotRow.dataset.saving === 'true') {
+        lotRow.dataset.saveAgain = 'true';
         return;
     }
 
@@ -424,8 +414,7 @@ function performSave(lotRow) {
         return;
     }
 
-    // Mark this row as having a save in progress
-    savingInProgress[rowKey] = true;
+    lotRow.dataset.saving = 'true';
 
     // Make AJAX request
     fetch("{% url 'save_lot_ajax' slug=auction.slug %}", {
@@ -441,10 +430,7 @@ function performSave(lotRow) {
         if (data.success) {
             // Update lot ID if new
             if (data.is_new) {
-                // Remove the temporary key and use the real lot_id
                 lotRow.dataset.lotId = data.lot_id;
-                // Clean up temp ID
-                delete lotRow.dataset.tempId;
             }
 
             // Update badge with admin bypass feedback
@@ -538,11 +524,10 @@ function performSave(lotRow) {
         if (actionsMenu) actionsMenu.style.display = 'none';
     })
     .finally(() => {
-        // Always clear the saving flag when request completes (success or error)
-        delete savingInProgress[rowKey];
-        // Also clear using lot_id if it exists
-        if (lotRow.dataset.lotId) {
-            delete savingInProgress[lotRow.dataset.lotId];
+        delete lotRow.dataset.saving;
+        if (lotRow.dataset.saveAgain === 'true') {
+            delete lotRow.dataset.saveAgain;
+            performSave(lotRow);
         }
     });
 }
@@ -691,6 +676,9 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
 
     // Clear values
     newRow.dataset.lotId = '';
+    // Or a copy of a row that was mid-save would wait for a save that is not its own.
+    delete newRow.dataset.saving;
+    delete newRow.dataset.saveAgain;
     const badge = newRow.querySelector('.lot-number-badge');
     badge.textContent = 'Not saved';
     badge.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-info');
@@ -718,7 +706,7 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     // A cloned row carries the previous row's species, which was worked out from a different lot
     // name.  Both halves have to go: the value that would be saved, and the line of text saying
     // what it is.
-    newRow.querySelectorAll('.species-input').forEach(input => {
+    newRow.querySelectorAll('.species-input, .species-offered').forEach(input => {
         input.value = '';
         delete input.dataset.lastQuery;
     });
@@ -775,7 +763,8 @@ function showSpecies(row, label, note) {
 }
 
 // The only control on this page: "that is not what I am selling".  Clearing sticks, because the
-// lookup below only runs when the lot name actually changes.
+// lookup below only runs when the lot name actually changes.  What was offered stays, so the save
+// reports it as declined.
 $(document).on('click', '.species-clear', function() {
     const row = this.closest('.lot-row');
     const input = row.querySelector('.species-input');
@@ -785,9 +774,24 @@ $(document).on('click', '.species-clear', function() {
     saveLot(row);
 });
 
+// A species belongs to the name it was worked out from.  Once the name is edited it goes, along with
+// what was offered, rather than being saved under the new name while the lookup is on its way.
+$(document).on('input', '[data-field="lot_name"]', function() {
+    const row = this.closest('.lot-row');
+    const input = row && row.querySelector('.species-input');
+    if (!input || input.dataset.lastQuery === this.value.trim()) return;
+    if (!input.value && !row.querySelector('.species-offered').value) return;
+    input.value = '';
+    row.querySelector('.species-offered').value = '';
+    delete input.dataset.lastQuery;
+    showSpecies(row, '', '');
+});
+
 function applySpecies(row, choices, source) {
     const input = row.querySelector('.species-input');
     if (!input) return;
+    // What the save reports the seller kept or took off. See species_matching.record_choice.
+    row.querySelector('.species-offered').value = choices.length === 1 ? choices[0].id : '';
     // Exactly one, or nothing.  A shortlist is the matcher saying it cannot tell two species
     // apart, and the honest answer to that on a page with no picker is no species at all.
     if (choices.length === 1) {

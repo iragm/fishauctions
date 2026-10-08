@@ -128,11 +128,11 @@
 <p class="text-muted small">
   {% comment %}The half of the cache that used to be invisible.  A remembered wrong species is worse than a remembered "no": it is served ahead of the token search, to every club, and it ends up on a printed label and in a breeder award.{% endcomment %}
   These answers are served straight back without looking anything up, for every club, and they are
-  written by the lot forms as well as by the language model. What stops one seller's wrong pick
-  from being the site's answer for good is the last two columns: a lot saved with the answer left
-  alone counts once, a lot it was cleared from or changed on counts against it, and one rejection in
-  ten retires the row by itself. &ldquo;Look it up again&rdquo; throws the answer away without
-  recording a rejection, so the matcher may well arrive at the same one.
+  written by the language model and by auction admins correcting lots. What stops a wrong one from
+  being the site's answer for good is the Left alone and Taken off columns: each lot it was offered on
+  counts once, for keeping it or for taking it off, and once three lots have taken it off and they are
+  more than one in ten, it retires by itself. &ldquo;Look it up again&rdquo; throws the answer away without recording a
+  rejection, so the matcher may well arrive at the same one.
 </p>
 <div class="table-responsive">
   <table class="table table-sm align-middle">
@@ -145,8 +145,8 @@
         <td>{{ row.search_text }}</td>
         <td><i>{{ row.species.full_scientific_name }}</i></td>
         <td class="text-end">{{ row.hits }}</td>
-        <td class="text-end">{{ row.accepts }}</td>
-        <td class="text-end">{% if row.rejects %}<span class="badge bg-warning text-dark">{{ row.rejects }}</span>{% else %}&mdash;{% endif %}</td>
+        <td class="text-end">{{ row.kept }}</td>
+        <td class="text-end">{% if row.taken_off %}<span class="badge bg-warning text-dark">{{ row.taken_off }}</span>{% else %}&mdash;{% endif %}</td>
         <td class="small text-muted">{{ row.get_source_display }}{% if row.created_by %} &middot; {{ row.created_by }}{% endif %}</td>
         <td class="text-end">
           <form method="post" action="{% url 'species_cache_forget' row.pk %}" class="d-inline">
@@ -231,21 +231,25 @@
 <h4 class="mt-4">Pairings the site has retired</h4>
 <p class="text-muted small">
   {% comment %}The memory that makes a retired cache row stay retired: without it the language model answers the same question the same way and the answer is written straight back.  See species_matching.record_choice.{% endcomment %}
-  Enough sellers took this species off the lots with this name, so the matcher will not offer it for
-  that name again &mdash; not from the cache, and not from the language model. It can still be
-  reached by searching, and a lot that already has it keeps it. Allow it again if the rejections were
-  really about the lot name rather than about the species.
+  Enough lots with this name had this species taken off them, so the matcher will not offer it for
+  that name again &mdash; not from the cache, the search or the language model, only when the species
+  list itself gives it that name. It can still be picked by hand, and a lot that already has it keeps
+  it. The columns are the lots that decided it. Allow it again if they were really about the lot name
+  rather than about the species.
 </p>
 <div class="table-responsive">
   <table class="table table-sm align-middle">
     <thead>
-      <tr><th>Name</th><th>Is not</th><th>Retired</th><th></th></tr>
+      <tr><th>Name</th><th>Is not</th><th class="text-end">Kept</th><th class="text-end">Taken off</th><th>They got instead</th><th>Retired</th><th></th></tr>
     </thead>
     <tbody>
       {% for row in rejections %}
       <tr>
         <td>{{ row.search_text }}</td>
         <td><i>{{ row.species.full_scientific_name }}</i></td>
+        <td class="text-end">{{ row.kept }}</td>
+        <td class="text-end">{{ row.taken_off }}{% if row.people %} <span class="small text-muted">by {{ row.people }}</span>{% endif %}</td>
+        <td class="small">{% for label, lots in row.instead %}{{ label }} &times;{{ lots }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-muted">&mdash;</span>{% endfor %}</td>
         <td class="small text-muted">{{ row.createdon|date:"M j, Y" }}</td>
         <td class="text-end">
           <form method="post" action="{% url 'species_rejection_delete' row.pk %}" class="d-inline">

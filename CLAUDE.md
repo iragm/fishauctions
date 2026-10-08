@@ -13,6 +13,7 @@ This file is loaded on **every** request, so it holds only what is true everywhe
 | A module's own docstring | What that module is for. Anything over 300 lines has one, enforced. |
 | `auctions/views/CLAUDE.md` | The views package and its acyclic-import rule. |
 | `auctions/mcp/CLAUDE.md` | The MCP endpoint, the palette, and the one registry behind both. |
+| `auctions/documents/__init__.py` | The library (`/library/`): upload, read, stitch, search; its worker and `./privatefiles/`. |
 | `auctions/templates/CLAUDE.md` | Templates, styles, navigation surfaces. |
 | `.claude/skills/` | Species list, club API, announcements, Celery, voice, mobile app. |
 | `style_reference.md` | Read before **any** visual change. |

@@ -113,6 +113,8 @@ def behaviour(action: palette_actions.Action) -> str:
 #: reviewer is checking exactly this, and it is never in the opening clause of a description, which
 #: says what a tool is *for*. ``test_mcp.SubmissionFileTests`` fails a destructive tool with no entry.
 _DESTROYS = {
+    "delete_document": "It deletes a library document and its uploaded file for everyone who could read it.",
+    "update_document": "It overwrites a library document's title, author, year or topics with the new ones.",
     "remove_lot_image": "It deletes the picture from the lot; putting it back means adding the image again.",
     "undo_check_in": "It clears a person's checked-in status, overwriting what the check-in desk recorded.",
     "refund_lot": (
@@ -190,6 +192,10 @@ _DESTROYS = {
     "update_auction_setting": (
         "It overwrites one of an auction's settings, such as the minimum bid, the club's cut or "
         "whether the auction is listed publicly."
+    ),
+    "update_auction_dates": (
+        "It overwrites an auction's dates, and what follows them moves too: unsold lots' closing times, "
+        "a single pickup location's time and the club calendar's event."
     ),
     "request_volunteers": (
         "It sends a push notification to everyone at the auction that cannot be unseen, though "

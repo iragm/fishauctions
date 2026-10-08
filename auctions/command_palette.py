@@ -19,6 +19,7 @@ from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
 
+from .auction_survey import survey_url, wants_answer
 from .models import (
     Auction,
     AuctionTOS,
@@ -391,6 +392,21 @@ def _t_auction_printing(user):
     ]
 
 
+def _t_auction_paddles(user):
+    """Bidder paddles for the user's most recent admin auction, when it's in person."""
+    auction = _last_auction_admin(user)
+    if not auction or auction.is_online:
+        return []
+    return [
+        {
+            "url": reverse("auction_paddles", kwargs={"slug": auction.slug}),
+            "title": f"Print paddles — {auction.title}",
+            "description": "A sheet of paper per person with their bidder number, folded in half",
+            "icon": "bi-123",
+        }
+    ]
+
+
 def _t_print_unprinted_labels(user):
     """Print the user's own unprinted labels in their most recent auction."""
     auction = _last_auction_active(user)
@@ -407,14 +423,14 @@ def _t_print_unprinted_labels(user):
 
 
 def _t_club_barcode_labels(user):
-    """Print membership-card / bidder-paddle barcode labels for the user's club."""
+    """Print membership-card, paddle-sticker and item barcode labels for the user's club."""
     return _clubs_items(
         user,
         "club_barcode_labels",
         "Print barcodes",
         "bi-upc-scan",
         "permission_view",
-        "Print membership cards, bidder paddles and barcode stickers",
+        "Print membership cards, paddle stickers and item barcodes",
     )
 
 
@@ -659,6 +675,7 @@ DYNAMIC_TARGETS = {
     "last_auction:label_setup": _t_label_setup,
     "last_auction:auction_printing": _t_auction_printing,
     "last_auction:print_unprinted": _t_print_unprinted_labels,
+    "last_auction:auction_paddles": _t_auction_paddles,
     "clubs:barcode_labels": _t_club_barcode_labels,
     "last_auction:bap": _t_bap,
     "last_auction:invoice": _t_invoice,
@@ -1211,8 +1228,9 @@ def _auction_member_items(user, auction, tos):
 
 def _auction_default_items(request, user, auction):
     """Defaults for the user's most recent auction, ordered by role and state."""
-    # Pretty much over: only the invoice is worth offering.
+    # Pretty much over: only the invoice and the survey are worth offering.
     if auction.pretty_much_over:
+        items = []
         invoice = (
             _ready_invoice(user, auction)
             or Invoice.objects.filter(auctiontos_user__user=user, auctiontos_user__auction=auction)
@@ -1220,8 +1238,12 @@ def _auction_default_items(request, user, auction):
             .first()
         )
         if invoice:
-            return [_invoice_item(invoice, auction, "bi-bag", _invoice_status_label(invoice))]
-        return []
+            items.append(_invoice_item(invoice, auction, "bi-bag", _invoice_status_label(invoice)))
+        if wants_answer(_user_tos(user, auction)):
+            items.append(
+                _item("auction", f"How was {auction.title}?", survey_url(auction), "bi-emoji-smile", "Leave feedback")
+            )
+        return items
 
     items = []
     is_admin = auction.permission_check(user)

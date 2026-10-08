@@ -420,7 +420,7 @@ def send_membership_card_email(member):
     """Email a member a link to their membership card. True when queued."""
     expiration_text = ""
     expiration = member.effective_expiration_date
-    if expiration and member.club.membership_annual_fee:
+    if expiration and member.club.charges_dues:
         if member.is_paid_member:
             expiration_text = f"  Your membership is paid through {expiration.strftime('%B %-d, %Y')}."
         else:
@@ -837,27 +837,15 @@ def send_invoice_notification(self, invoice_pk):
             send_kwargs["headers"] = {"Reply-to": contact_email}
             send_kwargs["context"]["reply_to_email"] = contact_email
 
-        # notify_user: opted-in app users get a push instead; bookkeeping below is the same.
-        from auctions.notifications import notify_user
+        # Always an email, never a push (notifications.PUSH_EXEMPT_CATEGORIES): a searchable record.
+        mail.send(email, **send_kwargs)
+        from django.utils import timezone
 
-        push_user = invoice.auctiontos_user.user
-        invoice_url = f"https://{current_site.domain}{invoice.get_absolute_url()}"
-        pushed = notify_user(
-            push_user,
-            category="invoice",
-            title=subject,
-            body="Tap to view your invoice.",
-            url=invoice_url,
-            send_email=lambda: mail.send(email, **send_kwargs),
-            auction_pk=invoice.auction.pk,
-            invoice_pk=invoice.pk,
-        )
-        # Add history entry about the notification being sent
-        channel = "push notification" if pushed else "email"
+        invoice.email_sent_on = timezone.now()
         AuctionHistory.objects.create(
             auction=invoice.auction,
             user=None,
-            action=f"Invoice notification {channel} sent to {invoice.auctiontos_user.name} ({email})",
+            action=f"Invoice notification email sent to {invoice.auctiontos_user.name} ({email})",
             applies_to="INVOICES",
         )
 
@@ -1002,6 +990,8 @@ def send_club_member_welcome_emails(self):
     members = ClubMember.objects.filter(
         is_deleted=False,
         welcome_email_sent=False,
+        # Unticked is held, not done: welcome_email_sent stays False until their first payment.
+        send_welcome_email=True,
         createdon__lte=timezone.now() - datetime.timedelta(hours=24),
     ).select_related("club")
     for member in members:
@@ -1011,16 +1001,9 @@ def send_club_member_welcome_emails(self):
 def _send_one_welcome(member):
     from auctions.models import ClubHistory
 
-    update_fields = ["welcome_email_sent"]
     member.welcome_email_sent = True
-    if member.source == "csv":
-        if member.send_welcome_email:
-            member.send_welcome_email = False
-            update_fields.append("send_welcome_email")
-        member.save(update_fields=update_fields)
-        return
     # Marked first: if anything after the send raises, the member is not welcomed again every night.
-    member.save(update_fields=update_fields)
+    member.save(update_fields=["welcome_email_sent"])
     if member.send_welcome_email and member.club.send_welcome_email_to_new_members:
         sent = send_club_member_email(
             member,
@@ -1076,6 +1059,7 @@ def _run_reminder_pass(now, today, due_field, subject, message, label):
         membership_expiration_date__gte=today,
         # PayPal subscribers auto-renew; their due timestamp stays, so reminders resume if cancelled.
         paypal_subscription_id="",
+        membership_carried_by__isnull=True,
         **{f"{due_field}__lte": now},
     ).select_related("club")
     for member in members:
@@ -1155,6 +1139,22 @@ def sync_club_calendars(self):
 def auction_emails(self):
     """Send auction-related drip marketing emails."""
     call_command("auction_emails")
+
+
+@shared_task(bind=True, ignore_result=True)
+def refresh_help_stats(self):
+    """Count the numbers the help guides quote (``help_stats.refresh``). Daily, or when a guide finds none."""
+    from auctions import help_stats
+
+    help_stats.refresh(run=_safely)
+
+
+@shared_task(bind=True, ignore_result=True)
+def send_auction_surveys(self):
+    """Email "How was <auction>?" to everyone with an invoice, for auctions asking separately. Hourly."""
+    from auctions.auction_survey import send_survey_emails
+
+    send_survey_emails()
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -1831,3 +1831,48 @@ def summarize_donation_email(email_pk):
     email_row = DonationEmail.objects.select_related("vendor__club").filter(pk=email_pk).first()
     if email_row and not email_row.summary:
         donations.summarize_incoming(email_row)
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=3600, time_limit=3660, max_retries=None)
+def index_document(self, document_pk):
+    """Read, chunk, embed and tag one library document. Routed to the ``documents`` queue (celery.py),
+    with an hour's limit: a scanned newsletter is one vision call per page. While another run holds the
+    document, waits for it rather than dropping a change saved in the meantime.
+    """
+    from auctions.documents.index import index_document as run
+
+    if not run(document_pk):
+        raise self.retry(countdown=60)
+
+
+@shared_task(bind=True, ignore_result=True)
+def requeue_stuck_documents(self):
+    """Re-queue library documents nobody is reading. See :func:`auctions.documents.index.requeue_stuck`."""
+    from auctions.documents import index, stitch
+
+    index.requeue_stuck()
+    stitch.requeue_stuck()
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=3600, time_limit=3660, max_retries=None)
+def process_document_batch(self, batch_pk):
+    """Read and stitch a batch of library pages, a slice at a time (``auctions.documents.stitch``), queueing
+    the next slice behind whatever else the documents worker has waiting.
+    """
+    from auctions.documents import stitch
+
+    outcome = stitch.process(batch_pk)
+    if outcome == stitch.LOCKED:
+        raise self.retry(countdown=60)
+    if outcome == stitch.MORE:
+        stitch._send(batch_pk)
+
+
+@shared_task(bind=True, ignore_result=True)
+def tidy_library(self):
+    """Nightly: bring a bounded number of library documents up to date with today's models. See
+    :func:`auctions.documents.index.tidy`.
+    """
+    from auctions.documents.index import tidy
+
+    tidy()

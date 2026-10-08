@@ -49,12 +49,9 @@ from auctions.forms import (
 )
 from auctions.history import record_club_history
 from auctions.models import (
-    AuctionTOS,
-    BapAward,
     ClubHistory,
     ClubMember,
     Invoice,
-    InvoicePayment,
     PayPalSeller,
     SquareSeller,
     UserLabelPrefs,
@@ -236,6 +233,13 @@ class ClubBarcodeLabelsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         context["club"] = self.club
         prefs, _ = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context["preset_name"] = dict(UserLabelPrefs.PRESETS).get(prefs.preset, prefs.preset)
+        # The auction the club sidebar shows, when it's one that paddles can be printed for.
+        auction = self.club.current_auction
+        context["paddles_url"] = (
+            reverse("auction_paddles", kwargs={"slug": auction.slug})
+            if auction and not auction.is_online and not auction.is_deleted
+            else ""
+        )
         return context
 
 
@@ -428,8 +432,14 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
     def _get_member(self, pk):
         return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
 
+    def _refuse_carried(self, member):
+        messages.error(self.request, f"{member}'s membership is carried with {member.membership_carried_by}'s.")
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
     def get(self, request, slug, pk):
         member = self._get_member(pk)
+        if member.membership_carried_by_id:
+            return self._refuse_carried(member)
         context = {
             "club": self.club,
             "member": member,
@@ -440,6 +450,8 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
+        if member.membership_carried_by_id:
+            return self._refuse_carried(member)
         next_url = request.POST.get("next", "")
         date_str = request.POST.get("membership_expiration_date", "")
         try:
@@ -451,6 +463,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
                 error_redirect += "?" + urlencode({"next": next_url})
             return redirect(error_redirect)
         old_expiration = member.membership_expiration_date
+        had_paid = member.has_ever_paid
         member.membership_expiration_date = new_expiration
         member._preserve_membership_email_schedule = True
         member.save(
@@ -460,6 +473,8 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
                 "membership_expiration_reminder_due",
             ]
         )
+        # A first date for somebody who never paid makes them a member: a held letter goes now.
+        member.welcome_after_first_payment(had_paid)
         old_str = old_expiration.strftime("%-m/%-d/%Y") if old_expiration else "none"
         new_str = new_expiration.strftime("%-m/%-d/%Y")
         ClubHistory.objects.create(
@@ -483,7 +498,7 @@ class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView)
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if not (self.club.membership_annual_fee and (self.club.can_accept_paypal or self.club.can_accept_square)):
+        if not (self.club.charges_dues and (self.club.can_accept_paypal or self.club.can_accept_square)):
             raise Http404
         # Members whose dues are current have nothing to pay.
         if request.user.is_authenticated:
@@ -607,7 +622,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     if check_club_permission(self.request.user, self.club, "permission_admin")
                     else "The removed member's club roles are not carried over; a club admin can set them."
                 ),
-                "Any missing Discord ID, points, or paid-through date on the kept member will be copied over.",
+                "Anything the kept member is missing is filled in, and the later paid-through date wins.",
             ],
             "target_field_name": "target",
             "cancel_url": cancel_url,
@@ -646,57 +661,14 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             if review_form.is_valid():
                 with transaction.atomic():
                     target = review_form.save()
-                    update_fields = set(review_form.changed_data)
-                    for field in [
-                        "discord_id",
-                        "bap_points",
-                        "hap_points",
-                        "membership_last_paid",
-                        "membership_expiration_date",
-                    ]:
-                        source_val = getattr(source, field, None)
-                        target_val = getattr(target, field, None)
-                        if source_val is not None and not target_val:
-                            setattr(target, field, source_val)
-                            update_fields.add(field)
-                    # Carrying roles over is granting them, which only a club admin may do
-                    # (ClubMemberPermissionsView): otherwise add/edit could merge the president into
-                    # their own row and come out an admin.
-                    can_grant_roles = check_club_permission(request.user, self.club, "permission_admin")
-                    for perm_field in [
-                        "permission_admin",
-                        "permission_view",
-                        "permission_export",
-                        "permission_add_edit",
-                        "permission_edit_club",
-                        "permission_money",
-                        "permission_manage_auctions",
-                        "permission_manage_bap",
-                        "permission_manage_donations",
-                        "permission_send_announcements",
-                    ]:
-                        if not can_grant_roles:
-                            break
-                        if getattr(source, perm_field, False) and not getattr(target, perm_field, False):
-                            setattr(target, perm_field, True)
-                            update_fields.add(perm_field)
-                    if target.is_deleted:
-                        target.is_deleted = False
-                        update_fields.add("is_deleted")
-                    if update_fields:
-                        target.save(update_fields=list(update_fields))
-                    source_name = str(source)
-                    # Re-point related records before deactivating.
-                    AuctionTOS.objects.filter(clubmember=source).update(clubmember=target)
-                    BapAward.objects.filter(club_member=source).update(club_member=target)
-                    InvoicePayment.objects.filter(club_member=source).update(club_member=target)
-                    source.is_deleted = True
-                    source.save(update_fields=["is_deleted"])
-                    ClubHistory.objects.create(
-                        club=self.club,
+                    target.merge_duplicate(
+                        source,
                         user=request.user,
-                        action=f"Merged member {source_name} into {target}",
-                        applies_to="MEMBERS",
+                        # Carrying roles over is granting them, which only a club admin may do
+                        # (ClubMemberPermissionsView): otherwise add/edit could merge the president into
+                        # their own row and come out an admin.
+                        can_grant_roles=check_club_permission(request.user, self.club, "permission_admin"),
+                        reviewed_fields=ClubMemberMergeReviewForm.Meta.fields,
                     )
                 messages.success(request, f"Merged {source} into {target}.")
                 return redirect(next_url or reverse("club_admin", kwargs={"slug": self.club.slug}))

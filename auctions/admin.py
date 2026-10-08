@@ -60,6 +60,7 @@ from .models import (
     Species,
     SpeciesCommonName,
     SpeciesNameRejection,
+    SpeciesNameVote,
     SpeciesSearchCache,
     ThermalPrinterProfile,
     UserAPIKey,
@@ -208,10 +209,12 @@ class InterestInline(admin.TabularInline):
 
 class UserdataInline(admin.StackedInline):
     model = UserData
+    fk_name = "user"
     can_delete = False
     verbose_name_plural = "User data"
     exclude = (
         "unsubscribe_link",
+        "merge_into_user",
         "rank_unique_species",
         "number_unique_species",
         "rank_total_lots",
@@ -598,7 +601,7 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
                     "Only one of these exists — saving a second edits the first. The app merges "
                     "what it gets here over the grammar it ships with, so a blank-ish row is safe."
                 ),
-                "fields": ("enabled", "backend", "locale", "prefer_on_device"),
+                "fields": ("enabled", "backend", "locale", "prefer_on_device", "cloud_model"),
             },
         ),
         (
@@ -606,7 +609,7 @@ class VoiceGrammarAdmin(admin.ModelAdmin):
             {
                 "description": (
                     "Anchors say which field a spoken number belongs to. Homophones are the pairs "
-                    "a room with a PA system cannot distinguish — the app offers both rather than "
+                    "a room with a PA system cannot distinguish — voice offers both rather than "
                     "guessing between them."
                 ),
                 "fields": ("anchors", "number_words", "homophones"),
@@ -1242,13 +1245,25 @@ class SpeciesAdmin(admin.ModelAdmin):
 class SpeciesSearchCacheAdmin(admin.ModelAdmin):
     model = SpeciesSearchCache
     menu_label = "Species name cache"
-    # accepts and rejects decide whether an answer is kept (species_matching.record_choice).
-    list_display = ("search_text", "species", "source", "created_by", "hits", "accepts", "rejects", "createdon")
+    # Whether an answer is kept is decided by SpeciesNameVote rows (species_matching.record_choice).
+    list_display = ("search_text", "species", "source", "created_by", "hits", "createdon")
     list_select_related = ("species", "created_by")
     list_filter = ("source",)
     search_fields = ("search_text", "species__scientific_name")
     # Delete a row to make the site look a name up again.
     autocomplete_fields = ("species",)
+
+
+class SpeciesNameVoteAdmin(admin.ModelAdmin):
+    """Each lot's say on the species offered for its name: the evidence behind a retirement."""
+
+    model = SpeciesNameVote
+    menu_label = "Species name votes"
+    list_display = ("search_text", "species", "agrees", "chosen", "lot", "user", "updatedon")
+    list_select_related = ("species", "chosen", "lot", "user")
+    list_filter = ("agrees",)
+    search_fields = ("search_text", "species__scientific_name")
+    raw_id_fields = ("lot", "species", "chosen", "user")
 
 
 class SpeciesNameRejectionAdmin(admin.ModelAdmin):
@@ -1376,6 +1391,7 @@ admin.site.register(Species, SpeciesAdmin)
 admin.site.register(SpeciesCommonName, SpeciesCommonNameAdmin)
 admin.site.register(SpeciesSearchCache, SpeciesSearchCacheAdmin)
 admin.site.register(SpeciesNameRejection, SpeciesNameRejectionAdmin)
+admin.site.register(SpeciesNameVote, SpeciesNameVoteAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(LotHistory, ChatAdmin)

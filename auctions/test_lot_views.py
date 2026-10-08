@@ -3,7 +3,7 @@
 from datetime import timedelta
 from unittest.mock import MagicMock
 
-from django.urls import reverse
+from django.urls import resolve, reverse
 from django.utils import timezone
 
 from auctions.models import (
@@ -18,6 +18,7 @@ from auctions.models import (
     Watch,
 )
 from auctions.tests import StandardTestCase, patch_views
+from auctions.views import UnprintedLotLabelsView
 
 
 class LotLabelViewTestCase(StandardTestCase):
@@ -172,6 +173,13 @@ class LotLabelViewTestCase(StandardTestCase):
             str(messages[0])
             == "You haven't joined this auction yet.  You need to join this auction and add lots before you can print labels."
         )
+
+    def test_unprinted_labels_by_bidder_number_reaches_the_unprinted_view(self):
+        """The Users tab's "Print only N unprinted labels" link was swallowed by the <path:> route."""
+        url = reverse("print_unprinted_labels_by_bidder_number", kwargs={"slug": "x", "bidder_number": "14"})
+        match = resolve(url)
+        self.assertIs(match.func.view_class, UnprintedLotLabelsView)
+        self.assertEqual(match.kwargs["bidder_number"], "14")
 
     def test_no_printable_lots(self):
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
@@ -336,7 +344,9 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
         assert response.status_code == 200
         self.assertContains(response, "You'll get a notification when bidding starts on this lot")
-        self.assertContains(response, "More information")
+        # "How it works" is the help, not a pop-up of its own.
+        self.assertContains(response, f"/help/in-person-auctions/?auction={self.in_person_auction.slug}#coming-up")
+        self.assertNotContains(response, "notification-help")
         self.assertNotContains(response, 'id="test-notification"')
 
     def test_anonymous_user_does_not_see_test_notification_controls(self):
@@ -370,6 +380,21 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         with patch_views("send_user_notification") as mock_notify:
             response = self.client.post(self.get_url())
+        assert response.status_code == 400
+        mock_notify.assert_not_called()
+
+    def test_the_help_page_test_needs_no_lot(self):
+        self._setup_watcher_with_push()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch_views("send_user_notification") as mock_notify:
+            response = self.client.post(reverse("push_test"))
+        assert response.status_code == 200
+        assert mock_notify.call_args.kwargs["payload"]["url"].endswith("/help/in-person-auctions/#coming-up")
+
+    def test_the_help_page_test_without_push_gets_400(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch_views("send_user_notification") as mock_notify:
+            response = self.client.post(reverse("push_test"))
         assert response.status_code == 400
         mock_notify.assert_not_called()
 

@@ -7,10 +7,13 @@
 ``complete_json(system, messages)`` returns one JSON object, for data answers (species names,
 donation emails, talk lists). ``complete(system, messages, tools)`` lets the model call a tool
 from JSON Schemas built by :mod:`auctions.mcp.tools`, which the provider enforces; the palette uses
-it. Both return an :class:`LLMResult` with token usage.
+it, and the library sends it pictures to read. Both return an :class:`LLMResult` with token usage.
+``embed(texts, model)`` returns vectors for the library's search; a provider without it raises
+:class:`LLMError` and the library falls back to keyword search.
 
 To add a provider, subclass ``LLMProvider``, implement ``complete_json``, ``complete`` and
-``is_configured``, add it to ``_PROVIDERS``, and set ``LLM_PROVIDER``.
+``is_configured`` (and ``embed`` if it has embeddings), add it to ``_PROVIDERS``, and set
+``LLM_PROVIDER``.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ DEFAULT_MAX_TOKENS = 2000
 DEFAULT_REASONING_EFFORT = "minimal"
 
 # Keys older models or compatible servers may not know; dropped one at a time on rejection.
-OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort", "tool_choice")
+OPTIONAL_PARAMETERS = ("max_completion_tokens", "reasoning_effort", "tool_choice", "dimensions")
 
 
 class LLMError(Exception):
@@ -89,6 +92,15 @@ class LLMResult:
         return self.prompt_tokens + self.completion_tokens
 
 
+@dataclass
+class EmbeddingResult:
+    """One vector per input text, in order, and what they cost."""
+
+    vectors: list[list[float]]
+    model: str = ""
+    prompt_tokens: int = 0
+
+
 class LLMProvider:
     """Base class for chat providers that can be asked to return a JSON object."""
 
@@ -139,6 +151,11 @@ class LLMProvider:
         msg = "complete must be implemented by a subclass"
         raise NotImplementedError(msg)
 
+    def embed(self, texts: list[str], model: str, dimensions: int = 0) -> EmbeddingResult:
+        """Vectors for ``texts``, shortened to ``dimensions`` where the model allows. Raises :class:`LLMError`."""
+        msg = f"The {self.name} provider has no embeddings"
+        raise LLMError(msg)
+
 
 class OpenAIProvider(LLMProvider):
     """OpenAI or any compatible endpoint (``LLM_BASE_URL``) via chat-completions, on ``httpx``."""
@@ -146,9 +163,8 @@ class OpenAIProvider(LLMProvider):
     name = "openai"
     default_base_url = "https://api.openai.com/v1"
 
-    @property
-    def _endpoint(self) -> str:
-        return f"{(self.base_url or self.default_base_url).rstrip('/')}/chat/completions"
+    def _endpoint(self, path: str = "chat/completions") -> str:
+        return f"{(self.base_url or self.default_base_url).rstrip('/')}/{path}"
 
     def _payload(self, system: str, messages: list[dict[str, Any]], max_tokens: int) -> dict[str, Any]:
         """The half of the request body that is the same however we are asking."""
@@ -162,14 +178,14 @@ class OpenAIProvider(LLMProvider):
             payload["reasoning_effort"] = self.reasoning_effort
         return payload
 
-    def _send(self, payload: dict[str, Any], max_tokens: int) -> dict[str, Any]:
+    def _send(self, payload: dict[str, Any], max_tokens: int, path: str = "chat/completions") -> dict[str, Any]:
         """POST the payload, dropping one optional parameter at a time if rejected."""
         if not self.is_configured():
             msg = "No API key configured for the OpenAI provider"
             raise LLMError(msg)
         for _attempt in range(len(OPTIONAL_PARAMETERS) + 1):
             try:
-                return self._post(payload)
+                return self._post(payload, path)
             except UnsupportedParameter as rejected:
                 logger.info("%s does not accept %s; retrying without it", self.model, rejected.name)
                 payload.pop(rejected.name, None)
@@ -205,12 +221,32 @@ class OpenAIProvider(LLMProvider):
             payload["tool_choice"] = tool_choice or "auto"
         return self._parse_tools(self._send(payload, max_tokens))
 
-    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def embed(self, texts: list[str], model: str, dimensions: int = 0) -> EmbeddingResult:
+        payload: dict[str, Any] = {"model": model, "input": list(texts)}
+        if dimensions:
+            # Only the text-embedding-3 family takes it; ``_send`` drops it for one that doesn't.
+            payload["dimensions"] = dimensions
+        body = self._send(payload, 0, path="embeddings")
+        try:
+            rows = sorted(body["data"], key=lambda row: row["index"])
+            vectors = [list(row["embedding"]) for row in rows]
+        except (KeyError, TypeError) as error:
+            msg = "Embedding response was missing its vectors"
+            raise LLMError(msg) from error
+        if len(vectors) != len(texts):
+            msg = f"Asked for {len(texts)} embeddings and got {len(vectors)}"
+            raise LLMError(msg)
+        usage = body.get("usage") or {}
+        return EmbeddingResult(
+            vectors=vectors, model=str(body.get("model") or model), prompt_tokens=int(usage.get("prompt_tokens") or 0)
+        )
+
+    def _post(self, payload: dict[str, Any], path: str = "chat/completions") -> dict[str, Any]:
         """POST and return the response body; raises :class:`UnsupportedParameter` for a rejected optional key."""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(self._endpoint, headers=headers, json=payload)
+                response = client.post(self._endpoint(path), headers=headers, json=payload)
         except httpx.HTTPError as error:
             msg = f"Could not reach the language model: {error}"
             raise LLMError(msg) from error
@@ -356,17 +392,22 @@ def set_provider_override(provider: LLMProvider | None) -> None:
     _provider_override = provider
 
 
-def get_provider() -> LLMProvider:
-    """Build the configured provider from settings. It may be unconfigured; check ``is_configured()``."""
+def get_provider(model: str = "", timeout: float | None = None) -> LLMProvider:
+    """Build the configured provider from settings. It may be unconfigured; check ``is_configured()``.
+
+    ``model`` and ``timeout`` override ``LLM_MODEL`` and the per-call default for one caller (the
+    library's vision reads are slower than a palette round). The test override ignores both.
+    """
     if _provider_override is not None:
         return _provider_override
     name = (getattr(settings, "LLM_PROVIDER", "") or OpenAIProvider.name).lower()
     provider_class = _PROVIDERS.get(name, OpenAIProvider)
     effort = getattr(settings, "LLM_REASONING_EFFORT", None)
     return provider_class(
-        model=getattr(settings, "LLM_MODEL", "") or "gpt-5-nano",
+        model=model or getattr(settings, "LLM_MODEL", "") or "gpt-5-nano",
         api_key=getattr(settings, "OPENAI_API_KEY", "") or "",
         base_url=getattr(settings, "LLM_BASE_URL", "") or "",
+        timeout=timeout,
         # Unset means the default; empty means don't send it.
         reasoning_effort=DEFAULT_REASONING_EFFORT if effort is None else effort,
     )

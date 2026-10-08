@@ -284,6 +284,7 @@ class BuyerFunnelTests(StandardTestCase):
 
 class DashboardTests(StandardTestCase):
     def test_a_superuser_sees_all_four_panels(self):
+        """Adoption is a pointer to the rules guide now; the numbers are there, beside each setting."""
         self.admin_user.is_superuser = True
         self.admin_user.save()
         self.client.login(username="admin_user", password="testpassword")

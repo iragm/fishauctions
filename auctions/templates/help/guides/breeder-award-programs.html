@@ -1,0 +1,64 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. The breeder award program: members' half first, then the BAP chair's. Eligibility is Lot.unsold_lot_no_bap_reason; points are Lot.bap_points_for_club (genus override, category override, flat rate, category default). The reasons table quotes BAP_REASON_CHOICES.{% endcomment %}
+<p>A breeder award program gives members points for fish they bred themselves, and a leaderboard to show off. Here, points come from lots sold in your club's auctions: a member ticks "I bred this", the lot sells, and the points are theirs. Plants (HAP) and live food cultures (CAP) can have programs of their own.</p>
+{% if help.club and help.is_club_admin %}{% helptip %}{{ help.club.name }} has the breeder award program {% if help.club.enable_breeder_award_program %}on{% if help.club.auto_add_points %}, awarding points by itself{% else %}, with points waiting for approval{% endif %}{% else %}off{% endif %}.{% endhelptip %}{% endif %}
+
+<h2 class="h5 mt-4" id="for-members">For members</h2>
+<ol>
+  <li>Add your lot to one of your club's auctions as usual.</li>
+  <li>Pick the species from the list. Points depend on what it is, and a lot with no species may not earn any.</li>
+  <li>Tick {% ui "I bred this" %}.</li>
+  <li>When it sells, you get the points. Your club may check each one first.</li>
+</ol>
+{% if help.bred_species.rows %}<p>Bred most often here lately: {% for row in help.bred_species.rows %}{{ row.name }}{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+{% endif %}<p>The club page has a leaderboard for each program, this year's or all time, and your own points under {% page "club_detail_tab" "My points" %}. The {% page "selling" "Selling" %} page, searched for "bap", lists every lot you've had points for.</p>
+<p>Points go to the club member who sold the lot, matched by your account or your email. Selling under a different email from the one your club has? Your points go nowhere until the club fixes it.</p>
+{% mike %}Mike ticked "I bred this" on a bag of platys he bought at the last auction. The BAP chair recognized the bag. Tick it only for fish that were born in your tanks.{% endmike %}
+{% aitip %}Ask "how many breeder award points do I have?"{% endaitip %}
+
+<h2 class="h5 mt-4" id="setup">Turning it on</h2>
+<ol>
+  <li>Tick {% ui "Enable breeder award program" %} in the club's {% page "club_edit" "General" %} settings.</li>
+  <li>Give your BAP chair the {% ui "Award points" %} permission. They don't need anything else.</li>
+  <li>Set the rules on {% page "club_bap_settings" "BAP settings" %}, under Setup.</li>
+  <li>Coming from a spreadsheet? Bring your old points across: see <a href="#import">below</a>.</li>
+</ol>
+
+<h2 class="h5 mt-4" id="rules">The rules</h2>
+<p>Every rule is on {% page "club_bap_settings" "BAP settings" %}. Start with the defaults and change one when somebody finds a way round it.</p>
+{% tip %}Change the rules at the start of the year, and tell members at a meeting. A rule that changes in September feels like somebody's being targeted.{% endtip %}
+
+<h2 class="h5 mt-4" id="approving">Approving points</h2>
+<p>{% page "club_bap_lots" "BAP" %}, in the club's menu, lists every lot from your club's auctions that a member sold. Filter it by {% ui "Pending" %}, {% ui "Approved" %}, {% ui "Rejected" %} or {% ui "Non-BAP (no checkbox)" %}.</p>
+{% tip %}Running a separate HAP program and someone's plants ended up as cichlids? Click the category under the lot's name and change it to "Aquatic plants".{% endtip %}
+<p>The {% ui "Reason" %} column says why a lot didn't get points by itself. The last three are rules you can switch on or off in {% page "club_bap_settings" "BAP settings" %}:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>{% ui "Didn't breed this fish" %}</th><td>"I bred this" wasn't ticked. If they did breed it, approve it anyway.</td></tr>
+    <tr><th>{% ui "Not a club member" %}</th><td>The seller isn't on your member list under that account or email. Add them, or fix their email, and approve.</td></tr>
+    <tr><th>{% ui "Not an active club member" %}</th><td>Their membership had lapsed.</td></tr>
+    <tr><th>{% ui "Not long enough since last submission" %}</th><td>The days-between rules.</td></tr>
+    <tr><th>{% ui "Quantity below club minimum" %}</th><td>{% ui "Min quantity" %}.</td></tr>
+    <tr><th>{% ui "Category not eligible (BAP points = 0)" %}</th><td>Equipment, or a category you've set to 0.</td></tr>
+    <tr><th>{% ui "Species not eligible for breeder points" %}</th><td>A species the site's list says can't earn them.</td></tr>
+    <tr><th>{% ui "Lot has a minimum bid set" %}</th><td>The seller set their own minimum bid on the lot, above the auction's. Only happens with {% ui "No minimum bids" %} on.</td></tr>
+    <tr><th>{% ui "Lot is not a donation" %}</th><td>The seller didn't mark the lot as a donation. Only happens with {% ui "Only donation lots" %} on.</td></tr>
+    <tr><th>{% ui "Not sold" %}</th><td>Nobody bought the lot. Only happens with {% ui "Only sold lots" %} on; turn it off and unsold lots earn points too.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 class="h5 mt-4" id="other-points">Points that didn't come from a lot</h2>
+<p>{% page "club_bap" "View awarded points" %} lists every award. {% ui "Add points" %} gives a member points by hand: a spawning report, a talk, a fish they bred and gave away at a meeting.</p>
+<h3 class="h6 mt-3" id="import">Bringing in old points</h3>
+<p>{% ui "Import CSV" %}, on the same page, takes a spreadsheet with an <strong>Email</strong> column, which has to match a member, and any of BAP, HAP, CAP, Date and Notes. You see what will be added before anything is. {% page "club_bap_import" "Importing" %} only ever adds: it never changes or deletes an award, so check the preview before you import the same file twice.</p>
+{% aitip %}Ask "what points are waiting for approval?", then "approve the points for lot 14" or "give Bob 10 points for the corydoras".{% endaitip %}
+
+<h2 class="h5 mt-4" id="showing">Showing it off</h2>
+<ul>
+  <li>The club page's leaderboards switch between {% ui "Year to date only" %} and all time. The year's totals start again on January 1st.</li>
+  <li>The {% page "bap_embed" "leaderboard snippet" %} puts your top ten on your own website. See <a href="{% url 'help_guide' slug='club-events' %}#website">Events and your website</a>.</li>
+  <li>Discord roles can follow points: "Master breeder" at 500. See <a href="{% url 'help_guide' slug='club-email' %}#discord">Discord</a>.</li>
+  <li>An API key with {% ui "Can use BAP points and lots" %} lets your own BAP spreadsheet or program read and add points.</li>
+</ul>

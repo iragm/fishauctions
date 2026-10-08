@@ -100,9 +100,16 @@ def on_save_auction(sender, instance, **kwargs):
 
     # if this is an existing auction
     if instance.pk:
-        logger.info("updating date end on lots because this is an existing auction")
         if instance.date_end:
-            if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
+            # A lot takes the auction's end when it's added, so moving the auction's end has to move its
+            # lots. Only until the last hour of the old end: after that, dynamic endings own each lot's end.
+            old_end = type(instance).objects.filter(pk=instance.pk).values_list("date_end", flat=True).first()
+            moved_in_time = (
+                old_end is not None
+                and old_end != instance.date_end
+                and timezone.now() < old_end - datetime.timedelta(hours=1)
+            )
+            if moved_in_time or instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
                 from auctions.models import Lot
 
                 lots = Lot.objects.exclude(is_deleted=True).filter(
@@ -300,6 +307,16 @@ def remove_event_from_calendars(sender, instance, **kwargs):
         club_events._remove_remote(instance)
     except Exception:
         logger.exception("Could not remove calendar event %s from Google and Discord", instance.pk)
+
+
+@receiver(pre_delete, sender="auctions.ClubMember")
+def release_carried_memberships(sender, instance, **kwargs):
+    """Free whoever this member carries before the row goes, through save(), so their own reminders
+    restart. on_delete=SET_NULL alone is a bare UPDATE. Deactivating is handled in ClubMember.save.
+    """
+    for carried in instance.carried_memberships.all():
+        carried.membership_carried_by = None
+        carried.save(update_fields=["membership_carried_by"])
 
 
 @receiver(pre_save, sender="auctions.ClubMember")
@@ -893,6 +910,45 @@ def on_uploaded_image_deleted(sender, instance, **kwargs):
             purge_edge_cache.delay(absolute)
 
     transaction.on_commit(delete_files)
+
+
+@receiver(post_delete, sender="auctions.Document")
+def on_document_deleted(sender, instance, **kwargs):
+    """Delete a library document's file once the delete commits -- including when its club goes.
+
+    Never served from ``/media/``, so there is no edge cache to purge.
+    """
+    field_file = instance.file
+    if not field_file or not field_file.name:
+        return
+
+    def delete_file():
+        try:
+            field_file.delete(save=False)
+        except Exception:
+            logger.exception("Could not delete the file for document %s", instance.pk)
+
+    transaction.on_commit(delete_file)
+
+
+@receiver(post_delete, sender="auctions.BatchPage")
+def on_batch_page_deleted(sender, instance, **kwargs):
+    """Delete a scanned page's files once the delete commits. A PDF's pages share its file, so that goes
+    with the last of them.
+    """
+    files = [instance.image] if instance.image else []
+    if instance.file and not sender.objects.filter(file=instance.file.name).exists():
+        files.append(instance.file)
+
+    def delete_files():
+        for field_file in files:
+            try:
+                field_file.delete(save=False)
+            except Exception:
+                logger.exception("Could not delete a file of batch page %s", instance.pk)
+
+    if files:
+        transaction.on_commit(delete_files)
 
 
 @receiver(post_save, sender="auctions.ThermalPrinterProfile")

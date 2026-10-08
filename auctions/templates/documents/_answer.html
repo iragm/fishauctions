@@ -1,0 +1,12 @@
+{% if result.error %}
+<p class="mb-0 text-muted">{{ result.error }}</p>
+{% else %}
+<p class="mb-2" style="white-space: pre-line;">{{ result.answer }}</p>
+{% if result.sources %}
+<div class="small text-muted">
+  {% for number, hit in result.sources %}
+  <div>[{{ number }}] <a href="{% url 'document_detail' hit.document.pk %}{% if hit.chunk.start %}#at-{{ hit.chunk.start }}{% endif %}">{{ hit.document.display_title }}</a>{% if hit.document.year %} ({{ hit.document.year }}){% endif %}</div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endif %}

@@ -7,7 +7,9 @@
     {% include "partials/club_member_uuid_card.html" %}
     {% if membership_invoice %}
       {% include "partials/membership_payment_inline.html" %}
-    {% elif club.membership_annual_fee and is_paid_member and not is_expired and not expiring_soon %}
+    {% elif member.membership_carried_by_id %}
+      <p class="text-muted small text-center mt-3">Your membership comes with {{ member.membership_carried_by }}'s.</p>
+    {% elif club.charges_dues and is_paid_member and not is_expired and not expiring_soon %}
       <p class="text-muted small text-center mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
     {% endif %}
   </div>

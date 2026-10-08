@@ -323,6 +323,17 @@ class SendInvoiceNotificationTaskTestCase(TestCase):
             email="",  # No email
         )
 
+    @patch("auctions.tasks.send_push_to_user.delay")
+    @patch("auctions.notifications.user_prefers_push", return_value=True)
+    @patch("auctions.tasks.mail.send")
+    def test_an_app_user_who_prefers_push_still_gets_the_email(self, mock_mail_send, prefers, push):
+        invoice = Invoice.objects.create(
+            auctiontos_user=self.tos_with_email, auction=self.auction, status="UNPAID", email_sent=False
+        )
+        tasks.send_invoice_notification(invoice.pk)
+        mock_mail_send.assert_called_once()
+        push.assert_not_called()
+
     @patch("auctions.tasks.mail.send")
     def test_sends_email_for_invoice(self, mock_mail_send):
         """Test that the task sends an email for an invoice."""

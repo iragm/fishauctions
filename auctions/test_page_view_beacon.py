@@ -107,7 +107,7 @@ class OneViewPerPageTests(StandardTestCase):
     def test_a_page_that_never_opted_in_records_one(self):
         """105 pages gained the beacon this way; login and signup are the two this phase is for."""
         self.client.login(username="my_lot", password="testpassword")
-        page = self.client.get(reverse("user_api_keys")).content.decode()
+        page = self.client.get(reverse("preferences")).content.decode()
         self.assertEqual(page.count("pageView(pageViewSubject)"), 1)
 
 

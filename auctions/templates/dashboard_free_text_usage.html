@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Adjustments and custom fields{% endblock %}
+{% block content %}
+<h3>Adjustments and custom fields</h3>
+<p class="text-muted small">Each text is in the group of its word that the most auctions use; groups only one auction uses are folded away at the end of each section.</p>
+
+<h4 class="mt-4">Invoice adjustment notes</h4>
+{% with section=adjustments %}
+<p class="small">{{ section.rows }} adjustments in {{ section.auctions }} auctions. Common words: {% for term, n in section.terms %}{{ term }} ({{ n }}){% if not forloop.last %}, {% endif %}{% endfor %}</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <thead><tr><th>Term</th><th>Auctions</th><th>Uses</th><th>Charges</th><th>Discounts</th><th>Median amount</th><th>Wording</th></tr></thead>
+  <tbody>
+    {% for group in section.groups %}
+    <tr>
+      <td>{{ group.term|default:"(no words)" }}</td><td>{{ group.auctions }}</td><td>{{ group.uses }}</td>
+      <td>{{ group.columns.charges }}</td><td>{{ group.columns.discounts }}</td><td>{{ group.columns.median|floatformat:2 }}</td>
+      <td class="small">{% for text, n in group.phrases %}{{ text }} ({{ n }}){% if not forloop.last %}; {% endif %}{% endfor %}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7" class="text-muted">No term is used by more than one auction.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% include "dashboard_free_text_singles.html" %}
+{% endwith %}
+
+{% for section in fields %}
+<h4 class="mt-4">{{ section.title }}</h4>
+<p class="small">{% if section.typed %}{{ section.rows }} lots in {{ section.auctions }} auctions.{% else %}{{ section.auctions }} auctions have it on.{% endif %} Common words: {% for term, n in section.terms %}{{ term }} ({{ n }}){% if not forloop.last %}, {% endif %}{% endfor %}</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <thead><tr><th>Term</th><th>Auctions</th>{% if section.typed %}<th>Lots</th><th>Values</th>{% else %}<th>Lots filled</th><th>Names</th><th>Options</th>{% endif %}</tr></thead>
+  <tbody>
+    {% for group in section.groups %}
+    <tr>
+      <td>{{ group.term|default:"(no words)" }}</td><td>{{ group.auctions }}</td>
+      <td>{% if section.typed %}{{ group.uses }}{% else %}{{ group.columns.lots }}{% endif %}</td>
+      <td class="small">{% for text, n in group.phrases %}{{ text }} ({{ n }}){% if not forloop.last %}; {% endif %}{% endfor %}</td>
+      {% if not section.typed %}<td class="small">{% for text, n in group.columns.options %}{{ text }} ({{ n }}){% if not forloop.last %}; {% endif %}{% endfor %}</td>{% endif %}
+    </tr>
+    {% empty %}
+    <tr><td colspan="5" class="text-muted">No term is used by more than one auction.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% include "dashboard_free_text_singles.html" %}
+{% endfor %}
+{% endblock %}

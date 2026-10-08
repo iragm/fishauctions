@@ -506,11 +506,18 @@ class WelcomeEmailTaskTests(TestCase):
         self.assertEqual(len(marked), 1)
 
     @patch("auctions.tasks.mail.send")
-    def test_csv_imports_are_marked_without_mail(self, send):
-        imported = self._member("Imported", "imp@example.com", source="csv")
+    def test_a_held_back_letter_waits(self, send):
+        imported = self._member("Imported", "imp@example.com", source="csv", send_welcome_email=False)
         tasks.send_club_member_welcome_emails()
         self.assertNotIn("imp@example.com", [c.args[0] for c in send.call_args_list])
-        self.assertEqual(self._flags(imported), (True, False))
+        # Still held, for their first payment.
+        self.assertEqual(self._flags(imported), (False, False))
+
+    @patch("auctions.tasks.mail.send")
+    def test_an_import_that_asks_for_the_letter_gets_it(self, send):
+        self._member("Imported", "imp@example.com", source="csv")
+        tasks.send_club_member_welcome_emails()
+        self.assertIn("imp@example.com", [c.args[0] for c in send.call_args_list])
 
     @patch("auctions.tasks.mail.send")
     def test_club_setting_off_marks_without_mail(self, send):

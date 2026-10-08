@@ -30,7 +30,7 @@ from bootstrap_datepicker_plus.widgets import (
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText, PrependedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
-from dal import autocomplete
+from dal import autocomplete, forward
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -587,6 +587,10 @@ QUICK_ADD_LOT_FIELDS = (
 class QuickAddLot(forms.ModelForm):
     """Add a new lot by filling out only the most important fields"""
 
+    #: The species the page filled in for this row's name, so the seller clearing it counts
+    #: (species_matching.record_choice).
+    species_offered = forms.IntegerField(required=False, widget=HiddenInput())
+
     class Meta:
         model = Lot
         fields = [
@@ -622,6 +626,9 @@ class QuickAddLot(forms.ModelForm):
         self.fields["species_category"].help_text = ""
         # No picker; see configure_species_field.
         configure_species_field(self.fields, self.auction, picker=False)
+        if self.instance.pk and "species" in self.fields:
+            # The name its species was worked out from: tabbing through the box mustn't redo it.
+            self.fields["species"].widget.attrs["data-last-query"] = self.instance.lot_name
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
         else:
@@ -2280,6 +2287,18 @@ class CreateAuctionForm(forms.ModelForm):
 class AuctionEditForm(forms.ModelForm):
     """Make changes to an auction"""
 
+    #: Labels the rules page shows in place of the model's verbose names. The help guides name rules by
+    #: these (``help_tags.rule``), so a rename here is a rename there.
+    LABELS = {
+        "winning_bid_percent_to_club": "Club cut",
+        "winning_bid_percent_to_club_for_club_members": "Alternate club cut",
+        "date_start": "Bidding opens",
+        "date_end": "Bidding ends",
+        "email_users_when_invoices_ready": "Invoice notifications",
+        "user_cut": "User cut",
+        "club": "Club",
+    }
+
     user_cut = forms.IntegerField(required=False, help_text="This plus the club cut must be 100%")
     club_member_cut = forms.IntegerField(
         required=False,
@@ -2309,7 +2328,9 @@ class AuctionEditForm(forms.ModelForm):
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
             "email_users_when_invoices_ready",
+            "post_auction_survey",
             "add_membership_fee_to_invoices_for_expired_members",
+            "send_club_welcome_letter",
             "pre_register_lot_discount_percent",
             "only_approved_sellers",
             "only_approved_bidders",
@@ -2356,11 +2377,8 @@ class AuctionEditForm(forms.ModelForm):
         timezone.activate(kwargs.pop("user_timezone"))
         super().__init__(*args, **kwargs)
         # self.fields["summernote_description"].widget.attrs = {"rows": 10}
-        self.fields["winning_bid_percent_to_club"].label = "Club cut"
-        self.fields["winning_bid_percent_to_club_for_club_members"].label = "Alternate club cut"
-        self.fields["date_start"].label = "Bidding opens"
-        self.fields["date_end"].label = "Bidding ends"
-        self.fields["email_users_when_invoices_ready"].label = "Invoice notifications"
+        for name, label in self.LABELS.items():
+            self.fields[name].label = label
         self.fields[
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
@@ -2472,6 +2490,14 @@ class AuctionEditForm(forms.ModelForm):
         else:
             # Membership fee only applies when club-managed mode is enabled
             self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        # Only a club-managed auction adds people to the club; shown and hidden by JS with that choice.
+        self.fields["send_club_welcome_letter"].required = False
+        self.fields["send_club_welcome_letter"].help_text = welcome_letter_help(
+            self.instance.club if self.instance.club_id else None,
+            self.fields["send_club_welcome_letter"],
+            "Off",
+            prefix="To people this auction adds to the club.",
+        )
         # clean_manage_users_through_club rejects enabling on non-empty auctions.
         if self.instance.is_online and not self.single_club_mode:
             # Check-in mode is in-person only, except single-club mode, which defaults to it.
@@ -2484,7 +2510,6 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
-            # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
             self.fields["date_online_bidding_starts"].widget = forms.HiddenInput()
             self.fields["date_online_bidding_ends"].widget = forms.HiddenInput()
         else:
@@ -2612,6 +2637,19 @@ class AuctionEditForm(forms.ModelForm):
                 "Associate this auction with a club before enabling membership fees.",
             )
         return cleaned_data
+
+    def clean_date_end(self):
+        """Less than an hour away gives bidders no warning, and lots only follow a move made before then."""
+        date_end = self.cleaned_data.get("date_end")
+        if (
+            date_end
+            and "date_end" in self.changed_data
+            and self.instance.is_online
+            and date_end < timezone.now() + datetime.timedelta(hours=1)
+        ):
+            msg = "Bidding has to end at least an hour from now."
+            raise forms.ValidationError(msg)
+        return date_end
 
     def clean_manage_users_through_club(self):
         target = self.cleaned_data.get("manage_users_through_club") or ""
@@ -2821,6 +2859,9 @@ class AuctionEditForm(forms.ModelForm):
 
 
 class AuctionCustomFieldsForm(forms.ModelForm):
+    #: As ``AuctionEditForm.LABELS``.
+    LABELS = {"custom_field_1": "Use custom text field"}
+
     class Meta:
         model = Auction
         fields = [
@@ -2851,7 +2892,8 @@ class AuctionCustomFieldsForm(forms.ModelForm):
         self.helper.form_id = "auction-custom-fields-form"
         self.helper.form_class = "form"
         self.helper.form_tag = True
-        self.fields["custom_field_1"].label = "Use custom text field"
+        for name, label in self.LABELS.items():
+            self.fields[name].label = label
         self.helper.layout = Layout(
             HTML("""<h4>Custom fields</h4>Control what information your users can enter about lots.
                 <span class='text-warning'>For advanced users only!</span>
@@ -2922,6 +2964,9 @@ class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
 
     cloned_from = forms.IntegerField(required=False, widget=forms.HiddenInput())
+    #: Set by lot_form.html when it fills the species in from the lot name; see
+    #: species_matching.record_choice.
+    species_offered = forms.IntegerField(required=False, widget=forms.HiddenInput())
     #: Set by refreshSpeciesUI() in lot_form.html when the category picker is on screen. While closed,
     #: its posted value is a leftover and gets derived; once opened, it's the user's answer.
     category_shown = forms.BooleanField(required=False, widget=forms.HiddenInput())
@@ -3066,6 +3111,9 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].help_text = ""
         # Always rendered, shown and hidden by JS with the chosen auction.
         configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
+        if self.instance.pk:
+            # The name its species was worked out from, so focusing the name box doesn't redo it.
+            self.fields["species"].widget.attrs["data-last-query"] = self.instance.lot_name
         if selected_auction:
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
@@ -3097,6 +3145,7 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "cloned_from",
+            "species_offered",
             "image_url",
             Div(
                 Div(
@@ -3873,7 +3922,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             else:
                 self.fields["push_notifications_instead_of_email"].help_text = (
                     "Install the app and sign in on a device to enable this. Then you'll get "
-                    "notifications in the app instead of emails, for everything except account emails."
+                    "notifications in the app instead of emails, for everything except invoices and account emails."
                 )
         # App users get lot alerts in the app; no browser subscribe prompt (or in the WebView).
         has_app_push = bool(self.instance and self.instance.pk and self.instance.has_app_push)
@@ -4816,7 +4865,8 @@ class ClubEmailSettingsForm(forms.ModelForm):
         ].label = "Send expiration reminder the day before membership expires"
         self.fields["send_membership_renewal_confirmation"].label = "Send membership renewal confirmation"
         reminder_help = (
-            "Requires integrated membership payments so the email can link members back to their renewal page."
+            "Each reminder has a button to pay, so it needs integrated membership payments. "
+            "Only sent to members who have paid at least once."
         )
         self.fields["send_membership_expiration_reminders_30_days"].help_text = reminder_help
         self.fields["send_membership_expiration_reminders"].help_text = reminder_help
@@ -5211,7 +5261,7 @@ class SpeciesCommonNameForm(forms.Form):
         return cleaned_data
 
     def save(self):
-        """Create the names, and return the ones that were really new."""
+        """Create the names, and return the ones that changed: new, or approved by a superuser naming them."""
         species = self.cleaned_data["species"]
         # Superusers approve their own; others need admin approval.
         approved = bool(self.added_by and self.added_by.is_superuser)
@@ -5230,6 +5280,11 @@ class SpeciesCommonNameForm(forms.Form):
                 },
             )
             if was_created:
+                created.append(row)
+            elif approved and not row.approved:
+                # Somebody's private name, which a superuser naming it approves.
+                row.approved = True
+                row.save(update_fields=["approved"])
                 created.append(row)
         return created
 
@@ -5340,6 +5395,19 @@ class BapAwardForm(forms.ModelForm):
         self.helper.layout = Layout(*layout_fields, *([] if footer is None else [footer]))
 
 
+def welcome_letter_help(club, field, unset_word, prefix=""):
+    """Help text for a field that decides whether somebody gets the club's welcome letter, and greys the
+    field out when the club sends none. Unset, they get it when they first pay dues
+    (``ClubMember.welcome_after_first_payment``), which only happens in a club that takes dues.
+    """
+    if club and not club.send_welcome_email_to_new_members:
+        field.disabled = True
+        return f"{prefix} {club.name} doesn't send welcome letters. Turn them on from its Emails page.".strip()
+    if club is None or club.charges_dues:
+        return f"{prefix} {unset_word}, they get it when they first pay dues.".strip()
+    return prefix
+
+
 class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
     """Club admin edit form for a member. With ``auctiontos``, adds auction fields (pickup location,
     is_club_member) and hides club-wide ones (contact status, Discord).
@@ -5362,6 +5430,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             "bidder_number",
             "bidding_allowed",
             "selling_allowed",
+            "membership_carried_by",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Name"}),
@@ -5434,6 +5503,29 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             self.fields["send_welcome_email"].required = False
             if not (self.instance and self.instance.pk):
                 self.fields["send_welcome_email"].initial = True
+            letter_club = club or (self.instance.club if self.instance and self.instance.pk else None)
+            self.fields["send_welcome_email"].help_text = welcome_letter_help(
+                letter_club, self.fields["send_welcome_email"], "Unticked"
+            )
+
+        # Editing only, here and from a club-managed auction's user list, where some clubs keep their whole
+        # member list. Dropped rather than hidden, so a form without it never clears it.
+        member = self.instance if self.instance and self.instance.pk else None
+        club_for_member = club or (member.club if member else None)
+        show_carried = bool(member and club_for_member.charges_dues)
+        if show_carried:
+            field = self.fields["membership_carried_by"]
+            field.widget = autocomplete.ModelSelect2(
+                url="club-member-autocomplete",
+                forward=[forward.Const(club_for_member.slug, "club_slug"), forward.Const(member.pk, "carrier_for")],
+                attrs={"data-placeholder": "Nobody: pays their own", "data-html": True, "style": "width: 100%"},
+            )
+            # After the widget: setting the queryset is what hands the widget its choices.
+            field.queryset = ClubMember.objects.filter(
+                club=club_for_member, is_deleted=False, membership_carried_by__isnull=True
+            ).exclude(pk=member.pk)
+        else:
+            del self.fields["membership_carried_by"]
 
         # Hide unused permission fields; not required so hidden values validate.
         if in_auction_context and auction:
@@ -5482,6 +5574,7 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
             ),
             "address",
             *contact_status_fields,
+            *(["membership_carried_by"] if show_carried else []),
             "send_welcome_email",
             bidding_selling_row,
             *alt_fees_field,
@@ -5532,6 +5625,19 @@ class ClubMemberAdminForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
         # No check against the club's auctions: saving takes the number from its holder
         # (services.set_member_bidder_number); the live validation names them first.
         return bidder_number
+
+    def clean_membership_carried_by(self):
+        carrier = self.cleaned_data.get("membership_carried_by")
+        if not carrier:
+            return carrier
+        carried = self.instance.carried_memberships.filter(is_deleted=False).first()
+        if carried:
+            msg = f"{self.instance} already carries {carried}'s membership."
+            raise forms.ValidationError(msg)
+        if self.instance.paypal_subscription_id:
+            msg = f"{self.instance} renews automatically through PayPal. Cancel that subscription first."
+            raise forms.ValidationError(msg)
+        return carrier
 
 
 class ClubMemberDiscordForm(MarksClubMemberAdminEditedMixin, forms.ModelForm):
@@ -6015,7 +6121,7 @@ class ClubDonationSettingsForm(forms.ModelForm):
             (
                 Club.DONATION_EMAIL_MODE_COPY,
                 mark_safe(  # noqa: S308 - literal
-                    "Copy/paste to my email<br><small class='text-muted'>No way to track replies</small>"
+                    "Copy/paste to my email<br><small class='text-muted'>Replies come to your own inbox</small>"
                 ),
             ),
         ]

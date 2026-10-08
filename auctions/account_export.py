@@ -133,9 +133,11 @@ def export(user):
     from allauth.socialaccount.models import SocialAccount
 
     from auctions.models import (
+        AbandonedBid,
         AuctionTOS,
         Bid,
         ClubMember,
+        Document,
         LotHistory,
         MobileDevice,
         SearchHistory,
@@ -195,6 +197,8 @@ def export(user):
                 "is_admin": row.is_admin,
                 "checked_in": _plain(row.checked_in),
                 "added_by_an_admin_at_the_door": row.manually_added,
+                "how_was_it": row.get_survey_answer_display(),
+                "feedback_on_the_auction": row.survey_comments,
             }
             for row in AuctionTOS.objects.filter(user=user).select_related("auction", "pickup_location")
         ],
@@ -214,6 +218,15 @@ def export(user):
                 "culture_points": row.culture_points,
             }
             for row in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club")
+        ],
+        "library_documents": [
+            {
+                "title": row.display_title,
+                "file_name": row.original_name,
+                "club": _plain(row.club),
+                "uploaded": _plain(row.createdon),
+            }
+            for row in Document.objects.filter(owner=user).select_related("club")
         ],
         "lots_sold": [
             {
@@ -268,6 +281,10 @@ def export(user):
         "watched_lots": [
             {"lot": _plain(row.lot_number), "watched_since": _plain(row.createdon)}
             for row in Watch.objects.filter(user=user).select_related("lot_number")
+        ],
+        "bids_started_and_not_placed": [
+            {"lot": _plain(row.lot), "how_far": row.get_stage_display(), "when": _plain(row.updatedon)}
+            for row in AbandonedBid.objects.filter(user=user).select_related("lot")
         ],
         "searches": [
             {"searched_for": row.search, "when": _plain(row.createdon), "auction": _plain(row.auction)}

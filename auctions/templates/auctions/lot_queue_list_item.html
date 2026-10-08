@@ -1,5 +1,5 @@
 {% comment %}One lot still to come in lot_queue_list.html. Context: auction, entry, position, current (the lot on the block).{% endcomment %}
-<li class="list-group-item d-flex align-items-center gap-2{% if current %} active{% endif %}" data-entry-id="{{ entry.pk }}">
+<li class="list-group-item d-flex align-items-center gap-2{% if current %} active{% endif %}" data-entry-id="{{ entry.pk }}" data-lot-pk="{{ entry.lot_id }}">
   <span class="queue-drag-handle" style="cursor:grab;" title="Drag to reorder" aria-label="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
   <span class="badge {% if current %}bg-light text-dark{% else %}bg-secondary{% endif %}">{{ position }}</span>
   {% if entry.lot.thumbnail %}

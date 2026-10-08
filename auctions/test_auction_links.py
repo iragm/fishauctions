@@ -379,6 +379,17 @@ class LotListUXTests(StandardTestCase):
         self.assertRedirects(response, self.ux_auction.get_absolute_url())
         self.assertContains(response, "Lot submission has ended")
 
+    def test_bulk_add_before_submission_opens_says_so(self):
+        from auctions.services import lot_add_block
+
+        # Lot submission can't open after the auction starts.
+        self.ux_auction.date_start = timezone.now() + datetime.timedelta(days=2)
+        self.ux_auction.lot_submission_start_date = timezone.now() + datetime.timedelta(days=1)
+        self.ux_auction.save()
+        tos = AuctionTOS.objects.get(user=self.bidder, auction=self.ux_auction)
+        _code, message = lot_add_block(self.ux_auction, tos, is_admin=False)
+        self.assertEqual(message, f"Lot submission hasn't opened yet for {self.ux_auction}")
+
 
 @override_settings(
     CLOUDFLARE_IMAGES_ENABLED=True,

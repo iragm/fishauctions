@@ -185,6 +185,8 @@ def ensure_club_member(
             source=str(auction.title)[:200],
             added_by=user,
             admin_edited=admin_edited,
+            # Held back from a participant until they first pay (ClubMember.welcome_after_first_payment).
+            send_welcome_email=auction.send_club_welcome_letter,
         )
         # A vetted auction must not grant selling through the back door.
         if auction.only_approved_sellers:
@@ -671,6 +673,8 @@ def lot_add_block(auction, tos, is_admin, *, bulk=True):
     if not tos.selling_allowed and not is_admin:
         return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You don't have permission to add lots to this auction"
     if not is_admin and not auction.can_submit_lots:
+        if timezone.now() < auction.lot_submission_start_date:
+            return LOT_ADD_BLOCK_SUBMISSION_ENDED, f"Lot submission hasn't opened yet for {auction}"
         return LOT_ADD_BLOCK_SUBMISSION_ENDED, f"Lot submission has ended for {auction}"
     if bulk and not is_admin and not auction.allow_bulk_adding_lots:
         return (
@@ -789,6 +793,34 @@ def promoting_makes_it_the_clubs_current_auction(auction, was_promoted) -> bool:
     return True
 
 
+def auction_date_warnings(auction, zone) -> list[str]:
+    """What the edit page says about an auction's dates once they're saved. ``zone`` is the reader's: a
+    start that is midnight only in UTC is not a midnight start.
+    """
+    warnings = []
+    if (
+        auction.use_check_in_mode
+        and not auction.is_online
+        and auction.online_bidding != "disable"
+        and auction.date_online_bidding_starts
+        and auction.date_online_bidding_starts < auction.date_start
+    ):
+        warnings.append(
+            "This auction uses check-in mode, so users can't bid until they've been checked in at the event.  "
+            "Online bidding is set to open before the auction starts, but no one will be able to bid online "
+            "until they've been checked in."
+        )
+    important = auction.date_end if auction.is_online else auction.date_start
+    if important:
+        local = important.astimezone(zone)
+        if local.hour == 0 and local.minute == 0:
+            warnings.append(
+                f"Don't set your {'end' if auction.is_online else 'start'} time to midnight, users will find it "
+                "confusing.  Use 23:59 instead."
+            )
+    return warnings
+
+
 #: Auction settings a copy inherits. A field missing here is reset to the default on copy.
 #: ``tests.AuctionCloneCustomFieldsTests`` fails if the custom fields form outgrows it.
 AUCTION_FIELDS_TO_CLONE = [
@@ -811,13 +843,13 @@ AUCTION_FIELDS_TO_CLONE = [
     "only_approved_sellers",
     "only_approved_bidders",
     "email_users_when_invoices_ready",
+    "post_auction_survey",
     "invoice_payment_instructions",
     "minimum_bid",
     "winning_bid_percent_to_club_for_club_members",
     "lot_entry_fee_for_club_members",
     "registration_fee",
     "registration_fee_for_club_members",
-    "set_lot_winners_url",
     "require_phone_number",
     "buy_now",
     "reserve_price",
@@ -850,6 +882,7 @@ AUCTION_FIELDS_TO_CLONE = [
     "enable_online_payments",
     "enable_square_payments",
     "add_membership_fee_to_invoices_for_expired_members",
+    "send_club_welcome_letter",
     "alternate_split_mode",
     "alternative_split_label",
     "google_drive_link",

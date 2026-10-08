@@ -1,0 +1,26 @@
+{% comment %}The reader's own Square connection, on the payments guide (help_tags.square_account). This used to be the /square/ page, which now redirects here.
+
+The connect links render in the app exactly as they do on the web. Apple's Tap to Pay on iPhone review guide (requirement 2.2 and the General Requirements) requires the whole merchant onboarding to be completable inside the app, without sending anyone to a second app, so there is deliberately no "open this on the website" banner here. The app intercepts /square/connect/ and the Square OAuth hosts and opens them in an in-app browser view, which shares Safari's cookie jar, so a merchant whose Square login is "Sign in with Google" still works.
+
+An account card payments haven't been switched on for gets the reason and the request-access mailto, not a connect button that SquareConnectView would bounce.{% endcomment %}
+{% if user.is_authenticated %}
+<div class="help-note help-tip"><i class="bi bi-person-check"></i><div>
+{% if not user.userdata.square_enabled %}
+  <strong>Card payments are reviewed before they're switched on</strong> for your account. Taking cards means collecting money from other people, so we look at each account by hand first, usually the same day.
+  <div><a href="mailto:{{ user.userdata.square_access_request_mailto_query }}" class="btn btn-primary btn-sm mt-2">Contact us and request access</a></div>
+{% elif seller %}
+  {% if not seller.supports_tap_to_pay %}
+  <div class="mb-2"><strong>Reconnect required for Tap to Pay.</strong> Your Square account was connected before Tap to Pay existed. Reconnect it to take cards on your phone; your settings and club link stay as they are.
+  <a class="btn btn-primary btn-sm ms-1" href="{% url 'square_connect' %}">Reconnect Square</a></div>
+  {% endif %}
+  Your Square account is connected{% if seller.club %}, and linked to {{ seller.club.name }}{% endif %}.
+{% else %}
+  You haven't connected a Square account.
+  <div><a class="btn btn-success text-dark btn-sm mt-2" href="{% url 'square_connect' %}">Connect your Square account</a></div>
+{% endif %}
+</div></div>
+{% if seller %}
+{% url 'square_seller_delete' as disconnect_url %}
+{% include "auctions/_payment_seller_card.html" with provider_label="Square" merchant_id=seller.square_merchant_id disconnect_url=disconnect_url warning="You can only have one Square account connected at a time. Connecting a new one disconnects this one." %}
+{% endif %}
+{% endif %}

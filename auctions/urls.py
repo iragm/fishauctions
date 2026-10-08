@@ -115,12 +115,14 @@ urlpatterns = [
     path("api/lots/get_recommended/", views.RecommendedLots.as_view()),
     path("api/pageview/", views.PageViewCreate.as_view(), name="pageview"),
     path("api/form-abandoned/", views.FormAbandonedBeacon.as_view(), name="form_abandoned"),
+    path("api/lots/<int:pk>/bid-abandoned/", views.AbandonedBidBeacon.as_view(), name="lot_bid_abandoned"),
     path("api/feedback/<int:pk>/<str:leave_as>/", views.Feedback.as_view()),
     path("api/users/ban/<int:pk>/", views.CreateUserBan.as_view()),
     path("api/users/unban/<int:pk>/", views.UserUnban.as_view()),
     path("api/users/location/", views.SetCoordinates.as_view()),
     path("api/users/enable-notifications", views.UpdateLotPushNotificationsView.as_view(), name="enable_notifications"),
     path("api/lots/<int:pk>/test-notification/", views.LotPushTestNotificationView.as_view(), name="lot_push_test"),
+    path("api/users/test-notification/", views.PushTestNotificationView.as_view(), name="push_test"),
     path("api/users/lot_notifications/", views.LotNotifications.as_view()),
     path("api/users/auction_notifications/", views.AuctionNotifications.as_view()),
     path("api/check-username/", views.CheckUsernameAvailability.as_view(), name="check_username"),
@@ -262,6 +264,8 @@ urlpatterns = [
     path("admin-unlinked-auctions/", views.UnlinkedAuctions.as_view(), name="admin_unlinked_auctions"),
     path("admin-unlinked-auctions/link/", views.LinkAuctionsToClub.as_view(), name="link_auctions_to_club"),
     path("admin-lifecycle/", views.AdminLifecycle.as_view(), name="admin_lifecycle"),
+    path("admin-early-adds/", views.AdminEarlyAdds.as_view(), name="admin_early_adds"),
+    path("admin-free-text/", views.AdminFreeTextUsage.as_view(), name="admin_free_text"),
     path("admin-session-replay/", views.AdminSessionReplay.as_view(), name="admin_session_replay"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
@@ -271,6 +275,8 @@ urlpatterns = [
         "robots.txt",
         TemplateView.as_view(template_name="robots.txt", content_type="text/plain"),
     ),
+    # Unnamed, like robots.txt: it is for crawlers, not a page anybody navigates to.
+    path("sitemap.xml", views.SitemapView.as_view()),
     path(
         "ads.txt",
         TemplateView.as_view(template_name="ads.txt", content_type="text/plain"),
@@ -427,15 +433,16 @@ urlpatterns = [
         login_required(views.LotLabelView.as_view()),
         name="my_labels_by_username",
     ),
-    path(
-        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/",
-        login_required(views.LotLabelView.as_view()),
-        name="print_labels_by_bidder_number",
-    ),
+    # Before the <path:> route below, which would otherwise swallow "14/unprinted" as a bidder number.
     path(
         "auctions/<slug:slug>/print/bidder/<str:bidder_number>/unprinted/",
         login_required(views.UnprintedLotLabelsView.as_view()),
         name="print_unprinted_labels_by_bidder_number",
+    ),
+    path(
+        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/",
+        login_required(views.LotLabelView.as_view()),
+        name="print_labels_by_bidder_number",
     ),
     path(
         "auctions/<slug:slug>/users/",
@@ -454,7 +461,7 @@ urlpatterns = [
     ),
     path(
         "auctions/<slug:slug>/help/",
-        login_required(views.AuctionHelp.as_view()),
+        views.AuctionHelp.as_view(),
         name="auction_help",
     ),
     path(
@@ -518,9 +525,14 @@ urlpatterns = [
         name="auction_voice_command_log",
     ),
     path(
-        "auctions/<slug:slug>/lots/set-winners/voice-vocabulary/",
-        views.VoiceVocabularyView.as_view(),
-        name="auction_voice_vocabulary",
+        "auctions/<slug:slug>/lots/set-winners/voice/",
+        views.VoiceInterpretView.as_view(),
+        name="auction_voice_interpret",
+    ),
+    path(
+        "auctions/<slug:slug>/lots/set-winners/voice/openai/",
+        views.VoiceCloudSessionView.as_view(),
+        name="auction_voice_cloud_session",
     ),
     path(
         "auctions/<slug:slug>/queue/",
@@ -589,6 +601,8 @@ urlpatterns = [
         name="auction_lot_list",
     ),
     path("auctions/<slug:slug>/stats/", views.AuctionStats.as_view(), name="auction_stats"),
+    path("auctions/<slug:slug>/survey/", views.AuctionSurvey.as_view(), name="auction_survey"),
+    path("auctions/<slug:slug>/survey/results/", views.AuctionSurveyResults.as_view(), name="auction_survey_results"),
     path("auctions/<slug:slug>/lot-map/", views.AuctionLotMap.as_view(), name="auction_lot_map"),
     path("auctions/<slug:slug>/lot-map/data/", views.AuctionLotMapData.as_view(), name="auction_lot_map_data"),
     path("auctions/<slug:slug>/lot-map/clear/", views.AuctionLotMapClear.as_view(), name="auction_lot_map_clear"),
@@ -618,6 +632,8 @@ urlpatterns = [
         views.PrintableLotList.as_view(),
         name="auction_printable_lot_list",
     ),
+    path("auctions/<slug:slug>/print/paddles/", views.AuctionPaddles.as_view(), name="auction_paddles"),
+    path("auctions/<slug:slug>/print/paddles/pdf/", views.AuctionPaddlesPDF.as_view(), name="auction_paddles_pdf"),
     path("selling/csv/", views.MyLotReportView.as_view(), name="my_lot_report"),
     path("buying/csv/", login_required(views.BuyingCSV.as_view()), name="my_won_lot_csv"),
     path("auctions/<slug:slug>/lotlist/", views.AuctionLotsCSV.as_view(), name="lot_list"),
@@ -670,6 +686,11 @@ urlpatterns = [
         login_required(views.AccountDeleteView.as_view()),
         name="account_delete",
     ),
+    path(
+        "account/merge/",
+        login_required(views.AccountMergeView.as_view()),
+        name="account_merge",
+    ),
     # Public: the user is signed out by the time they land here.
     path("account/deleted/", views.AccountDeletedView.as_view(), name="account_deleted"),
     path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
@@ -695,6 +716,8 @@ urlpatterns = [
         name="remote_print_job_cancel",
     ),
     path("faq/", views.FAQ.as_view(), name="faq"),
+    path("help/", views.HelpIndexView.as_view(), name="help"),
+    path("help/<slug:slug>/", views.HelpGuideView.as_view(), name="help_guide"),
     path("support/", views.SupportView.as_view(), name="support"),
     # /contact/ is the App Store Support URL and what older links point at. Unnamed on purpose: a
     # name would put it in front of the palette route audit as a page to describe.
@@ -735,6 +758,17 @@ urlpatterns = [
     # Copyright Office. /dmca/ 404s on a deployment with no agent -- see auctions/dmca.py.
     path("dmca/", views.DmcaPolicyView.as_view(), name="dmca"),
     path("dmca/notice/", views.CopyrightNoticeCreate.as_view(), name="dmca_notice"),
+    # The library (auctions/documents/).
+    path("library/", views.LibraryView.as_view(), name="library"),
+    path("library/answer/", views.DocumentAnswerView.as_view(), name="library_answer"),
+    path("library/batch/<int:pk>/", views.DocumentBatchView.as_view(), name="document_batch"),
+    path("library/page/<int:pk>/", views.BatchPageView.as_view(), name="batch_page"),
+    path("library/<int:pk>/", views.DocumentDetailView.as_view(), name="document_detail"),
+    path("library/<int:pk>/file/", views.DocumentFileView.as_view(), name="document_file"),
+    path("library/<int:pk>/edit/", views.DocumentEditView.as_view(), name="document_edit"),
+    path("library/<int:pk>/read-again/", views.DocumentReindexView.as_view(), name="document_reindex"),
+    path("library/<int:pk>/delete/", views.DocumentDeleteView.as_view(), name="document_delete"),
+    path("library/<int:pk>/report/", views.DocumentFeedbackView.as_view(), name="document_feedback"),
     path("feedback/", views.LeaveFeedbackView.as_view(), name="feedback"),
     path("unsubscribe/<slug:slug>/", views.UnsubscribeView.as_view()),
     path(
@@ -751,11 +785,6 @@ urlpatterns = [
         "api/auctionstats/<slug:slug>/activity",
         views.AuctionStatsActivityJSONView.as_view(),
         name="auction_stats_activity",
-    ),
-    path(
-        "api/auctionstats/<slug:slug>/pictures",
-        views.AuctionStatsImagesJSONView.as_view(),
-        name="auction_stats_pictures",
     ),
     path(
         "api/auctionstats/<slug:slug>/distance_traveled",

@@ -1,0 +1,122 @@
+{% comment %}help_tags.push_status: turn on "your lot is about to sell" right here, then test it. The steps go once this device is set up, leaving the test button. Only the page knows about the device: the app's bridge in the app, the browser's own subscription outside it. In a browser, an account with the app gets them in the app only (selling.notify_watchers_lot_selling_soon), so the browser isn't asked and the button only turns the preference on. The browser subscribe is webpush.js's, without its button.{% endcomment %}
+{% if show %}<div id="help-push" class="help-note help-tip"{% if in_app or not app_push %} hidden{% endif %}><i class="bi bi-bell"></i><div>
+  <ol id="help-push-steps" class="mb-0"{% if app_push and not in_app and lot_alerts %} hidden{% endif %}>
+    <li>Click Watch on the lots you want.</li>
+    <li><button type="button" id="help-push-on" class="btn btn-primary btn-sm">{% if in_app or app_push %}Notify me when bidding starts{% else %}Turn on notifications{% endif %}</button> {% if app_push and not in_app %}They go to the app on your phone, not this browser. {% endif %}That covers every lot you watch, from then on.</li>
+  </ol>
+  <div id="help-push-done"{% if not app_push or in_app or not lot_alerts %} hidden{% endif %}>
+    {% if in_app %}This phone gets them{% elif app_push %}They go to the app on your phone, not this browser{% else %}This browser gets them{% endif %}, for every lot you watch.
+    <button type="button" id="help-push-test" class="btn btn-primary btn-sm ms-1">Test notification</button>
+    <span id="help-push-test-status" class="text-success"></span>
+    <div class="small">If the test doesn't arrive, nothing will on the day either.</div>
+  </div>
+  <div id="help-push-problem" hidden></div>
+</div></div>
+<script>
+(function () {
+  var box = document.getElementById('help-push');
+  var steps = document.getElementById('help-push-steps');
+  var done = document.getElementById('help-push-done');
+  var problem = document.getElementById('help-push-problem');
+  var onButton = document.getElementById('help-push-on');
+  var testButton = document.getElementById('help-push-test');
+  var lotAlerts = {% if lot_alerts %}true{% else %}false{% endif %};
+
+  function post(url) {
+    return fetch(url, {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': '{{ csrf_token }}'}}).then(function (response) {
+      if (!response.ok) { throw new Error(response.status); }
+      return response;
+    });
+  }
+  function show(state, html) {
+    box.hidden = false;
+    steps.hidden = state !== 'steps';
+    done.hidden = state !== 'done';
+    problem.hidden = state !== 'problem';
+    if (html) { problem.innerHTML = html; }
+  }
+  function turnedOn() {
+    return post('{% url "enable_notifications" %}').then(function () { lotAlerts = true; show('done'); });
+  }
+
+  testButton.addEventListener('click', function () {
+    var status = document.getElementById('help-push-test-status');
+    testButton.disabled = true;
+    post('{% url "push_test" %}').then(function () {
+      status.className = 'text-success';
+      status.textContent = 'Sent.';
+    }).catch(function () {
+      status.className = 'text-danger';
+      status.textContent = "Couldn't send one.";
+    }).then(function () { testButton.disabled = false; });
+  });
+
+  {% if in_app %}
+  var bridge = window.flutter_inappwebview;
+  if (!bridge || !bridge.callHandler) { return; }
+  function fromPhone(state) {
+    if (!state || !state.supported) { box.hidden = true; return; }
+    show(state.permitted && lotAlerts ? 'done' : 'steps');
+  }
+  onButton.addEventListener('click', function () {
+    onButton.disabled = true;
+    bridge.callHandler('pushGetState').then(function (state) {
+      return state && state.permitted ? state : bridge.callHandler('pushEnable', 'notifications');
+    }).then(function (state) {
+      if (state && state.permitted) { return turnedOn(); }
+      show('problem', 'This phone doesn\'t allow notifications from the app. Turn them on in the phone\'s settings.');
+    }).catch(function () {}).then(function () { onButton.disabled = false; });
+  });
+  bridge.callHandler('pushGetState').then(fromPhone).catch(function () {});
+  {% elif app_push %}
+  onButton.addEventListener('click', function () {
+    onButton.disabled = true;
+    turnedOn().catch(function () {}).then(function () { onButton.disabled = false; });
+  });
+  {% else %}
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    show('problem', 'This browser can\'t get notifications. On an iPhone, use the <a href="{% url "help_guide" slug="mobile-app" %}">app</a>.');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    show('problem', 'This browser blocks notifications from this site. Allow them in its settings, then reload this page.');
+    return;
+  }
+  function vapidKey(base64) {
+    var raw = window.atob((base64 + '='.repeat((4 - base64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, function (c) { return c.charCodeAt(0); });
+  }
+  // webpush's own save view: idempotent, so saving a subscription the server already has is harmless.
+  function save(subscription) {
+    var browser = (navigator.userAgent.match(/(firefox|msie|chrome|safari|trident)/i) || ['chrome'])[0].toLowerCase();
+    return fetch('{% url "save_webpush_info" %}', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status_type: 'subscribe', subscription: subscription.toJSON(), browser: browser, user_agent: navigator.userAgent}),
+    }).then(function (response) {
+      if (response.status !== 201) { throw new Error(response.status); }
+    });
+  }
+  onButton.addEventListener('click', function () {
+    onButton.disabled = true;
+    navigator.serviceWorker.register('{% url "service_worker" %}').then(function (registration) {
+      return registration.pushManager.getSubscription().then(function (subscription) {
+        return subscription || registration.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: vapidKey('{{ vapid_public_key|escapejs }}')});
+      });
+    }).then(save).then(turnedOn).catch(function () {
+      if (Notification.permission === 'denied') {
+        show('problem', 'This browser blocks notifications from this site. Allow them in its settings, then reload this page.');
+      }
+    }).then(function () { onButton.disabled = false; });
+  });
+  navigator.serviceWorker.getRegistrations().then(function (registrations) {
+    return Promise.all(registrations.map(function (registration) { return registration.pushManager.getSubscription(); }));
+  }).then(function (subscriptions) {
+    var subscription = subscriptions.filter(Boolean)[0];
+    if (subscription) { save(subscription).catch(function () {}); }
+    show(subscription && lotAlerts ? 'done' : 'steps');
+  }).catch(function () { show('steps'); });
+  {% endif %}
+})();
+</script>{% endif %}

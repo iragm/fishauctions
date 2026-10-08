@@ -15,6 +15,7 @@ def club_sidebar(context):
     auction. Club-level sub-links are gated with the same permissions the old club_ribbon used.
     """
     # Lazy import: avoids a circular import at module load (views imports heavily).
+    from auctions.documents.search import can_use_library
     from auctions.views import check_club_permission
 
     view = context.get("view")
@@ -93,4 +94,5 @@ def club_sidebar(context):
         # Anyone in this sidebar already holds a club permission, which is the access bar.
         "show_speakers": club.is_nec_club,
         "speakers_url": reverse("speaker_list") + "?" + urlencode({"club": club.slug}),
+        "show_library": can_use_library(user),
     }

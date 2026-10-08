@@ -1,0 +1,17 @@
+{% comment %}nginx refuses a body over the limit with its own bare error page, so any library form with data-max-bytes checks its files' total before sending.{% endcomment %}
+<script>
+document.querySelectorAll("form[data-max-bytes]").forEach(function (form) {
+  form.addEventListener("submit", function (event) {
+    var total = 0;
+    form.querySelectorAll("input[type=file]").forEach(function (input) {
+      for (var i = 0; i < input.files.length; i++) { total += input.files[i].size; }
+    });
+    if (total > Number(form.dataset.maxBytes)) {
+      event.preventDefault();
+      alert("That's more than " + Math.floor(form.dataset.maxBytes / 1000000) + " MB in one go. Send them in a few smaller uploads.");
+      return;
+    }
+    form.querySelectorAll("button[type=submit]").forEach(function (button) { button.disabled = true; });
+  });
+});
+</script>

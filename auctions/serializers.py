@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 
 from django.conf import settings
 from rest_framework import serializers
+from rest_framework.fields import empty
 
 from .models import (
     Auction,
@@ -126,10 +127,19 @@ class ClubMemberIngestSerializer(serializers.Serializer):
         return data
 
 
+class _UnsetMeansTrueBooleanField(serializers.BooleanField):
+    """A form-encoded request reads a missing checkbox as False; here a missing field gets the default."""
+
+    default_empty_html = empty
+
+
 class ClubMemberAPIKeySerializer(serializers.ModelSerializer):
     """Writable serializer for ClubMember records created or updated via API keys."""
 
     id = serializers.IntegerField(read_only=True)
+    # Unset means the welcome letter goes, as it always has. False holds it until they first pay dues
+    # (ClubMember.welcome_after_first_payment).
+    send_welcome_email = _UnsetMeansTrueBooleanField(required=False, default=True)
     # Server-set from the API key name.
     source = serializers.CharField(read_only=True)
     first_name = serializers.CharField(max_length=100, required=False, allow_blank=True, write_only=True)

@@ -30,7 +30,7 @@ style_reference.md.{% endcomment %}
 {% if not can_send %}
 <div class="alert alert-info py-2" role="alert">
   <i class="bi bi-info-circle me-1"></i>
-  Donation emails are copied into your own email program, so replies won't be tracked here.
+  Donation emails go out from your own email, so replies come to your inbox, not here.
   <a href="{% url 'club_donation_settings' club.slug %}">Change this in donation settings</a>.
 </div>
 {% endif %}
@@ -45,13 +45,13 @@ style_reference.md.{% endcomment %}
 {% comment %}The daily allowance, spent and remaining. A bar rather than a number because the thing worth knowing at a glance is how close to the end of it you are.{% endcomment %}
 <div class="mb-3">
   <div class="d-flex justify-content-between align-items-center small">
-    <span>Donation emails today</span>
+    <span>Donation emails from this site today</span>
     <span class="{% if quota.exhausted %}text-warning{% else %}text-muted{% endif %}">
       {{ quota.used }} of {{ quota.limit }}
     </span>
   </div>
   <div class="progress" style="height: 8px;" role="progressbar"
-       aria-label="Donation emails sent today" aria-valuenow="{{ quota.used }}"
+       aria-label="Donation emails sent from this site today" aria-valuenow="{{ quota.used }}"
        aria-valuemin="0" aria-valuemax="{{ quota.limit }}">
     <div class="progress-bar {% if quota.exhausted %}bg-warning{% endif %}" style="width: {{ quota.percent_used }}%;"></div>
   </div>
@@ -81,7 +81,7 @@ style_reference.md.{% endcomment %}
     <ul class="mb-0 ps-3">
       <li>
         There's no way to import a list of vendors, and you're capped at {{ quota.limit }} emails a
-        day. This isn't a spam system, it's donation tracking.
+        day from this site. This isn't a spam system, it's donation tracking.
       </li>
       {% if can_send %}
       <li>
@@ -95,8 +95,8 @@ style_reference.md.{% endcomment %}
       </li>
       {% else %}
       <li>
-        You're copying emails into your own email program, so replies arrive in your inbox and
-        this site never sees them. Open the vendor and set their status by hand when one comes in.
+        You send donation emails from your own email, so replies arrive in your inbox, not here.
+        Open the vendor and set their status by hand when one comes in.
       </li>
       {% endif %}
     </ul>

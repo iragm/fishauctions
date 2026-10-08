@@ -20,11 +20,12 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models.base import Model as Model
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.generic import TemplateView, View
+from django.views.generic import View
 from django.views.generic.edit import (
     DeleteView,
 )
 
+from auctions import help_guides
 from auctions.mobile.services.web_session import mark_session_opened_by_app, session_opened_by_app
 from auctions.models import (
     SQUARE_OAUTH_SCOPES,
@@ -840,18 +841,11 @@ class PayPalSuccessView(PayPalAPIMixin, View):
         return redirect(reverse("home"))
 
 
-class PayPalInfoView(TemplateView):
-    template_name = "auctions/paypal_seller.html"
+class PayPalInfoView(View):
+    """/paypal/ is written up in the help now; the reader's own connection is shown there too."""
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        if self.request.user.is_authenticated:
-            context["seller"] = PayPalSeller.objects.filter(user=self.request.user).first()
-            context["auction"] = self.request.user.userdata.last_auction_created
-        else:
-            context["seller"] = None
-            context["auction"] = None
-        return context
+    def get(self, request, *args, **kwargs):
+        return redirect(help_guides.GUIDES["payments"].url + "#paypal")
 
 
 class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):

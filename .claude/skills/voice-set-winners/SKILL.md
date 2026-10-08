@@ -1,18 +1,27 @@
 ---
 name: voice-set-winners
-description: The voice grammar for setting lot winners: what is data in VoiceGrammar rather than app code, and the page-side fallback matcher. Use when touching auctions/voice.py, dynamic_set_lot_winner.html, or the mobile voice endpoints.
+description: Voice on set lot winners: the server reading the auctioneer's speech as sales, the page that listens (app bridge or OpenAI in a browser), and the grammar in VoiceGrammar. Use when touching auctions/voice_interpreter.py, auctions/voice.py, auctions/views/voice.py, dynamic_set_lot_winner.html, or the mobile voice endpoints.
 ---
 
 # Voice set winners
 
-The app listens (WKWebView has no Web Speech API); the **grammar is data** in `auctions/voice.py` and
-the `VoiceGrammar` row, so a new word is an admin edit, not an app release. Fix voice problems here.
+Passive: the phone or laptop sits by the auctioneer, who calls the auction as usual, and voice replaces
+the bid recorder. **The server reads; nothing else does.** Fix reading problems in
+`auctions/voice_interpreter.py`, with a case in `test_voice_interpreter.py`.
 
-- `GET /api/mobile/config/` serves the grammar. `…/auctions/<slug>/voice/vocabulary/` serves the lot
-  and bidder numbers that exist in this auction; matching is against those, never free text.
-- `voice.page_config` sends both to the page. `voiceParse` / `voiceMatchLocally` in
-  `dynamic_set_lot_winner.html` match if the app hasn't answered in `voiceUnmatchedGraceMs` (1200).
-  Everything goes through `voiceHandleCommand`.
-- Never invent a value or guess a bare number's slot. Two matches → amber, both offered
-  (`VoiceGrammar.homophones`). A currency symbol anchors the price.
-- No match says why and doesn't repeat the number. A late duplicate transcript is dropped.
+- The page keeps a *window* (transcripts since the lot on the block came up) and posts it to
+  `VoiceInterpretView`. The answer is commands for the three fields plus `sold`/`unsold`/`undo`, and
+  `carry` -- the window after the close, applied only once the save lands. One request at a time.
+- Listening: in the app, the app's recognizer pushes `transcript` events (a `state` re-arm ends a phrase);
+  its `command` events are ignored. In a browser, the page streams the mic to OpenAI over WebRTC with
+  a key from `VoiceCloudSessionView` (`VoiceGrammar.cloud_model`, and `UserData.voice_cloud_enabled` per
+  account; the live model's turns are the page's to commit).
+- Never invent a value: lots and bidders come from `build_vocabulary`; prices from the close or the
+  last bid the auctioneer *had*. "For", "to" and "won" are never digits. A lot named after "sold" is
+  the next lot's.
+- A close missing a piece waits; a new lot or new round of bidding first makes it a `missed` row
+  ("not recorded" on the voice log page), never a guess. `previous` stops a repeated close being sold
+  to the next lot.
+- End to end: OpenAI TTS of an auctioneer's script as a WAV, played as Chrome's microphone
+  (`--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=auction.wav%noloop`) in
+  Selenium against the local site, sells real lots through the real OpenAI session.

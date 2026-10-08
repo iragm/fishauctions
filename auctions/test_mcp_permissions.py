@@ -31,6 +31,9 @@ from auctions.models import (
     Club,
     ClubEvent,
     ClubMember,
+    Document,
+    DocumentChunk,
+    DonationEmail,
     DonationVendor,
     Invoice,
     Lot,
@@ -63,6 +66,9 @@ def secrets() -> tuple[str, ...]:
         f"{SENTINEL}MEMO",
         f"{SENTINEL.lower()}-member@example.invalid",
         f"{SENTINEL.lower()}-bidder@example.invalid",
+        f"{SENTINEL} Spawning Notes",
+        f"{SENTINEL}LIBRARYTEXT",
+        f"{SENTINEL}VENDORREPLY",
     )
 
 
@@ -81,6 +87,8 @@ WATCHED = (
     AuctionDropdown,
     VolunteerJob,
     DonationVendor,
+    DonationEmail,
+    Document,
 )
 
 
@@ -179,11 +187,38 @@ class CrossTenantTestCase(TestCase):
             contact_method=DonationVendor.CONTACT_WEBFORM,
             contact_url=f"https://{SENTINEL.lower()}.example.invalid/donations",
         )
+        # What one of them said back, so the reads that return a conversation are audited too.
+        self.their_vendor_reply = DonationEmail.objects.create(
+            vendor=self.their_vendor,
+            direction=DonationEmail.DIRECTION_INCOMING,
+            sender=f"{SENTINEL.lower()}-vendor@example.invalid",
+            subject="Re: your raffle",
+            body=f"{SENTINEL}VENDORREPLY: we can give a tank",
+        )
         self.their_volunteer_job = VolunteerJob.objects.create(
             auction=self.their_auction,
             created_by=self.their_owner,
             description=f"{SENTINEL} table duty",
             people_needed=2,
+        )
+
+        # A club library document; never saved to disk, since no tool should get as far as the file.
+        self.their_document = Document.objects.create(
+            owner=self.their_owner,
+            club=self.their_club,
+            visibility="club",
+            title=f"{SENTINEL} Spawning Notes",
+            original_name="notes.pdf",
+            file="never-written.pdf",
+            status=Document.READY,
+            text=f"{SENTINEL}LIBRARYTEXT about spawning",
+        )
+        DocumentChunk.objects.create(
+            document=self.their_document,
+            position=0,
+            text=f"{SENTINEL}LIBRARYTEXT about spawning",
+            end=40,
+            content_hash="x",
         )
 
         # --- tenant B: a real administrator, of somewhere else ---------------------------
@@ -243,6 +278,9 @@ class CrossTenantTestCase(TestCase):
 
         for user in (self.their_owner, self.our_owner, self.outsider, self.their_bidder_user):
             UserData.objects.get_or_create(user=user)
+            # On, so the library's tools get as far as who may see what, like donation tracking above.
+            user.userdata.library_enabled = True
+            user.userdata.save(update_fields=["library_enabled"])
 
     # -- the driver ---------------------------------------------------------------------
 
@@ -337,6 +375,10 @@ class CrossTenantTestCase(TestCase):
             "by_mail": False,
             "users_must_coordinate_pickup": False,
             "pickup_time": (timezone.now() + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M"),
+            "lot_submission_opens": (timezone.now() + datetime.timedelta(days=20)).strftime("%Y-%m-%dT%H:%M"),
+            "lot_submission_closes": (timezone.now() + datetime.timedelta(days=29)).strftime("%Y-%m-%dT%H:%M"),
+            "online_bidding_opens": (timezone.now() + datetime.timedelta(days=25)).strftime("%Y-%m-%dT%H:%M"),
+            "online_bidding_closes": (timezone.now() + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M"),
             "option": f"{SENTINEL}Audit",
             "field": "Lot name",
             "people_needed": 2,
@@ -359,6 +401,17 @@ class CrossTenantTestCase(TestCase):
             "followup_due": (timezone.now() + datetime.timedelta(days=14)).strftime("%Y-%m-%d"),
             "subject": "Audit subject",
             "body": "Audit body, sent by nobody who should be able to.",
+            "direction": "received",
+            "summary": "audit summary",
+            "message_id": "audit-message",
+            # The library.
+            "document": str(self.their_document.pk),
+            "author": "Audit Author",
+            "year": 1990,
+            "topics": ["ponds"],
+            "topic": "breeding",
+            "start": 0,
+            "length": 100,
         }
 
     def _params_for(self, action):
@@ -388,6 +441,8 @@ class CrossTenantTestCase(TestCase):
             "AuctionDropdown": {self.their_dropdown_option.pk},
             "VolunteerJob": {self.their_volunteer_job.pk},
             "DonationVendor": {self.their_vendor.pk, self.their_webform_vendor.pk},
+            "DonationEmail": {self.their_vendor_reply.pk},
+            "Document": {self.their_document.pk},
         }
 
     def _assert_nothing_of_theirs_moved(self, before, after, where, *, may_create_inside=False):
@@ -415,6 +470,8 @@ class CrossTenantTestCase(TestCase):
                     ("auctiontos_seller_id", self.their_tos.pk),
                     ("auctiontos_winner_id", self.their_tos.pk),
                     ("auctiontos_user_id", self.their_tos.pk),
+                    ("vendor_id", self.their_vendor.pk),
+                    ("vendor_id", self.their_webform_vendor.pk),
                 ):
                     self.assertNotEqual(row.get(column), value, f"{where} created a {model} inside their tenant")
 

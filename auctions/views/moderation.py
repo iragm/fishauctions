@@ -28,7 +28,7 @@ from django.views.generic import TemplateView
 from django.views.generic.edit import FormView
 
 from auctions import dmca
-from auctions.models import Lot
+from auctions.models import Document, Lot
 from auctions.moderation_forms import CopyrightNoticeForm, ReportContentForm
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,14 @@ class CopyrightNoticeCreate(FormView):
         kwargs["user"] = self.request.user
         return kwargs
 
+    def get_initial(self):
+        # The library's "copyright problem?" link names the document it was on.
+        initial = super().get_initial()
+        material = self.request.GET.get("material", "")[:500]
+        if material:
+            initial["material"] = material
+        return initial
+
     def get_success_url(self):
         return reverse("dmca_notice")
 
@@ -106,6 +114,7 @@ class CopyrightNoticeCreate(FormView):
         if self.request.user.is_authenticated:
             notice.submitted_by = self.request.user
         notice.lot = _lot_from_urls(notice.material)
+        notice.document = _document_from_urls(notice.material)
         notice.save()
         domain = Site.objects.get_current().domain
         recipient = dmca.agent_email()
@@ -215,3 +224,11 @@ def _lot_from_urls(text):
     if not match:
         return None
     return Lot.objects.filter(pk=int(match.group(1)), is_deleted=False).first()
+
+
+def _document_from_urls(text):
+    """Like :func:`_lot_from_urls`, for a library document's ``/library/<pk>/``."""
+    match = re.search(r"/library/(\d+)", text or "")
+    if not match:
+        return None
+    return Document.objects.filter(pk=int(match.group(1))).first()

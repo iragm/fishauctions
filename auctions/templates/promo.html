@@ -1,270 +1,437 @@
 {% extends "base.html" %}
-{% load static %}
-{% block title %}About site{% endblock %}
-{% block extra_js %}
-<style>
-  .strike {
-    position: relative;
-  }
-
-  .strike::after {
-    content: ' ';
-    position: absolute;
-    top: 58%;
-    left: -3%;
-    width: 0;
-    height: 10px;
-    opacity: 80%;
-    transform: translateY(-50%);
-    background: repeat-x url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB0AAAAKAQMAAAByjsdvAAAABlBMVEVEs1XdMzNU8N6kAAAAAXRSTlMAQObYZgAAAAFiS0dEAIgFHUgAAAAJcEhZcwAACxMAAAsTAQCanBgAAAAHdElNRQfkDA0OHjn3QVw1AAAAH0lEQVQI12NgQAX/GxgsGP5/YPjBwPgfSDHYAwVQAQDnowlMrxaiKAAAAABJRU5ErkJggg==);
-    animation: strike .5s linear .1s 1 forwards;
-  }
-
-  @keyframes strike {
-    to {
-      width: 106%;
-    }
-  }
-
-  .appear {
-    animation: slidein 3s;
-  }
-
-  @keyframes slidein {
-    0% {
-      margin-left: -800px;
-    }
-
-    20% {
-      margin-left: -800px;
-    }
-
-    35% {
-      margin-left: 0px;
-    }
-
-    100% {
-      margin-left: 0px;
-    }
-  }
-
-  .fadein {
-    animation: fadein 3s;
-  }
-
-  @keyframes fadein {
-    0% {
-      opacity: 0;
-    }
-
-    50% {
-      opacity: 0;
-    }
-
-    100% {
-      opacity: 1;
-    }
-  }
-
-
-
-
-</style>
+{% comment %}The promo page: / for a signed-out visitor and /about/ for everyone (PromoSite). One line per feature, each linking to the help section that explains it; PromoPageTests checks every one of those links lands on a real section. With JavaScript off, every demo is drawn in one telling state. Reduced motion stops things sliding and floating, not the demos.{% endcomment %}
+{% block title %}Club auctions, members and events{% endblock %}
+{% block meta_description %}Free software for club auctions, online and in person, and for running the club between them: memberships, events, mailing lists, Discord and breeder awards.{% endblock %}
+{% block extra_head %}
 <script>
-
-  $crossOut = $('#cross_out_trigger');
-  $locations = $('#locations_trigger');
-  var locationsAnimationScrollDistance = window.innerHeight / 10;
-  var isCrossed = false;
-  var activeLocation = 1;
-  $(document).ready(function () {
-    $(window).bind("scroll", function () {
-      if ($(this).scrollTop() >= $crossOut.offset().top) {
-        if (!isCrossed) {
-          isCrossed = true;
-          $(".cross_out").addClass("strike");
-          $(".it_gets_easier").css('visibility', 'visible');
-          $(".free").css('visibility', 'visible');
-          $(".it_gets_easier").addClass("appear");
-          $(".free").addClass("fadein");
-        }
-      } else {
-        if (isCrossed) {
-          isCrossed = false;
-          $(".cross_out").removeClass("strike");
-          $(".it_gets_easier").css('visibility', 'hidden');
-          $(".free").css('visibility', 'hidden');
-          $(".it_gets_easier").removeClass("appear");
-          $(".free").removeClass("fadein");
-        }
-      }
-      // if ($(this).scrollTop() >= $locations.offset().top && $(this).scrollTop() < ($locations.offset().top + locationsAnimationScrollDistance)) {
-      //   if (activeLocation !== 1) {
-      //     $("#locations_animation").attr("src","{% static 'locations_1.svg' %}");
-      //     activeLocation = 1;
-      //   }
-      // } else if ($(this).scrollTop() >= ($locations.offset().top + locationsAnimationScrollDistance) && ($(this).scrollTop() < $locations.offset().top + (locationsAnimationScrollDistance * 2))) {
-      //   if (activeLocation !== 2) {
-      //     $("#locations_animation").attr("src","{% static 'locations_2.svg' %}");
-      //     activeLocation = 2;
-      //   }
-      // } else if ($(this).scrollTop() >= ($locations.offset().top + locationsAnimationScrollDistance * 2) && ($(this).scrollTop() < $locations.offset().top + (locationsAnimationScrollDistance * 4))) {
-      //   if (activeLocation !== 3) {
-      //     $("#locations_animation").attr("src","{% static 'locations_3.svg' %}");
-      //     activeLocation = 3;
-      //   }
-      // }
-    });
-  });
+  if ("IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.documentElement.classList.add("promo-motion");
+  }
 </script>
 {% endblock %}
-{% block content %}
-<span id='cross_out_trigger'></span>
-<div style='background:transparent !important' class="jumbotron jumbotron-fluid bg-dark">
-  <div class="container">
-    <h1 class="display-4">Make a splash with your next club auction.</h1>
-    <h2 class="text-end"><span class='text-info'>Completely free.</span></h2>
-  </div>
-</div>
-<h5>This site provides all the tools you need to run traditional, in-person auctions.  Or, run your auctions online without the need to reserve an auction hall or pay an auctioneer.</h5><h4 class="text-end">No paperwork.  No math.  Simple enough to use on your phone.</h4>
-<div><h3>Click below to learn more about:</h3>
-    <ul class="nav nav-pills">
-      <li class="nav-item">
-        <a class="nav-link " data-bs-toggle="tab" href="#runAuction">Online auctions</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link active" data-bs-toggle="tab" href="#runInPersonAuction">In-person auctions</a>
-      </li>
-      <!-- <li class="nav-item">
-        <a class="nav-link " data-toggle="tab" href="#nonauctionlots">Buying or selling without an auction</a>
-      </li> -->
+{% block extra_css %}
+<style>
+  .promo { --promo-accent: #2fa4e7; --promo-green: #00bc8c; }
+  .promo section { scroll-margin-top: 4rem; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  .promo-kicker { color: var(--promo-accent); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: .85rem; }
+  .promo-hero h1 { font-size: clamp(2.2rem, 5.5vw, 3.8rem); font-weight: 700; line-height: 1.08; }
+  .promo-rotator { color: var(--promo-green); display: block; transition: opacity .3s, transform .3s; }
+  .promo-rotator.is-out { opacity: 0; }
+  .promo-motion .promo-rotator.is-out { transform: translateY(.3em); }
+  .promo-lead { font-size: 1.25rem; }
 
-    </ul>
+  .promo-areas a { display: block; height: 100%; padding: 1.25rem; border-radius: .75rem; background: #303030; color: inherit; text-decoration: none; border: 1px solid transparent; transition: border-color .2s, transform .2s; }
+  .promo-areas a:hover, .promo-areas a:focus-visible { border-color: var(--promo-accent); transform: translateY(-3px); }
+  .promo-areas i { font-size: 2rem; color: var(--promo-accent); }
+  .promo-areas .h4 { margin: .5rem 0 .25rem; }
+  @media (max-width: 767.98px) {
+    .promo-areas a { display: flex; gap: 1rem; align-items: center; padding: .9rem 1rem; }
+    .promo-areas .h4 { margin: 0; font-size: 1.2rem; }
+    .promo-nav { flex-wrap: nowrap; }
+    .promo-nav .nav-link { padding: .5rem .7rem; }
+  }
+
+  .promo-strip { overflow: hidden; mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+  .promo-strip-track { display: flex; width: max-content; }
+  .promo-motion .promo-strip-track { animation: promo-scroll 70s linear infinite; }
+  .promo-strip:hover .promo-strip-track { animation-play-state: paused; }
+  .promo-strip img { margin-right: .75rem; height: 130px; width: 190px; object-fit: cover; border-radius: .5rem; background: #303030; }
+  @keyframes promo-scroll { to { transform: translateX(-50%); } }
+
+  .promo-nav { position: sticky; top: 0; z-index: 1020; background: rgba(34, 34, 34, .92); backdrop-filter: blur(6px); }
+  .promo-nav .nav-link { color: #adb5bd; border-bottom: 2px solid transparent; border-radius: 0; }
+  .promo-nav .nav-link.active, .promo-nav .nav-link:hover { color: #fff; border-bottom-color: var(--promo-accent); }
+
+  .promo-feature { display: flex; gap: 1rem; padding: .85rem .75rem; margin: 0 -.75rem; border-radius: .5rem; color: inherit; text-decoration: none; transition: background-color .2s; }
+  .promo-feature:hover, .promo-feature:focus-visible { background: #303030; }
+  .promo-feature > i { font-size: 1.6rem; color: var(--promo-accent); line-height: 1.2; }
+  .promo-feature-title { font-size: 1.3rem; font-weight: 600; line-height: 1.25; }
+  .promo-feature-title::after { content: "\2192"; margin-left: .4rem; opacity: 0; transition: opacity .2s, margin-left .2s; }
+  .promo-feature:hover .promo-feature-title::after, .promo-feature:focus-visible .promo-feature-title::after { opacity: 1; margin-left: .6rem; }
+
+  .promo-mock { background: #303030; border-radius: .75rem; padding: 1.25rem; box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, .35); }
+  .promo-mock-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: #adb5bd; }
+
+  .promo-winners .form-control { min-height: calc(1.5em + .75rem + 2px); font-variant-numeric: tabular-nums; }
+  .promo-catch { min-height: 1.5em; transition: opacity .3s; }
+  .promo-catch.is-hidden { opacity: 0; }
+  .promo-winners [data-save].is-pressed { filter: brightness(.8); }
+  .promo-banner { transition: opacity .3s; }
+  .promo-banner.is-hidden { opacity: 0; }
+
+  .promo-lot .promo-lot-blank { width: 100%; height: 190px; border-radius: .5rem; background: linear-gradient(135deg, #375a7f, #1f3349); display: flex; align-items: center; justify-content: center; font-size: 3rem; color: #ffffff66; }
+  .promo-price { font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; transition: color .3s; }
+  .promo-price.is-bid { color: var(--promo-green); }
+
+  .promo-strike { list-style: none; padding: 0; font-size: 1.15rem; }
+  .promo-strike li { position: relative; display: table; margin-bottom: .3rem; color: #dee2e6; }
+  .promo-strike li::after { content: ""; position: absolute; left: -2%; top: 55%; height: 3px; width: 0; background: #e2756a; border-radius: 2px; }
+  .promo-strike.is-visible li { color: #888; }
+  .promo-strike.is-visible li::after { width: 104%; }
+  .promo-motion .promo-strike.is-visible li { transition: color .3s calc(var(--i) * 300ms + 200ms); }
+  .promo-motion .promo-strike.is-visible li::after { transition: width .4s calc(var(--i) * 300ms) ease-out; }
+  .promo-motion .promo-free { opacity: 0; transform: translateY(.5rem); transition: opacity .6s 1.8s, transform .6s 1.8s; }
+  .promo-motion .is-visible .promo-free { opacity: 1; transform: none; }
+
+  .promo-card { aspect-ratio: 1.586; max-width: 360px; margin: 0 auto; border-radius: 1rem; padding: 1.25rem; color: #fff; background: #1f2937; display: flex; flex-direction: column; box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, .45); }
+  .promo-card-logo { width: 2.25rem; height: 2.25rem; border-radius: 50%; background: #fff; color: #1f2937; display: inline-flex; align-items: center; justify-content: center; }
+  .promo-card-label { font-size: .75rem; color: #c8c8c8; }
+  .promo-motion .promo-card { animation: promo-float 6s ease-in-out infinite; }
+  @keyframes promo-float { 50% { transform: translateY(-8px) rotate(-1deg); } }
+  .promo-barcode { height: 46px; margin-top: auto; border-radius: .25rem; background: #fff repeating-linear-gradient(90deg, #111 0 2px, transparent 2px 4px, #111 4px 5px, transparent 5px 8px, #111 8px 11px, transparent 11px 12px); background-clip: content-box; padding: 6px 8px; }
+
+  .promo-chat { max-width: 30rem; margin: 0 auto; min-height: 10rem; }
+  .promo-bubble { padding: .65rem 1rem; border-radius: 1rem; max-width: 85%; margin-bottom: .6rem; }
+  .promo-bubble.from-you { background: #375a7f; margin-left: auto; border-bottom-right-radius: .25rem; }
+  .promo-bubble.from-ai { background: #3a3a3a; border-bottom-left-radius: .25rem; }
+  .promo-bubble.from-ai.is-waiting { opacity: 0; }
+  .promo-bubble.from-ai { transition: opacity .4s; }
+  .promo-caret::after { content: "|"; animation: promo-blink 1s steps(1) infinite; margin-left: 1px; }
+  @keyframes promo-blink { 50% { opacity: 0; } }
+
+  .promo-motion .reveal { opacity: 0; transform: translateY(1.5rem); transition: opacity .7s ease-out, transform .7s ease-out; transition-delay: calc(var(--i, 0) * 90ms); }
+  .promo-motion .reveal.is-visible { opacity: 1; transform: none; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="promo">
+
+<section class="promo-hero text-center py-4 py-lg-5">
+  <h1 class="mb-3">One home for your club's <span class="promo-rotator" data-words="auctions|members|events|mailing list|Discord|breeder awards">auctions</span></h1>
+  <p class="promo-lead text-muted mx-auto mb-4" style="max-width: 36rem;">In person or online, and everything your club does between auctions. Completely free.</p>
+  <div class="d-flex flex-wrap gap-2 justify-content-center">
+    <a class="btn btn-success text-dark btn-lg" href="{% if enable_club_finder %}{% url 'clubs' %}{% else %}{% url 'support' %}{% endif %}">Bring your club</a>
+    <a class="btn btn-primary btn-lg" href="{% url 'auctions' %}">Find an auction</a>
+  </div>
+  {% if site.lots %}<p class="text-muted small mt-3 mb-0">{{ site.lots|floatformat:"0g" }} lots auctioned here in the last three years.</p>{% endif %}
+</section>
+
+{% if photos %}
+<div class="promo-strip my-4" aria-label="Lots sold here recently">
+  <div class="promo-strip-track">
+    {% for photo in photos %}<img src="{{ photo.url }}" alt="{{ photo.name }}" loading="lazy">{% endfor %}
+    {% for photo in photos %}<img src="{{ photo.url }}" alt="" aria-hidden="true" loading="lazy">{% endfor %}
+  </div>
 </div>
-<div id="tabs" class="tab-content">
-  <div class="tab-pane fade " id="runAuction">
-    <p></p>
-    <div class="lead">Think of the stuff that makes running an auction hard:</div>
-    <ol>
-      <li>Pick a date and time</li>
-      <li>Choose a location</li>
-      <li><span class='cross_out'>Reserve the location</span></li>
-      <li><span class='cross_out'>Pay for the location</span></li>
-      <li><span class='cross_out'>Find and pay an auctioneer</span></li>
-      <li><span class='cross_out'>Run the auction</span></li>
-      <li><span class='cross_out'>Figure out how much people owe or need to be paid</span></li>
-      <li><span class='cross_out'>Handle payment and deal with unsold lots</span></li>
-      <li>Get paid</li>
-      <li>Give sold lots to their winners</li>
-    </ol>
-    <p class="lead"><span class="it_gets_easier" style="visibility:hidden;">It gets easier with online auctions.</span> <span
-        style="visibility:hidden;" class='free text-info'>Still completely free.</span></p>
-<div class="jumbotron jumbotron-fluid bg-primary">
-  <div class="container">
-    <h1 class="display-4">Easy to use.  Better for everyone.</h1>
-    <div class="row">
-        <div class="col-lg-4 col-md-6">
-          <div class="card border-secondary mb-3" style="max-width: 20rem;">
-            <div class="card-header">Online auctions benefit everyone</div>
-            <div class="card-body">
-              <h4 class="card-title">Buyers and sellers</h4>
-              <h3><img style='max-width:2em' src="{% static 'red_tail_cat.svg' %}" class="card-img-top" alt="Don't buy big fish"></h3>
-              <p class="card-text">Take your time and research items before you bid
-                <p>Set a minimum bid, so your items always sell for what they're worth</p>
-                <p>No need to pack and transport unsold items</p>
-              </p>
-            </div>
-          </div>
+{% endif %}
+
+<div class="row g-3 promo-areas my-4">
+  <div class="col-md-4 reveal" style="--i:0"><a href="#in-person"><i class="bi bi-megaphone"></i><div><div class="h4">In-person auctions</div><div class="text-muted">You run the room. We do the paperwork.</div></div></a></div>
+  <div class="col-md-4 reveal" style="--i:1"><a href="#online"><i class="bi bi-laptop"></i><div><div class="h4">Online auctions</div><div class="text-muted">No hall, no auctioneer, no math.</div></div></a></div>
+  <div class="col-md-4 reveal" style="--i:2"><a href="#clubs"><i class="bi bi-people"></i><div><div class="h4">Club management</div><div class="text-muted">Members, dues, events, all of it.</div></div></a></div>
+</div>
+
+<nav class="promo-nav nav justify-content-center my-4" aria-label="On this page">
+  <a class="nav-link" href="#in-person">In person</a>
+  <a class="nav-link" href="#online">Online</a>
+  <a class="nav-link" href="#clubs">Clubs</a>
+  <a class="nav-link" href="#ai">AI</a>
+</nav>
+
+<section id="in-person" class="py-5">
+  <div class="row g-4 g-lg-5 align-items-center">
+    <div class="col-lg-6">
+      <div class="promo-kicker reveal">In-person auctions</div>
+      <h2 class="display-6 fw-bold mb-4 reveal">You run the room. We do the paperwork.</h2>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#lots"><i class="bi bi-box-seam"></i><div><div class="promo-feature-title">Add lots easily</div><div class="text-muted">Users can add lots themselves, or you can add lots for them.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#selling"><i class="bi bi-mic"></i><div><div class="promo-feature-title">Simple bid recording</div><div class="text-muted">Type it, tap it, or just say "lot 12, bidder 104, fifteen dollars".</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#projector"><i class="bi bi-projector"></i><div><div class="promo-feature-title">Every lot on the big screen</div><div class="text-muted">Photos on the projector as each lot is called.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-in-person-auction' %}#checkout"><i class="bi bi-receipt"></i><div><div class="promo-feature-title">Checkout in seconds</div><div class="text-muted">Invoices add themselves up. Square, Tap to Pay or cash.</div></div></a>
+    </div>
+    <div class="col-lg-6 reveal">
+      {% comment %}Drawn as the demo's first catch: lot 5 sold to a bidder number nobody has. The script picks up from here, fixes it to 243, and goes on through the other lots.{% endcomment %}
+      <div class="promo-mock promo-winners" id="promo-winners" aria-hidden="true">
+        <div class="promo-mock-label mb-2">Set lot winners</div>
+        <div class="alert bg-success text-dark py-2 px-3 mb-3 promo-banner is-hidden" data-banner><i class="bi bi-check-circle-fill me-1"></i><span data-banner-text>Bidder 57 is now the winner of lot 4</span></div>
+        <div class="row g-2 align-items-start">
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">Lot</div><div class="form-control" data-field="lot">5</div></div>
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">Price</div><div class="input-group"><span class="input-group-text">$</span><div class="form-control" data-field="price">10</div></div></div>
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">Winner</div><div class="form-control is-invalid" data-field="winner">234</div></div>
+          <div class="col-6 col-sm-3"><div class="promo-mock-label">&nbsp;</div><div class="btn btn-success text-dark w-100" data-save>Save</div></div>
         </div>
-        <div class="col-lg-4 col-md-6">
-          <div class="card border-secondary mb-3" style="max-width: 20rem;">
-            <div class="card-header">A game-changer for clubs</div>
-            <div class="card-body">
-              <h4 class="card-title">Clubs</h4>
-              <p class="card-text">
-                  <p>Attract new members</p>
-                  <p>No location rental costs</p>
-                  <p>No auctioneer costs</p>
-                  <p>Save time and hassle setting up</p>
-              </p>
-            </div>
-          </div>
-        </div>
-        <div class="col-lg-4 col-md-6">
-          <div class="card border-secondary mb-3" style="max-width: 20rem;">
-            <div class="card-header">Your auction, your way</div>
-            <div class="card-body">
-              <h4 class="card-title">Pants optional</h4>
-              <p class="card-text"></p>
-              Bid from the comfort of your home<br>
-              <h3><img style='max-width:1em' src="{% static 'glass.svg' %}" class="card-img-top" alt="Don't drink and bid"></h3>
-              <span class='text-info'>Sturgeon general's warning:</span> consumption of alcohol while bidding may be
-              beneficial to your club's finances<br><br>
-              </p>
-            </div>
-          </div>
-        </div>
+        <div class="promo-catch text-danger fw-semibold mt-2"><i class="bi bi-shield-exclamation me-1"></i><span data-catch>Caught: bidder 234 isn't in this auction</span></div>
       </div>
-      <h1 class="text-end"><span class='magic'>Awesome.</span></h1>
+      <p class="text-muted text-center mt-3 mb-0"><i class="bi bi-shield-check text-success me-1"></i>Wrong numbers are caught before anything is saved.</p>
     </div>
   </div>
-  <div class="jumbotron jumbotron-fluid">
-      <div class="container">
-        <div class="row">
-          <div class="row">
-            <div class="col-lg-4">
-                <figure class="text-end">
-                    <blockquote class="blockquote">
-                        <p class="mb-0">I was reluctant at first, but after buying and selling, I am convinced this is the next generation of fish auctions. I love the fact my fish don't sit on a cold table all day long.</p>
-                    </blockquote>
-                    <figcaption class="blockquote-footer">rob.vermont</figcaption>
-                </figure>
-            </div>
-            <div class="col-lg-4">
-                <figure class="text-end">
-                    <blockquote class="blockquote">
-                        <p class="mb-0">Amazing! The best auction software I've ever seen</p>
-                    </blockquote>
-                    <figcaption class="blockquote-footer">Janine Banks</figcaption>
-                </figure>
-            </div>
-            <div class="col-lg-4">
-                <figure class="text-end">
-                    <blockquote class="blockquote">
-                        <p class="mb-0">This electronic age shit sucks !!!</p>
-                    </blockquote>
-                    <figcaption class="blockquote-footer">John Krol</figcaption>
-                </figure>
-            </div>
+</section>
+
+<section id="online" class="py-5">
+  <div class="row g-4 g-lg-5 align-items-center flex-lg-row-reverse">
+    <div class="col-lg-6">
+      <div class="promo-kicker reveal">Online auctions</div>
+      <h2 class="display-6 fw-bold mb-3 reveal">No hall. No auctioneer. No math.</h2>
+      <div class="reveal promo-strike-wrap mb-3">
+        <ul class="promo-strike">
+          <li style="--i:0">Book a hall</li>
+          <li style="--i:1">Pay for the hall</li>
+          <li style="--i:2">Find an auctioneer</li>
+          <li style="--i:3">Add up who owes what</li>
+        </ul>
+        <div class="promo-free fs-5 fw-semibold" style="color: var(--promo-green);">Still completely free.</div>
+      </div>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='online-auctions' %}#bid"><i class="bi bi-cup-hot"></i><div><div class="promo-feature-title">Bid from the couch</div><div class="text-muted">A week to look things up before you bid.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='online-auctions' %}#sell"><i class="bi bi-shield-check"></i><div><div class="promo-feature-title">Nothing sells too cheap</div><div class="text-muted">Sellers set a minimum bid, or a buy-now price.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-online-auction' %}#multi-location"><i class="bi bi-geo-alt"></i><div><div class="promo-feature-title">Deliver lots to multiple locations</div><div class="text-muted">Club members choose the location nearest them.</div></div></a>
+      <a class="promo-feature reveal" href="{% url 'help_guide' slug='run-an-online-auction' %}#invoices"><i class="bi bi-calculator"></i><div><div class="promo-feature-title">Invoices build themselves</div><div class="text-muted">Everyone knows what they owe before pickup.</div></div></a>
+    </div>
+    <div class="col-lg-6 reveal">
+      <div class="promo-mock promo-lot mx-auto" id="promo-lot" style="max-width: 24rem;" aria-hidden="true">
+        <div class="promo-lot-blank"><i class="bi bi-camera"></i></div>
+        <div class="fw-semibold fs-5 mt-3">Lot 214</div>
+        <div class="d-flex justify-content-between align-items-end mt-2">
+          <div><div class="promo-mock-label">High bid</div><div class="promo-price" data-price>$14</div></div>
+          <div class="text-end"><div class="promo-mock-label">Ends in</div><div class="fs-5" data-clock>1d 04:12:09</div></div>
         </div>
+        <div class="d-flex justify-content-between align-items-center mt-3">
+          <span class="text-muted small"><span data-bids>6</span> bids</span>
+          <span class="badge text-bg-primary fs-6 px-3 py-2">Place bid</span>
         </div>
-        {% include 'youtube_embed.html' with videoId=online_tutorial chapters=online_tutorial_chapters %}
       </div>
     </div>
   </div>
-<div class="tab-pane fade show active" id="runInPersonAuction">
-  <br>
-  <h4>All the software you need to run an in-person auction</h4>
-  <ul>
-    <li>Manage users and lots</li>
-    <li>Quickly and easily set lot winners</li>
-    <li>Minimum bid (reserve) and buy now prices</li>
-    <li>Using a projector, show pictures of a lot as it's being auctioned off</li>
-    <li>Support for Breeder Award Programs/Breeder Participation Programs</li>
-    <li>Easily copy lots, rules, and users between auctions</li>
-    <li>One click export of data to generate marketing lists</li>
-    <li>Different seller and club cuts for club members</li>
-    <li>Automatic invoicing</li>
-    <li>Make other users admins to help run the auction</li>
-    <li>...and more!</li>
-  </ul>
-  <br>
-    {% include 'youtube_embed.html' with videoId=in_person_tutorial chapters=in_person_tutorial_chapters %}
-</div>
-<div style="background:transparent !important" class="jumbotron jumbotron-fluid bg-primary">
-  <div class="container">
-    <h2 class="display-4">Ready to get started?</h2>
-    <h3 class='text-end'>Head to the <a href='{% url "auctions" %}'>list of club auctions</a> and add yours today!</h3>
+</section>
+
+<section id="clubs" class="py-5">
+  <div class="text-center mb-4">
+    <div class="promo-kicker reveal">Club management</div>
+    <h2 class="display-6 fw-bold reveal">Run the whole club, not just the auction.</h2>
+  </div>
+  <div class="row g-4 g-lg-5 align-items-center">
+    <div class="col-lg-4 reveal">
+      <div class="promo-card" aria-hidden="true">
+        <div class="d-flex align-items-center gap-2">
+          <span class="promo-card-logo"><i class="bi bi-water"></i></span>
+          <div class="fw-bold">Your Club</div>
+          <div class="ms-auto small text-end">Active Paid Membership</div>
+        </div>
+        <div class="mt-3 promo-card-label">Member</div>
+        <div class="fs-5 fw-semibold lh-sm">Pat Rivera</div>
+        <div class="d-flex gap-4 mt-2">
+          <div><div class="promo-card-label">Member ID</div><div class="small">1042</div></div>
+          <div><div class="promo-card-label">Membership</div><div class="small">Valid through 31 Dec 2026</div></div>
+        </div>
+        <div class="promo-barcode"></div>
+      </div>
+      <div class="text-center text-muted mt-3"><i class="bi bi-apple"></i> Apple Wallet &middot; <i class="bi bi-google"></i> Google Wallet</div>
     </div>
+    <div class="col-lg-8">
+      <div class="row gx-4">
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-membership' %}"><i class="bi bi-people"></i><div><div class="promo-feature-title">Your member list</div><div class="text-muted">Who's paid, who's lapsing, and who's new.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-membership' %}#auto-renew"><i class="bi bi-arrow-repeat"></i><div><div class="promo-feature-title">Renewals that run themselves</div><div class="text-muted">Dues by card, reminders, and yearly subscriptions.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-membership' %}#cards"><i class="bi bi-wallet2"></i><div><div class="promo-feature-title">Membership cards on their phone</div><div class="text-muted">In their wallet, and scanned at the door.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-events' %}#google-calendar"><i class="bi bi-calendar-event"></i><div><div class="promo-feature-title">Events, synced to Google Calendar</div><div class="text-muted">Type it once. It's on your calendar, Discord and website.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-email' %}#mailing-lists"><i class="bi bi-envelope-paper"></i><div><div class="promo-feature-title">Mailchimp or Brevo, automatically</div><div class="text-muted">Your mailing list keeps up with your members.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-email' %}#discord"><i class="bi bi-discord"></i><div><div class="promo-feature-title">A Discord bot</div><div class="text-muted">Member roles and announcements, kept up to date.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='breeder-award-programs' %}"><i class="bi bi-award"></i><div><div class="promo-feature-title">Breeder award programs</div><div class="text-muted">Points from lots sold, and a leaderboard. No spreadsheet.</div></div></a></div>
+        <div class="col-md-6"><a class="promo-feature reveal" href="{% url 'help_guide' slug='club-donations' %}"><i class="bi bi-gift"></i><div><div class="promo-feature-title">Donation tracking</div><div class="text-muted">Who you asked, who said yes, and who's due a nudge.</div></div></a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="ai" class="py-5">
+  <div class="row g-4 g-lg-5 align-items-center">
+    <div class="col-lg-5 text-center text-lg-start">
+      <div class="promo-kicker reveal">AI tools</div>
+      <h2 class="display-6 fw-bold reveal">Or just ask.</h2>
+      <p class="fs-5 text-muted reveal mb-1">Connect Claude, ChatGPT or Grok, and manage all of it in plain English.</p>
+      <p class="small text-muted reveal">Perfect for instant help and troubleshooting about any aspect of your auction or club</p>
+      <a class="btn btn-primary reveal" href="{% url 'help_guide' slug='ai-agents' %}">Connect an AI assistant</a>
+      <p class="small text-muted mt-3 mb-0 reveal">Or <a href="{% url 'support' %}">get help from an actual person</a>.</p>
+    </div>
+    <div class="col-lg-7 reveal">
+      <div class="promo-mock promo-chat" id="promo-chat" aria-hidden="true">
+        <div class="promo-bubble from-you" data-ask>Who still owes money from Saturday's auction?</div>
+        <div class="promo-bubble from-ai" data-answer>Three people: bidders 12, 31 and 57, $165 between them.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-5">
+  <div class="row g-4 text-center">
+    <figure class="col-md-4 mb-0 reveal" style="--i:0"><blockquote class="blockquote fs-6"><p>I was reluctant at first, but after buying and selling, I am convinced this is the next generation of fish auctions.</p></blockquote><figcaption class="blockquote-footer">rob.vermont</figcaption></figure>
+    <figure class="col-md-4 mb-0 reveal" style="--i:1"><blockquote class="blockquote fs-6"><p>Amazing! The best auction software I've ever seen.</p></blockquote><figcaption class="blockquote-footer">Janine Banks</figcaption></figure>
+    <figure class="col-md-4 mb-0 reveal" style="--i:2"><blockquote class="blockquote fs-6"><p>This electronic age shit sucks!!!</p></blockquote><figcaption class="blockquote-footer">John Krol</figcaption></figure>
+  </div>
+</section>
+
+<section class="promo-mock text-center py-5 my-4 reveal">
+  <h2 class="display-6 fw-bold mb-4">Make a splash with your next auction.</h2>
+  <div class="d-flex flex-wrap gap-2 justify-content-center">
+    <a class="btn btn-success text-dark btn-lg" href="{% url 'auctions' %}">Find an auction</a>
+    <a class="btn btn-primary btn-lg" href="{% url 'help' %}">Read the help</a>
+  </div>
+</section>
+
 </div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+  // promo-motion only moves things about: reveals, the floating card, the photo strip. The demos below
+  // change words and numbers, so they run with reduced motion too.
+  var motion = document.documentElement.classList.contains("promo-motion");
+  var observing = "IntersectionObserver" in window;
+
+  // Run `start` once, the first time `el` scrolls into view.
+  function whenSeen(el, start, threshold) {
+    if (!el) return;
+    if (!observing) { start(); return; }
+    var seen = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) { seen.disconnect(); start(); }
+      });
+    }, { threshold: threshold || 0.3 });
+    seen.observe(el);
+  }
+
+  if (motion) {
+    var reveal = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) { entry.target.classList.add("is-visible"); reveal.unobserve(entry.target); }
+      });
+    }, { threshold: 0.15 });
+    document.querySelectorAll(".promo .reveal").forEach(function (el) { reveal.observe(el); });
+  }
+  document.querySelectorAll(".promo-strike").forEach(function (list) {
+    whenSeen(list, function () { list.classList.add("is-visible"); list.parentElement.classList.add("is-visible"); }, 0.6);
+  });
+
+  // The on-this-page bar follows the section in view.
+  var navLinks = document.querySelectorAll(".promo-nav .nav-link");
+  if (observing) {
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        navLinks.forEach(function (link) { link.classList.toggle("active", link.getAttribute("href") === "#" + entry.target.id); });
+      });
+    }, { rootMargin: "-45% 0px -50% 0px" });
+    navLinks.forEach(function (link) { spy.observe(document.querySelector(link.getAttribute("href"))); });
+  }
+
+  var rotator = document.querySelector(".promo-rotator");
+  if (rotator) {
+    var words = rotator.dataset.words.split("|"), w = 0;
+    setInterval(function () {
+      rotator.classList.add("is-out");
+      setTimeout(function () {
+        w = (w + 1) % words.length;
+        rotator.textContent = words[w];
+        rotator.classList.remove("is-out");
+      }, 300);
+    }, 2200);
+  }
+
+  // Set lot winners, one keystroke at a time, with a mistake caught on two of the three lots.
+  var winners = document.getElementById("promo-winners");
+  whenSeen(winners, function () {
+    var save = winners.querySelector("[data-save]"), banner = winners.querySelector("[data-banner]");
+    var bannerText = winners.querySelector("[data-banner-text]"), caught = winners.querySelector("[data-catch]");
+    function field(name) { return winners.querySelector('[data-field="' + name + '"]'); }
+    var steps = [
+      ["type", "lot", "5"], ["type", "price", "10"], ["type", "winner", "234"], ["save"],
+      ["error", "winner", "Caught: bidder 234 isn't in this auction"],
+      // The markup is drawn as of here.
+      ["clear", "winner"], ["type", "winner", "243"], ["save"], ["sold", "Bidder 243 is now the winner of lot 5"],
+      ["type", "lot", "6"], ["type", "price", "25"], ["type", "winner", "57"], ["save"], ["sold", "Bidder 57 is now the winner of lot 6"],
+      ["type", "lot", "6"], ["type", "price", "8"], ["type", "winner", "112"], ["save"],
+      ["error", "lot", "Caught: lot 6 has already been sold"],
+      ["clear", "lot"], ["type", "lot", "7"], ["save"], ["sold", "Bidder 112 is now the winner of lot 7"]
+    ];
+    var i = 5;
+    function next(delay) { setTimeout(run, delay); }
+    function run() {
+      var step = steps[i];
+      i = (i + 1) % steps.length;
+      if (step[0] === "type") {
+        var el = field(step[1]), text = step[2], c = 0;
+        el.classList.add("promo-caret");
+        var typing = setInterval(function () {
+          el.textContent = text.slice(0, ++c);
+          if (c < text.length) return;
+          clearInterval(typing);
+          el.classList.remove("promo-caret");
+          next(350);
+        }, 160);
+      } else if (step[0] === "save") {
+        save.classList.add("is-pressed");
+        setTimeout(function () { save.classList.remove("is-pressed"); }, 200);
+        next(500);
+      } else if (step[0] === "error") {
+        banner.classList.add("is-hidden");
+        field(step[1]).classList.add("is-invalid");
+        caught.textContent = step[2];
+        caught.parentElement.classList.remove("is-hidden");
+        next(2600);
+      } else if (step[0] === "clear") {
+        field(step[1]).classList.remove("is-invalid");
+        field(step[1]).textContent = "";
+        caught.parentElement.classList.add("is-hidden");
+        next(400);
+      } else if (step[0] === "sold") {
+        ["lot", "price", "winner"].forEach(function (name) { field(name).textContent = ""; });
+        bannerText.textContent = step[1];
+        banner.classList.remove("is-hidden");
+        next(2400);
+      }
+    }
+    next(1200);
+  });
+
+  var lotCard = document.getElementById("promo-lot");
+  whenSeen(lotCard, function () {
+    var priceEl = lotCard.querySelector("[data-price]"), bidsEl = lotCard.querySelector("[data-bids]");
+    var clockEl = lotCard.querySelector("[data-clock]");
+    var price = 14, bids = 6, left = 28 * 3600 + 12 * 60 + 9;
+    function pad(n) { return (n < 10 ? "0" : "") + n; }
+    setInterval(function () {
+      left -= 1;
+      var d = Math.floor(left / 86400), h = Math.floor(left % 86400 / 3600), m = Math.floor(left % 3600 / 60);
+      clockEl.textContent = (d ? d + "d " : "") + pad(h) + ":" + pad(m) + ":" + pad(left % 60);
+    }, 1000);
+    setInterval(function () {
+      price += 1 + Math.floor(Math.random() * 3);
+      bids += 1;
+      priceEl.textContent = "$" + price;
+      bidsEl.textContent = bids;
+      priceEl.classList.add("is-bid");
+      setTimeout(function () { priceEl.classList.remove("is-bid"); }, 900);
+    }, 3200);
+  });
+
+  var chat = document.getElementById("promo-chat");
+  whenSeen(chat, function () {
+    var ask = chat.querySelector("[data-ask]"), answer = chat.querySelector("[data-answer]");
+    var turns = [
+      [ask.textContent, answer.textContent],
+      ["Pat just paid dues in cash.", "Renewed. Pat's paid up for another year, and it's in the treasurer's report."],
+      ["Add the swap meet to our calendar, the 14th at 7pm.", "Added. It's on your Google Calendar and Discord too."],
+      ["Tell everyone the auction moved to Sunday.", "Sent to Discord, the app and your mailing list."]
+    ];
+    var t = 0;
+    function play() {
+      var question = turns[t][0], i = 0;
+      ask.textContent = "";
+      ask.classList.add("promo-caret");
+      answer.classList.add("is-waiting");
+      var typing = setInterval(function () {
+        ask.textContent = question.slice(0, ++i);
+        if (i < question.length) return;
+        clearInterval(typing);
+        ask.classList.remove("promo-caret");
+        setTimeout(function () {
+          answer.textContent = turns[t][1];
+          answer.classList.remove("is-waiting");
+          t = (t + 1) % turns.length;
+          setTimeout(play, 3500);
+        }, 700);
+      }, 40);
+    }
+    play();
+  });
+})();
+</script>
 {% endblock %}

@@ -27,7 +27,7 @@
     <li>{% if auction.admin_checklist_additional_admin %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Click a name to edit that user and <a href="{% url 'auction_tos_list' slug=auction.slug %}">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
-  {% if enable_help %}<div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Click here to get help</a></div>{% endif %}
+  <div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Read the guide for this auction</a></div>
   <small class="text-muted">This message will disappear once you've finished setting up your auction.</small>
 </div>
 {% else %}
@@ -139,7 +139,8 @@
           {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_lot_queue' slug=auction.slug %}"><i class="bi bi-list-ol"></i> Lot queue</a>{% endif %}
           {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_volunteers' slug=auction.slug %}"><i class="bi bi-people"></i> Recruit volunteers</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_chat' slug=auction.slug %}"><i class="bi bi-chat-fill"></i> Chat messages</a>
-          {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
+          <a class="dropdown-item" href="{% url 'auction_survey_results' slug=auction.slug %}"><i class="bi bi-emoji-smile"></i> Feedback</a>
+          <a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help</a>
           {% if auction.use_check_in_mode and can_manage_check_in %}
           <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
           <a class="dropdown-item" href="{% url 'auction_self_check_in' slug=auction.slug %}"><i class="bi bi-person-check"></i> Self-checkin</a>
@@ -152,6 +153,7 @@
           <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>
           <a class="dropdown-item" href="{% url 'auction_lot_map' slug=auction.slug %}"><i class="bi bi-geo-alt"></i> Lot map</a>
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
+          {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_paddles' slug=auction.slug %}"><i class="bi bi-123"></i> Print paddles</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_printable_lot_list' slug=auction.slug %}"><i class="bi bi-printer"></i> Printable lot list</a>
           <a class="dropdown-item" href="{% url 'auction_history' slug=auction.slug %}"><i class="bi bi-clock-history"></i> Admin history</a>
           <a class="dropdown-item" href="{% url 'auction_delete' slug=auction.slug %}"><i class="bi bi-x-circle"></i> Delete auction</a>

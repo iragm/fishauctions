@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -59,13 +60,16 @@ class Route:
     fixed: dict[str, Any] = field(default_factory=dict)
     #: The kwarg name for the scope's object when a URL spells it differently.
     param: str = ""
+    #: ``f(user) -> bool`` for a page only some accounts have. Unlike ``admin``, this one is enforced:
+    #: the page is left out of the catalog and :func:`resolve_route` won't open it.
+    gate: Callable[[Any], bool] | None = None
 
     @property
     def search_text(self) -> str:
         return " ".join([self.label, self.key.replace("_", " "), *self.keywords]).lower()
 
 
-def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fixed=None, param=""):
+def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fixed=None, param="", gate=None):
     return Route(
         key=key,
         label=label,
@@ -75,7 +79,14 @@ def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fix
         keywords=tuple(keywords),
         fixed=dict(fixed or {}),
         param=param,
+        gate=gate,
     )
+
+
+def _has_library(user) -> bool:
+    from .documents.search import can_use_library
+
+    return can_use_library(user)
 
 
 # --- the catalog -------------------------------------------------------------
@@ -118,8 +129,22 @@ ROUTE_LIST: list[Route] = [
         "Browsing",
         keywords=["new speaker", "add a presenter", "add a program"],
     ),
-    _r("promo", "About this site", "Browsing", keywords=["about", "what is this", "marketing"]),
-    _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "help", "how does this work"]),
+    _r(
+        "help",
+        "Help guides",
+        "Browsing",
+        keywords=[
+            "help",
+            "how do i",
+            "how does this work",
+            "guide",
+            "instructions",
+            "tutorial",
+            "about",
+            "what is this",
+        ],
+    ),
+    _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "questions"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
     _r(
@@ -134,7 +159,6 @@ ROUTE_LIST: list[Route] = [
         "Browsing",
         keywords=["dmca notice", "report copyright infringement", "someone used my photo"],
     ),
-    _r("feedback", "Leave feedback about the site", "Browsing", keywords=["suggest", "bug report", "contact"]),
     _r(
         "support",
         "Help and support",
@@ -149,14 +173,21 @@ ROUTE_LIST: list[Route] = [
             "tutorial",
             "video",
             "who runs this",
+            "suggest",
+            "bug report",
         ],
     ),
-    _r("add_to_calendar", "Add auctions to my calendar", "Browsing", keywords=["calendar", "ical", "subscribe"]),
     # --- My stuff ---
     _r("selling", "Lots I am selling", "My stuff", keywords=["my lots", "what am i selling"]),
     _r("watched", "Lots I am watching", "My stuff", keywords=["watchlist", "watched", "saved lots"]),
     _r("won_lots", "Lots I won", "My stuff", keywords=["bought", "purchases", "what did i win"]),
     _r("my_bids", "My bids", "My stuff", keywords=["bids i placed", "bidding history"]),
+    _r(
+        "feedback",
+        "Leave feedback on lots I bought and sold",
+        "My stuff",
+        keywords=["rate a seller", "rate a buyer", "review", "positive", "negative"],
+    ),
     _r("my_invoices", "My invoices", "My stuff", keywords=["invoice", "what do i owe", "bill", "receipt"]),
     _r("invoice_by_pk", "One specific invoice", "My stuff", scope=SCOPE_INVOICE, keywords=["invoice"]),
     _r("new_lot", "Add a single lot", "My stuff", keywords=["sell something", "list an item", "new lot"]),
@@ -215,6 +246,13 @@ ROUTE_LIST: list[Route] = [
     _r("ignore_categories", "Categories to hide", "Account", keywords=["ignore", "hide categories", "mute"]),
     _r("printing", "Label printing preferences", "Account", keywords=["printer", "label size", "thermal"]),
     _r(
+        "library",
+        "The library: club articles, breeder reports and documents",
+        "Account",
+        keywords=["documents", "articles", "newsletters", "bap reports", "upload a document", "archive", "scans"],
+        gate=_has_library,
+    ),
+    _r(
         "user_api_keys",
         "Connect Claude or another AI assistant",
         "Account",
@@ -225,6 +263,12 @@ ROUTE_LIST: list[Route] = [
         "Download everything this site knows about me",
         "Account",
         keywords=["export my data", "download my data", "copy of my data", "what do you know about me", "gdpr"],
+    ),
+    _r(
+        "account_merge",
+        "Merge two of my accounts into one",
+        "Account",
+        keywords=["merge accounts", "duplicate account", "two accounts", "combine accounts", "second account"],
     ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
@@ -240,6 +284,13 @@ ROUTE_LIST: list[Route] = [
     _r("auction_help", "Auction help and rules", "Auction", scope=SCOPE_AUCTION, keywords=["rules", "how it works"]),
     _r("auction_chat", "Auction chat", "Auction", scope=SCOPE_AUCTION, keywords=["chat", "questions", "messages"]),
     _r("auction_stats", "Auction statistics", "Auction", scope=SCOPE_AUCTION, keywords=["stats", "numbers", "charts"]),
+    _r(
+        "auction_survey",
+        "Say how an auction went",
+        "Auction",
+        scope=SCOPE_AUCTION,
+        keywords=["survey", "feedback on the auction", "how was it", "rate the auction"],
+    ),
     _r("auction_lot_map", "Map of where lots are", "Auction", scope=SCOPE_AUCTION, keywords=["map", "tables", "where"]),
     _r("auction_volunteers", "Volunteer for a job", "Auction", scope=SCOPE_AUCTION, keywords=["volunteer", "help out"]),
     _r("auction_door_prizes", "Door prizes", "Auction", scope=SCOPE_AUCTION, keywords=["raffle", "prizes", "giveaway"]),
@@ -285,6 +336,14 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
         keywords=["settings", "edit auction", "configure", "change the date", "rules"],
+    ),
+    _r(
+        "auction_survey_results",
+        "What people said about an auction",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["survey results", "auction feedback", "reviews", "what did people think"],
     ),
     _r(
         "edit_auction_custom_fields",
@@ -365,6 +424,14 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
         keywords=["lot list", "print lots", "paper list", "table numbers", "preview lots"],
+    ),
+    _r(
+        "auction_paddles",
+        "Print bidder paddles",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["paddles", "print paddles", "bidder cards", "bidder number cards", "reprint a paddle"],
     ),
     _r(
         "auction_printing_pdf",
@@ -783,7 +850,7 @@ ROUTE_LIST: list[Route] = [
         "Club admin",
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
-        keywords=["barcodes", "member cards", "scan"],
+        keywords=["barcodes", "member cards", "scan", "paddle stickers"],
     ),
     _r(
         "club_barcode_labels_pdf",
@@ -1076,6 +1143,20 @@ ROUTE_LIST: list[Route] = [
         keywords=["milestones", "cohorts", "retention", "lapsed members", "median member", "new people"],
     ),
     _r(
+        "admin_early_adds",
+        "Early lots and gross",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["lots added early", "does adding lots early help", "early signups", "gross correlation"],
+    ),
+    _r(
+        "admin_free_text",
+        "Adjustments and custom fields",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["invoice adjustments", "custom fields", "what are adjustments used for", "custom field names"],
+    ),
+    _r(
         "admin_session_replay",
         "Read one person's session",
         "Site admin",
@@ -1135,6 +1216,23 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    "add_to_calendar": "Needs a pickup location; the Add to calendar button sits next to each one on the auction page.",
+    "auction_paddles_pdf": "Downloaded from Print bidder paddles, which first asks for plain paper in the printer.",
+    # The library: one document's pages. search_documents and read_document answer with its link.
+    "document_detail": "One library document; search_documents and read_document answer with its link.",
+    "document_file": "A document's original file, served to someone who can see it; opened from its page.",
+    "document_edit": "Editing one document is update_document, or one click from its page.",
+    "document_reindex": "A button on one document's page.",
+    "document_delete": "A button on one document's page; delete_document for an agent.",
+    "document_feedback": "The report form on one document's page.",
+    "library_answer": "The written answer the library page loads into itself; not a page on its own.",
+    "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
+    "batch_page": "One scanned page as a picture, opened from the article it is part of.",
+    "promo": "Marketing for people who don't use the site yet; anyone who does is better served by the help.",
+    "help_guide": (
+        "One help guide. search_help answers with a link to the section that holds the answer, which "
+        "beats landing on the top of a guide, and the help index lists every guide."
+    ),
     # The MCP endpoint and its authorization server
     "mcp": (
         "The Model Context Protocol endpoint. Another program's way in, authenticated by a bearer "
@@ -1173,6 +1271,7 @@ EXCLUDED: dict[str, str] = {
     "htmx_lot": _API,
     "lot_bid": _API,
     "lot_push_test": _API,
+    "push_test": _API,
     "enable_notifications": _API,
     "lot_chat_subscribe": _API,
     "delete_auction_chat": _API,
@@ -1209,10 +1308,13 @@ EXCLUDED: dict[str, str] = {
     "lot_end_unsold": _ACTION_ONLY,
     "bulk_set_lots_won": _API,
     "auction_unsell_lot": _ACTION_ONLY,
-    "auction_voice_vocabulary": (
-        "The lot and bidder numbers voice may match against, fetched by the set-winners page to keep "
-        "its own matcher current while an auction runs. It is that page's working data, not a "
-        "capability: everything in it is already on the users and lots pages the palette can reach."
+    "auction_voice_interpret": (
+        "The set-winners page posting what its microphone heard while an auction runs, to be read as a "
+        "sale. Only that page has a microphone; a person saying who bought a lot uses set_lot_winner."
+    ),
+    "auction_voice_cloud_session": (
+        "A short-lived OpenAI key for the set-winners page's microphone. It opens one listening session "
+        "and is no use to anything without a microphone attached."
     ),
     "auction_enable_bidding_for_all": _API,
     "auction_invoices_ready": _API,
@@ -1260,7 +1362,6 @@ EXCLUDED: dict[str, str] = {
     "auction_stats_attrition": _API,
     "auction_stats_auctioneer": _API,
     "auction_stats_activity": _API,
-    "auction_stats_pictures": _API,
     "auction_stats_distance_traveled": _API,
     "auction_stats_previous_auctions": _API,
     "auction_stats_lots_submitted": _API,
@@ -1268,6 +1369,7 @@ EXCLUDED: dict[str, str] = {
     "auction_stats_feature_use": _API,
     "auction_stats_referrers": _API,
     "form_abandoned": "A beacon the page fires on its way out. There is no page here to send anybody to.",
+    "lot_bid_abandoned": "A beacon the lot page fires on its way out. There is no page here to send anybody to.",
     "club_mark_contacted": "POST-only button on the club health queue; the page it sits on is admin_club_health.",
     "link_auctions_to_club": (
         "POST-only button on the unlinked auctions page; the page it sits on is admin_unlinked_auctions."
@@ -1451,6 +1553,8 @@ def _permitted_routes(user=None) -> list[Route]:
         if route.admin == ADMIN_AUCTION and not can_admin_auction:
             continue
         if route.admin == ADMIN_CLUB and not can_admin_club:
+            continue
+        if route.gate and not route.gate(user):
             continue
         allowed.append(route)
     return allowed
@@ -1651,6 +1755,8 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     from . import palette_actions
 
     user = request.user
+    if route.gate and not route.gate(user):
+        return {"error": "I couldn't find that page."}
     kwargs: dict[str, Any] = dict(route.fixed)
     hint = str(params.get("target") or "").strip()
     # What the destination is about, so the narration can say so.

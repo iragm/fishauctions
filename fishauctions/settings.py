@@ -266,6 +266,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    # Before ShortAnonymousSessionMiddleware, so it has the last word on the way out.
+    "auctions.middleware.CrawlerSessionMiddleware",
     # After AuthenticationMiddleware: it needs request.user to tell a visitor from a member.
     "auctions.middleware.ShortAnonymousSessionMiddleware",
 ]
@@ -420,8 +422,8 @@ SESSION_COOKIE_AGE = 60 * 60 * 24 * 365
 ANONYMOUS_SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
 
 # Redis-cached sessions with the database behind them: no session query per request, and a Redis
-# restart loses nobody.
-SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
+# restart loses nobody. auctions.session_store also reads the row when Redis doesn't answer.
+SESSION_ENGINE = "auctions.session_store"
 
 # The mobile WebView handoff relies on these server-set cookie flags. Secure outside DEBUG only, since
 # dev runs plain http.
@@ -712,6 +714,8 @@ ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY
 # past it every user is refused at once instead of each waiting a second.
 LLM_TOKENS_PER_MINUTE = int(os.environ.get("LLM_TOKENS_PER_MINUTE") or 150000)
 SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
+LIBRARY_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("LIBRARY_ENABLED_FOR_USERS") or None, default=False)
+VOICE_CLOUD_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("VOICE_CLOUD_ENABLED_FOR_USERS") or None, default=False)
 USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(
     "UNTRUSTED_MESSAGE", "You cannot currently promote auctions.  Please contact the website administrator for access."
@@ -719,6 +723,12 @@ UNTRUSTED_MESSAGE = os.environ.get(
 ENABLE_PROMO_PAGE = parse_bool_env(os.environ.get("ENABLE_PROMO_PAGE") or None, default=False)
 ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None, default=True)
 ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=False)
+# False on a staging or test copy of a public site: every page says noindex, robots.txt names no sitemap,
+# and the sitemap is empty, so search engines don't list the copy beside the real one.
+ALLOW_SEARCH_INDEXING = parse_bool_env(os.environ.get("ALLOW_SEARCH_INDEXING") or None, default=True)
+# The phone app's store pages. The help's app guide says the app isn't out yet until one is set.
+APP_STORE_URL = os.environ.get("APP_STORE_URL", "")
+PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "")
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 
 # --- DMCA designated agent ---------------------------------------------------------------------
@@ -738,6 +748,18 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 # minimal / low / medium / high, or blank to omit. See llm.DEFAULT_REASONING_EFFORT.
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "minimal")
+
+# The library (auctions/documents/). Vectors for search; blank means keyword search only, which is
+# also what happens with an LLM_BASE_URL endpoint that has no /embeddings. Changing it is a re-index:
+# `manage.py reindex_documents`.
+LLM_EMBEDDING_MODEL = os.environ.get("LLM_EMBEDDING_MODEL", "" if LLM_BASE_URL else "text-embedding-3-small")
+# The library's own model: reads scanned pages and pictures, puts batches of pages back together into
+# articles, files them, and writes the answers on /library/. Cheaper than the palette's job is hard; this
+# is the one place a better model is worth paying for. Defaults to LLM_MODEL behind an LLM_BASE_URL,
+# which won't know OpenAI's model names.
+DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (LLM_MODEL if LLM_BASE_URL else "gpt-5-mini")
+# Uploaded files, outside mediafiles/ because nginx serves all of /media/ to anyone with the URL.
+DOCUMENT_ROOT = os.environ.get("DOCUMENT_ROOT", "/home/app/web/privatefiles/documents/")
 
 # Public repository for the /mcp/ read_source tool. Paths resolve against the repo's own file list,
 # so nothing on this server's disk is reachable. Blank turns the tool off.
@@ -946,6 +968,9 @@ CACHES = {
         + "@"
         + os.environ.get("REDIS_HOST", "redis")
         + ":6379/3",
+        # redis-py waits forever by default. A stalled Redis has to raise, or auctions.session_store's fall
+        # back to the database never happens and the request hangs instead.
+        "OPTIONS": {"socket_connect_timeout": 2, "socket_timeout": 2},
     }
 }
 

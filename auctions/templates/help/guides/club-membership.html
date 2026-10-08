@@ -1,0 +1,103 @@
+{% load help_tags %}
+{% comment %}See HELP.md for the voice. The member list, dues and membership cards. Members' half first, then the membership chair's. Emails about membership are in club-email; the money side is in club-money.{% endcomment %}
+<p>Your member list is everyone in the club: when they joined, when they last paid, and when they run out. Members can pay their own dues by card and carry their membership card on their phone. Or skip all that and just keep the list.</p>
+{% if help.club_active_members %}{% helptip "people" %}{{ help.club.name }} has {{ help.club_active_members }} active member{{ help.club_active_members|pluralize }}.{% endhelptip %}{% endif %}
+
+<h2 class="h5 mt-4" id="for-members">For members</h2>
+<ul>
+  <li><strong>Joining:</strong> on the club's {% page "club_detail" "page" %}, click {% ui "Join" %}. No button means the club adds members itself; ask them.</li>
+  <li><strong>Your card:</strong> {% ui "Membership" %} on the club page shows your membership number and its barcode, when it runs out, and a button to put it in your phone's wallet. It updates itself when you renew.</li>
+  <li><strong>Paying:</strong> if the club takes dues here, the same panel has a button to {% page "club_membership_pay" "pay or renew" %} by card. You're renewed when the payment goes through.</li>
+  <li><strong>Club emails:</strong> the link at the bottom of any membership email picks all emails, essential ones only (membership and payment notices), or none.</li>
+</ul>
+<p>Belong to a club that does breeder awards? See <a href="{% url 'help_guide' slug='breeder-award-programs' %}#for-members">Breeder award programs</a>.</p>
+
+<h2 class="h5 mt-4" id="member-list">The member list</h2>
+<p>{% page "club_admin" "Members" %}, in the club's menu. Click a column to sort by it. The search box takes names, emails and membership numbers, and these words:</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>paid</th><td>Paid up.</td></tr>
+    <tr><th>expiring</th><td>Runs out soon. The people to remind.</td></tr>
+    <tr><th>expired</th><td>Paid once, not now. Who your renewal letter is for.</td></tr>
+    <tr><th>never paid</th><td>On the list, never paid. Auction participants and people who signed up end up here.</td></tr>
+    <tr><th>unpaid</th><td>Expired or never paid.</td></tr>
+    <tr><th>joined</th><td>Signed up with the {% ui "Join" %} button.</td></tr>
+    <tr><th>duplicate</th><td>Probably the same person twice. See <a href="#duplicates">below</a>.</td></tr>
+    <tr><th>deactivated</th><td>Members you've taken off the list.</td></tr>
+    <tr><th>discord</th><td>Linked to your Discord server.</td></tr>
+    <tr><th>nonmailchimp, nonbrevo</th><td>Not on your mailing list yet.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>{% page "club_member_export" "Export current view" %} downloads whatever the list shows. Search "expired" first and you have this year's renewal letter list.</p>
+<h3 class="h6 mt-3">One member</h3>
+<p>Click a name to edit them.</p>
+{% tip %}A family membership? Open the second person and pick the first in {% ui "Membership carried with" %}. They're paid up whenever that member is, and only that member renews.{% endtip %}
+{% tip %}Want to stop somebody bidding or selling at your auctions without taking them off the list? Untick {% ui "Bidding allowed" %} or {% ui "Selling allowed" %}.{% endtip %}
+<p>The menu at the end of each row has the rest: {% ui "Permissions" %}, {% ui "Renew" %}, {% ui "Set expiration date" %}, {% ui "Membership number" %}, {% ui "Resend membership card" %}, {% ui "Merge with..." %} and {% ui "Deactivate" %}. A deactivated member drops off the list, keeps their history, and comes back with {% ui "Reactivate" %}.</p>
+<p>{% page "club_member_map" "Map" %} puts everyone with an address on a map. Handy for picking a meeting place, or a second pickup location.</p>
+{% aitip %}Ask "who is about to lapse?" or "how many members have renewed?"{% endaitip %}
+
+<h2 class="h5 mt-4" id="adding">Adding members</h2>
+<div class="table-responsive">
+<table class="table table-sm">
+  <tbody>
+    <tr><th>One person</th><td>{% ui "Add member" %}. Only a name is required; an email is how they get their card and reminders.</td></tr>
+    <tr><th>A spreadsheet</th><td>{% ui "Import from CSV" %}. See <a href="#import">below</a>.</td></tr>
+    <tr><th>They sign up</th><td>Tick {% ui "Allow joining" %} in the club's {% page "club_edit" "General" %} settings, and your club page gets a {% ui "Join" %} button.</td></tr>
+    <tr><th>From your Discord</th><td>The join button in your Discord server adds whoever uses it. See <a href="{% url 'help_guide' slug='club-email' %}#discord">Discord</a>.</td></tr>
+    <tr><th>Your own sign-up form</th><td>A form on your website can add members through an API key. See <a href="{% url 'help_guide' slug='club-events' %}#api">Events and your website</a>.</td></tr>
+    <tr><th>Everyone from an auction</th><td>{% page "auction_add_users_to_club" "Add all users to your club" %}, on the auction's Users tab.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The Source column says which way each person arrived.</p>
+<h3 class="h6 mt-3" id="import">Importing a spreadsheet</h3>
+<ol>
+  <li>Save it as a CSV. Name the columns: <strong>Email</strong> (required), First Name, Last Name, Phone, Address, Memo, Discord ID, Contact Status, Membership Last Paid, Membership Expiration Date, Date Joined and Send Welcome Letter. Leave out any you don't have.</li>
+  <li>Click {% page "club_member_import" "Import from CSV" %}, pick the file, and {% ui "Upload CSV" %}.</li>
+  <li>Check the preview. Nothing is saved until you confirm it.</li>
+</ol>
+<ul>
+  <li>Somebody already on the list, by email, is updated from the file.</li>
+  <li>Dates can be partial: "2025" means January 1st, 2025.</li>
+  <li>People you import don't get the welcome letter unless their Send Welcome Letter says yes.</li>
+</ul>
+<h3 class="h6 mt-3" id="duplicates">The same person twice</h3>
+<p>It happens: one entry from the old spreadsheet and one from signing up. A <i class="bi bi-people-fill text-warning"></i> next to a name means the site thinks it's found one. Search "duplicate" to see them all. Open the menu on the one you don't want, click {% page "club_member_merge" "Merge with..." %}, and pick the one to keep. The kept one gets anything it's missing from the other (permissions too, if you're a club admin), and the other is deactivated. It can't be undone.</p>
+{% aitip %}Ask "add Jane Doe, jane@example.com, as a member".{% endaitip %}
+
+<h2 class="h5 mt-4" id="dues">Dues</h2>
+<p>On {% page "club_membership_settings" "Membership and payments" %}, pick a {% ui "Membership system" %} and set the {% ui "Membership annual fee" %}.</p>
+{% if help.club and help.is_club_admin %}{% helptip %}{{ help.club.name }}: {{ help.club.get_membership_system_display }}{% if help.club.membership_annual_fee %}, {{ help.club_currency_symbol }}{{ help.club.membership_annual_fee|floatformat:"-2" }} a year{% endif %}.{% endhelptip %}{% endif %}
+{% tip %}Want one renewal drive a year? Pick {% ui "January 1st renewal" %}. Rather not chase everyone at once? Pick {% ui "Rolling annual membership" %}.{% endtip %}
+<p>Renewing before a membership runs out adds a year to it, so nobody loses anything by paying early.</p>
+{% mike %}Mike joined in December at a club with January 1st renewal. On New Year's Eve he got an email saying his membership expires tomorrow, and he's been telling everyone the club stole his $20. Set a December joiner's expiration to the end of next year by hand.{% endmike %}
+<h3 class="h6 mt-3">Taking dues</h3>
+<ul>
+  <li><strong>By card:</strong> connect Square on the same page, and members pay on your club page. They're renewed when the payment goes through, and it's in the treasurer's report. See <a href="{% url 'help_guide' slug='club-money' %}#payment-accounts">Club money</a>.</li>
+  <li><strong>Cash or check:</strong> {% ui "Renew" %} in the member's menu. It adds one membership period by your club's rules, records the dues in the treasurer's report, and sends the renewal email if you've turned it on.</li>
+  <li><strong>Fixing a date:</strong> {% page "club_member_renew_page" "Set expiration date" %} changes the date and records no money. For somebody who has never paid, it also sends any welcome letter held back for them.</li>
+  <li><strong>At an auction:</strong> with {% rule "add_membership_fee_to_invoices_for_expired_members" %} in an auction's rules, a lapsed member's invoice includes the fee, and paying it renews them.</li>
+</ul>
+{% if help.auction and help.is_admin and help.auction.club %}{% helptip %}That rule is {% if help.auction.add_membership_fee_to_invoices_for_expired_members %}on{% else %}off{% endif %} in {{ help.auction.title }}.{% endhelptip %}{% endif %}
+{% tip %}Took money? {% ui "Renew" %}. Just correcting a mistake? {% ui "Set expiration date" %}. Using the wrong one either counts dues nobody paid, or loses dues somebody did.{% endtip %}
+<p>Your own membership form, on your website or Google Forms, doesn't make someone a paid member here. Renew them by hand, or have the form do it with an {% page "club_api_keys" "API key" %} that can renew memberships.</p>
+{% if help.club and help.is_club_admin %}{% helptip "key" %}{% if help.club_renewal_keys %}{{ help.club.name }} has an API key that can renew memberships: {{ help.club_renewal_keys|join:", " }}.{% else %}{{ help.club.name }} doesn't have an API key that can renew memberships yet.{% endif %}{% endhelptip %}{% endif %}
+<h3 class="h6 mt-3" id="auto-renew">Automatic renewals</h3>
+{% if help.club_paypal_subscriptions %}<p>Members can pay by yearly subscription, so their membership renews itself with nobody chasing it. Under {% page "club_membership_settings" "Membership and payments" %}, open {% ui "PayPal membership subscriptions" %}, follow the steps in PayPal, and paste the {% ui "PayPal webhook ID" %} it gives you.</p>{% endif %}
+<p>{% if help.club_paypal_subscriptions %}Or turn{% else %}Turn{% endif %} on the <a href="{% url 'help_guide' slug='club-email' %}#membership-emails">expiration reminders</a>: once you charge a fee and have a payment account connected, each one carries a button to pay.</p>
+{% aitip %}Ask "Bob paid his dues". It renews him and records the payment.{% endaitip %}
+
+<h2 class="h5 mt-4" id="cards">Membership cards</h2>
+<p>With {% ui "Show member barcodes" %} on, every member gets a number and a barcode. It's made by the site; you can't bring your own numbering.</p>
+<ul>
+  <li>Members find it under {% ui "Membership" %} on your club page, in their welcome and renewal emails, and in Apple Wallet or Google Wallet on their phone. The wallet card updates itself when they renew.</li>
+  <li>Scan it at the door to check them in, or at checkout to find their invoice. <a href="{% url 'help_guide' slug='scanning' %}">Barcodes and scanners</a> has how.</li>
+  <li>{% ui "Resend membership card" %} emails it to them again.</li>
+  <li>A card was lost or shared? {% ui "Membership number" %}, then {% ui "Reset" %}. The old number stops working; resend the card.</li>
+  <li>No phone? Print it: add a row for them on {% page "club_barcode_labels" "Print Barcodes" %} and click {% page "club_barcode_labels_pdf" "Download PDF" %}.</li>
+</ul>
+<p>{% page "club_stats" "Club stats" %} charts how many members you've had over the years.</p>
+{% aitip %}Ask "resend Jane her membership card".{% endaitip %}

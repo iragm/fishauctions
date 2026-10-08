@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime
 from datetime import timezone as date_tz
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib import messages
@@ -38,7 +39,6 @@ from django.views.generic.edit import (
     DeleteView,
     UpdateView,
 )
-from pytz import timezone as pytz_timezone
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -68,6 +68,7 @@ from auctions.models import (
     PickupLocation,
 )
 from auctions.services import (
+    auction_date_warnings,
     check_in_auctiontos,
     draw_door_prize,
     promoting_makes_it_the_clubs_current_auction,
@@ -354,36 +355,8 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
                 ),
                 extra_tags="safe",
             )
-        if (
-            self.get_object().use_check_in_mode
-            and not self.get_object().is_online
-            and self.get_object().online_bidding != "disable"
-            and self.get_object().date_online_bidding_starts
-            and self.get_object().date_online_bidding_starts < self.get_object().date_start
-        ):
-            messages.info(
-                self.request,
-                "This auction uses check-in mode, so users can't bid until they've been checked in at the event.  "
-                "Online bidding is set to open before the auction starts, but no one will be able to bid online "
-                "until they've been checked in.",
-            )
-
-        # Warn when an important time is set to midnight.
-        user_tz = browser_timezone(self.request)
-        try:
-            user_tz = pytz_timezone(user_tz)
-        except Exception:  # Catch any invalid timezone errors
-            user_tz = pytz_timezone(settings.TIME_ZONE)
-        if self.get_object().is_online:
-            time_value = self.get_object().date_end
-        else:
-            time_value = self.get_object().date_start
-        localized_time = time_value.astimezone(user_tz)
-        if localized_time.hour == 0 and localized_time.minute == 0:
-            messages.info(
-                self.request,
-                f"Don't set your {'end' if self.get_object().is_online else 'start'} time to midnight, users will find it confusing.  Use 23:59 instead.",
-            )
+        for warning in auction_date_warnings(updated_auction, ZoneInfo(browser_timezone(self.request))):
+            messages.info(self.request, warning)
 
         # A newly set club gets its admins added as auction admins.
         new_club = self.get_object().club
@@ -618,20 +591,6 @@ class AuctionLots(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         ]
 
 
-class AuctionHelp(LoginRequiredMixin, AuctionViewMixin, TemplateView):
-    template_name = "auction_help.html"
-
-    def dispatch(self, request, *args, **kwargs):
-        if not settings.ENABLE_HELP:
-            return redirect(reverse("home"))
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["auction"] = self.auction
-        return context
-
-
 class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
     """List of users (AuctionTOS) associated with an auction"""
 
@@ -648,7 +607,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         # Every row renders the Admin badge, which reads the creator and the member row.
         return AuctionTOS.annotate_lot_counts(
             AuctionTOS.objects.filter(auction=self.auction)
-            .select_related("clubmember__club", "user__userdata")
+            .select_related("clubmember__club", "clubmember__membership_carried_by", "user__userdata")
             .prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date")))
             # prefetch, not select_related: a join gives every row its own Auction instance, so
             # `self.auction.club` was a query per row.
@@ -674,7 +633,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         if (
             self.auction.is_club_managed
             and self.auction.alternate_split_mode == "club_member"
-            and self.auction.club.membership_annual_fee
+            and self.auction.club.charges_dues
         ):
             filters.extend(
                 [
@@ -1259,7 +1218,6 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
         context["stats_auctioneer_speed_json"] = _chart_json(auction.get_stat_auctioneer_speed)
         context["stats_lot_sell_prices_json"] = _chart_json(auction.get_stat_lot_sell_prices)
         context["stats_referrers_json"] = _chart_json(auction.get_stat_referrers)
-        context["stats_images_json"] = _chart_json(auction.get_stat_images)
         context["stats_travel_distance_json"] = _chart_json(auction.get_stat_travel_distance)
         context["stats_previous_auctions_json"] = _chart_json(auction.get_stat_previous_auctions)
         context["stats_lots_submitted_json"] = _chart_json(auction.get_stat_lots_submitted)
@@ -1274,7 +1232,6 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             context["compare_stats_auctioneer_speed_json"] = _chart_json(compare_auction.get_stat_auctioneer_speed)
             context["compare_stats_lot_sell_prices_json"] = _chart_json(compare_auction.get_stat_lot_sell_prices)
             context["compare_stats_referrers_json"] = _chart_json(compare_auction.get_stat_referrers)
-            context["compare_stats_images_json"] = _chart_json(compare_auction.get_stat_images)
             context["compare_stats_travel_distance_json"] = _chart_json(compare_auction.get_stat_travel_distance)
             context["compare_stats_previous_auctions_json"] = _chart_json(compare_auction.get_stat_previous_auctions)
             context["compare_stats_lots_submitted_json"] = _chart_json(compare_auction.get_stat_lots_submitted)
