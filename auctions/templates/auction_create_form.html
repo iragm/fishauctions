@@ -64,7 +64,8 @@ $(".submit-button").click(function(event){
         <div class="col-md-10 offset-md1">
           <div style='padding: 2vw;'> -->
             <h4>{{ title }}</h4>{% if new %}<br><span class='text-muted'>
-                Selling one lot? <a href='{% url "new_lot" %}'>Create a lot</a> instead.</span><br><br>{% endif %}
+                This will create a club auction that other people can add lots to.
+                If you are trying to sell a single lot, you should <a href='{% url "new_lot" %}'>create a new lot</a> instead.</span><br><br>{% endif %}
             {% if show_club_tip %}
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-1"></i>

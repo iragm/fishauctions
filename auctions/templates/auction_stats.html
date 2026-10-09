@@ -593,6 +593,16 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
   createLineChart('activity', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', null);
 </script>
 
+            {% if auction.is_online %}
+            <!-- Commented out funnel chart - can be restored if users request it
+            <h4>User engagement</h4>
+            Number of users who viewed lots, logged in, bid, and won lots in this auction.
+            <canvas id="funnel_chart"></canvas>
+            <span><br>In order for the auction to succeed, users must<ol><li>Visit the site</li><li>See a lot they like</li><li>Sign up for an account</li><li>Place a bid</li><li>Up their bid if they are outbid</li></ol>
+              This graph represents "friction" in this process.  At each step, some number of people will give up.  Ideally, every user who viewed a lot would win at least a lot or two, meaning there would be very little change as you move down the graph.<br><br>Remember that this graph only indicates people who visited the auction site, we can't know how many people are (for example) aware of your club but don't know about the auction, or have heard about the auction but didn't have a link for the site.</span>
+            <br>
+            -->
+            {% endif %}
 <br><h4>Promotions and join reminder emails</h4>
 <p class="text-muted small">{% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}No join reminders: this auction has no in-person pickup location.{% else %}People who view without joining get a reminder a day later.{% endif %}</p>
 <div class="table-responsive">
@@ -827,6 +837,22 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
             </script>
             <br>
               <br><br>
+            {% if auction.is_online %}
+            <!-- Commented out competition for lots and category popularity - can be restored if users request them
+            <h4>Competition for lots</h4>
+            How many bidders were there per lot?
+            <canvas id="lot_pie"></canvas>
+            <br>Ideally, each lot would have at least 2-3 bidders -- having at least two people who "must have" a lot means that lot will sell for what it's worth.<br><br>Lots of lots with few bidders means you need to attract more buyers next time.<br>Lots of lots with lots of bidders means your auction can support more sellers.
+            <br><br>
+            <h4>Category popularity</h4>
+            Relative popularity of categories by views and by number of lots.  Click a label to change the chart.<br>
+            <canvas id="categories"></canvas>
+            <br>
+            This chart is a good way to look at the popularity of different categories in your auction.<br><br>
+            If there is equal supply, interest, and demand in a category, views/bids/number of lots should be the same height (and determined by the number of lots).  When they are different, you can get some interesting info from this graph.
+            For example, categories with more bids are likely to be in higher demand, especially if views are lower.  Categories with lots of views but no bids may be something people are curious about, but don't actually want.  To wit: <i>What's this tequila fish?  Oh, it's a gray livebearer, never mind.</i>
+            -->
+            {% endif %}
 {% if not auction.is_online %}
 <p></p>
 <h4>Attrition</h4>
@@ -837,7 +863,14 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
   var compareData = {% if compare_auction and compare_stats_attrition_json %}{{ compare_stats_attrition_json|safe }}{% else %}null{% endif %};
   createScatterChart('attrition', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', true);
 </script>
-<p class="text-muted small">Prices usually fall as an auction drags on: swap tired auctioneers, use Buy Now, run a silent auction alongside, or hold door prizes late.</p>
+<div>This graph shows lot sell price, graphed against the minutes into the auction.  Generally, prices tend to decrease the longer an auction runs.  (And if you can't see a decrease on this graph, awesome!)  Attrition is often the largest issue in big auctions.  You can counteract it with:
+  <ul>
+    <li>Change out your auctioneer if they start to slow down</li>
+    <li>Enable or require a Buy Now price on lots to skip bidding altogether</li>
+    <li>Put some items up for a silent auction, which will allow people to bid on these items while the main auction is running (you can still use this site for invoicing, just record the silent auction winners once the silent auction ends)</li>
+    <li>Hold more door prize drawings and raffles later in the auction to encourage people to stay</li>
+  </ul>
+</div>
 
 <h5>Auctioneer performance</h5>
 <canvas id="auctioneer" width="500" height="400"></canvas>
@@ -875,7 +908,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
   var compareData = {% if compare_auction and compare_stats_lots_submitted_json %}{{ compare_stats_lots_submitted_json|safe }}{% else %}null{% endif %};
   createBarChart('auction_stats_lots_submitted', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
-<p class="text-muted small">Only people who bought or sold.</p>
+Most people will add very few lots to an auction, but it's worth considering those people, as how their lots do will impact whether or not they come back.  Only people who actually bought or sold a lot are included here -- if someone joined your auction but didn't participate, they won't appear in any column of this graph.
 {% if auction.multi_location %}
 <p></p>
 <h4>How much volume does each location do?</h4>
@@ -894,7 +927,15 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
   var compareData = {% if compare_auction and compare_stats_feature_use_json %}{{ compare_stats_feature_use_json|safe }}{% else %}null{% endif %};
   createBarChart('auction_stats_feature_use', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
-<p class="text-muted small">Percent of users who could use each feature; most need an account.</p>
+How many of your users are taking advantage of features on this webiste?
+<div>These measure the percent of users who <b>could</b> be taking advantage of the feature, which means:</div>
+<ul>
+  <li>Mobile app shows the percent of all your users (with an account) who have installed and signed in to the mobile app</li>
+  <li>Searches, watches, proxy bidding, and chat measure only the percent of users with an account</li>
+  <li>Proxy bidding shows the percent of your users with an account who have bid and who have ever used proxy bidding, even in other auctions</li>
+  <li>View invoice shows the percent of all users with an invoice who viewed it</li>
+  <li>Leave feedback shows the percent of all users who won a lot and left feedback on it</li>
+</ul>
 <p></p>
 <h4>Referrers</h4>
 <canvas id="auction_stats_referrers" width="500" height="400"></canvas>

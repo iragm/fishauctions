@@ -316,7 +316,7 @@ function initMap() {
                             {% if auction.unsold_lot_fee %}<li class="mb-2">If your lot does not sell, you will be charged {{ auction.currency_symbol }}{{ auction.unsold_lot_fee }}</li>{% endif %}
                             {% if auction.force_donation_threshold %}<li class="mb-2">If your lot sells for {{ auction.currency_symbol }}{{auction.force_donation_threshold}} or less, it will be considered a donation to the club</li>{% endif %}
                             {% if auction.minimum_bid > 2 %} <li class="mb-2">There will be a minimum bid of {{ auction.currency_symbol }}{{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
-                            {% if auction.buy_now != 'disable' %} <li class="mb-2">Sellers can set a buy now price</li> {% endif %}
+                            {% if auction.buy_now != 'disable' %} <li class="mb-2">Sellers can set a buy now price on their lots, which will allow a lot to be sold without bidding</li> {% endif %}
                         </ul>
                     </div>
                 </div>
@@ -501,7 +501,7 @@ function initMap() {
                             <button class='btn btn-sm btn-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
                         </div>
                         <div class="valid-feedback d-none" id="copyFeedback">
-                            <i class="bi bi-check-circle-fill"></i> Copied!
+                            <i class="bi bi-check-circle-fill"></i> Copied! Thanks for spreading the word!
                         </div>
                     </div>
                     <div class="col-12 col-md-auto">
