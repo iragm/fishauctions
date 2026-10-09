@@ -10,6 +10,28 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 mkdir -p logs
 rm -f logs/.stack-ready
 
+# The cloud session's HTTPS goes through a proxy that re-signs TLS with its own CA, so pip inside
+# the build fails certificate checks. Cloud-only and invisible to git (never on staging or prod): a
+# copy of the Dockerfile that trusts the proxy's bundle after every FROM, and the override file
+# compose loads on its own.
+ca=/root/.ccr/ca-bundle.crt
+if [ -f "$ca" ]; then
+  cp "$ca" .cloud-ca.crt
+  sed '/^FROM /a COPY .cloud-ca.crt /etc/ssl/certs/cloud-ca.crt\nENV PIP_CERT=/etc/ssl/certs/cloud-ca.crt SSL_CERT_FILE=/etc/ssl/certs/cloud-ca.crt REQUESTS_CA_BUNDLE=/etc/ssl/certs/cloud-ca.crt' \
+    Dockerfile >Dockerfile.cloud
+  cat >docker-compose.override.yaml <<'YAML'
+services:
+  web: {build: {dockerfile: Dockerfile.cloud}}
+  celery_worker: {build: {dockerfile: Dockerfile.cloud}}
+  celery_documents: {build: {dockerfile: Dockerfile.cloud}}
+  celery_beat: {build: {dockerfile: Dockerfile.cloud}}
+  test: {build: {dockerfile: Dockerfile.cloud}}
+YAML
+  for name in .cloud-ca.crt Dockerfile.cloud docker-compose.override.yaml; do
+    grep -qxF "$name" .git/info/exclude 2>/dev/null || echo "$name" >>.git/info/exclude
+  done
+fi
+
 nohup bash -c '
   if ! docker info >/dev/null 2>&1; then
     (dockerd >/tmp/dockerd.log 2>&1 &)
