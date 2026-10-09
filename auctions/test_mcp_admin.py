@@ -437,6 +437,16 @@ class FeatureRequestTests(AdminEndpointCase):
         self.assertEqual((row.user, row.status), (self.owner, AssistantSkillRequest.STATUS_NEW))
         self.assertIn("12 sessions", row.reason)
 
+    def test_a_suggestion_says_which_repository_and_the_list_shows_it(self):
+        self.call("suggest_feature", {"feature": "offline lot list", "reason": "no signal", "target": "app"})
+        self.assertEqual(AssistantSkillRequest.objects.get(skill="offline lot list").target, "app")
+        result = self.call("list_feature_requests", {"status": "new"})
+        rows = {row["request"]: row for row in result["structuredContent"]["requests"]}
+        self.assertEqual(rows[AssistantSkillRequest.objects.get(skill="offline lot list").pk]["target"], "app")
+        result = self.call("suggest_feature", {"feature": "something", "reason": "r", "target": "toaster"})
+        self.assertIn("site, app, both", result["content"][0]["text"])
+        self.assertFalse(AssistantSkillRequest.objects.filter(skill="something").exists())
+
     def test_a_planned_request_cannot_be_rewritten_by_the_person_who_asked(self):
         # Otherwise "planned" would approve one text and the build would read another.
         request = RequestFactory().get("/")

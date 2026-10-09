@@ -372,6 +372,7 @@ def list_feature_requests(request, params: dict[str, Any]) -> dict[str, Any]:
             "reason": palette_actions.untrusted(row.reason),
             "would_need": palette_actions.untrusted(row.params),
             "status": row.status,
+            "target": row.target,
             "owner_note": row.notes,
             "people_asking": row.others_asking + 1,
             "asked_on": row.createdon.date().isoformat(),
@@ -653,6 +654,12 @@ def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
     if "note" in params:
         row.notes = _str(params, "note")[:2000]
         fields.append("notes")
+    if "target" in params:
+        target = _str(params, "target").lower()
+        if target not in dict(AssistantSkillRequest.TARGET_CHOICES):
+            return _need("Which repository? One of: site, app, both.")
+        row.target = target
+        fields.append("target")
     row.save(update_fields=fields)
     return _ok(f"Feature request {row.pk}, “{row.skill}”, is now {row.get_status_display().lower()}.")
 
@@ -673,6 +680,7 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "request": "integer, required. The request number from list_feature_requests.",
                 "status": "string, required. new, done or declined.",
                 "note": "string, optional. Replaces the owner's private note on it.",
+                "target": "string, optional. site, app or both: which repository building it changes.",
             },
             danger=DANGER_CONFIRM,
             idempotent=True,
@@ -804,13 +812,21 @@ def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     since = timezone.now() - timedelta(days=1)
     if AssistantSkillRequest.objects.filter(user=request.user, createdon__gte=since).count() >= SUGGESTIONS_PER_DAY:
         return _error(f"{SUGGESTIONS_PER_DAY} suggestions in a day is the limit. Pick the best ones.")
+    target = _str(params, "target", AssistantSkillRequest.TARGET_SITE).lower()
+    if target not in dict(AssistantSkillRequest.TARGET_CHOICES):
+        return _need("Which repository? One of: site, app, both.")
     evidence = _str(params, "evidence")
     reason = _str(params, "reason")
     if evidence:
         reason = f"{reason}\n\nEvidence: {evidence}" if reason else f"Evidence: {evidence}"
-    return palette_actions.request_a_skill(
+    result = palette_actions.request_a_skill(
         request, {"skill": feature, "reason": reason, "params": _str(params, "would_need")}
     )
+    if result.get("request_id"):
+        AssistantSkillRequest.objects.filter(pk=result["request_id"], status=AssistantSkillRequest.STATUS_NEW).update(
+            target=target
+        )
+    return result
 
 
 def apply_proposal(proposal, request) -> None:
@@ -941,6 +957,10 @@ ADMIN_TOOLS: dict[str, Action] = {
                 "reason": "string, required. What people are trying to do and what goes wrong now.",
                 "evidence": "string, optional. What you read that shows it: page, counts, dates. No names.",
                 "would_need": "string, optional. What building it involves, roughly.",
+                "target": (
+                    "string, optional, default site. site, app or both: the repository building it would "
+                    "change. app is the mobile app (iragm/fishauctions-app)."
+                ),
             },
             danger=DANGER_CONFIRM,
             idempotent=True,

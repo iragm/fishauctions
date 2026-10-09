@@ -1571,8 +1571,8 @@ class AssistantSkillRequestAdmin(admin.ModelAdmin):
     bulk edits and search.
     """
 
-    list_display = ("skill", "user", "status", "surface", "createdon")
-    list_filter = ("status", "surface")
+    list_display = ("skill", "user", "status", "target", "surface", "createdon")
+    list_filter = ("status", "target", "surface")
     search_fields = ("skill", "reason", "params", "user__username")
     readonly_fields = ("createdon", "updatedon")
     list_select_related = ("user",)
