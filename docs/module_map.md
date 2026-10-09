@@ -207,7 +207,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16295 lines)
+- **`palette_actions.py`** (16324 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2210 lines)
   Natural-language orchestration for the command palette.
@@ -406,7 +406,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1057 lines)
+- **`test_documents.py`** (1102 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3015 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -469,7 +469,7 @@ this only quotes its opening sentence.
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (763 lines)
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
-- **`test_mcp.py`** (1536 lines)
+- **`test_mcp.py`** (1573 lines)
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (702 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
@@ -833,10 +833,10 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`protocol.py`** (273 lines)
   JSON-RPC 2.0 and the MCP methods, with no HTTP in it.
   `Caller`, `error`, `is_notification`, `negotiate`, `handle`
-- **`resources.py`** (353 lines)
+- **`resources.py`** (379 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
-  `Template`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (451 lines)
+  `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
+- **`tools.py`** (456 lines)
   The action registry, as MCP tools.
 - **`transport.py`** (161 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
