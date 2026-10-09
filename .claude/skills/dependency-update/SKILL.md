@@ -17,8 +17,6 @@ description: The weekly upgrade of every pinned package, in this repository (lan
    so at the end.
 5. End with the notable upgrades (majors, anything security-related) and anything held back.
 
-The `Weekly dependency update` workflow is manual-only now; this replaces its schedule.
-
 ## The app repository (iragm/fishauctions-app)
 
 Its own workflow does the upgrade every Monday at 06:23 UTC: it verifies the result (Dart checks,

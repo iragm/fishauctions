@@ -48,3 +48,12 @@ Only `mkdir` succeeding makes it yours; then write a line into `owner` in that d
 which session and what you are doing. Skip a run that is already claimed, whose branch has an open
 PR (its session owns it), or that a newer green run on the same branch has superseded. Remove the
 claim once the fix is green.
+
+## Routine state
+
+Scheduled runs share one long-lived session, so nothing a run needs may live only in the
+conversation: it gets summarized away. Each routine keeps what it must remember in
+`/mnt/project-files/routines/<routine>.md`: read it first, act on it rather than on recollection,
+and rewrite it at the end (replace, never append; keep it under about 40 lines). Typical contents:
+problems already reported and when, errors with a fix in flight and the PR, the last run's key
+numbers.

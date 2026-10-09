@@ -14,7 +14,7 @@ docker exec -it django python3 manage.py collectstatic --no-input
 docker compose restart web nginx
 ```
 
-`.github/workflows/weekly-dependency-update.yml` runs this every Monday and opens a PR.
+The weekly `dependency-update` routine (`.claude/skills/dependency-update/`) runs this every Monday and lands it on staging.
 
 ## Adding a library
 
