@@ -15750,6 +15750,8 @@ for _name in MCP_ONLY_SKILLS:
 #: Views a registered action covers: view class -> action name.
 SKILLS: dict[str, str] = {
     # The upload form, with an agent's transcription as the file.
+    # Bug reports and feature requests: the form is the same row request_a_skill writes.
+    "FeatureRequestsView": "request_a_skill",
     "LibraryView": "add_document",
     "DocumentEditView": "update_document",
     "DocumentDeleteView": "delete_document",

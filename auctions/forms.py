@@ -3494,6 +3494,29 @@ class ContactForm(forms.Form):
         return self.cleaned_data.get("email", "")
 
 
+class FeatureRequestForm(forms.Form):
+    """A bug report or feature request from ``/requests/``: the same three things ``request_a_skill`` takes."""
+
+    skill = forms.CharField(max_length=100, label="In a few words")
+    reason = forms.CharField(
+        widget=forms.Textarea(attrs={"rows": 5}),
+        max_length=2000,
+        label="What were you trying to do, and what happened?",
+    )
+    target = forms.ChoiceField(
+        choices=(("site", "Website"), ("app", "App"), ("both", "Both")),
+        initial="site",
+        widget=forms.RadioSelect,
+        label="Where",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Send", css_class="btn-success text-dark"))
+
+
 class CustomResetPasswordForm(ResetPasswordForm):
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 

@@ -1,4 +1,4 @@
-"""Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
+"""Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 the privacy policy, the blog, unsubscribe, joining the Android app's test, and the landing redirect.
 """
 
@@ -43,10 +43,12 @@ from auctions.filters import (
 )
 from auctions.forms import (
     ContactForm,
+    FeatureRequestForm,
 )
 from auctions.models import (
     FAQ,
     PRIVACY_POLICY_SLUG,
+    AssistantSkillRequest,
     Auction,
     AuctionTOS,
     BlogPost,
@@ -168,6 +170,65 @@ class SupportView(FormView):
             self.request,
             f"Thanks - your message is on its way. We'll reply to {email}.",
         )
+        return super().form_valid(form)
+
+
+class FeatureRequestsView(LoginRequiredMixin, FormView):
+    """``/requests/``: report a bug or ask for a feature, and see where your earlier ones stand.
+
+    The web face of ``request_a_skill`` and ``my_requests``: the same queue the site owner marks
+    planned, so a request from here is built exactly like one an assistant filed. GitHub's new-issue
+    page sends people here. The owner's note is never shown.
+    """
+
+    template_name = "feature_requests.html"
+    form_class = FeatureRequestForm
+    #: Requests one person may send in a day.
+    PER_DAY = 10
+    #: How each status reads to the person who asked.
+    STATUS_LABELS = {
+        AssistantSkillRequest.STATUS_NEW: "Received",
+        AssistantSkillRequest.STATUS_PLANNED: "Planned",
+        AssistantSkillRequest.STATUS_DONE: "Live",
+        AssistantSkillRequest.STATUS_DECLINED: "Not planned",
+    }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        rows = AssistantSkillRequest.objects.filter(user=self.request.user).order_by("-createdon")
+        context["past"] = [
+            {
+                "what": row.skill,
+                "where": row.get_target_display(),
+                "status": self.STATUS_LABELS.get(row.status, row.status),
+                "status_key": row.status,
+                "on": row.createdon,
+            }
+            for row in rows
+        ]
+        return context
+
+    def get_success_url(self):
+        return reverse("feature_requests")
+
+    def form_valid(self, form):
+        from auctions import palette_actions
+
+        since = timezone.now() - timedelta(days=1)
+        if AssistantSkillRequest.objects.filter(user=self.request.user, createdon__gte=since).count() >= self.PER_DAY:
+            messages.error(self.request, "That's a lot for one day; send the rest tomorrow.")
+            return self.form_invalid(form)
+        self.request.assistant_surface = "requests page"
+        result = palette_actions.request_a_skill(
+            self.request, {"skill": form.cleaned_data["skill"], "reason": form.cleaned_data["reason"]}
+        )
+        row = AssistantSkillRequest.objects.filter(pk=result.get("request_id")).first()
+        if row and row.status == AssistantSkillRequest.STATUS_NEW:
+            row.target = form.cleaned_data["target"]
+            row.save(update_fields=["target", "updatedon"])
+            messages.success(self.request, "Thanks, it's on the list.")
+        elif row:
+            messages.info(self.request, "That one's already decided; give a new request a new name.")
         return super().form_valid(form)
 
 
