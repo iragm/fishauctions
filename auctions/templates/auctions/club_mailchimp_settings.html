@@ -87,7 +87,10 @@
       {% if has_emails_enabled %}
         <div class="alert alert-info mt-3 mb-0 small">
           <i class="bi bi-lightbulb"></i>
-          To send membership emails from Mailchimp instead, turn off this site's.
+          You have outgoing emails enabled. Now that Mailchimp is connected you may want to turn those off
+          and send membership emails (welcome, renewal, expiry reminders) through Mailchimp instead &mdash;
+          for example, using a <strong>Customer Journey</strong> triggered by the <span class="text-warning">new-member</span>
+          or <span class="text-warning">expiring-soon</span> tags.
           <a href="{% url 'club_email_settings' club.slug %}">Manage email settings</a>
         </div>
       {% endif %}

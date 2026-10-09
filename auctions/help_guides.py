@@ -830,6 +830,7 @@ NOT_IN_HELP: dict[str, str] = {
     "dmca": "Legal text for rightsholders, linked from the footer.",
     "dmca_notice": "A form for rightsholders, reached from the DMCA page.",
     "support": "The contact page is where help ends, not a topic.",
+    "feature_requests": "A form and your own list; the support page links it.",
     "faq": "Being replaced by these guides.",
     "auction_help": "Redirects into these guides.",
     "auction_pages": "A list of the auction's other pages, which the guides cover one by one.",

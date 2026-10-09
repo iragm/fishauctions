@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Requests{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Report a bug or request a feature</h1>
+  <div class="row">
+    <div class="col-12 col-lg-6">
+      {% crispy form form.helper %}
+    </div>
+  </div>
+  {% if past %}
+  <h2 class="h5 mt-4">Your requests</h2>
+  <ul class="list-group">
+    {% for row in past %}
+    <li class="list-group-item d-flex justify-content-between align-items-start">
+      <div>{{ row.what }}<div class="small text-muted">{{ row.on|date:"M j, Y" }}</div></div>
+      <span class="badge {% if row.status_key == 'done' %}bg-success text-dark{% elif row.status_key == 'planned' %}bg-primary{% else %}bg-secondary{% endif %}">{{ row.status }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

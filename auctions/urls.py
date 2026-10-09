@@ -723,6 +723,7 @@ urlpatterns = [
     path("help/", views.HelpIndexView.as_view(), name="help"),
     path("help/<slug:slug>/", views.HelpGuideView.as_view(), name="help_guide"),
     path("support/", views.SupportView.as_view(), name="support"),
+    path("requests/", views.FeatureRequestsView.as_view(), name="feature_requests"),
     # /contact/ is the App Store Support URL and what older links point at. Unnamed on purpose: a
     # name would put it in front of the palette route audit as a page to describe.
     path("contact/", RedirectView.as_view(pattern_name="support", permanent=True)),
