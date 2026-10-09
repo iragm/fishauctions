@@ -74,12 +74,8 @@ class CatalogueTests(SimpleTestCase):
                 # Both spellings, flat and nested, because hosts read one or the other.
                 self.assertEqual(meta["ui"]["resourceUri"], widgets.TOOL_WIDGETS[name])
             else:
-                # Absent rather than null: fifty tools' worth of a key that says nothing. The one
-                # other key a tool may carry is the ask-every-call flag.
-                meta = descriptor.get("_meta", {})
-                self.assertLessEqual(
-                    set(meta), {tools.ASK_EVERY_CALL_KEY}, f"{name} has no widget but carries ui metadata"
-                )
+                # Absent rather than null: fifty tools' worth of a key that says nothing.
+                self.assertNotIn("_meta", descriptor, f"{name} has no widget but carries ui metadata")
 
     #: The two writes allowed to carry a widget. Both draw the thing they just acted on rather than
     #: the thing they are about to do -- the widget is the receipt, not the button.
