@@ -52,38 +52,6 @@
   {% endif %}
 </div>
 {% endif %}
-{% if shortcut_proposals %}
-<div class="alert alert-success">
-  <h5 class="mb-2"><i class="bi bi-lightning-charge"></i> Shortcuts worth writing down</h5>
-  {% comment %}
-    The model's own repeated answers are the ground truth here: a phrase is only offered when every
-    single time it was asked it resolved to the same page. Accepting one means that phrase never
-    reaches the model again -- it costs nothing, answers instantly, and cannot come back wrong.
-  {% endcomment %}
-  <div class="table-responsive">
-    <table class="table table-sm table-borderless mb-0 align-middle">
-      <thead><tr><th>Phrase</th><th>Goes to</th><th class="text-end">Asked</th><th></th></tr></thead>
-      <tbody>
-        {% for row in shortcut_proposals %}
-        <tr>
-          <td>{{ row.phrase }}</td>
-          <td>{{ row.label }}</td>
-          <td class="text-end">{{ row.count }}</td>
-          <td class="text-end">
-            <form method="post" class="d-inline">
-              {% csrf_token %}
-              <input type="hidden" name="phrase" value="{{ row.phrase }}">
-              <input type="hidden" name="route" value="{{ row.route }}">
-              <button type="submit" class="btn btn-sm btn-success">Accept</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
 {% if llm_variants %}
 <h5 class="mt-4">Before and after</h5>
 {% comment %}

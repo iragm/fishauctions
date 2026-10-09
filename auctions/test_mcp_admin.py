@@ -13,7 +13,7 @@ from django.contrib.auth.models import User
 from django.db import connection
 from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from auctions import palette_actions
@@ -576,9 +576,20 @@ class FeatureRequestTests(AdminEndpointCase):
 
 class ReadAdminPageTests(AdminEndpointCase):
     def test_a_dashboard_comes_back_as_text(self):
-        result = self.call("read_admin_page", {"page": "assistant_skill_requests"})
+        result = self.call("read_admin_page", {"page": "species_gaps"})
         self.assertFalse(result["isError"], result)
-        self.assertIn("Feature requests", result["structuredContent"]["text"])
+        self.assertIn("scientific name", result["structuredContent"]["text"])
+
+    def test_a_report_with_no_url_still_reads(self):
+        """The owner retired these from the site; the scout reads them here."""
+        for page in admin.MCP_ONLY_PAGES:
+            with self.subTest(page=page):
+                self.assertIn(page, admin.readable_pages())
+                with self.assertRaises(NoReverseMatch):
+                    reverse(page)
+        result = self.call("read_admin_page", {"page": "admin_usability", "query": "days=7"})
+        self.assertFalse(result["isError"], result)
+        self.assertNotIn("url", result["structuredContent"])
 
     def test_pages_that_fire_errors_or_dump_every_address_are_not_readable(self):
         for page in admin.UNREADABLE_PAGES:

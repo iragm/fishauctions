@@ -62,8 +62,8 @@ there to approve.
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
   `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, a club's outreach
   stage, trusting a user) can be proposed, checked again at
-  approval. `planned` starts a build, so only the owner's click on the requests page sets it, and a
-  request can't be edited once decided.
+  approval. `planned` starts a build, so only the owner sets it (the project chat's decision cards,
+  or Django admin), and a request can't be edited once decided.
 - `read_logs` and dashboard text go through `admin.redact` on the way out. No database tool, by
   decision.
 - `test_mcp_admin.ReadOnlyToolsDontWriteTests` runs every registry read as a superuser and fails on
@@ -182,7 +182,8 @@ back search results rather than a refusal.
 
 ## Watching it work
 
-`/admin-dashboard/palette-analytics/`. `LLMUsage.request_id` is one id per thing somebody typed, so
+The `command_palette_analytics` report, which has no URL: only `read_admin_page` on `/mcp/admin/`
+renders it (`admin.MCP_ONLY_PAGES`). `LLMUsage.request_id` is one id per thing somebody typed, so
 a lookup and the answer it fed are one story — rounds-per-request was counted over the *text* of the
 query before, which made two people asking the same thing one query. `variant` fingerprints the
 prompt, the skill list and the model together, so a deploy that changes any of them starts a new row
@@ -197,9 +198,9 @@ guess made on somebody's behalf; **`tools_offered`** names the tier (`all`/`read
 so a turn that quietly lost its write tools isn't just another navigation. The page also shows
 whether the breaker is open right now, which was previously visible only as slow answers.
 
-`palette_assist.shortcut_proposals` offers phrases the assistant has answered the same way every
-single time, one button each. The mining was always there and nothing ever ran it. An accepted
-phrase stops reaching the model at all: no call, no wait, and no way for it to come back wrong.
+`manage.py mine_palette_shortcuts` turns phrases the assistant has answered the same way every
+single time into shortcuts. An accepted phrase stops reaching the model at all: no call, no wait, and
+no way for it to come back wrong.
 
 ## Transport and auth
 
@@ -360,8 +361,8 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   `auctions.donation_views`; the latter was added when the donation skills arrived, having held five
   user-facing writes in none of the three tables. `app_links`, `apple_notifications` and
   `passkit_views` are still outside it.
-- `request_a_skill` records a feature somebody asked for; `/admin-dashboard/assistant-requests/` is the
-  queue, ordered by distinct askers, and `planned` is the go-ahead to build. `my_requests` shows the
+- `request_a_skill` records a feature somebody asked for; `list_feature_requests` on `/mcp/admin/` reads
+  the queue, and `planned` is the go-ahead to build. `my_requests` shows the
   asker its status, never the owner's note. Row content is model-written: displayed, escaped, never
   executed.
 - `docs/mcp_next.md` is the standing list of unused spec features, including what's already rejected.

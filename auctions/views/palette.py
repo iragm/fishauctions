@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 from datetime import timedelta
-from urllib.parse import urlencode
 
 from asgiref.sync import sync_to_async
 from django.contrib import messages
@@ -23,15 +22,13 @@ from django.http import (
     JsonResponse,
     StreamingHttpResponse,
 )
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import TemplateView, View
 
 from auctions.models import (
     AgentProposal,
-    AssistantSkillRequest,
-    CommandPalettePage,
     CommandPaletteSearch,
     LLMUsage,
     UserAPIKey,
@@ -302,68 +299,6 @@ class CommandPaletteReportView(View):
         return JsonResponse({"recorded": recorded})
 
 
-class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
-    """What agents asked for and couldn't do, grouped by skill name and ordered by distinct requesters.
-
-    Request text was written by a language model; it's displayed escaped and never executed.
-    """
-
-    template_name = "assistant_skill_requests.html"
-
-    #: Rows per page.
-    LIMIT = 200
-
-    def post(self, request, *args, **kwargs):
-        """Move one request between the four states, with its note and target. The only thing this page writes."""
-        row = get_object_or_404(AssistantSkillRequest, pk=request.POST.get("pk"))
-        status = request.POST.get("status", "")
-        if status in dict(AssistantSkillRequest.STATUS_CHOICES):
-            row.status = status
-            row.notes = request.POST.get("notes", row.notes)[:2000]
-            target = request.POST.get("target", row.target)
-            if target in dict(AssistantSkillRequest.TARGET_CHOICES):
-                row.target = target
-            row.save(update_fields=["status", "notes", "target", "updatedon"])
-            messages.success(request, f"“{row.skill}” is now {row.get_status_display().lower()}.")
-        return redirect(self.back_to(request))
-
-    @staticmethod
-    def back_to(request):
-        """This page on the posted tab, built from ``reverse()``; never ``HTTP_REFERER`` (an open redirect)."""
-        wanted = request.POST.get("filter", "")
-        url = reverse("assistant_skill_requests")
-        for status, _label in AssistantSkillRequest.STATUS_CHOICES:
-            if status == wanted:
-                # Interpolate the model constant, not the posted string.
-                return f"{url}?{urlencode({'status': status})}"
-        return url
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        wanted = self.request.GET.get("status", AssistantSkillRequest.STATUS_NEW)
-        rows = AssistantSkillRequest.objects.select_related("user")
-        if wanted in dict(AssistantSkillRequest.STATUS_CHOICES):
-            rows = rows.filter(status=wanted)
-        groups: dict[str, dict] = {}
-        for row in rows[: self.LIMIT]:
-            key = row.skill.strip().lower()
-            group = groups.setdefault(key, {"skill": row.skill, "rows": [], "people": set()})
-            group["rows"].append(row)
-            group["people"].add(row.user_id)
-        ordered = sorted(groups.values(), key=lambda group: (-len(group["people"]), -len(group["rows"])))
-        for group in ordered:
-            group["people_count"] = len(group["people"])
-        context["groups"] = ordered
-        context["status"] = wanted
-        context["targets"] = AssistantSkillRequest.TARGET_CHOICES
-        # Tuples, since templates can't index a dict by a variable key.
-        context["statuses"] = [
-            (value, label, AssistantSkillRequest.objects.filter(status=value).count())
-            for value, label in AssistantSkillRequest.STATUS_CHOICES
-        ]
-        return context
-
-
 class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
     """Changes an agent on ``/mcp/admin/`` proposed, each waiting for Approve or Reject.
 
@@ -429,7 +364,10 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
 
 
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
-    """Admin overview of palette searches, especially bounces, to add as synonyms or shortcuts."""
+    """Palette searches and the assistant's exchanges, read by agents through ``read_admin_page``.
+
+    No URL: ``mcp.admin.MCP_ONLY_PAGES`` renders it. ``manage.py mine_palette_shortcuts`` adds shortcuts.
+    """
 
     template_name = "command_palette_analytics.html"
 
@@ -540,31 +478,7 @@ class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
             .annotate(count=Count("id"))
             .order_by("-count")[:15]
         )
-        context["shortcut_proposals"] = palette_assist.shortcut_proposals()
         return context
-
-    def post(self, request, *args, **kwargs):
-        """Accept one mined shortcut. See :func:`palette_assist.shortcut_proposals`."""
-        from auctions import command_palette, palette_assist, palette_routes
-
-        phrase = (request.POST.get("phrase") or "").strip()
-        route_key = (request.POST.get("route") or "").strip()
-        route = palette_routes.get_route(route_key)
-        # Both come from the page's own list, so anything else is a stale form or a typed URL.
-        if not phrase or route is None:
-            messages.error(request, "That shortcut proposal is no longer on the list.")
-            return redirect(reverse("command_palette_analytics"))
-        if palette_assist.normalize_query(phrase) in palette_assist.phrases_with_a_shortcut():
-            messages.info(request, f"“{phrase}” already has a shortcut.")
-            return redirect(reverse("command_palette_analytics"))
-        CommandPalettePage.objects.create(
-            search_term=phrase[:200],
-            target=f"{command_palette.ROUTE_TARGET_PREFIX}{route.key}"[:100],
-            title=route.label[:200],
-            description="Accepted from the assistant's own repeated answers on this page.",
-        )
-        messages.success(request, f"“{phrase}” now goes straight to {route.label.lower()} without a model call.")
-        return redirect(reverse("command_palette_analytics"))
 
     #: Requests shown in full. A handful of people use this, so the useful view is every exchange in
     #: order, not a percentage of a hundred: a rate over five users is one person's afternoon.

@@ -11,8 +11,8 @@ this project offers over a spreadsheet.
 | 0 | Path in `PageView.url`; `AdminUserFlow` deleted; One Tap rationed on intent | done |
 | 1 | Friction instrument: which form, which field, how many attempts, and whether they gave up without submitting | done |
 | 1b | `AuctionHistory.changed_fields` / `ClubHistory.changed_fields` as JSON | done |
-| 1.5 | Reach / failure / adoption dashboard, `/admin-usability/` | done |
-| 2 | Club health rollup + due-for-check-in queue, `/admin-club-health/` | done |
+| 1.5 | Reach / failure / adoption dashboard, `read_admin_page admin_usability` on `/mcp/admin/` | done |
+| 2 | Club health rollup + due-for-check-in queue (page removed 2026-10) | done |
 | 3 | Progressive disclosure on `AuctionEditForm` | done |
 | 4 | Contextual help notes | scrapped -- the human writes these page by page |
 | 5 | Accessibility debt (`template_a11y.py`) | done |

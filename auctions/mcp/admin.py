@@ -11,7 +11,8 @@ differences, all enforced here or in the transport rather than by any client's a
   pointer to :func:`propose_change`, and an OAuth token a client asked for with this endpoint as its RFC 8707
   ``resource`` can't write on ``/mcp/`` either (``auth.minted_for_admin``). A scheduled agent runs
   with nobody there to approve anything, so the server is the only place a "read only" can live.
-* **Its own reads**, :data:`ADMIN_TOOLS`: any superuser dashboard as text, the feature requests, the
+* **Its own reads**, :data:`ADMIN_TOOLS`: any superuser dashboard as text (and the reports in
+  :data:`MCP_ONLY_PAGES`, which have no URL), the feature requests, the
   mobile app's crash reports, the logs (redacted on the way out) and the deploy's health.
 
 Two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
@@ -270,20 +271,35 @@ PAGE_CHARS = 14000
 _FURNITURE = ("script", "style", "noscript", "template", "svg", "nav", "header", "footer")
 
 
-def readable_pages() -> dict[str, palette_routes.Route]:
-    """Every superuser page with no object in its URL, by URL name: the Admin menu and its kin."""
-    return {
-        key: route
+#: Reports with no URL, read only through ``read_admin_page``: the owner retired them from the site
+#: and the scout still reads them. Page name -> (label, view class in ``auctions.views``).
+MCP_ONLY_PAGES = {
+    "admin_usability": ("Usability report", "AdminUsability"),
+    "admin_session_replay": ("Read one person's session", "AdminSessionReplay"),
+    "command_palette_analytics": ("Command palette searches", "CommandPaletteAnalyticsView"),
+    "admin_free_text": ("Adjustments and custom fields", "AdminFreeTextUsage"),
+}
+
+
+def readable_pages() -> dict[str, str]:
+    """Every superuser page with no object in its URL, and the MCP-only reports: name -> label."""
+    pages = {
+        key: route.label
         for key, route in palette_routes.ROUTES.items()
         if route.admin == palette_routes.ADMIN_SUPERUSER
         and route.scope == palette_routes.SCOPE_NONE
         and route.gate is None
         and key not in UNREADABLE_PAGES
     }
+    pages.update({key: label for key, (label, _view) in MCP_ONLY_PAGES.items()})
+    return pages
 
 
-def _render(request, path: str):
-    """GET ``path`` as ``request.user``, in-process: no middleware, so no PageView and no cookie."""
+def _render(request, path: str, view=None):
+    """GET ``path`` as ``request.user``, in-process: no middleware, so no PageView and no cookie.
+
+    ``view`` renders a page with no URL; ``path`` then only carries the query string.
+    """
     from django.contrib.messages.storage.fallback import FallbackStorage
     from django.test import RequestFactory
 
@@ -293,8 +309,11 @@ def _render(request, path: str):
     inner.is_agent_render = True
     inner.session = import_module(settings.SESSION_ENGINE).SessionStore()
     inner._messages = FallbackStorage(inner)
-    match = resolve(inner.path_info)
-    response = match.func(inner, *match.args, **match.kwargs)
+    if view is not None:
+        response = view(inner)
+    else:
+        match = resolve(inner.path_info)
+        response = match.func(inner, *match.args, **match.kwargs)
     if callable(getattr(response, "render", None)) and not getattr(response, "is_rendered", True):
         response = response.render()
     return response
@@ -326,28 +345,37 @@ def read_admin_page(request, params: dict[str, Any]) -> dict[str, Any]:
     key = _str(params, "page")
     if key not in pages:
         return _need("Which page? These can be read: " + ", ".join(sorted(pages)) + ".")
-    route = pages[key]
+    label = pages[key]
     query = _str(params, "query").lstrip("?")
     pairs = parse_qsl(query, keep_blank_values=True)
-    path = reverse(key, kwargs=route.fixed or None)
+    view = None
+    if key in MCP_ONLY_PAGES:
+        from auctions import views
+
+        view = getattr(views, MCP_ONLY_PAGES[key][1]).as_view()
+        path = f"/mcp/admin/{key}/"
+    else:
+        path = reverse(key, kwargs=palette_routes.ROUTES[key].fixed or None)
     if pairs:
         path += "?" + urlencode(pairs)
     try:
-        response = _render(request, path)
+        response = _render(request, path, view)
     except Resolver404:
-        return _error(f"{route.label} has no page at {path}.")
+        return _error(f"{label} has no page at {path}.")
     if response.status_code != 200:
         where = response.get("Location", "")
-        return _error(f"{route.label} answered {response.status_code}{' (to ' + where + ')' if where else ''}.")
+        return _error(f"{label} answered {response.status_code}{' (to ' + where + ')' if where else ''}.")
     text = page_text(response.content.decode(response.charset or "utf-8", "replace"))
     # Session replay and the rest are read by user number, so nothing here needs a contact detail.
     text = redact(text)
     offset = max(0, _int(params, "offset", 0) or 0)
     chunk = text[offset : offset + PAGE_CHARS]
-    result = {"page": key, "url": path, "characters": len(text), "text": chunk}
+    result = {"page": key, "characters": len(text), "text": chunk}
+    if view is None:
+        result["url"] = path
     if offset + PAGE_CHARS < len(text):
         result["next_offset"] = offset + PAGE_CHARS
-    return _ok(f"{route.label} ({path}).", **result)
+    return _ok(f"{label}." if view else f"{label} ({path}).", **result)
 
 
 # --- list_feature_requests -------------------------------------------------------------------------
@@ -694,9 +722,9 @@ def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
     status = _str(params, "status").lower()
     status = spoken.get(status, status)
     if status == AssistantSkillRequest.STATUS_PLANNED:
-        # Planned starts a build, so only the owner's own click on the requests page sets it -- never
+        # Planned starts a build, so only the owner's own decision sets it -- never
         # an approved proposal, whose wording (and note) an agent wrote.
-        return _error("Only the owner plans a request, on the feature requests page.")
+        return _error("Only the owner plans a request.")
     if status not in statuses:
         return _need("Which status? One of: new, done, declined.")
     row = AssistantSkillRequest.objects.filter(pk=_int(params, "request")).first()
@@ -1138,10 +1166,10 @@ ADMIN_TOOLS: dict[str, Action] = {
         Action(
             name="read_admin_page",
             description=(
-                "Read one of the site's admin dashboards as text: usability, session replay, "
-                "command palette searches, species gaps, traffic, signups, club health and the "
-                "rest of the Admin menu. Rendered as the signed-in superuser, exactly as the page "
-                "shows it."
+                "Read one of the site's admin dashboards as text: species gaps, traffic, signups and "
+                "the rest of the Admin menu, plus four reports that are only here: usability, session "
+                "replay, command palette searches, and what invoice adjustments and custom fields are "
+                "used for. Rendered as the signed-in superuser."
             ),
             params={
                 "page": "string, required. The page's name: " + ", ".join(sorted(readable_pages())) + ".",

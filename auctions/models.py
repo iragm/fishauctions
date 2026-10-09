@@ -14442,7 +14442,7 @@ class SpeakerComment(models.Model):
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """A feature somebody asked for through an assistant: a tool it lacked, or something the site can't do.
 
-    Written by ``request_a_skill``, read on ``/admin-dashboard/assistant-requests/``; the asker follows it
+    Written by ``request_a_skill``, read through the admin MCP's ``list_feature_requests``; the asker follows it
     with ``my_requests``. ``planned`` is the site owner's go-ahead to build it, in the repository
     ``target`` names. Duplicates are evidence and are counted. Content is model-written: displayed
     escaped, never executed or matched.

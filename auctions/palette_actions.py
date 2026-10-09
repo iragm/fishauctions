@@ -15948,14 +15948,6 @@ NOT_A_SKILL: dict[str, str] = {
         "on the way. Every sale already makes the invoice it needs, so this only exists for the "
         "checkout table's list of people, and find_invoice answers for anyone who has one."
     ),
-    # The assistant looking at itself
-    "CommandPaletteAnalyticsView": (
-        "Accepts one shortcut the assistant mined out of its own answers, which changes what the "
-        "palette does for everybody on the site. What makes a proposal safe to accept is that a "
-        "person has just read the phrase, the page it resolved to and how many times -- three "
-        "columns that only exist on this page. An assistant accepting its own proposals is the "
-        "one reader whose agreement means nothing."
-    ),
     # The usability instruments
     "AbandonedBidBeacon": (
         "The lot page reporting that somebody started a bid and didn't place it. Like the form beacon, "
@@ -15975,12 +15967,6 @@ NOT_A_SKILL: dict[str, str] = {
         "the weakest of the four signals behind it is two names resembling each other, and "
         "agreeing to one from a sentence would be agreeing to something nobody read. The whole "
         "batch is one button once somebody has."
-    ),
-    "ClubMarkContacted": (
-        "Records that a real person wrote to a club that has gone quiet -- it is the note saying "
-        "the conversation happened, not the conversation. Marking it from a sentence would take "
-        "the club off the queue for three months on the strength of an intention, and the queue "
-        "is only worth anything if what is on it is what has not been done yet."
     ),
     # Copyright and reporting
     "CopyrightNoticeCreate": (
@@ -16038,13 +16024,6 @@ NOT_A_SKILL: dict[str, str] = {
         "Approve and Reject on changes an agent proposed. Approving is the person's own act -- it is "
         "what the agent asked for, so a tool that approved would let the agent that wrote the "
         "proposal carry it out."
-    ),
-    "AssistantSkillRequestsView": (
-        "The POST is the four status buttons on the page, and the decision is the thing being read: "
-        "how many different people asked for it, in whose words, and whether the site should build "
-        "it. That is a queue to sit down with, not a sentence -- and an assistant marking its own "
-        "request as built is exactly the shape of thing this page exists to keep a person in front "
-        "of. go_to_page opens it."
     ),
     "SpeciesSearchCacheForgetView": (
         "One button on the species gaps page, and the decision is the row next to it: this "

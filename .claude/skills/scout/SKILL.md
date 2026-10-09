@@ -26,12 +26,12 @@ names and dates.
    straight away, with a PR into `master`.
 2. GitHub issues: intake and closing, exactly as the `github-issues` skill says. Labelling,
    commenting on and closing an existing issue are the only GitHub writes a scout makes.
-3. `list_feature_requests status=all` first, so you don't suggest anything already there.
+3. `list_feature_requests status=all` first, so you don't suggest anything already there. Its `new`
+   rows are also members' own asks.
 4. Read, in this order, and stop when you have enough:
    - `read_admin_page usability query=days=7`
    - `command_palette_analytics`: read the exchanges themselves. A second query soon after a first
      is chaining, not failure.
-   - `assistant_skill_requests` (members' own asks)
    - `species_gaps`
    - `admin_session_replay` for the sessions behind a funnel drop
 5. File at most **five** suggestions, each with its evidence and its `target`: `app` when only the

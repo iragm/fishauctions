@@ -31,7 +31,7 @@ from auctions.models import (
     LotImage,
     UserData,
 )
-from auctions.test_support import isolated_cache
+from auctions.test_support import isolated_cache, mcp_only_page
 from auctions.tests import StandardTestCase
 from auctions.views import palette as palette_views
 
@@ -742,8 +742,7 @@ class UsageLoggingTests(PaletteAssistTestCase):
         self.admin_user.is_superuser = True
         self.admin_user.is_staff = True
         self.admin_user.save()
-        self.client.force_login(self.admin_user)
-        response = self.client.get(reverse("command_palette_analytics"))
+        response = mcp_only_page(self.admin_user, "command_palette_analytics")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "42")
 
@@ -930,11 +929,10 @@ class TokenAccountingTests(PaletteAssistTestCase):
         self.admin_user.is_superuser = True
         self.admin_user.is_staff = True
         self.admin_user.save()
-        self.client.force_login(self.admin_user)
-        response = self.client.get(reverse("command_palette_analytics"))
-        self.assertEqual(response.context["llm_cached_prompt_tokens"], 2816)
-        self.assertEqual(response.context["llm_uncached_prompt_tokens"], 284)
-        self.assertEqual(response.context["llm_cached_percent"], 91)
+        response = mcp_only_page(self.admin_user, "command_palette_analytics")
+        self.assertEqual(response.context_data["llm_cached_prompt_tokens"], 2816)
+        self.assertEqual(response.context_data["llm_uncached_prompt_tokens"], 284)
+        self.assertEqual(response.context_data["llm_cached_percent"], 91)
 
     def test_the_provider_reads_cached_tokens_off_the_wire(self):
         provider = llm.OpenAIProvider(model="gpt-5-nano", api_key="k")
@@ -1272,8 +1270,7 @@ class FallbackTests(PaletteAssistTestCase):
         self.admin_user.is_superuser = True
         self.admin_user.is_staff = True
         self.admin_user.save()
-        self.client.force_login(self.admin_user)
-        response = self.client.get(reverse("command_palette_analytics"))
+        response = mcp_only_page(self.admin_user, "command_palette_analytics")
         self.assertContains(response, "book me a flight")
 
 
@@ -4278,52 +4275,6 @@ class RequestGroupingTests(PaletteAssistTestCase):
         self.assertGreaterEqual(row.elapsed_ms, 0)
 
 
-class ShortcutQueueTests(PaletteAssistTestCase):
-    """Mining has always been there; nothing ran it, so nothing was ever mined."""
-
-    def _answered(self, query, destination, times):
-        for _ in range(times):
-            LLMUsage.objects.create(user=self.user, query=query, destination=destination, success=True)
-
-    def test_a_phrase_answered_the_same_way_every_time_is_proposed(self):
-        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
-        proposals = palette_assist.shortcut_proposals()
-        self.assertEqual([row["phrase"] for row in proposals], ["where do i pay"])
-        self.assertEqual(proposals[0]["route"], "my_invoices")
-
-    def test_one_disagreement_leaves_it_to_the_model(self):
-        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
-        self._answered("where do I pay", "watched", 1)
-        self.assertEqual(palette_assist.shortcut_proposals(), [])
-
-    def test_a_phrase_asked_twice_is_not_enough(self):
-        self._answered("where do I pay", "my_invoices", 2)
-        self.assertEqual(palette_assist.shortcut_proposals(), [])
-
-    def test_accepting_one_answers_it_without_the_model_from_then_on(self):
-        self._answered("where do I pay", "my_invoices", palette_assist.MINE_MIN_COUNT)
-        self.client.force_login(self.user)
-        self.user.is_superuser = True
-        self.user.save()
-        response = self.client.post(
-            reverse("command_palette_analytics"), {"phrase": "where do i pay", "route": "my_invoices"}
-        )
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(palette_assist.shortcut_proposals(), [])
-        # And the phrase now answers from the shortcut, without reaching the provider.
-        self._script()
-        groups = palette_assist.shortcut_match(self._request_for(self.user), "where do I pay")
-        self.assertTrue(groups)
-        self.assertEqual(self.provider.call_count, 0)
-
-    def test_a_phrase_that_is_not_on_the_list_is_refused(self):
-        self.user.is_superuser = True
-        self.user.save()
-        self.client.force_login(self.user)
-        self.client.post(reverse("command_palette_analytics"), {"phrase": "anything", "route": "not_a_route"})
-        self.assertFalse(CommandPalettePage.objects.filter(search_term="anything").exists())
-
-
 class LotSubmissionRulesTests(PaletteAssistTestCase):
     """add_lot / add_lots go through the auction's own gates, for an agent as for a person.
 
@@ -5170,13 +5121,12 @@ class UsageColumnsTests(PaletteAssistTestCase):
         self.admin_user.is_superuser = True
         self.admin_user.is_staff = True
         self.admin_user.save()
-        self.client.force_login(self.admin_user)
-        response = self.client.get(reverse("command_palette_analytics"))
+        response = mcp_only_page(self.admin_user, "command_palette_analytics")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("llm_writes_withheld", response.context)
-        self.assertIn("llm_read_the_query", response.context)
-        self.assertIn("llm_provider_resting", response.context)
-        self.assertEqual(response.context["llm_writes_withheld"], 1)
+        self.assertIn("llm_writes_withheld", response.context_data)
+        self.assertIn("llm_read_the_query", response.context_data)
+        self.assertIn("llm_provider_resting", response.context_data)
+        self.assertEqual(response.context_data["llm_writes_withheld"], 1)
 
 
 class ConnectionReleaseTests(SimpleTestCase):

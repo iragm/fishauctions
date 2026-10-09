@@ -1,8 +1,8 @@
 # Phase 9 -- everybody who is not running the auction
 
-Built 2026-09-10. `auctions/lifecycle.py` is 9a-9d, `/admin-lifecycle/` and `/admin-session-replay/`
-are the pages, `SignInStitch` (migration 0438) is the one row it adds, `test_lifecycle.py` is the
-ratchet.
+Built 2026-09-10. `auctions/lifecycle.py` is 9a-9d. The lifecycle page was removed in 2026-10;
+session replay is `read_admin_page admin_session_replay` on `/mcp/admin/`. `SignInStitch` (migration
+0438) is the one row it adds, `test_lifecycle.py` is the ratchet.
 
 Phases 0-8 were about the organizer. This is about the buyer (no account, came from Facebook), the
 non-user (brings lots on paper, first contact is the invoice email) and the seller (lists lots, gets
@@ -13,7 +13,7 @@ is never "did they convert" but "did they come back" -- and a year is two or thr
 |---|---|
 | 9a milestones | `lifecycle.MILESTONES`, `milestone_reach` |
 | 9a lapsing | `lifecycle.LAPSED_AFTER_AUCTIONS`, `lapsed_participants` |
-| 9b session replay | `lifecycle.session_timeline`, `/admin-session-replay/` |
+| 9b session replay | `lifecycle.session_timeline`, `admin_session_replay` on `/mcp/admin/` |
 | 9b sign-in stitch | `SignInStitch`, `signals.record_sign_in_stitch`, `lifecycle.stitched_sessions` |
 | 9c median member | `lifecycle.median_member`, `median_member_story` |
 | 9c share never spoken to | `lifecycle.unreached_share` |

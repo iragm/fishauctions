@@ -1,35 +1,24 @@
-"""The usability dashboards: measurements, the buyer funnel, and club outreach.
+"""The usability reports, and linking auctions to clubs.
 
-:class:`AdminUsability` shows reach, failures and the buyer funnel side by side, from
-:mod:`auctions.usability_report`. Setting adoption (:mod:`auctions.field_adoption`) is on the help's
-rules guide instead, beside each setting.
-
-:class:`AdminClubHealth` is the outreach worklist from :mod:`auctions.club_health`; marking a club
-contacted writes ``Club.date_contacted``.
+:class:`AdminUsability`, :class:`AdminFreeTextUsage` and :class:`AdminSessionReplay` have no URL: the
+admin MCP endpoint's ``read_admin_page`` renders them (``mcp.admin.MCP_ONLY_PAGES``), for the agents
+that read them, and nobody else.
 
 :class:`UnlinkedAuctions` proposes club links for auctions with none (:mod:`auctions.club_matching`),
 since only about a fifth of auctions have a club.
-
-:class:`AdminEarlyAdds` plots promoted in-person auctions' gross against how early their lots and people
-were added (:mod:`auctions.early_adds`).
-
-:class:`AdminFreeTextUsage` groups invoice adjustment notes and custom field names by common terms
-(:mod:`auctions.free_text_usage`). Temporary, for writing the help.
 """
 
 import logging
 
 from django.contrib import messages
 from django.contrib.auth.models import User
-from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
-from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
-from auctions import club_health, club_matching, early_adds, free_text_usage, lifecycle, usability_report
-from auctions.models import Auction, Club, ClubHealth
+from auctions import club_health, club_matching, free_text_usage, lifecycle, usability_report
+from auctions.models import Auction, Club
 from auctions.services import link_auction_to_club
 
 from .base import AdminOnlyViewMixin
@@ -57,74 +46,6 @@ class AdminUsability(AdminOnlyViewMixin, TemplateView):
         context["funnel"] = usability_report.buyer_funnel()
         context["friction"] = usability_report.friction_by_form(days=days)
         return context
-
-
-class AdminClubHealth(AdminOnlyViewMixin, TemplateView):
-    """Clubs gone quiet against their own cadence, who to contact next, and the full ladder."""
-
-    template_name = "dashboard_club_health.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["queue"] = club_health.due_for_checkin()
-        context["ladder"] = club_health.ladder_counts()
-        context["ladder_history"] = club_health.ladder_history()
-        context["stall_reason_choices"] = Club.STALL_REASON_CHOICES
-        context["stall_reasons"] = _stall_reason_counts()
-        context["never_computed"] = Club.objects.filter(health__isnull=True).count()
-        # Most auctions have no club, so link to the repair page.
-        context["unlinked_auctions"] = Auction.objects.filter(club__isnull=True, is_deleted=False).count()
-        context["stale"] = ClubHealth.objects.filter(
-            computed_on__lt=timezone.now() - timezone.timedelta(days=3)
-        ).count()
-        context["unreachable"] = sum(1 for row in context["queue"] if not row.is_reachable)
-        context["contact_cooldown_days"] = club_health.CONTACT_COOLDOWN_DAYS
-        context["tool_names"] = [label for label, _check in club_health.TOOL_CHECKS]
-        context["tool_counts"] = _tool_counts(context["tool_names"])
-        return context
-
-
-def _stall_reason_counts():
-    """``[{reason, label, clubs}]``: counts of recorded stall reasons, excluding unknown."""
-    labels = dict(Club.STALL_REASON_CHOICES)
-    rows = Club.objects.exclude(stall_reason="").values("stall_reason").annotate(clubs=Count("pk")).order_by("-clubs")
-    return [
-        {
-            "reason": row["stall_reason"],
-            "label": labels.get(row["stall_reason"], row["stall_reason"]),
-            "clubs": row["clubs"],
-        }
-        for row in rows
-    ]
-
-
-def _tool_counts(tool_names):
-    """How many clubs have used each tool; one query per tool since ``tools_used`` is JSON."""
-    counts = []
-    for name in tool_names:
-        counts.append({"tool": name, "clubs": ClubHealth.objects.filter(tools_used__contains=name).count()})
-    return sorted(counts, key=lambda row: -row["clubs"])
-
-
-class ClubMarkContacted(AdminOnlyViewMixin, View):
-    """Mark one club contacted via ``Club.date_contacted``, which survives the nightly rollup rebuild."""
-
-    http_method_names = ["post"]
-
-    def post(self, request, *args, **kwargs):
-        club = get_object_or_404(Club, pk=kwargs["pk"])
-        club.date_contacted = timezone.now()
-        fields = ["date_contacted"]
-        # Only fixed choices are stored, and only when the field is posted ("" is valid).
-        if "stall_reason" in request.POST:
-            reason = request.POST["stall_reason"]
-            if reason in dict(Club.STALL_REASON_CHOICES):
-                club.stall_reason = reason
-                fields.append("stall_reason")
-        club.save(update_fields=fields)
-        club_health.compute_club_health(club)
-        messages.success(request, f"{club.name} marked as contacted.")
-        return redirect(reverse("admin_club_health"))
 
 
 #: Unlinked auctions per page, bounded by rendering cost.
@@ -190,93 +111,6 @@ class LinkAuctionsToClub(AdminOnlyViewMixin, View):
         else:
             messages.info(request, "Nothing to link -- those auctions already have a club.")
         return redirect(reverse("admin_unlinked_auctions"))
-
-
-class AdminLifecycle(AdminOnlyViewMixin, TemplateView):
-    """Milestones, one club's cohorts, and the median member of one of its auctions.
-
-    Reach, not a funnel: sellers never open lots. See ``docs/phase_9.md``. Defaults to the club with
-    the most auctions, since cohorts need history.
-    """
-
-    template_name = "dashboard_lifecycle.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["milestones"] = lifecycle.MILESTONES
-        context["coverage"] = lifecycle.club_coverage()
-        context["stitching_began"] = lifecycle.stitching_began()
-        context["lapsed_after"] = lifecycle.LAPSED_AFTER_AUCTIONS
-
-        clubs = list(
-            # An annotation can't shadow the ``auctions`` reverse accessor.
-            Club.objects.annotate(auction_count=Count("auctions", filter=Q(auctions__is_deleted=False)))
-            .filter(auction_count__gt=0)
-            .order_by("-auction_count", "name")
-        )
-        context["clubs"] = clubs
-        club = None
-        if self.request.GET.get("club"):
-            club = next((item for item in clubs if str(item.pk) == self.request.GET["club"]), None)
-        club = club or (clubs[0] if clubs else None)
-        context["club"] = club
-
-        auctions = lifecycle.club_auctions(club, limit=None)[-lifecycle.COHORT_AUCTIONS :] if club else []
-        # Newest first for milestones; cohorts stay oldest first.
-        shown = list(reversed(auctions))
-        context["auctions"] = shown
-        reach = lifecycle.milestone_reach(auctions)
-        # Templates can't index a dict by a variable key.
-        context["milestone_rows"] = [
-            {
-                "milestone": milestone,
-                "cells": [reach.get(auction.pk, {}).get(milestone.key, 0) for auction in shown],
-            }
-            for milestone in lifecycle.MILESTONES
-        ]
-        context["cohorts"] = lifecycle.club_cohorts(club) if club else []
-
-        auction = context["auctions"][0] if context["auctions"] else None
-        if self.request.GET.get("auction"):
-            auction = next((item for item in auctions if str(item.pk) == self.request.GET["auction"]), auction)
-        context["auction"] = auction
-        context["median"] = lifecycle.median_member_story(auction) if auction else None
-        context["unreached"] = lifecycle.unreached_share(auction) if auction else None
-        return context
-
-
-class AdminEarlyAdds(AdminOnlyViewMixin, TemplateView):
-    """Gross against the share of lots, and of people, added more than ``?days=`` before the auction."""
-
-    template_name = "dashboard_early_adds.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        try:
-            days = int(self.request.GET.get("days", 5))
-        except (TypeError, ValueError):
-            days = 5
-        days = max(0, min(days, 60))
-        points = early_adds.early_adds(days)
-        context["days"] = days
-        context["points"] = points
-        context["charts"] = [
-            {"key": key, "label": label, "summary": early_adds.summarize(points, key)}
-            for key, label in (("early_lots_pct", "lots"), ("early_people_pct", "people"))
-        ]
-        context["min_lots"] = early_adds.MIN_LOTS
-        context["points_data"] = [
-            {
-                "title": point.title,
-                "slug": point.slug,
-                "gross": round(point.gross),
-                "lots": point.lots,
-                "early_lots_pct": point.early_lots_pct,
-                "early_people_pct": point.early_people_pct,
-            }
-            for point in points
-        ]
-        return context
 
 
 class AdminFreeTextUsage(AdminOnlyViewMixin, TemplateView):
