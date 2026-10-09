@@ -288,6 +288,11 @@ class HelpContext:
         return [{"name": name, "url": url, "icon": icon} for name, url, icon in stores if url]
 
     @property
+    def android_testers(self) -> bool:
+        """Whether the Android app's closed test takes testers (``PLAY_TESTERS_GROUP_URL``, before ``PLAY_STORE_URL``)."""
+        return bool(settings.PLAY_TESTERS_GROUP_URL and not settings.PLAY_STORE_URL)
+
+    @property
     def now(self):
         """For a guide comparing one of the auction's dates with now."""
         return timezone.now()

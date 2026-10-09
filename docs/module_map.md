@@ -111,7 +111,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (448 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (295 lines)
+- **`context_processors.py`** (325 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -165,7 +165,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (985 lines)
+- **`help_guides.py`** (990 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (907 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -211,7 +211,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2210 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1985 lines)
+- **`palette_routes.py`** (1999 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -286,6 +286,8 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
+- **`test_android_testers.py`** (60 lines)
+  `AndroidTestersTests`
 - **`test_app_links.py`** (154 lines)
   Part LINKS — the two files that make a site link open in the app.
   `AppLinkFilesTests`, `AppLinksUnconfiguredTests`
@@ -654,7 +656,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1602 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1357 lines)
+- **`urls.py`** (1358 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -1022,7 +1024,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (608 lines)
+- **`site_pages.py`** (631 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
@@ -1059,7 +1061,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1251 lines)
+- **`settings.py`** (1256 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

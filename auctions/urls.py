@@ -272,6 +272,7 @@ urlpatterns = [
     path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
     path("user-signups-data/", views.AdminUserSignupsJSON.as_view(), name="admin_user_signups_json"),
     path("tos/", views.UserAgreement.as_view(), name="tos"),
+    path("android-testers/", views.AndroidTesters.as_view(), name="android_testers"),
     path(
         "robots.txt",
         TemplateView.as_view(template_name="robots.txt", content_type="text/plain"),

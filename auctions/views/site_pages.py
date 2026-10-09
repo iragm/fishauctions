@@ -1,5 +1,5 @@
 """Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
-the privacy policy, the blog, unsubscribe, and the landing redirect.
+the privacy policy, the blog, unsubscribe, joining the Android app's test, and the landing redirect.
 """
 
 import logging
@@ -605,4 +605,27 @@ class UnsubscribeView(TemplateView):
         else:
             userData.unsubscribe_from_all()
         context = super().get_context_data(**kwargs)
+        return context
+
+
+class AndroidTesters(TemplateView):
+    """How to join the Android app's closed test on Google Play: join the testers' Google Group, then opt in.
+
+    Not found until ``PLAY_TESTERS_GROUP_URL`` is set; once ``PLAY_STORE_URL`` is, it sends people to the
+    store instead.
+    """
+
+    template_name = "android_testers.html"
+
+    def get(self, request, *args, **kwargs):
+        if settings.PLAY_STORE_URL:
+            return redirect(settings.PLAY_STORE_URL)
+        if not settings.PLAY_TESTERS_GROUP_URL:
+            raise Http404
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["group_url"] = settings.PLAY_TESTERS_GROUP_URL
+        context["testing_url"] = settings.PLAY_TESTING_URL
         return context

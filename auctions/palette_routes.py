@@ -83,6 +83,13 @@ def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fix
     )
 
 
+def _play_closed_test(user) -> bool:
+    """The Android app is in Google Play's closed test, which is open to anyone who joins."""
+    from django.conf import settings
+
+    return bool(settings.PLAY_TESTERS_GROUP_URL and not settings.PLAY_STORE_URL)
+
+
 def _has_library(user) -> bool:
     from .documents.search import can_use_library
 
@@ -147,6 +154,13 @@ ROUTE_LIST: list[Route] = [
     _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "questions"]),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
+    _r(
+        "android_testers",
+        "Test the Android app",
+        "Browsing",
+        keywords=["android", "beta", "google play", "tester", "get the app"],
+        gate=_play_closed_test,
+    ),
     _r(
         "dmca",
         "Copyright and DMCA policy",

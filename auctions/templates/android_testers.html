@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %} Test the Android app {% endblock %}
+{% block content %}
+<h3>Help test the Android app</h3>
+<p>Use the Google account that's on your phone for both steps.</p>
+<p class="d-flex flex-wrap gap-2">
+  <a class="btn btn-primary" href="{{ group_url }}" target="_blank" rel="noopener">1. Join the testers group</a>
+  <a class="btn btn-primary" href="{{ testing_url }}" target="_blank" rel="noopener"><i class="bi bi-google-play"></i> 2. Opt in on Google Play</a>
+</p>
+{% endblock %}
