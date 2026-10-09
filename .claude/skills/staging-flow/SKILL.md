@@ -12,6 +12,10 @@ should ever be the way a failure is noticed: the agent that pushed fixes it.
 ## Landing work on staging
 
 1. Branch from `origin/staging`, build, review with the `code-review` skill, commit.
+   In a cloud session the test stack comes from `.claude/hooks/cloud-stack.sh`, which only starts
+   on its own when the session opens in the repository. If `logs/.stack-ready` is missing and
+   `logs/.stack-up.log` isn't growing, run `CLAUDE_CODE_REMOTE=true bash .claude/hooks/cloud-stack.sh`
+   from the repository and wait for the marker.
 2. Run `docker compose run --rm test --ci --verbose`, the touched modules' tests, then the full suite
    (`docker exec django python3 manage.py test --parallel --noinput`). Never two suites at once.
 3. `git fetch origin staging`; merge it in if it moved and rerun the tests. Then
