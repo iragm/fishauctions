@@ -108,8 +108,10 @@ if [ "$debug_mode" = "true" ]; then
     echo Starting fishauctions in development mode
     # --loop asyncio to match production: uvicorn's loop="auto" picks uvloop, still installed via
     # uvicorn[standard], which is the library whose heap-corruption SIGABRTs gunicorn.conf.py
-    # exists to avoid.
-    exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --loop asyncio --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
+    # exists to avoid. staticfiles/ is excluded because collectstatic rewrites every hashed .js in
+    # it, and a reload per run took the site down under the selenium tests that run it. It must be
+    # absolute: uvicorn compares a relative exclude dir against absolute paths and never matches.
+    exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --loop asyncio --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js' --reload-exclude "$PWD/staticfiles"
 else
     echo Starting fishauctions in production mode
     # Worker/loop config lives in gunicorn.conf.py -- it runs uvicorn on the
