@@ -239,7 +239,7 @@ this only quotes its opening sentence.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
   `SessionStore`
-- **`signals.py`** (1060 lines)
+- **`signals.py`** (1064 lines)
   Signal handlers for the auctions app.
 - **`site_setup.py`** (146 lines)
   `single_club_mode_enabled`, `single_club_name`, `site_paypal_configured`, `get_server_public_ip`, `get_single_club`, `ensure_single_club_membership_for_user`
@@ -530,7 +530,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (873 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5264 lines)
+- **`test_palette_assist.py`** (5274 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1285 lines)
   The command palette itself, and the mobile surfaces that call into it.

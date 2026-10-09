@@ -3514,6 +3514,16 @@ class UpdateAuctionDatesTests(RunActionTestCase):
         online.refresh_from_db()
         self.assertEqual(online.date_start, self._at(10))
 
+    def test_moving_the_start_past_a_leftover_end_clears_the_end_rather_than_swapping(self):
+        """Old in-person auctions kept a date_end the edit page hides but posts back as it was."""
+        self.in_person_auction.date_end = self._at(20)
+        self.in_person_auction.save()
+        result = self._dates(starts=self._iso(18, days=1))
+        self.assertTrue(result.get("ok"), result)
+        self.in_person_auction.refresh_from_db()
+        self.assertEqual(self.in_person_auction.date_start, self._at(18, days=1))
+        self.assertIsNone(self.in_person_auction.date_end)
+
     def test_an_in_person_auction_has_no_end(self):
         result = self._dates(ends=self._iso(21))
         self.assertIn("in person", result["error"])
