@@ -30,6 +30,14 @@ Only ever use {% templatetag openblock %} comment {% templatetag closeblock %} b
         so it can never do anything you couldn't do yourself on this site.
       </p>
 
+      {% if admin_connection %}
+      <div class="alert alert-warning text-dark">
+        <i class="bi bi-exclamation-triangle"></i>
+        <strong>This is the site admin connection.</strong> It can read every dashboard, every log and
+        every member's activity on this site, though never change anything. Only allow it if you
+        started connecting the admin connector in Claude just now.
+      </div>
+      {% endif %}
       <h2 class="h6 mt-4">It will be able to:</h2>
       <ul>
         {% for scope in scopes_descriptions %}

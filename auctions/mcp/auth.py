@@ -32,6 +32,10 @@ LAST_USED_INTERVAL_SECONDS = 3600
 SCOPE_READ = "read"
 SCOPE_WRITE = "write"
 
+#: The superusers' read-only endpoint (:mod:`auctions.mcp.admin`). A token a client asked for with this
+#: as its RFC 8707 ``resource`` can't write anywhere, so a leaked admin connection is never a write one.
+ADMIN_PATH = "/mcp/admin"
+
 
 # No per-user opt-in on this endpoint: agents bring their own model and can't exceed their owner's
 # permissions. ``is_active`` is still checked on every credential; see :data:`INACTIVE_MESSAGE`.
@@ -118,6 +122,26 @@ def challenge(request) -> str:
     return f'Bearer resource_metadata="{resource_metadata_url(request)}"'
 
 
+def resource_paths(credential: Credential) -> list[str]:
+    """The paths an OAuth credential was issued for (its RFC 8707 ``resource``), without trailing
+    slashes. Empty for a key, or for a token whose client named no resource."""
+    from urllib.parse import urlsplit
+
+    if credential.kind != "oauth":
+        return []
+    return [urlsplit(str(uri)).path.rstrip("/") for uri in (getattr(credential.token, "resource", None) or [])]
+
+
+def is_admin_path(path: str) -> bool:
+    path = (path or "").rstrip("/")
+    return path == ADMIN_PATH or path.startswith(ADMIN_PATH + "/")
+
+
+def minted_for_admin(credential: Credential) -> bool:
+    """Whether this OAuth credential was issued for the admin endpoint. Such a token never writes."""
+    return any(is_admin_path(path) for path in resource_paths(credential))
+
+
 def _from_oauth(request) -> Credential | Refusal | None:
     """An OAuth 2.1 access token issued by this site's authorization server."""
     if not oauth_enabled():
@@ -137,12 +161,9 @@ def _from_oauth(request) -> Credential | Refusal | None:
     if token.user is None:
         # Client-credentials tokens have no user to act as.
         return None
-    return Credential(
-        user=token.user,
-        writes=token.is_valid([SCOPE_WRITE]),
-        kind="oauth",
-        token=token,
-    )
+    credential = Credential(user=token.user, kind="oauth", token=token)
+    credential.writes = token.is_valid([SCOPE_WRITE]) and not minted_for_admin(credential)
+    return credential
 
 
 def _from_api_key(request) -> Credential | Refusal | None:

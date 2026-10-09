@@ -20,6 +20,10 @@ Two things have to be true together or the connection breaks rather than degrade
 ``email_verified`` is the allauth fact, never ``True`` because we have a string: a workspace
 restriction built on an unverified address is worth nothing, and saying so is what lets the other
 end trust it.
+
+The validator also closes one RFC 8707 gap for ``/mcp/admin/``
+(:meth:`Validator._check_and_set_request_resource`): it is the site's one validator class, so the
+token endpoint's rules live here too.
 """
 
 from __future__ import annotations
@@ -57,6 +61,45 @@ class Validator(OAuth2Validator):
 
     def get_additional_claims(self):
         return {"email": _email, "email_verified": _email_verified}
+
+    def _check_and_set_request_resource(self, request):
+        """The toolkit's RFC 8707 handling, minus one escalation: a token for ``/mcp/admin`` only from
+        a grant or refresh token that already named it.
+
+        The toolkit lets a token request add a ``resource`` when the grant (or refresh token) named
+        none, so a connection consented to without the admin warning -- or a long-lived refresh token
+        from an everyday connection -- could otherwise be swapped for an admin one at the token
+        endpoint, never passing ``auctions.mcp.consent``.
+        """
+        from oauthlib.oauth2.rfc6749 import errors
+
+        from .auth import is_admin_path
+
+        super()._check_and_set_request_resource(request)
+        wanted = {uri for uri in request.resource or [] if is_admin_path(_path(uri))}
+        if not wanted:
+            return
+        if request.grant_type == "authorization_code":
+            from oauth2_provider.models import get_grant_model
+
+            grant = get_grant_model().objects.filter(code=request.code, application=request.client).first()
+            had = set((grant.resource or []) if grant else [])
+        elif request.grant_type == "refresh_token":
+            had = set(getattr(getattr(request, "refresh_token_instance", None), "resource", None) or [])
+        else:
+            had = set()
+        if not wanted <= had:
+            raise errors.CustomOAuth2Error(
+                error="invalid_target",
+                description="An admin connection must be asked for when signing in, not added afterwards.",
+                request=request,
+            )
+
+
+def _path(uri) -> str:
+    from urllib.parse import urlsplit
+
+    return urlsplit(str(uri)).path
 
 
 @receiver(pre_save, sender="oauth2_provider.Application")

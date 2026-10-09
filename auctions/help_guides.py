@@ -834,6 +834,7 @@ NOT_IN_HELP: dict[str, str] = {
     "admin_setup_checklist": "Site operator only.",
     "command_palette_analytics": "Site operator only.",
     "assistant_skill_requests": "Site operator only.",
+    "agent_proposals": "Site operator only.",
     "species_gaps": "Site operator only.",
     "species_create": "Site operator only.",
     "species_name_create": "Site operator only.",

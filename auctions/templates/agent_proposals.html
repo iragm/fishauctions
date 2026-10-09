@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Changes agents proposed{% endblock %}
+{% block content %}
+<h2 class="mb-1">Changes agents proposed</h2>
+{% comment %}
+  Written by propose_change on /mcp/admin/, so the summary, reason and every argument came out of a
+  language model. Displayed escaped; nothing here runs until Approve, and then as you.
+{% endcomment %}
+<div class="help-note">
+  <i class="bi bi-lightbulb-fill"></i>
+  <div>An agent on the admin connector can read anything and change nothing. These are the changes it asked for. Approve runs them, in order, as you.</div>
+</div>
+
+{% if not pending %}
+  <p class="text-muted">Nothing waiting.</p>
+{% endif %}
+
+{% for proposal in pending %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title mb-1">{{ proposal.summary }}</h5>
+    <div class="text-muted small mb-2">
+      {% if proposal.surface %}{{ proposal.surface }} · {% endif %}{{ proposal.createdon|date:"M j, g:i a" }}
+    </div>
+    {% if proposal.reason %}<p class="mb-2">{{ proposal.reason|linebreaksbr }}</p>{% endif %}
+    <ol class="mb-3">
+      {% for step in proposal.step_rows %}
+      <li class="mb-1">
+        <strong>{{ step.label }}</strong> <code>{{ step.tool }}</code>
+        {% if step.arguments %}
+        <ul class="list-unstyled small ms-2 mb-0">
+          {% for key, value in step.arguments %}<li><span class="text-muted">{{ key }}:</span> {{ value }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    <form method="post" class="d-flex gap-2">
+      {% csrf_token %}
+      <input type="hidden" name="pk" value="{{ proposal.pk }}">
+      <button type="submit" name="decision" value="approve" class="btn btn-success text-dark">Approve and run</button>
+      <button type="submit" name="decision" value="reject" class="btn btn-danger">Reject</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+{% if decided %}
+<h4 class="mt-4">Decided</h4>
+{% for proposal in decided %}
+<div class="border-top pt-2 mt-2">
+  <div><strong>{{ proposal.summary }}</strong> · {{ proposal.get_status_display }}</div>
+  <div class="text-muted small">
+    {% if proposal.decided_by %}{{ proposal.decided_by.username }} · {% endif %}{{ proposal.decided_on|date:"M j, g:i a" }}
+  </div>
+  {% if proposal.results %}
+  <ol class="small mb-0">
+    {% for result in proposal.results %}<li>{% if not result.ok %}<span class="text-danger">{% endif %}{{ result.said }}{% if not result.ok %}</span>{% endif %}</li>{% endfor %}
+  </ol>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -17,7 +17,7 @@ from django_ses.views import SESEventWebhookView
 
 from . import app_links, apple_notifications, donation_views, passkit_views, views
 from .mcp import verification
-from .mcp.transport import MCPEndpointView
+from .mcp.transport import AdminMCPEndpointView, MCPEndpointView
 
 urlpatterns = [
     # App-association files. The paths are fixed by Google and Apple (Apple's really has no .json
@@ -223,6 +223,7 @@ urlpatterns = [
         views.AssistantSkillRequestsView.as_view(),
         name="assistant_skill_requests",
     ),
+    path("admin-dashboard/proposals/", views.AgentProposalsView.as_view(), name="agent_proposals"),
     path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
     path("species/name/", views.SpeciesCommonNameCreateView.as_view(), name="species_name_create"),
     path(
@@ -336,6 +337,8 @@ urlpatterns = [
     # See auctions/mcp/auth.py. Matched with and without the trailing slash, since APPEND_SLASH
     # drops a POST body and the RFC 9728 metadata names the resource without one.
     re_path(r"^mcp/?$", MCPEndpointView.as_view(), name="mcp"),
+    # Superusers only, read-only, advertised nowhere: auctions/mcp/admin.py.
+    re_path(r"^mcp/admin/?$", AdminMCPEndpointView.as_view(), name="mcp_admin"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.MyAccount.as_view(), name="account"),
@@ -878,6 +881,7 @@ urlpatterns = [
         views.AuctionLabelConfig.as_view(),
         name="auction_label_config",
     ),
+    path("auctions/<slug:slug>/pages/", views.AuctionPages.as_view(), name="auction_pages"),
     path(
         "auctions/<slug:slug>/history/",
         views.AuctionHistoryView.as_view(),

@@ -18,7 +18,7 @@ from django.conf import settings
 
 from auctions import palette_actions
 
-from . import icons, prompts, resources, tools, widgets
+from . import admin, icons, prompts, resources, tools, widgets
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ class Caller:
     areas: set = field(default_factory=set)  # ``?tools=`` filter; empty means the whole catalogue
     protocol_version: str = LATEST_PROTOCOL_VERSION
     client: dict[str, Any] = field(default_factory=dict)  # set by ``initialize``
+    admin: bool = False  # ``/mcp/admin/``: the reads plus :mod:`auctions.mcp.admin`, never a write
 
     @property
     def user(self):
@@ -127,15 +128,22 @@ def _initialize(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
             "icons": icons.server(),
             "websiteUrl": f"https://{icons.domain()}/",
         },
-        "instructions": INSTRUCTIONS,
+        "instructions": admin.INSTRUCTIONS if caller.admin else INSTRUCTIONS,
     }
 
 
 def _tools_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
-    return {"tools": tools.tool_descriptors(caller.user, writes=caller.writes, areas=caller.areas)}
+    listed = tools.tool_descriptors(caller.user, writes=caller.writes, areas=caller.areas)
+    if caller.admin:
+        listed += admin.descriptors()
+    return {"tools": listed}
 
 
 def _resources_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
+    if caller.admin:
+        # Resources are a second way into the reads; the admin endpoint has only the one, which
+        # admin.private_result guards.
+        return {"resources": []}
     """The ``ui://`` widget documents plus the two ``me://`` reads, unfiltered by permission -- a
     widget is an empty template and the ``me://`` reads are checked when read. No concrete slugs
     here (e.g. ``auction://spring-2027``): that would enumerate auctions to whoever asked."""
@@ -144,13 +152,15 @@ def _resources_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
 
 def _resources_templates_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
     """The addressable reads, as URI patterns. See :mod:`auctions.mcp.resources`."""
-    return {"resourceTemplates": resources.template_descriptors()}
+    return {"resourceTemplates": [] if caller.admin else resources.template_descriptors()}
 
 
 def _resources_read(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
     uri = params.get("uri")
     if not isinstance(uri, str) or not uri.strip():
         return _Problem(INVALID_PARAMS, "A resource uri is required.")
+    if caller.admin:
+        return _Problem(INVALID_PARAMS, "This endpoint has no resources; use its tools.")
     uri = uri.strip()
     contents = widgets.read_resource(uri)  # widget schemes first; they need no request
     if contents is None:
@@ -161,7 +171,8 @@ def _resources_read(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | 
 
 
 def _prompts_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
-    return {"prompts": prompts.descriptors(caller.user)}
+    # Every prompt is a recipe of writes, and the admin endpoint has none.
+    return {"prompts": [] if caller.admin else prompts.descriptors(caller.user)}
 
 
 def _prompts_get(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:
@@ -193,6 +204,16 @@ def _tools_call(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Pro
     name = params.get("name")
     if not isinstance(name, str) or not name.strip():
         return _Problem(INVALID_PARAMS, "A tool name is required.")
+    if caller.admin:
+        # Its own tools, and a refusal for any write; registry reads run below. Every answer leaves
+        # through admin.private_result, which takes contact details out.
+        answered = admin.call_tool(caller.request, name.strip(), params.get("arguments"))
+        if answered is None:
+            try:
+                answered = tools.call_tool(caller.request, name, params.get("arguments"), writes=False)
+            except tools.UnknownTool:
+                return _Problem(INVALID_PARAMS, f"There is no tool called “{name}”.")
+        return admin.private_result(answered)
     try:
         return tools.call_tool(caller.request, name, params.get("arguments"), writes=caller.writes)
     except tools.UnknownTool:

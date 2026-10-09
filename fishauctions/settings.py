@@ -1239,3 +1239,13 @@ OAUTH2_PROVIDER = {
     #
     # COMPLIANT_BCP_RFC9700_TOKEN_STORAGE is left off: token hashing breaks the refresh grace period.
 }
+
+# /mcp/admin/ (auctions/mcp/admin.py): which OAuth clients may open it -- by default only claude.ai's
+# client metadata document, whose redirect URIs nobody else controls -- and whether a token must have
+# named the endpoint (RFC 8707 resource) when it was issued. Both defaults are the strict ones.
+MCP_ADMIN_CLIENT_IDS = [
+    client.strip()
+    for client in os.environ.get("MCP_ADMIN_CLIENT_IDS", "https://claude.ai/oauth/mcp-oauth-client-metadata").split(",")
+    if client.strip()
+]
+MCP_ADMIN_REQUIRE_RESOURCE = parse_bool_env(os.environ.get("MCP_ADMIN_REQUIRE_RESOURCE"), default=True)

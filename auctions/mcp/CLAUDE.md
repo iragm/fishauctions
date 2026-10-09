@@ -33,7 +33,39 @@ auctions/mcp/tools.py      tool_descriptors(user, writes=) / call_tool(request, 
 auctions/mcp/protocol.py   JSON-RPC 2.0 + the four MCP methods. Dicts in, dicts out.
 auctions/mcp/transport.py  the Django view: methods, headers, status codes, Origin check
 auctions/mcp/auth.py       who is calling
+auctions/mcp/admin.py      /mcp/admin/: superusers, read-only, and propose_change
 ```
+
+## The admin endpoint
+
+`/mcp/admin/` is the same view (`AdminMCPEndpointView`) for superusers only, advertised nowhere. It
+lists every registry read plus `admin.ADMIN_TOOLS` (any superuser dashboard as text, feature
+requests, logs, `site_health`), and **nothing on it writes**: the server makes it read-only, not a
+client prompt, because a scheduled routine runs connectors' tools with nobody there to approve.
+
+- **Who gets in, checked on every request** (`admin.refusal`): a superuser, over OAuth (never an
+  `ak_` key), through a client in `MCP_ADMIN_CLIENT_IDS` (claude.ai's CIMD document by default:
+  anyone can DCR-register a client called "Claude", nobody else controls claude.ai's redirect URIs),
+  on a token whose RFC 8707 `resource` is this host and path (`MCP_ADMIN_REQUIRE_RESOURCE`). Anything
+  else is a `403`. A token minted for `/mcp/admin` can't write on `/mcp/`.
+- **The consent screen** (`consent.ConsentView`) refuses an admin `resource` for anyone else, always
+  shows a warning, and ignores `approval_prompt=auto`. **The token endpoint**
+  (`oidc.Validator._check_and_set_request_resource`) refuses to add the admin `resource` to a grant or
+  refresh token that never named it; the toolkit alone would allow that.
+- **Nothing private leaves**: every answer goes through `admin.private_result` (contact-detail keys
+  dropped at any depth, emails, phones, keys and public IPs scrubbed), because the agents reading
+  here also read strangers' text and may push to a public repo. No resources, no prompts.
+- The two tools that write only fill queues a person decides: `suggest_feature` adds a feature request
+  (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
+  `/admin-dashboard/proposals/` changes data. Approve runs
+  the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
+  `admin.APPROVAL_ONLY` (feature request status, never `planned`) can be proposed, checked again at
+  approval. `planned` starts a build, so only the owner's click on the requests page sets it, and a
+  request can't be edited once decided.
+- `read_logs` and dashboard text go through `admin.redact` on the way out. No database tool, by
+  decision.
+- `test_mcp_admin.ReadOnlyToolsDontWriteTests` runs every registry read as a superuser and fails on
+  any write except the caller's own `last_auction_used`. A new read that writes breaks it.
 
 ## Registry rules
 
@@ -325,12 +357,14 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   `auctions.donation_views`; the latter was added when the donation skills arrived, having held five
   user-facing writes in none of the three tables. `app_links`, `apple_notifications` and
   `passkit_views` are still outside it.
-- `request_a_skill` records what an agent couldn't do; `/admin-dashboard/assistant-requests/` is the
-  queue, ordered by distinct askers. Row content is model-written: displayed, escaped, never executed.
+- `request_a_skill` records a feature somebody asked for; `/admin-dashboard/assistant-requests/` is the
+  queue, ordered by distinct askers, and `planned` is the go-ahead to build. `my_requests` shows the
+  asker its status, never the owner's note. Row content is model-written: displayed, escaped, never
+  executed.
 - `docs/mcp_next.md` is the standing list of unused spec features, including what's already rejected.
 
 ```bash
-docker exec -it django python3 manage.py test auctions.test_mcp auctions.test_mcp_widgets auctions.test_mcp_resources auctions.test_mcp_permissions auctions.test_source_code auctions.test_palette_account
+docker exec django python3 manage.py test auctions.test_mcp auctions.test_mcp_admin auctions.test_mcp_widgets auctions.test_mcp_resources auctions.test_mcp_permissions auctions.test_source_code auctions.test_palette_account
 curl -s -X POST http://127.0.0.1/mcp/ -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}'
 # expect 401 + WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"

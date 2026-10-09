@@ -10477,6 +10477,15 @@ def request_a_skill(request, params: dict[str, Any]) -> dict[str, Any]:
             f"What were you trying to do with “{skill}”, and what happened instead? That sentence "
             "is the whole value of the request — the name on its own does not say what it is for."
         )
+    existing = AssistantSkillRequest.objects.filter(user=user, skill=skill[:100]).first()
+    if existing and existing.status != AssistantSkillRequest.STATUS_NEW:
+        # Once the owner has decided, the words they decided on stay put: a planned request is what
+        # gets built, so editing it afterwards would be a way to change what gets built.
+        return _ok(
+            f"“{existing.skill}” is already {REQUEST_STATUS_FOR_ASKER.get(existing.status, existing.status)}; "
+            "it can't be changed now. Ask for it under a new name if it's something different.",
+            request_id=existing.pk,
+        )
     row, created = AssistantSkillRequest.objects.update_or_create(
         user=user,
         skill=skill[:100],
@@ -10499,6 +10508,40 @@ def request_a_skill(request, params: dict[str, Any]) -> dict[str, Any]:
         skill=row.skill,
         others_asking=others,
     )
+
+
+#: How a request's status reads to the person who asked. The owner's note is never shown to them.
+REQUEST_STATUS_FOR_ASKER = {
+    "new": "received, not looked at yet",
+    "planned": "planned: the site owner has said to build it",
+    "done": "built",
+    "declined": "not planned",
+}
+
+
+def my_requests(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The caller's own feature requests and where each one stands. Only their own."""
+    from .models import AssistantSkillRequest
+
+    rows = AssistantSkillRequest.objects.filter(user=request.user)
+    total = rows.count()
+    if not total:
+        return _ok("You haven't asked for anything yet. request_a_skill is how to ask.", requests=[])
+    limit, offset = _slice(params)
+    found = [
+        {
+            "request": row.pk,
+            "feature": row.skill,
+            "status": REQUEST_STATUS_FOR_ASKER.get(row.status, row.status),
+            "asked_on": row.createdon.date().isoformat(),
+            "others_asking": row.others_asking,
+        }
+        for row in rows[offset : offset + limit]
+    ]
+    built = sum(1 for row in found if row["status"] == REQUEST_STATUS_FOR_ASKER["done"])
+    summary = f"You have asked for {total} thing{'s' if total != 1 else ''}"
+    summary += f"; {built} of these {'is' if built == 1 else 'are'} built." if built else "."
+    return _ok(summary + _showing(total, limit, offset), requests=found)
 
 
 # --- create_auction ----------------------------------------------------------
@@ -11657,17 +11700,18 @@ register(
     Action(
         name="request_a_skill",
         description=(
-            "Write down something this site should be able to do and can't — a tool here, or an "
-            "endpoint on the club API an integration needed and didn't find. Call it when the "
-            "user asked for something and nothing here can do it — after you have said so, not "
-            "instead of saying so. It changes nothing and does not do the thing they wanted; it "
-            "puts the request in front of the person who builds these. Say what it would be "
-            "called, what it would need to be told, and what the user was actually trying to do. "
-            "Do not call it for something a tool here already does, and do not call it twice for "
-            "the same thing in one conversation."
+            "Write down something this site should be able to do and can't — a tool here, a "
+            "feature on the website, or an endpoint on the club API an integration needed and "
+            "didn't find. Call it when the user asked for something and nothing here can do it — "
+            "after you have said so, not instead of saying so. It changes nothing and does not do "
+            "the thing they wanted; it puts the request in front of the person who builds the "
+            "site, and my_requests shows them later where it stands. Say what it would be called, "
+            "what it would need to be told, and what the user was actually trying to do. Do not "
+            "call it for something a tool here already does, and do not call it twice for the "
+            "same thing in one conversation."
         ),
         params={
-            "skill": "string, required. Short name for the tool, e.g. 'refund an invoice'.",
+            "skill": "string, required. Short name for the tool or feature, e.g. 'refund an invoice'.",
             "reason": (
                 "string, required. What the user was trying to do and what happened instead. This "
                 "sentence is the whole value of the request."
@@ -11680,6 +11724,21 @@ register(
         aliases={"command", "name", "why", "description"},
         confirm_template="Ask for a new assistant skill",
         examples=["there's no way to do that here", "ask them to add a way to refund an invoice"],
+    )
+)
+
+register(
+    Action(
+        name="my_requests",
+        description=(
+            "The features the signed-in user has asked for with request_a_skill, and where each "
+            "stands: received, planned, built or not planned."
+        ),
+        params=dict(PAGING_PARAMS),
+        danger=DANGER_SAFE,
+        resolver=my_requests,
+        lookup=True,
+        examples=["did they ever build what I asked for?", "what happened to my feature request"],
     )
 )
 
@@ -15548,6 +15607,11 @@ _DONATION_DESK = (
 
 #: Actions offered over ``/mcp/`` and left off the palette's tool list: name -> why.
 MCP_ONLY_SKILLS: dict[str, str] = {
+    "my_requests": (
+        "The palette writes a request down by itself when it fails, so the people it asked for "
+        "mostly never knew they asked; the ones who did asked their own assistant, which is where "
+        "they will ask how it went."
+    ),
     # Output meant for an agent, too long for the palette.
     "read_source": _AGENT_OUTPUT,
     "club_api": _AGENT_OUTPUT,
@@ -15963,6 +16027,11 @@ NOT_A_SKILL: dict[str, str] = {
         "is already signed in, and a signed-in person is shown the address itself on the FAQ -- so "
         "the capability the form provides is one the caller does not need. request_a_skill is where "
         "an agent records something this site could not do. go_to_page opens the page."
+    ),
+    "AgentProposalsView": (
+        "Approve and Reject on changes an agent proposed. Approving is the person's own act -- it is "
+        "what the agent asked for, so a tool that approved would let the agent that wrote the "
+        "proposal carry it out."
     ),
     "AssistantSkillRequestsView": (
         "The POST is the four status buttons on the page, and the decision is the thing being read: "

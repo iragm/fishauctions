@@ -29,6 +29,7 @@ from django.utils import timezone
 from django.views.generic import TemplateView, View
 
 from auctions.models import (
+    AgentProposal,
     AssistantSkillRequest,
     CommandPalettePage,
     CommandPaletteSearch,
@@ -356,6 +357,70 @@ class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
             (value, label, AssistantSkillRequest.objects.filter(status=value).count())
             for value, label in AssistantSkillRequest.STATUS_CHOICES
         ]
+        return context
+
+
+class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
+    """Changes an agent on ``/mcp/admin/`` proposed, each waiting for Approve or Reject.
+
+    Approving runs the steps here, as the person who pressed it (``mcp.admin.apply_proposal``). Step
+    arguments were written by a model and are displayed escaped.
+    """
+
+    template_name = "agent_proposals.html"
+
+    #: Decided proposals shown under the waiting ones.
+    RECENT = 30
+
+    def post(self, request, *args, **kwargs):
+        from auctions.mcp.admin import apply_proposal
+
+        decision = request.POST.get("decision", "")
+        pk = request.POST.get("pk", "")
+        if decision not in ("approve", "reject") or not pk.isdigit():
+            return redirect(reverse("agent_proposals"))
+        # Claimed before anything runs, so a double click or a second tab can't apply it twice.
+        claimed = AgentProposal.objects.filter(
+            pk=int(pk), status=AgentProposal.STATUS_PENDING, decided_on__isnull=True
+        ).update(decided_on=timezone.now(), decided_by=request.user)
+        if not claimed:
+            messages.info(request, "That proposal was already decided.")
+            return redirect(reverse("agent_proposals"))
+        proposal = AgentProposal.objects.get(pk=int(pk))
+        if decision == "reject":
+            proposal.status = AgentProposal.STATUS_REJECTED
+            proposal.save(update_fields=["status"])
+            messages.success(request, f"Rejected “{proposal.summary}”.")
+        else:
+            apply_proposal(proposal, request)
+            if proposal.status == AgentProposal.STATUS_APPLIED:
+                messages.success(request, f"Done: “{proposal.summary}”.")
+            else:
+                messages.error(request, f"“{proposal.summary}” stopped on an error; see below.")
+        return redirect(reverse("agent_proposals"))
+
+    def get_context_data(self, **kwargs):
+        from auctions.mcp.admin import step_action
+
+        context = super().get_context_data(**kwargs)
+        rows = AgentProposal.objects.select_related("proposed_by", "decided_by")
+        context["pending"] = list(rows.filter(status=AgentProposal.STATUS_PENDING))
+        context["decided"] = list(rows.exclude(status=AgentProposal.STATUS_PENDING)[: self.RECENT])
+        for proposal in context["pending"]:
+            proposal.step_rows = []
+            for step in proposal.steps:
+                action = step_action(step.get("tool"))
+                arguments = step.get("arguments") or {}
+                proposal.step_rows.append(
+                    {
+                        "tool": step.get("tool"),
+                        "label": (action.confirm_template if action else "") or step.get("tool"),
+                        "arguments": [
+                            (key, json.dumps(value) if not isinstance(value, str) else value)
+                            for key, value in arguments.items()
+                        ],
+                    }
+                )
         return context
 
 

@@ -16,6 +16,9 @@ over the rate limit              ``429`` with ``Retry-After``
 
 A 401 (not a tool error) is required so the client's OAuth flow can start from ``WWW-Authenticate``.
 Authentication failures are answered here and never reach :mod:`protocol`.
+
+:class:`AdminMCPEndpointView` is the same view at ``/mcp/admin/``, for superusers only and read-only
+whatever the credential allows (:mod:`auctions.mcp.admin`).
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from . import auth, protocol, tools
+from . import admin, auth, protocol, tools
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,9 @@ class MCPEndpointView(View):
     session cookies are refused outright, so there is no ambient authority to forge."""
 
     http_method_names = ["post", "get", "delete", "options"]
+
+    #: The superusers' read-only catalogue; see :class:`AdminMCPEndpointView`.
+    admin = False
 
     def dispatch(self, request, *args, **kwargs):
         forbidden = self.check_origin(request)
@@ -109,6 +115,10 @@ class MCPEndpointView(View):
             return self.forbidden(credential.message)
         if credential is None:
             return self.unauthorized(request)
+        if self.admin:
+            refused = admin.refusal(credential, request)
+            if refused:
+                return self.forbidden(refused)
         if not auth.within_rate_limit(credential):
             response = _rpc_error(protocol.INTERNAL_ERROR, "Too many requests. Try again later.", status=429)
             response["Retry-After"] = str(RETRY_AFTER_SECONDS)
@@ -129,11 +139,23 @@ class MCPEndpointView(View):
 
         caller = protocol.Caller(
             request=request,
-            writes=credential.writes,
+            writes=credential.writes and not self.admin,
             protocol_version=version,
             areas=tools.parse_areas(request.GET.get("tools", "")),  # ``?tools=club`` narrows it
+            admin=self.admin,
         )
         answer = protocol.handle(message, caller)
         if answer is None:
             return HttpResponse(status=202)
         return _json(answer)
+
+
+class AdminMCPEndpointView(MCPEndpointView):
+    """``/mcp/admin/``: every read on ``/mcp/`` plus the site's own dashboards and logs, for superusers.
+
+    Unadvertised, and no use to anyone else: a recognised credential that isn't a superuser's is a
+    ``403``. Nothing here writes, whatever the credential could do on ``/mcp/``; changes are proposed
+    and wait for a person (``admin.propose_change``).
+    """
+
+    admin = True

@@ -43,6 +43,7 @@ from rest_framework.authentication import SessionAuthentication, TokenAuthentica
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from auctions import auction_nav
 from auctions.filters import (
     AuctionHistoryFilter,
     AuctionTOSFilter,
@@ -501,6 +502,19 @@ class AuctionHistoryView(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["auction"] = self.auction
         return kwargs
+
+
+class AuctionPages(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """The ribbon's More tab: every admin page for the auction, a line each. The list is `auctions/auction_nav.py`."""
+
+    template_name = "auctions/auction_pages.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        context["active_tab"] = "more"
+        context["nav_groups"] = auction_nav.groups_for(self.auction)
+        return context
 
 
 class AuctionLotMap(LoginRequiredMixin, AuctionViewMixin, TemplateView):

@@ -14395,10 +14395,11 @@ class SpeakerComment(models.Model):
 
 
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
-    """Something an agent tried to do and couldn't, in its own words.
+    """A feature somebody asked for through an assistant: a tool it lacked, or something the site can't do.
 
-    Written by ``request_a_skill``, read on ``/admin-dashboard/assistant-requests/``. Duplicates are
-    evidence and are counted. Content is model-written: displayed escaped, never executed or matched.
+    Written by ``request_a_skill``, read on ``/admin-dashboard/assistant-requests/``; the asker follows it
+    with ``my_requests``. ``planned`` is the site owner's go-ahead to build it. Duplicates are evidence
+    and are counted. Content is model-written: displayed escaped, never executed or matched.
     """
 
     STATUS_NEW = "new"
@@ -14429,7 +14430,7 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
 
     class Meta:
         ordering = ["-createdon"]
-        verbose_name = "Assistant skill request"
+        verbose_name = "Feature request"
 
     def __str__(self):
         return f"{self.skill} ({self.get_status_display()})"
@@ -14444,6 +14445,51 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
             .distinct()
             .count()
         )
+
+
+class AgentProposal(models.Model):
+    """Changes an agent on ``/mcp/admin/`` wants made, held until a superuser approves them.
+
+    That endpoint is read-only; ``propose_change`` is the only thing it writes, and nothing it proposes
+    runs until somebody presses Approve on ``/admin-dashboard/proposals/``, which runs each step through
+    ``palette_actions.run_action`` as that person. See :mod:`auctions.mcp.admin`.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_APPLIED = "applied"
+    STATUS_FAILED = "failed"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Waiting for you"),
+        (STATUS_APPLIED, "Done"),
+        (STATUS_FAILED, "Stopped on an error"),
+        (STATUS_REJECTED, "Rejected"),
+    )
+
+    summary = models.CharField(max_length=200)
+    reason = models.TextField(blank=True, default="")
+    reason.help_text = "Why the agent wants it, and what it read that says so."
+    steps = models.JSONField(default=list)
+    steps.help_text = 'Tool calls to run in order: [{"tool": ..., "arguments": {...}}].'
+    results = models.JSONField(default=list, blank=True)
+    results.help_text = "What each step answered when it ran."
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    proposed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="agent_proposals"
+    )
+    surface = models.CharField(max_length=100, blank=True, default="")
+    surface.help_text = "Which assistant proposed it: the OAuth application's name or the API key's."
+    decided_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="agent_proposals_decided"
+    )
+    decided_on = models.DateTimeField(null=True, blank=True)
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.summary} ({self.get_status_display()})"
 
 
 class SignInStitch(models.Model):
