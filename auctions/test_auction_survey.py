@@ -137,7 +137,7 @@ class SurveyResultsTests(StandardTestCase):
 
     def test_more_menu_links_it(self):
         self.client.force_login(self.user)
-        response = self.client.get(reverse("auction_stats", kwargs={"slug": self.online_auction.slug}))
+        response = self.client.get(reverse("auction_pages", kwargs={"slug": self.online_auction.slug}))
         self.assertContains(response, self.url)
 
     def test_stat(self):

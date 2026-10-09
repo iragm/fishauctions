@@ -827,6 +827,7 @@ NOT_IN_HELP: dict[str, str] = {
     "support": "The contact page is where help ends, not a topic.",
     "faq": "Being replaced by these guides.",
     "auction_help": "Redirects into these guides.",
+    "auction_pages": "A list of the auction's other pages, which the guides cover one by one.",
     "auction_survey": "One question, reached from its buttons in an email; the question is the whole page.",
     "print_my_unprinted_labels": "Reached from the buy-now sale email, which says what it prints.",
     "blog_post": "Posts are announcements, read on their own.",

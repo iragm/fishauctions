@@ -1,7 +1,9 @@
+from django.contrib.auth.models import User
 from django.urls import reverse
 from django.utils.html import escape
 
 from auctions import auction_nav
+from auctions.models import Auction, Club, ClubMember
 from auctions.tests import StandardTestCase
 
 IN_PERSON_ONLY = {"Print labels", "Print paddles", "Recruit volunteers", "Lot queue", "Set lot winners", "Checkout"}
@@ -58,3 +60,16 @@ class AuctionNavTests(StandardTestCase):
         response = self.client.get(reverse("auction_pages", kwargs={"slug": self.online_auction.slug}))
         self.assertContains(response, "Admin history")
         self.assertNotContains(response, "Set lot winners")
+
+    def test_a_club_member_who_manages_people_sees_the_pages_that_let_them_in(self):
+        club = Club.objects.create(name="Nav Club")
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(club=club, manage_users_through_club="all")
+        helper = User.objects.create_user(username="door_helper", password="testpassword")
+        ClubMember.objects.create(club=club, user=helper, name="Helper", permission_add_edit=True)
+        self.client.force_login(helper)
+        response = self.client.get(reverse("auction_pages", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("auction_quick_check_in", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertContains(response, reverse("auction_paddles", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertNotContains(response, reverse("auction_delete", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertNotContains(response, "Admin history")

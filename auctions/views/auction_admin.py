@@ -508,12 +508,16 @@ class AuctionPages(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """The ribbon's More tab: every admin page for the auction, a line each. The list is `auctions/auction_nav.py`."""
 
     template_name = "auctions/auction_pages.html"
+    allow_non_admins = True  # a club member who manages people gets the pages that let them in
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        admin = self.is_auction_admin
+        if not admin:
+            _ = self.can_add_edit_people  # raises PermissionDenied if not allowed
         context["auction"] = self.auction
         context["active_tab"] = "more"
-        context["nav_groups"] = auction_nav.groups_for(self.auction)
+        context["nav_groups"] = auction_nav.groups_for(self.auction, people_only=not admin)
         return context
 
 

@@ -4,9 +4,10 @@ One list so the two can't disagree. `auction_ribbon.html` draws the `tabs` group
 `/auctions/<slug>/pages/` (More) draws every group, tabs included, with a line about each. More was a
 dropdown until it held twenty-odd unsorted links.
 
-`Row.gate` takes the auction, never the user: the ribbon only renders for auction admins, and an
-admin can do everything here. `_in_person` rows are hidden from online auctions (the auction-type
-exception in style_reference.md).
+`Row.gate` takes the auction, never the user. The ribbon also renders for a club member who may add
+and edit people without running the auction (`can_add_edit_people`); More shows them only the
+`people` rows, the pages that let them in. `_in_person` rows are hidden from online auctions (the
+auction-type exception in style_reference.md).
 """
 
 from collections.abc import Callable
@@ -27,6 +28,8 @@ class Row:
     gate: Callable | None = None
     #: The `active_tab` value that highlights this row's tab; only rows in the `tabs` group have one.
     tab: str = ""
+    #: Open to whoever manages the auction's people, not only its admins.
+    people: bool = False
 
 
 @dataclass(frozen=True)
@@ -66,9 +69,14 @@ GROUPS = (
     Group(
         "",
         (
-            Row("Main", "bi-house-fill", "The auction's front page", _named("auction_main"), tab="main"),
+            Row("Main", "bi-house-fill", "The auction's front page", _named("auction_main"), tab="main", people=True),
             Row(
-                "Users", "bi-people-fill", "Everyone in it, and their invoices", _named("auction_tos_list"), tab="users"
+                "Users",
+                "bi-people-fill",
+                "Everyone in it, and their invoices",
+                _named("auction_tos_list"),
+                tab="users",
+                people=True,
             ),
             Row("Lots", "bi-calendar", "Every lot", _named("auction_lot_list"), tab="lots"),
         ),
@@ -97,6 +105,7 @@ GROUPS = (
                 "A bidder number sheet for each person",
                 _named("auction_paddles"),
                 gate=_in_person,
+                people=True,
             ),
             Row("Printable lot list", "bi-printer", "Every lot on paper", _named("auction_printable_lot_list")),
         ),
@@ -104,13 +113,21 @@ GROUPS = (
     Group(
         "On the day",
         (
-            Row(_check_in_label, "bi-upc-scan", "Scan membership cards", _named("auction_quick_check_in"), gate=_club),
+            Row(
+                _check_in_label,
+                "bi-upc-scan",
+                "Scan membership cards",
+                _named("auction_quick_check_in"),
+                gate=_club,
+                people=True,
+            ),
             Row(
                 "Self-checkin",
                 "bi-person-check",
                 "A kiosk where members scan their own card",
                 _named("auction_self_check_in"),
                 gate=_check_in,
+                people=True,
             ),
             Row(
                 "Recruit volunteers",
@@ -139,6 +156,7 @@ GROUPS = (
                 "Draw a random checked-in name",
                 _named("auction_door_prizes"),
                 gate=_check_in,
+                people=True,
             ),
             Row(
                 "Checkout",
@@ -175,16 +193,16 @@ GROUPS = (
 )
 
 
-def groups_for(auction, active_tab=None):
+def groups_for(auction, active_tab=None, people_only=False):
     """The menu as the templates draw it: groups of `{label, icon, description, url, active}` rows.
 
-    A group whose rows are all gated away is dropped.
+    `people_only` keeps the `people` rows. A group whose rows are all gated away is dropped.
     """
     drawn = []
     for group in GROUPS:
         rows = []
         for row in group.rows:
-            if row.gate and not row.gate(auction):
+            if (row.gate and not row.gate(auction)) or (people_only and not row.people):
                 continue
             rows.append(
                 {

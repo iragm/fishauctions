@@ -557,6 +557,7 @@ class SiteHealthTests(AdminEndpointCase):
         self.assertEqual(facts["pending_migrations"], [])
         for key in ("branch", "commit", "queues", "beat", "errors_last_24h"):
             self.assertIn(key, facts)
+        self.assertNotIn("redacted", facts["commit"])
 
 
 #: Writes a read may make: its caller's own "last auction used" pointer.

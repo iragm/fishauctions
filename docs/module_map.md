@@ -74,7 +74,7 @@ this only quotes its opening sentence.
 - **`auction_form_layout.py`** (223 lines)
   The layout of ``AuctionEditForm``: what an organizer sees first, and what is behind *Advanced*.
   `build_layout`, `advanced_fields_in_use`
-- **`auction_nav.py`** (200 lines)
+- **`auction_nav.py`** (218 lines)
   The auction admin menu: the ribbon's tabs, and the page its **More** tab opens.
   `Row`, `Group`, `groups_for`
 - **`auction_survey.py`** (212 lines)
@@ -165,7 +165,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (984 lines)
+- **`help_guides.py`** (985 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (907 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -303,7 +303,7 @@ this only quotes its opening sentence.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
   Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images.
-- **`test_auction_nav.py`** (60 lines)
+- **`test_auction_nav.py`** (75 lines)
   `AuctionNavTests`
 - **`test_auction_promos.py`** (493 lines)
   ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.
@@ -471,7 +471,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1536 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (686 lines)
+- **`test_mcp_admin.py`** (687 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -811,7 +811,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (965 lines)
+- **`admin.py`** (968 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`auth.py`** (312 lines)
   Who is calling ``/mcp/``, and what they may do.
@@ -943,7 +943,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (841 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
-- **`auction_admin.py`** (1255 lines)
+- **`auction_admin.py`** (1259 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (734 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.

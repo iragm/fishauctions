@@ -140,13 +140,13 @@ def _tools_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resources_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
+    """The ``ui://`` widget documents plus the two ``me://`` reads, unfiltered by permission -- a
+    widget is an empty template and the ``me://`` reads are checked when read. No concrete slugs
+    here (e.g. ``auction://spring-2027``): that would enumerate auctions to whoever asked."""
     if caller.admin:
         # Resources are a second way into the reads; the admin endpoint has only the one, which
         # admin.private_result guards.
         return {"resources": []}
-    """The ``ui://`` widget documents plus the two ``me://`` reads, unfiltered by permission -- a
-    widget is an empty template and the ``me://`` reads are checked when read. No concrete slugs
-    here (e.g. ``auction://spring-2027``): that would enumerate auctions to whoever asked."""
     return {"resources": widgets.resource_descriptors() + resources.fixed_descriptors()}
 
 

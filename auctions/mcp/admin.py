@@ -531,8 +531,9 @@ ERROR_KINDS = 10
 
 def _recent_errors() -> dict[str, Any]:
     """ERROR and CRITICAL records in ``django.log`` within :data:`ERROR_WINDOW`, grouped by their first line."""
-    # The log's timestamps are in the site's own time zone, which Django set as the process's.
-    zone = timezone.get_current_timezone()
+    # The log's timestamps are in the site's own time zone, which Django set as the process's. Not
+    # the current one: a form's timezone.activate() leaks into whatever this thread serves next.
+    zone = timezone.get_default_timezone()
     since = timezone.localtime() - ERROR_WINDOW
     kinds: dict[str, int] = {}
     total = 0
@@ -548,7 +549,7 @@ def _recent_errors() -> dict[str, Any]:
         total += 1
         first = text.splitlines()[0]
         # "ERROR 2026-10-08 08:21:46,190 module.func:12 message" -> "module.func:12 message"
-        kind = redact(first.split(" ", 3)[-1].split(" ", 1)[-1])[:200]
+        kind = redact(first.split(" ", 3)[-1].strip())[:200]
         kinds[kind] = kinds.get(kind, 0) + 1
     ranked = sorted(kinds.items(), key=lambda item: -item[1])[:ERROR_KINDS]
     return {"total": total, "most_common": [{"error": kind, "times": times} for kind, times in ranked]}
@@ -561,6 +562,8 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     errors = _recent_errors()
     facts = {
         **deployed,
+        # Short: a full 40-character hash is exactly what redact() takes for a credential.
+        "commit": deployed["commit"][:12],
         "pending_migrations": pending,
         "queues": _queue_depths(),
         "beat": _beat(),

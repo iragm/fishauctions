@@ -180,7 +180,7 @@ class PageTests(PaddleTestCase):
         self.assertEqual(self.client.get(self.pdf, {"who": "everyone", "plain_paper": "1"}).status_code, 403)
 
     def test_the_more_menu_links_it(self):
-        self.assertContains(self.client.get(self.auction.get_absolute_url()), self.page)
+        self.assertContains(self.client.get(reverse("auction_pages", kwargs={"slug": self.auction.slug})), self.page)
 
 
 class LayoutTests(PaddleTestCase):
