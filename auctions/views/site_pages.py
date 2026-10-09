@@ -94,7 +94,7 @@ class FAQ(ListView):
 class SupportView(FormView):
     """Every way to get help on one page, ending in a way to reach a human with no account.
 
-    Leads with connecting an AI agent (``/ai/``), then the FAQ, the two tutorial videos, and the message
+    Leads with connecting an AI agent (``/ai/``), then the help guides, feature requests, and the message
     form. The App Store's Support URL is opened with no session, so nothing here requires one; the site
     owner's address is never rendered (scrapers), and the message is emailed to ``settings.ADMINS[0][1]``
     with the sender as ``Reply-To``. reCAPTCHA stands in for the login.
@@ -104,15 +104,6 @@ class SupportView(FormView):
 
     template_name = "support.html"
     form_class = ContactForm
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # The same two videos and chapter lists as the help: one online, one in person.
-        context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
-        context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
-        context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
-        context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
-        return context
 
     #: Messages one address may send in an hour: the floor under reCAPTCHA, which a site with no
     #: keys doesn't have at all.
