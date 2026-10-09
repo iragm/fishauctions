@@ -484,7 +484,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 {% else %}
                     {% if lot.auto_image %}
                         <img src="{{ lot.auto_image.display_url }}" alt="A {{ lot.lot_name }} from another lot" class="img-fluid rounded mb-1">
-                        <div class="text-muted small">Photo from another lot with the same name.</div>
+                        <div class="text-muted small">This image was automatically added from another lot with the same name and may not be representative of this lot</div>
                         {% if is_lot_creator %}
                         <div class="text-muted small mb-2">This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
                         {% endif %}

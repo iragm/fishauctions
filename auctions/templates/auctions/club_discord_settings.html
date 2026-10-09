@@ -53,7 +53,11 @@
   <div class="card-header">Step 3 &mdash; Configure roles</div>
   <div class="card-body">
     <p class="text-muted small">
-      The bot's role must be <strong>above</strong> the roles it manages, and the email typed at the join button isn't verified.
+      Note that the bot needs a role that is placed <strong>above</strong> any roles it needs to manage in your
+      server's role hierarchy.
+    </p>
+    <p class="text-muted small">
+      The join button matches people to members by the email they type, which isn't verified, so don't put anything private behind a paid role.
     </p>
     <form method="post" action="{% url 'club_discord_fetch_roles' club.slug %}" class="mb-3">
       {% csrf_token %}

@@ -15,6 +15,13 @@
   </div>
 </div>
 
+{% if not assist_enabled %}
+<div class="alert alert-info" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Automatic email writing isn't set up on this site. You can still track vendors and record what
+  you sent, but you'll be writing the emails yourself.
+</div>
+{% endif %}
 
 <form method="post" novalidate>
   {% csrf_token %}
