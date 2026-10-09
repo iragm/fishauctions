@@ -34,8 +34,8 @@ names and dates.
    five guesses.
 5. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
    for every lot on the gaps page whose match you are sure of (`set_lot_species`).
-6. For each `planned` request: if its PR (`feature request #N` in the title) is merged and
-   `site_health`'s commit includes it, propose `set_request_status` → `done`.
+6. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
+   and `site_health`'s commit includes it, propose `set_request_status` → `done`.
 7. End with a few lines: what you filed, what you proposed, anything you couldn't tell.
 
 ## What the owner has already decided
