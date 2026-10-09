@@ -61,16 +61,31 @@ def site_origin():
     plain = f"http://{host}:{port}"
     if os.environ.get("TEST_SERVER_ORIGIN"):
         return os.environ["TEST_SERVER_ORIGIN"], os.environ.get("TEST_SERVER_HOST_MAP", "")
-    try:
-        import socket
-        import urllib.request
+    import socket
+    import urllib.error
+    import urllib.request
 
-        request = urllib.request.Request(plain + "/", method="HEAD")  # noqa: S310 - fixed internal URL
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - fixed internal URL
-            if response.status < 400 and response.geturl().startswith(plain):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    # Redirects aren't followed, so swag's 301 to https is an HTTPError like a 4xx. A 5xx or a
+    # refused connection is the app restarting: wait it out, or this picks https on a stack with
+    # no 443 and every page in the class is ERR_CONNECTION_REFUSED.
+    opener = urllib.request.build_opener(NoRedirect)
+    for _ in range(30):
+        try:
+            request = urllib.request.Request(plain + "/", method="HEAD")  # noqa: S310 - fixed internal URL
+            with opener.open(request, timeout=5):
                 return plain, ""
-    except Exception:
-        pass
+        except urllib.error.HTTPError as error:
+            if 300 <= error.code < 400 and not error.headers.get("Location", "").startswith("https:"):
+                return plain, ""  # e.g. single club mode's landing redirect
+            if error.code < 500:
+                break
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(1)
     domain = getattr(settings, "SITE_DOMAIN", "") or os.environ.get("SITE_DOMAIN", "")
     if not domain:
         return plain, ""
@@ -130,6 +145,39 @@ def selenium_available():
         return False
 
 
+_static_collected = False
+
+
+def collect_static_once():
+    """collectstatic so vendor files exist for the vendor library tests, once per run.
+
+    It rewrites every hashed file, and dev uvicorn used to reload on each one: run per class, a
+    class's first page load could land mid-restart.
+    """
+    global _static_collected
+    if _static_collected:
+        return
+    import io
+    import sys
+
+    from django.core.management import call_command
+
+    # Capture output to avoid cluttering test output
+    stdout_backup = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        call_command("collectstatic", "--no-input", verbosity=0)
+    except PermissionError:
+        # The static directory may be owned by another user; ignore PermissionError.
+        static_root = settings.STATIC_ROOT
+        if not static_root or not any(os.scandir(static_root)):
+            msg = f"collectstatic failed with PermissionError and {static_root!r} appears empty. Check that the static files directory has correct permissions."
+            raise RuntimeError(msg) from None
+    finally:
+        sys.stdout = stdout_backup
+    _static_collected = True
+
+
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
 @tag("selenium")
 class SeleniumTestCase(TestCase):
@@ -138,27 +186,7 @@ class SeleniumTestCase(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        # collectstatic so vendor files exist for the vendor library tests.
-        import io
-        import sys
-
-        from django.core.management import call_command
-
-        # Capture output to avoid cluttering test output
-        stdout_backup = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            call_command("collectstatic", "--no-input", verbosity=0)
-        except PermissionError:
-            # The static directory may be owned by another user; ignore PermissionError.
-            from django.conf import settings
-
-            static_root = settings.STATIC_ROOT
-            if not static_root or not any(os.scandir(static_root)):
-                msg = f"collectstatic failed with PermissionError and {static_root!r} appears empty. Check that the static files directory has correct permissions."
-                raise RuntimeError(msg) from None
-        finally:
-            sys.stdout = stdout_backup
+        collect_static_once()
 
         # See site_origin().
         cls.test_server_host = os.environ.get("TEST_SERVER_HOST", "nginx")
