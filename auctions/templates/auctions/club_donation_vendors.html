@@ -28,7 +28,15 @@ style_reference.md.{% endcomment %}
 {% if not can_send %}
 <div class="alert alert-info py-2" role="alert">
   <i class="bi bi-info-circle me-1"></i>
-  Donation emails go out from your own email (<a href="{% url 'club_donation_settings' club.slug %}">settings</a>).
+  Donation emails go out from your own email, so replies come to your inbox, not here.
+  <a href="{% url 'club_donation_settings' club.slug %}">Change this in donation settings</a>.
+</div>
+{% endif %}
+
+{% if not assist_enabled %}
+<div class="alert alert-info py-2" role="alert">
+  <i class="bi bi-info-circle me-1"></i>
+  Automatic email writing isn't set up on this site, so you'll be writing donation emails yourself.
 </div>
 {% endif %}
 
@@ -57,7 +65,39 @@ style_reference.md.{% endcomment %}
   {% endif %}
 </div>
 
-{% if can_send %}<p class="text-muted small">Replies land here, not in your inbox, with no alert.</p>{% endif %}
+{% comment %}Collapsed, not hidden: three things about this feature that surprise people, worth reading once and never again.{% endcomment %}
+<p class="mb-2">
+  <button class="btn btn-sm btn-primary" type="button" data-bs-toggle="collapse"
+          data-bs-target="#donation-tracking-help" aria-expanded="false" aria-controls="donation-tracking-help">
+    <i class="bi bi-info-circle me-1"></i> How donation tracking works
+  </button>
+</p>
+<div class="collapse mb-3" id="donation-tracking-help">
+  <div class="card card-body py-2">
+    <ul class="mb-0 ps-3">
+      <li>
+        There's no way to import a list of vendors, and you're capped at {{ quota.limit }} emails a
+        day from this site. This isn't a spam system, it's donation tracking.
+      </li>
+      {% if can_send %}
+      <li>
+        Replies are routed back to this page, and nothing tells you when one arrives. That's
+        deliberate &mdash; a reply landing in your own inbox is one you'd answer from there, and
+        this site would never see it. Get in the habit of checking this page.
+      </li>
+      <li>
+        When a vendor replies, their follow-up date is set to today, so they show up in the list
+        of vendors waiting on you.
+      </li>
+      {% else %}
+      <li>
+        You send donation emails from your own email, so replies arrive in your inbox, not here.
+        Open the vendor and set their status by hand when one comes in.
+      </li>
+      {% endif %}
+    </ul>
+  </div>
+</div>
 {% endblock %}
 
 {% comment %}The header partial renders the search box and status menu, so the default crispy filter form would only duplicate them.{% endcomment %}

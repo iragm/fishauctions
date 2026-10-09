@@ -17,7 +17,7 @@ class FeatureRequestsPageTests(TestCase):
         self.client.force_login(self.user)
 
     def _send(self, **data):
-        payload = {"skill": "Sort lots by price", "reason": "I wanted the cheap ones first.", "target": "site"}
+        payload = {"request": "Sort lots by price\nI wanted the cheap ones first."}
         payload.update(data)
         return self.client.post(reverse("feature_requests"), payload, follow=True)
 
@@ -27,12 +27,19 @@ class FeatureRequestsPageTests(TestCase):
         self.assertEqual(response.status_code, 302)
 
     def test_a_request_joins_the_owners_queue_as_new(self):
-        self._send(target="app")
+        self._send()
         row = AssistantSkillRequest.objects.get(user=self.user)
         self.assertEqual(row.skill, "Sort lots by price")
+        self.assertEqual(row.reason, "Sort lots by price\nI wanted the cheap ones first.")
         self.assertEqual(row.status, AssistantSkillRequest.STATUS_NEW)
-        self.assertEqual(row.target, "app")
         self.assertEqual(row.surface, "requests page")
+
+    def test_a_long_first_line_is_cut_at_a_word_for_the_name(self):
+        self._send(request="word " * 40)
+        row = AssistantSkillRequest.objects.get(user=self.user)
+        self.assertLessEqual(len(row.skill), 81)
+        self.assertTrue(row.skill.endswith("word…"))
+        self.assertEqual(row.reason, ("word " * 40).strip())
 
     def test_you_see_your_own_requests_and_their_status_never_anyone_elses(self):
         AssistantSkillRequest.objects.create(
@@ -47,9 +54,9 @@ class FeatureRequestsPageTests(TestCase):
 
     def test_a_decided_request_is_not_changed_by_sending_it_again(self):
         AssistantSkillRequest.objects.create(user=self.user, skill="Sort lots by price", reason="old", status="planned")
-        self._send(reason="new words", target="app")
+        self._send(request="Sort lots by price\nnew words")
         row = AssistantSkillRequest.objects.get(user=self.user)
-        self.assertEqual((row.reason, row.target), ("old", "site"))
+        self.assertEqual(row.reason, "old")
 
     def test_a_day_has_a_limit(self):
         for number in range(10):

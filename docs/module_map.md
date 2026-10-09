@@ -152,7 +152,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6451 lines)
+- **`forms.py`** (6458 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -434,7 +434,7 @@ this only quotes its opening sentence.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
 - **`test_error_pages.py`** (35 lines)
   `SubresourceNotFoundTests`
-- **`test_feature_requests_page.py`** (61 lines)
+- **`test_feature_requests_page.py`** (68 lines)
   /requests/: the web form for bug reports and feature requests, writing the same queue as request_a_skill.
   `FeatureRequestsPageTests`
 - **`test_form_filter_fixes.py`** (398 lines)
@@ -484,7 +484,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (712 lines)
+- **`test_mcp_admin.py`** (816 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -826,7 +826,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1106 lines)
+- **`admin.py`** (1303 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`auth.py`** (312 lines)
   Who is calling ``/mcp/``, and what they may do.
@@ -1036,7 +1036,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (692 lines)
+- **`site_pages.py`** (689 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
