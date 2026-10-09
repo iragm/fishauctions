@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import shutil
 import uuid
 from collections import deque
 from datetime import datetime, timedelta
@@ -523,6 +525,47 @@ def _beat() -> dict[str, Any]:
     return {"enabled_tasks": enabled.count(), "last_run": latest.isoformat() if latest else None}
 
 
+#: Disk or memory use, as a percentage, at which ``site_health`` stops saying ``ok``.
+HOST_WARN_PERCENT = 85
+
+
+def _host() -> dict[str, Any]:
+    """The server's disk, memory and load, as the container sees them: the host's, not a cgroup's.
+
+    The disk is the one the checkout is on, which on the server also holds Docker's images and
+    build cache. Docker itself is out of sight: the container has no socket, on purpose.
+    """
+    facts: dict[str, Any] = {}
+    try:
+        disk = shutil.disk_usage(settings.BASE_DIR)
+        facts["disk"] = {
+            "used_percent": round(100 * disk.used / disk.total, 1),
+            "free_gb": round(disk.free / 1024**3, 1),
+            "total_gb": round(disk.total / 1024**3, 1),
+        }
+    except OSError as exc:
+        facts["disk"] = {"error": f"{type(exc).__name__}: {exc}"}
+    try:
+        meminfo = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, _, value = line.partition(":")
+            meminfo[key] = int(value.split()[0])  # kB
+        total, available = meminfo["MemTotal"], meminfo["MemAvailable"]
+        facts["memory"] = {
+            "used_percent": round(100 * (total - available) / total, 1),
+            "available_gb": round(available / 1024**2, 1),
+            "swap_used_gb": round((meminfo.get("SwapTotal", 0) - meminfo.get("SwapFree", 0)) / 1024**2, 1),
+        }
+    except (OSError, KeyError, ValueError, IndexError, ZeroDivisionError) as exc:
+        facts["memory"] = {"error": f"{type(exc).__name__}: {exc}"}
+    try:
+        one, five, fifteen = os.getloadavg()
+        facts["load"] = {"1m": round(one, 2), "5m": round(five, 2), "15m": round(fifteen, 2), "cpus": os.cpu_count()}
+    except OSError as exc:
+        facts["load"] = {"error": f"{type(exc).__name__}: {exc}"}
+    return facts
+
+
 #: How far back ``site_health`` counts errors.
 ERROR_WINDOW = timedelta(hours=24)
 #: Distinct error lines ``site_health`` names.
@@ -556,10 +599,11 @@ def _recent_errors() -> dict[str, Any]:
 
 
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
-    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors."""
+    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host."""
     deployed = _deployed_commit()
     pending = _pending_migrations()
     errors = _recent_errors()
+    host = _host()
     facts = {
         **deployed,
         # Short: a full 40-character hash is exactly what redact() takes for a credential.
@@ -568,14 +612,17 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "queues": _queue_depths(),
         "beat": _beat(),
         "errors_last_24h": errors,
+        **host,
         "debug": settings.DEBUG,
         "checked_at": timezone.now().isoformat(),
     }
     summary = (
         f"{deployed['branch']} at {deployed['commit'][:10]}; "
         f"{len(pending)} migration{'s' if len(pending) != 1 else ''} not applied; "
-        f"{errors['total']} error{'s' if errors['total'] != 1 else ''} logged in the last 24 hours."
+        f"{errors['total']} error{'s' if errors['total'] != 1 else ''} logged in the last 24 hours"
     )
+    full = [name for name in ("disk", "memory") if host[name].get("used_percent", 0) >= HOST_WARN_PERCENT]
+    summary += f"; {' and '.join(full)} over {HOST_WARN_PERCENT}% used." if full else "."
     return _ok(summary, **facts)
 
 
@@ -875,8 +922,8 @@ ADMIN_TOOLS: dict[str, Action] = {
             name="site_health",
             description=(
                 "What is deployed and whether it is well: branch and commit, migrations not yet "
-                "applied, Celery queue depths, when beat last ran, and the last 24 hours of logged "
-                "errors grouped by kind."
+                "applied, Celery queue depths, when beat last ran, the last 24 hours of logged "
+                "errors grouped by kind, and the server's disk, memory and load."
             ),
             params={},
             danger=DANGER_SAFE,

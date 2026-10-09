@@ -5,7 +5,9 @@ import datetime
 import json
 import secrets
 import tempfile
+from collections import namedtuple
 from pathlib import Path
+from unittest import mock
 
 from django.contrib.auth.models import User
 from django.db import connection
@@ -558,6 +560,19 @@ class SiteHealthTests(AdminEndpointCase):
         for key in ("branch", "commit", "queues", "beat", "errors_last_24h"):
             self.assertIn(key, facts)
         self.assertNotIn("redacted", facts["commit"])
+
+    def test_it_reports_the_servers_disk_memory_and_load(self):
+        facts = self.call("site_health")["structuredContent"]
+        self.assertGreater(facts["disk"]["total_gb"], 0)
+        self.assertIn("used_percent", facts["memory"])
+        self.assertIn("cpus", facts["load"])
+
+    def test_a_full_disk_is_in_the_summary(self):
+        usage = namedtuple("usage", "total used free")(100 * 1024**3, 92 * 1024**3, 8 * 1024**3)
+        with mock.patch("auctions.mcp.admin.shutil.disk_usage", return_value=usage):
+            result = self.call("site_health")
+        self.assertEqual(result["structuredContent"]["disk"]["free_gb"], 8.0)
+        self.assertIn("disk over 85% used", result["content"][0]["text"])
 
 
 #: Writes a read may make: its caller's own "last auction used" pointer.

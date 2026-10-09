@@ -387,6 +387,12 @@ if ! docker compose up -d --force-recreate --wait --wait-timeout 600; then
     fi
 fi
 
+# Every build leaves layers behind, and the build cache alone grows until the disk fills. With the
+# new containers up, drop dangling images and any cache unused for a week (recent layers keep the
+# next build quick). Never volumes: the database lives in one. A failure here doesn't fail the deploy.
+docker image prune -f >/dev/null || true
+docker builder prune -f --filter until=168h | tail -n 1 || true
+
 # Proof: hit the site through nginx from the host. Anything below 500 counts, the https redirect
 # and the login page included; the point is catching "deploy finished but the site is down" while
 # the operator is still at the keyboard.
