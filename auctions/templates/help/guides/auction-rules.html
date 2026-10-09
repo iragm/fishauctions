@@ -189,6 +189,12 @@
 </table>
 </div>
 <p>Custom fields print on labels and are columns in the lot spreadsheet.</p>
+{% tip %}The description field can be very long and really shouldn't be printed on labels. If you want a printable description field, you can:
+<ol class="mb-0">
+  <li>Rename the custom text field to description {% description_step "rename" %}</li>
+  <li>Disable the built-in description field {% description_step "disable" %}</li>
+  <li>Make sure that the custom text field is set to print on the label {% description_step "print" %}</li>
+</ol>{% endtip %}
 {% tip %}Running a joint auction with three clubs? Add a dropdown called "Club" with each club's name. Sellers pick theirs, and the lot spreadsheet adds up each club's share.{% endtip %}
 {% aitip %}Ask "add Wild caught and Tank raised to the dropdown".{% endaitip %}
 
