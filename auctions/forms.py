@@ -3495,19 +3495,18 @@ class ContactForm(forms.Form):
 
 
 class FeatureRequestForm(forms.Form):
-    """A bug report or feature request from ``/requests/``: the same three things ``request_a_skill`` takes."""
+    """A bug report or feature request from ``/requests/``: one box, nothing else to fill out."""
 
-    skill = forms.CharField(max_length=100, label="In a few words")
-    reason = forms.CharField(
-        widget=forms.Textarea(attrs={"rows": 5}),
+    request = forms.CharField(
+        widget=forms.Textarea(
+            attrs={
+                "rows": 6,
+                "placeholder": "A bug or an idea. Include as much detail as you can: what you were "
+                "doing, where, and what you expected.",
+            }
+        ),
         max_length=2000,
-        label="What were you trying to do, and what happened?",
-    )
-    target = forms.ChoiceField(
-        choices=(("site", "Website"), ("app", "App"), ("both", "Both")),
-        initial="site",
-        widget=forms.RadioSelect,
-        label="Where",
+        label="",
     )
 
     def __init__(self, *args, **kwargs):
@@ -3515,6 +3514,14 @@ class FeatureRequestForm(forms.Form):
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.add_input(Submit("submit", "Send", css_class="btn-success text-dark"))
+
+    @property
+    def short_name(self) -> str:
+        """The queue's one-line name: the first line, cut at a word within 80 characters."""
+        first = self.cleaned_data["request"].strip().splitlines()[0].strip()
+        if len(first) <= 80:
+            return first
+        return first[:80].rsplit(" ", 1)[0] + "…"
 
 
 class CustomResetPasswordForm(ResetPasswordForm):

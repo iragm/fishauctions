@@ -14,7 +14,7 @@
   <ul class="list-group">
     {% for row in past %}
     <li class="list-group-item d-flex justify-content-between align-items-start">
-      <div>{{ row.what }}<div class="small text-muted">{{ row.where }}, {{ row.on|date:"M j, Y" }}</div></div>
+      <div>{{ row.what }}<div class="small text-muted">{{ row.on|date:"M j, Y" }}</div></div>
       <span class="badge {% if row.status_key == 'done' %}bg-success text-dark{% elif row.status_key == 'planned' %}bg-primary{% else %}bg-secondary{% endif %}">{{ row.status }}</span>
     </li>
     {% endfor %}

@@ -199,7 +199,6 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
         context["past"] = [
             {
                 "what": row.skill,
-                "where": row.get_target_display(),
                 "status": self.STATUS_LABELS.get(row.status, row.status),
                 "status_key": row.status,
                 "on": row.createdon,
@@ -220,15 +219,13 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
             return self.form_invalid(form)
         self.request.assistant_surface = "requests page"
         result = palette_actions.request_a_skill(
-            self.request, {"skill": form.cleaned_data["skill"], "reason": form.cleaned_data["reason"]}
+            self.request, {"skill": form.short_name, "reason": form.cleaned_data["request"]}
         )
         row = AssistantSkillRequest.objects.filter(pk=result.get("request_id")).first()
-        if row and row.status == AssistantSkillRequest.STATUS_NEW:
-            row.target = form.cleaned_data["target"]
-            row.save(update_fields=["target", "updatedon"])
+        if row and row.status != AssistantSkillRequest.STATUS_NEW:
+            messages.info(self.request, "That one's already decided; word it differently if it's something new.")
+        else:
             messages.success(self.request, "Thanks, it's on the list.")
-        elif row:
-            messages.info(self.request, "That one's already decided; give a new request a new name.")
         return super().form_valid(form)
 
 
