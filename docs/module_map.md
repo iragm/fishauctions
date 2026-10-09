@@ -476,7 +476,7 @@ this only quotes its opening sentence.
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (763 lines)
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
-- **`test_mcp.py`** (1536 lines)
+- **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (712 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
@@ -728,6 +728,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`change_standalone_lots.py`** (28 lines)
   `Command`
 - **`change_voice_cloud.py`** (25 lines)
+  `Command`
+- **`chatgpt_reviewer.py`** (158 lines)
+  Make the account OpenAI's reviewer signs in with, and the auction its test cases name.
   `Command`
 - **`chatgpt_submission.py`** (398 lines)
   Write ``chatgpt-app-submission.json``, the file OpenAI's plugin form imports.

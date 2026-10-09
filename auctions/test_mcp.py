@@ -1,6 +1,7 @@
 """Tests for the MCP tool catalogue."""
 
 import datetime
+import io
 import json
 import re
 from unittest.mock import patch
@@ -1534,3 +1535,41 @@ class SubmissionFileTests(SimpleTestCase):
             self.assertEqual(entry["annotations"], served[name])
             for sentence in entry["justifications"].values():
                 self.assertTrue(sentence.strip(), f"{name} has an empty justification")
+
+    def test_the_committed_file_is_current(self):
+        # The form imports the file, not the command; regenerate with ``chatgpt_submission --write``.
+        from auctions.management.commands import chatgpt_submission
+
+        committed = json.loads(chatgpt_submission.OUTPUT_PATH.read_text())
+        self.assertEqual(committed, chatgpt_submission.build())
+
+
+class ReviewerAccountTests(StandardTestCase):
+    """``manage.py chatgpt_reviewer`` builds what the submission's test cases ask about."""
+
+    def run_command(self, **options):
+        from django.core.management import call_command
+
+        call_command("chatgpt_reviewer", email="reviewer@example.com", stdout=io.StringIO(), **options)
+
+    def test_the_test_cases_have_something_to_find(self):
+        from allauth.account.models import EmailAddress
+        from django.contrib.auth import get_user_model
+
+        from auctions.models import Auction, AuctionTOS, Lot
+
+        self.run_command(password="first")
+        self.run_command(password="second")
+        reviewer = get_user_model().objects.get(username="chatgpt-review")
+        auction = Auction.objects.get(title="Spring Auction")
+        self.assertTrue(reviewer.check_password("second"))
+        self.assertTrue(EmailAddress.objects.get(user=reviewer).verified)
+        self.assertTrue(auction.can_submit_lots)
+        self.assertFalse(auction.promote_this_auction)
+        self.assertTrue(Lot.objects.filter(auction=auction, lot_number_int=14).exists())
+        tos = AuctionTOS.objects.get(auction=auction, user=reviewer)
+        self.assertFalse(tos.is_admin)
+        self.assertIsNotNone(tos.invoice)
+        # Run twice, made once.
+        self.assertEqual(Auction.objects.filter(title="Spring Auction").count(), 1)
+        self.assertEqual(Lot.objects.filter(auction=auction).count(), 20)

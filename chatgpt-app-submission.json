@@ -44,6 +44,18 @@
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
+    "add_document": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: add a document to the library from its text, when you have read it yourself -- typically transcribing scans or photos of old club.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+      }
+    },
     "add_donation_vendor": {
       "annotations": {
         "readOnlyHint": false,
@@ -346,6 +358,18 @@
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
+    "delete_document": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: delete a document from the library, with its file.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes a library document and its uploaded file for everyone who could read it."
+      }
+    },
     "describe_auction": {
       "annotations": {
         "readOnlyHint": true,
@@ -567,6 +591,18 @@
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
+    "list_documents": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (list the library's documents, newest first).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
     "list_donation_vendors": {
       "annotations": {
         "readOnlyHint": true,
@@ -625,6 +661,19 @@
         "read_only_justification": "Only looks up and returns data (get the lot queue for an in-person auction); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
+    "move_queued_lot": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: move one lot to a different place in an in-person auction's running order, queueing it first if it isn't queued.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
     "my_activity": {
@@ -695,6 +744,18 @@
       },
       "justifications": {
         "read_only_justification": "Only looks up and returns data (the user's own breeder award points); the one thing it records is which auction the account last asked about, so the next request can leave it out.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
+    "my_requests": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (the features the signed-in user has asked for with request_a_skill, and where each stands).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
@@ -785,6 +846,18 @@
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
+    "read_document": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (read one library document's text, a page at a time, with its topics, the species it names, and any notes on what couldn't be read).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
     "read_source": {
       "annotations": {
         "readOnlyHint": true,
@@ -829,6 +902,18 @@
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: write down that somebody asked a donation vendor whose requests don't go by email.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+      }
+    },
+    "record_donation_email": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: record one email from your own mailbox against a donation vendor.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
@@ -1068,6 +1153,18 @@
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
+    "search_documents": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (search the library).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
     "search_help": {
       "annotations": {
         "readOnlyHint": true,
@@ -1075,7 +1172,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Only looks up and returns data (search this site's own FAQ and blog for how something works, or read the whole FAQ with no query at all).",
+        "read_only_justification": "Only looks up and returns data (search this site's own help guides, FAQ and blog for how something works, or read the whole FAQ with no query at all).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
@@ -1233,6 +1330,18 @@
         "destructive_justification": "It replaces what a genus or category is worth in a club's points program, which changes what later awards give."
       }
     },
+    "step_queue": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: move an in-person auction's running order on to the next lot, or back to the previous one, like the queue page's Next and Back.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+      }
+    },
     "suggest_starting_prices": {
       "annotations": {
         "readOnlyHint": true,
@@ -1294,6 +1403,19 @@
         "read_only_justification": "Changes data on this site: take one lot back out of an in-person auction's running order.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+      }
+    },
+    "update_auction_dates": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: change when an auction happens.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It overwrites an auction's dates, and what follows them moves too: unsold lots' closing times, a single pickup location's time and the club calendar's event."
       }
     },
     "update_auction_setting": {
@@ -1358,6 +1480,19 @@
         "read_only_justification": "Changes data on this site: change this user's own name, phone number, mailing address, ship-to region or map marker.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It overwrites the user's name, phone number or address on their account and on the auctions and clubs that hold a copy of it."
+      }
+    },
+    "update_document": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: correct a library document's title, author, the year it was written, or its topics -- often worked out by reading it.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It overwrites a library document's title, author, year or topics with the new ones."
       }
     },
     "update_donation_vendor": {
