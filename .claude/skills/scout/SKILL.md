@@ -33,12 +33,16 @@ names and dates.
    - `assistant_skill_requests` (members' own asks)
    - `species_gaps`
    - `admin_session_replay` for the sessions behind a funnel drop
-5. File at most **five** suggestions, each with its evidence. One well-evidenced suggestion beats
+5. File at most **five** suggestions, each with its evidence and its `target`: `app` when only the
+   mobile app has to change, `both` when the app needs the site to change too, otherwise `site`. One well-evidenced suggestion beats
    five guesses.
 6. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
    for every lot on the gaps page whose match you are sure of (`set_lot_species`).
 7. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
-   and `site_health`'s commit includes it, propose `set_request_status` → `done`.
+   and `site_health`'s commit includes it, propose `set_request_status` → `done`. An `app` request is
+   done once its PR has merged into the app's `main`; a `both` request needs both.
+   A `new` request from a member whose target looks wrong goes in the same proposal: `set_request_status`
+   with status `new` and the right `target`.
 8. End with a few lines: issues queued and closed, what you filed, what you proposed, anything you
    couldn't tell.
 

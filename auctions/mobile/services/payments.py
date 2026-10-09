@@ -13,6 +13,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.urls import reverse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,33 @@ class PaymentService:
     # Sent from here so it can be reworded without an app release.
     NOT_A_MERCHANT_MESSAGE = "Only an auction admin with a connected Square account can set up Tap to Pay."
 
+    #: What an eligible admin with no usable seller does next: (step, message, button label). Each
+    #: is answered on the /square/ page, which already renders all three states.
+    SETUP_STEPS = {
+        "request_access": (
+            "Card payments are switched on by hand for each account, usually the same day.",
+            "Request access",
+        ),
+        "connect_square": ("Connect your Square account to use Tap to Pay on iPhone.", "Connect Square"),
+        "reconnect_square": ("Reconnect your Square account to use Tap to Pay on iPhone.", "Reconnect Square"),
+    }
+
+    @staticmethod
+    def _setup_step(user, seller):
+        """The step between this eligible admin and a usable seller, or None when there is a seller.
+
+        Without it the app offered Apple's terms to someone Square couldn't authorize, and the only answer
+        was "cancelled or failed" (TTP-9). ``square_enabled`` is a fraud control, so it is disclosed, not lifted.
+        """
+        if seller and seller.supports_tap_to_pay:
+            return None
+        if seller:
+            return "reconnect_square"
+        userdata = getattr(user, "userdata", None)
+        if not (userdata and userdata.square_enabled):
+            return "request_access"
+        return "connect_square"
+
     @staticmethod
     def _latest_admin_auction(user):
         """The auction this user most plausibly collects money for, or None: ``last_auction_used`` first,
@@ -172,7 +200,8 @@ class PaymentService:
 
         Apple requires the reader to prepare on foreground (1.5) and the UI within a second (5.6).
         ``can_accept_terms`` answers 3.8 (only an admin may accept Apple's terms). A user who can't charge
-        right now gets ``eligible: true`` with no token, and the app shows setup instead. No side effects.
+        right now gets ``eligible: true`` with no token, plus ``setup_step``/``setup_label``/``setup_path`` and a
+        ``message`` when the missing piece is the Square account. No side effects.
         """
         if not PaymentService.user_can_take_payments(user):
             return {
@@ -186,7 +215,10 @@ class PaymentService:
         result = {"eligible": True, "can_accept_terms": True}
         if seller:
             result["seller_name"] = PaymentService._seller_display_name(auction, seller)
-        if not seller or not seller.supports_tap_to_pay:
+        step = PaymentService._setup_step(user, seller)
+        if step:
+            message, label = PaymentService.SETUP_STEPS[step]
+            result.update(setup_step=step, message=message, setup_label=label, setup_path=reverse("square_seller"))
             return result
 
         # Token only now: refreshing may call Square.

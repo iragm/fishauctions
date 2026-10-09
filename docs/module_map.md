@@ -190,7 +190,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14561 lines)
+- **`models.py`** (14573 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -475,7 +475,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1536 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (702 lines)
+- **`test_mcp_admin.py`** (712 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -545,7 +545,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (165 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3216 lines)
+- **`test_palette_skills.py`** (3227 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -612,7 +612,7 @@ this only quotes its opening sentence.
   `InvoiceOpenedTests`, `MaxBidPeekTests`, `RefundDialogTests`, `GrantingAuctionAdminTests`, `SellToOnlineHighBidderTests`, `BulkInvoiceStatusTests`
 - **`test_sweep_round_two.py`** (709 lines)
   Regression tests for the second review sweep: club member merge roles, BAP award lots, the API-key member
-- **`test_tap_to_pay.py`** (1128 lines)
+- **`test_tap_to_pay.py`** (1161 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
 - **`test_template_a11y.py`** (129 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
@@ -814,7 +814,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1015 lines)
+- **`admin.py`** (1035 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`auth.py`** (312 lines)
   Who is calling ``/mcp/``, and what they may do.
@@ -896,7 +896,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`offline.py`** (530 lines)
   Offline mode for the app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
-- **`payments.py`** (592 lines)
+- **`payments.py`** (624 lines)
   Taking a card payment in the room, through the app's Tap to Pay.
   `PaymentVerificationError`, `PaymentAlreadyChargedError`, `TapToPayAttemptOpen`, `SquareReconnectRequired`, `PaymentService`
 - **`printers.py`** (138 lines)
@@ -1013,7 +1013,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (619 lines)
+- **`palette.py`** (623 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1075 lines)
   Connecting PayPal and Square accounts and taking payments through them.

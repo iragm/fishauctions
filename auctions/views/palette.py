@@ -314,13 +314,16 @@ class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
     LIMIT = 200
 
     def post(self, request, *args, **kwargs):
-        """Move one request between the four states. The only thing this page writes."""
+        """Move one request between the four states, with its note and target. The only thing this page writes."""
         row = get_object_or_404(AssistantSkillRequest, pk=request.POST.get("pk"))
         status = request.POST.get("status", "")
         if status in dict(AssistantSkillRequest.STATUS_CHOICES):
             row.status = status
             row.notes = request.POST.get("notes", row.notes)[:2000]
-            row.save(update_fields=["status", "notes", "updatedon"])
+            target = request.POST.get("target", row.target)
+            if target in dict(AssistantSkillRequest.TARGET_CHOICES):
+                row.target = target
+            row.save(update_fields=["status", "notes", "target", "updatedon"])
             messages.success(request, f"“{row.skill}” is now {row.get_status_display().lower()}.")
         return redirect(self.back_to(request))
 
@@ -352,6 +355,7 @@ class AssistantSkillRequestsView(AdminOnlyViewMixin, TemplateView):
             group["people_count"] = len(group["people"])
         context["groups"] = ordered
         context["status"] = wanted
+        context["targets"] = AssistantSkillRequest.TARGET_CHOICES
         # Tuples, since templates can't index a dict by a variable key.
         context["statuses"] = [
             (value, label, AssistantSkillRequest.objects.filter(status=value).count())
