@@ -8,10 +8,7 @@ connector does tools only; prompts and resources reach Claude through a custom c
 
 1. **Incremental scope consent (SEP-835).** Connect read-only, return a `401` naming `write` on the
    first write. `mcp/auth.py` must tell "no token" from "token without this scope".
-2. **The library as resources.** A `document://{n}` template over `read_document`, never listed
-   (it names somebody's papers). Then a citation can be a `resource_link`, and a client that reads
-   resources can fetch the whole text itself.
-3. **The scans themselves over MCP.** `add_document` takes the agent's transcription, so the library
+2. **The scans themselves over MCP.** `add_document` takes the agent's transcription, so the library
    has no picture to check it against. Once a client can hand over a file it is holding (tool
    arguments are text today), keep the original beside the text.
 

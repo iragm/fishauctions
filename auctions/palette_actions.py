@@ -590,9 +590,10 @@ def strip_internal(result: Any) -> Any:
     return {key: value for key, value in result.items() if key not in INTERNAL_RESULT_KEYS}
 
 
-def _about(auction=None, club=None, lot=None, person=None, auctions=(), clubs=()) -> dict[str, Any]:
+def _about(auction=None, club=None, lot=None, person=None, auctions=(), clubs=(), documents=()) -> dict[str, Any]:
     """Build a :data:`KEY_ABOUT` block; empty if nothing given. ``person`` (an ``AuctionTOS``) only means
-    something with ``auction``: together they address an invoice.
+    something with ``auction``: together they address an invoice. ``documents`` are library documents,
+    addressed by number.
     """
     about: dict[str, Any] = {}
     if lot is not None:
@@ -614,6 +615,9 @@ def _about(auction=None, club=None, lot=None, person=None, auctions=(), clubs=()
     many = _slugs(clubs)
     if many:
         about["clubs"] = many
+    numbers = list(dict.fromkeys(document.pk for document in documents))
+    if numbers:
+        about["documents"] = numbers
     return {KEY_ABOUT: about} if about else {}
 
 
@@ -15228,7 +15232,7 @@ def search_documents(request, params: dict[str, Any]) -> dict[str, Any]:
         "found": True,
         "passages": passages,
         "summary": f"{len(passages)} passages from the library for “{query}”.{_showing(total, limit, offset)}",
-        **_about(clubs=clubs),
+        **_about(clubs=clubs, documents=[hit.document for hit in hits]),
     }
 
 
@@ -15251,7 +15255,7 @@ def read_document(request, params: dict[str, Any]) -> dict[str, Any]:
         "end": end,
         "length": total,
         "text": untrusted(document.text[start:end]),
-        **_about(club=document.club),
+        **_about(club=document.club, documents=[document]),
     }
     if not document.text:
         result["summary"] = (

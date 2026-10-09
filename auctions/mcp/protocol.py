@@ -152,7 +152,7 @@ def _resources_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
 
 def _resources_templates_list(caller: Caller, params: dict[str, Any]) -> dict[str, Any]:
     """The addressable reads, as URI patterns. See :mod:`auctions.mcp.resources`."""
-    return {"resourceTemplates": [] if caller.admin else resources.template_descriptors()}
+    return {"resourceTemplates": [] if caller.admin else resources.template_descriptors(caller.user)}
 
 
 def _resources_read(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Problem:

@@ -10,6 +10,8 @@ caller's request, so the resolver's own permission check runs. There is no secon
 
 Nothing concrete is listed: ``resources/list`` returns the widgets, the ``me://`` reads and public
 documents, which say nothing about anybody; enumeration stays in the tools, behind permissions.
+``document://{n}`` is the same: a library document names somebody's papers, so it is reached by a
+citation's ``resource_link`` or a number already in hand, never by a list.
 """
 
 from __future__ import annotations
@@ -129,6 +131,17 @@ TEMPLATES: tuple[Template, ...] = (
         # 50: a history line is long, and 100 would approach ``tools.MAX_RESULT_CHARS``.
         {"limit": 50},
     ),
+    Template(
+        "document://{document}",
+        "document",
+        "A library document",
+        "One library document by its number, e.g. document://12: its title, author, topics, the "
+        "species it names, and its text from the start. read_document reads on from where this stops.",
+        "read_document",
+        ("document",),
+        # The most read_document gives in one go; most newsletter articles fit.
+        {"length": 12000},
+    ),
 )
 
 #: Fixed resources: no placeholders, the same URI for everybody, and about the caller.
@@ -185,9 +198,19 @@ def _descriptor(template: Template, *, as_template: bool) -> dict[str, Any]:
     }
 
 
-def template_descriptors() -> list[dict[str, Any]]:
+def offered_to(user, template: Template) -> bool:
+    """Whether ``user`` is shown this template: the library's only to those who have the library."""
+    from auctions import palette_actions
+    from auctions.documents.search import can_use_library
+
+    if palette_actions.ACTIONS[template.action].needs != palette_actions.NEEDS_LIBRARY:
+        return True
+    return bool(user) and can_use_library(user)
+
+
+def template_descriptors(user=None) -> list[dict[str, Any]]:
     """The ``resources/templates/list`` answer."""
-    return [_descriptor(template, as_template=True) for template in TEMPLATES]
+    return [_descriptor(template, as_template=True) for template in TEMPLATES if offered_to(user, template)]
 
 
 def fixed_descriptors() -> list[dict[str, Any]]:
@@ -305,6 +328,9 @@ def _uris(about: dict[str, Any]) -> list[str]:
         found.append(f"auction://{auction}")
     if about.get("club"):
         found.append(f"club://{about['club']}")
+    # Before the lists of clubs, so a search's citations are what MAX_LINKS keeps.
+    for number in about.get("documents") or ():
+        found.append(f"document://{number}")
     for slug in about.get("auctions") or ():
         found.append(f"auction://{slug}")
     for slug in about.get("clubs") or ():

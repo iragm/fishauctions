@@ -331,8 +331,9 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   client, which only works if it has one: checking for a mail connector is its first step, because
   this server cannot see what else the client is connected to.
 - **Resources** (`auctions/mcp/resources.py`): `auction://`, `lot://`, `club://` templates,
-  `me://context`, `me://activity`, `help://faq` — each names a registered **read-only** action, so
-  there's no second permission path. **Nothing that names somebody is ever listed**: `resources/list`
+  `document://`, `me://context`, `me://activity`, `help://faq` — each names a registered
+  **read-only** action, so there's no second permission path. `document://{n}` is offered only to
+  people with the library, and a library search cites each document as a `resource_link` to it. **Nothing that names somebody is ever listed**: `resources/list`
   returns only the widget documents, the two `me://` reads and `help://faq` — the rule is *no slugs*,
   not *nothing concrete*.
 
