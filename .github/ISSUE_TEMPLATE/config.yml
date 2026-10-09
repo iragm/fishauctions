@@ -1,0 +1,9 @@
+# Bug reports and feature requests go through the site, into the queue the owner plans from.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a bug or request a feature
+    url: https://auction.fish/requests/
+    about: Sign in, send it, and follow where it stands.
+  - name: Get help
+    url: https://auction.fish/support/
+    about: Guides, videos, and a way to reach a person.

@@ -23,7 +23,7 @@
     </label>
   </div>
   {% if invoice.member_has_paypal_subscription %}
-  <small class="text-muted">Renews through a PayPal subscription.</small>
+  <small class="text-muted">This member renews automatically through a PayPal subscription, so the membership fee isn't applied here.</small>
   {% elif invoice.member_membership_carried_by %}
   <small class="text-muted">Membership carried with {{ invoice.member_membership_carried_by }}'s.</small>
   {% else %}

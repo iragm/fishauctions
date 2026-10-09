@@ -67,8 +67,13 @@
   {% if request.user.pk == auction.created_by.pk and auction.show_square_banner and auction.pk == request.user.userdata.last_auction_created.pk %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Enable payments with your Square account</h5>
     <small>
-      Buyers pay from their invoices, straight to you; only Square's fees apply. <a href='{% url "square_seller" %}' class="text-white">Learn more</a>.<br>
-      {% if not request.user.userdata.square_enabled %}Card payments are reviewed before they're switched on, usually the same day.<br>{% endif %}
+      <ul>
+        <li>Users will see a button to pay on their invoices</li>
+        <li>Invoices will automatically be marked paid as users pay</li>
+        <li>Funds will go directly to your Square account</li>
+      </ul>
+      It's "free": we don't charge anything, but normal Square fees apply.  <a href='{% url "square_seller" %}' class="text-white">Learn more about accepting payments with Square</a>.<br>
+      {% if not request.user.userdata.square_enabled %}We review each account by hand before enabling card payments &mdash; taking cards means collecting money from other people. Ask and we'll usually have you set up the same day.<br>{% endif %}
     </small>
     <div>
       {% comment %}The gate on square_enabled is disclosed here rather than hiding the banner: an organizer who was shown nothing had no button, no explanation and no way to ask, which reads as "this site can't take card payments". Same pattern as the promotion banner above. See Auction.show_square_banner.{% endcomment %}

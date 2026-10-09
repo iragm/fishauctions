@@ -31,7 +31,9 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "blog_post", "privacy_policy", "tos", "support", "dmca", "dmca_notice", "report_lot", "help",
         "help_guide",
         "club_detail", "speakers", "speaker_detail",
-        # Account pages: their content is the caller's own, or a sign-in form.
+        # Account pages: their content is the caller's own, or a sign-in form. feature_requests lists
+        # only the caller's own requests.
+        "feature_requests",
         "account_login", "account_signup", "account_logout", "account_inactive", "account_email",
         "account_email_verification_sent", "account_reset_password", "account_reset_password_done",
         "account_reset_password_from_key", "account_reset_password_from_key_done", "account_set_password",

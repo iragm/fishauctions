@@ -187,9 +187,13 @@ ROUTE_LIST: list[Route] = [
             "tutorial",
             "video",
             "who runs this",
-            "suggest",
-            "bug report",
         ],
+    ),
+    _r(
+        "feature_requests",
+        "Report a bug or request a feature",
+        "Browsing",
+        keywords=["bug report", "report a bug", "feature request", "suggest", "my requests", "github issue"],
     ),
     # --- My stuff ---
     _r("selling", "Lots I am selling", "My stuff", keywords=["my lots", "what am i selling"]),

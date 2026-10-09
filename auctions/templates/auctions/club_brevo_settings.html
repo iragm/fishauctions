@@ -99,7 +99,11 @@
       {% if has_emails_enabled %}
         <div class="alert alert-info mt-3 mb-0 small">
           <i class="bi bi-lightbulb"></i>
-          To send membership emails from Brevo instead, turn off this site's.
+          You have outgoing emails enabled. Now that Brevo is connected you may want to turn those off
+          and send membership emails (welcome, renewal, expiry reminders) through Brevo instead &mdash;
+          for example, using an <strong>Automation</strong> that filters on the
+          <span class="text-warning">MEMBER_TAGS</span> attribute (e.g. contains
+          <span class="text-warning">new-member</span> or <span class="text-warning">expiring-soon</span>).
           <a href="{% url 'club_email_settings' club.slug %}">Manage email settings</a>
         </div>
       {% endif %}
