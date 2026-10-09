@@ -135,9 +135,9 @@ this only quotes its opening sentence.
   `mailing_address`
 - **`email_routing.py`** (174 lines)
   `email_routing_enabled`, `email_routing_domain`, `build_routed_sender_address`, `sender_with_display_name`, `admin_routing_email`, `resolve_donation_alias`, `resolve_routing_info`, `resolve_routed_recipient`
-- **`error_views.py`** (35 lines)
+- **`error_views.py`** (54 lines)
   Error handlers that surface otherwise-swallowed tracebacks.
-  `error_404`, `error_500`
+  `wants_page`, `error_404`, `error_500`
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
@@ -424,6 +424,8 @@ this only quotes its opening sentence.
 - **`test_endauctions.py`** (902 lines)
   Tests for the ``endauctions`` command and the websocket consumers.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
+- **`test_error_pages.py`** (35 lines)
+  `SubresourceNotFoundTests`
 - **`test_form_filter_fixes.py`** (398 lines)
   Regression tests for a batch of form and filter fixes: edit locks and limits on lot forms, the posted
   `BulkAddFormsetEditLockTests`, `CreateLotFormAuctionMoveTests`, `ManageUsersThroughClubPermissionTests`, `EditLotUsesItsOwnAuctionTests`, `PickupLocationFormAuctionTests`, `NumericLimitTests`, `LotFilterTests`, `NumericLookingSearchTests`, `AuctionTOSKeywordBoundaryTests`, `GetClubsTests`
