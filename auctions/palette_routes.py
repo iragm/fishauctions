@@ -506,6 +506,14 @@ ROUTE_LIST: list[Route] = [
         keywords=["report", "summary", "who came"],
     ),
     _r(
+        "auction_pages",
+        "Every admin page for an auction",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["more", "menu", "all pages", "where is"],
+    ),
+    _r(
         "auction_history",
         "Auction change history",
         "Running an auction",
@@ -1086,16 +1094,25 @@ ROUTE_LIST: list[Route] = [
     ),
     _r(
         "assistant_skill_requests",
-        "Assistant skill requests",
+        "Feature requests",
         "Site admin",
         admin=ADMIN_SUPERUSER,
         keywords=[
+            "feature requests",
+            "what people asked for",
             "skill requests",
             "what agents asked for",
             "missing tools",
             "mcp requests",
             "what can't the assistant do",
         ],
+    ),
+    _r(
+        "agent_proposals",
+        "Changes agents proposed",
+        "Site admin",
+        admin=ADMIN_SUPERUSER,
+        keywords=["proposals", "approve a change", "what the agent wants to change", "pending changes"],
     ),
     _r(
         "species_gaps",
@@ -1238,6 +1255,7 @@ EXCLUDED: dict[str, str] = {
         "The Model Context Protocol endpoint. Another program's way in, authenticated by a bearer "
         "token rather than a person's session; there is nothing on it to look at."
     ),
+    "mcp_admin": "The superusers' read-only MCP endpoint; the same answer as mcp.",
     # django-oauth-toolkit's URLs are namespaced and excused like allauth's; an entry would show up
     # as stale in the audit.
     # Speaker directory

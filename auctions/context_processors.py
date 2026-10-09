@@ -179,7 +179,8 @@ def add_location(request):
     # Only the fields that changed: request.user.userdata was read at the start of the request, and a
     # full save would write back whatever it held then over anything saved since.
     changed = []
-    if request.user.is_authenticated:
+    # mcp.admin renders admin pages in-process for an agent: not a visit, and its address is a server's.
+    if request.user.is_authenticated and not getattr(request, "is_agent_render", False):
         userdata = request.user.userdata
         # No cookies: the IP gives a location later, see set_user_location.py.
         ip = client_ip(request) or None

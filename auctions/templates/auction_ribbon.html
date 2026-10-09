@@ -1,4 +1,5 @@
 {# this is the tabs that are shown on many auction pages #}
+{% load auction_nav_tags %}
 <h3 class="d-flex align-items-center gap-2">
   {% if auction.club and auction.club.icon %}
   <img src="{{ auction.club.icon_thumbnail_url }}" alt="" class="rounded" style="width: 2em; height: 2em; object-fit: cover;">
@@ -119,46 +120,15 @@
 </script>
 {% endif %}
 {% comment %}Icon-only on a phone on purpose: four labelled tabs wrap to two rows, and a wrapped tab strip reads as two separate things.  The icons carry the meaning at that width, which is why More has one at all -- it used to be an empty tab on mobile.{% endcomment %}
+{% auction_nav_groups auction as nav_groups %}
 <ul class="nav nav-tabs">
+  {% for group in nav_groups %}{% if group.tabs %}{% for row in group.rows %}
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href='{% url "auction_main" slug=auction.slug %}'><i class="bi bi-house-fill"></i><span class='d-none d-md-inline'> Main</span></a>
+      <a class="nav-link {% if row.active %}active{% endif %}" href="{{ row.url }}"><i class="bi {{ row.icon }}"></i><span class='d-none d-md-inline'> {{ row.label }}</span></a>
     </li>
+  {% endfor %}{% endif %}{% endfor %}
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" href='{% url "auction_tos_list" slug=auction.slug %}'><i class="bi bi-people-fill"></i><span class='d-none d-md-inline'> Users</span></a>
-    </li>
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="{% url 'auction_lot_list' slug=auction.slug %}"><i class="bi bi-calendar"></i><span class='d-none d-md-inline'> Lots</span></a>
-    </li>
-    <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-three-dots"></i><span class='d-none d-md-inline'> More</span></a>
-        <ul class="dropdown-menu dropdown-menu-end">
-          <a class="dropdown-item" href="{% url 'edit_auction' slug=auction.slug %}"><i class="bi bi-gear-fill"></i> Rules</a>
-          <a class="dropdown-item" href="{% url 'edit_auction_custom_fields' slug=auction.slug %}"><i class="bi bi-ui-checks-grid"></i> Custom fields</a>
-          <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
-          {% if not auction.is_online %}<a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
-          {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_lot_queue' slug=auction.slug %}"><i class="bi bi-list-ol"></i> Lot queue</a>{% endif %}
-          {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_volunteers' slug=auction.slug %}"><i class="bi bi-people"></i> Recruit volunteers</a>{% endif %}
-          <a class="dropdown-item" href="{% url 'auction_chat' slug=auction.slug %}"><i class="bi bi-chat-fill"></i> Chat messages</a>
-          <a class="dropdown-item" href="{% url 'auction_survey_results' slug=auction.slug %}"><i class="bi bi-emoji-smile"></i> Feedback</a>
-          <a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help</a>
-          {% if auction.use_check_in_mode and can_manage_check_in %}
-          <a class="dropdown-item" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
-          <a class="dropdown-item" href="{% url 'auction_self_check_in' slug=auction.slug %}"><i class="bi bi-person-check"></i> Self-checkin</a>
-          {% endif %}
-          {% if can_scan_club_barcodes %}
-          <a class="dropdown-item" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> {% if auction.use_check_in_mode %}Check in{% else %}Scan club cards{% endif %}</a>
-          {% endif %}
-          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Checkout</a>{% endif %}
-          <a class="dropdown-item" href="{% url 'create_auction' %}?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
-          <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>
-          <a class="dropdown-item" href="{% url 'auction_lot_map' slug=auction.slug %}"><i class="bi bi-geo-alt"></i> Lot map</a>
-          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
-          {% if not auction.is_online %}<a class="dropdown-item" href="{% url 'auction_paddles' slug=auction.slug %}"><i class="bi bi-123"></i> Print paddles</a>{% endif %}
-          <a class="dropdown-item" href="{% url 'auction_printable_lot_list' slug=auction.slug %}"><i class="bi bi-printer"></i> Printable lot list</a>
-          <a class="dropdown-item" href="{% url 'auction_history' slug=auction.slug %}"><i class="bi bi-clock-history"></i> Admin history</a>
-          <a class="dropdown-item" href="{% url 'auction_delete' slug=auction.slug %}"><i class="bi bi-x-circle"></i> Delete auction</a>
-
-        </ul>
+      <a class="nav-link {% if active_tab == 'more' %}active{% endif %}" href="{% url 'auction_pages' slug=auction.slug %}"><i class="bi bi-three-dots"></i><span class='d-none d-md-inline'> More</span></a>
     </li>
 </ul>
 {% comment %} Every auction admin page listens for USB HID barcode scanner input (club auctions only). {% endcomment %}

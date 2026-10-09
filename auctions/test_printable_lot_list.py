@@ -37,7 +37,7 @@ class PrintableLotListTests(StandardTestCase):
         self.assertEqual(self.get().status_code, 403)
 
     def test_it_is_in_the_more_menu(self):
-        response = self.client.get(reverse("auction_main", kwargs={"slug": self.auction.slug}))
+        response = self.client.get(reverse("auction_pages", kwargs={"slug": self.auction.slug}))
         self.assertContains(response, self.url)
 
     def test_every_lot_prints_on_one_page(self):

@@ -559,9 +559,8 @@ def sync_member_to_shadows(member, *, acting_user=None):
             )
             if clash:
                 logger.warning(
-                    "AuctionTOS pk=%s now shares email '%s' with another row in auction pk=%s",
+                    "AuctionTOS pk=%s now shares its email with another row in auction pk=%s",
                     shadow.pk,
-                    update["email"],
                     shadow.auction_id,
                 )
         AuctionTOS.objects.filter(pk=shadow.pk).update(**update)

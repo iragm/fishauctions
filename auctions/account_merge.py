@@ -58,6 +58,8 @@ REPOINTED = frozenset(
         "admin.LogEntry.user",
         "auctions.AdCampaignGroup.contact_user",
         "auctions.AdCampaignResponse.user",
+        "auctions.AgentProposal.decided_by",
+        "auctions.AgentProposal.proposed_by",
         "auctions.AssistantSkillRequest.user",
         "auctions.AuctionDropdown.user",
         "auctions.AuctionHistory.user",

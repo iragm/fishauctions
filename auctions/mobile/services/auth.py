@@ -35,11 +35,11 @@ class MobileAuthService:
             return None
 
         if not user.is_active:
-            logger.info("Mobile login attempted for inactive user: %s", credential)
+            logger.info("Mobile login attempted for inactive user %s", user.pk)
             return None
 
         if not MobileAuthService.email_verification_satisfied(user):
-            logger.info("Mobile login blocked for user with unverified email: %s", credential)
+            logger.info("Mobile login blocked for user %s: email not verified", user.pk)
             return None
 
         return user

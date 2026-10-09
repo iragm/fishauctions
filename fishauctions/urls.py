@@ -5,6 +5,7 @@ from oauth2_provider import urls as oauth2_urls
 from oauth2_provider.urls import metadata_urlpatterns
 
 from auctions.mcp.auth import throttle_registration
+from auctions.mcp.consent import ConsentView
 
 #: Application-management views the toolkit ships. ``LoginRequiredMixin`` is the only gate they
 #: carry, so out of the box any signed-in member of the site can register OAuth clients and list
@@ -38,18 +39,28 @@ def _wrap_named(patterns, name, wrapper):
     ]
 
 
+def _replace_named(patterns, name, view):
+    """The same, swapping one named view for another -- the consent screen, which knows about /mcp/admin/."""
+    return [
+        URLPattern(entry.pattern, view if entry.name == name else entry.callback, entry.default_args, entry.name)
+        for entry in patterns
+    ]
+
+
 # The authorization server, assembled by hand instead of `include("oauth2_provider.urls")`, because
 # two of its parts need something the toolkit doesn't do:
 #
 #   * the application-management pages belong to whoever runs this server, not to every signed-in
 #     member of the site, and the toolkit gates them on login alone;
 #   * dynamic client registration has to be open to anonymous callers (it is a client's first call),
-#     which makes the Application table writable by strangers -- so it gets a per-address rate limit.
+#     which makes the Application table writable by strangers -- so it gets a per-address rate limit;
+#   * the consent screen hands out /mcp/admin/ connections only to superusers through claude.ai, and
+#     always asks first (auctions/mcp/consent.py).
 #
 # See auctions/mcp/auth.py. Everything else passes through untouched, names included.
 _oauth2_urlpatterns = (
     oauth2_urls.metadata_urlpatterns
-    + oauth2_urls.base_urlpatterns
+    + _replace_named(oauth2_urls.base_urlpatterns, "authorize", ConsentView.as_view())
     + [entry for entry in oauth2_urls.management_urlpatterns if entry.name not in _APPLICATION_VIEW_NAMES]
     + _superusers_only([entry for entry in oauth2_urls.management_urlpatterns if entry.name in _APPLICATION_VIEW_NAMES])
     + oauth2_urls.oidc_urlpatterns

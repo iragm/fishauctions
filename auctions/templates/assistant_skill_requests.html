@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Assistant skill requests{% endblock %}
+{% block title %}Feature requests{% endblock %}
 {% block content %}
-<h2 class="mb-1">Assistant skill requests</h2>
+<h2 class="mb-1">Feature requests</h2>
 {% comment %}
   Written by request_a_skill over MCP, so every word of skill/params/reason came out of a language
   model acting for a member of this site. It is displayed and never run; Django's autoescaping is
@@ -11,10 +11,8 @@
 <div class="help-note">
   <i class="bi bi-lightbulb-fill"></i>
   <div>
-    What an assistant tried to do here and couldn't, in its own words. Every tool on
-    <a href="{% url 'user_api_keys' %}">the MCP endpoint</a> exists because somebody said out loud
-    that it was missing — this is that, collected on purpose. Ordered by how many
-    <strong>different people</strong> asked, because that is the number that decides what gets built.
+    What people asked an assistant for that the site couldn't do, in its words. Ordered by how many
+    <strong>different people</strong> asked. Planned is the go-ahead to build it; askers see the status.
   </div>
 </div>
 
