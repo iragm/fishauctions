@@ -55,12 +55,11 @@ analytics: the argument for this site is that a club's member list is not a prod
 not survive a script tag. No engagement mechanics. No survey beyond one question, asked once, after
 an invoice is paid.
 
-## Waiting on a decision
+## Decided (2026-10-09)
 
-1. **The anonymous seam** shipped as stitch-forward plus unstitched history with the date marked. To
-   fall back to unstitched only, delete the `record_sign_in_stitch` call in `signals.py`.
-2. **`LAPSED_AFTER_AUCTIONS = 2`** is a judgement. The unit is settled; the number is not. The right
-   one is what an organizer would recognise as "they have stopped coming", and nobody has been asked.
+- **The anonymous seam** stays stitch-forward plus unstitched history with the date marked. To fall
+  back to unstitched only, delete the `record_sign_in_stitch` call in `signals.py`.
+- **`LAPSED_AFTER_AUCTIONS = 2`** stays.
 
 Blocked on data, not code: about one auction in five has a club, so `club_coverage()` is at the top
 of the page. `/admin-unlinked-auctions/` is the fix.

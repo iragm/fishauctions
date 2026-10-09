@@ -77,7 +77,6 @@ without rejections means they cannot see how to fill it in at all.
 - Work `/admin-unlinked-auctions/` down. Prerequisite for every club-grouped number.
 - 8f outreach: draft per club, send by hand, record the attempt and the stall reason. The code half
   (`ClubLadderSnapshot`, month-over-month ladder counts) is done.
-- The two judgement calls in `docs/phase_9.md` under "Waiting on a decision".
 
 ## Decided -- do not reopen
 
