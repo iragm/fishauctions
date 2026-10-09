@@ -40,8 +40,9 @@ auctions/mcp/admin.py      /mcp/admin/: superusers, read-only, and propose_chang
 
 `/mcp/admin/` is the same view (`AdminMCPEndpointView`) for superusers only, advertised nowhere. It
 lists every registry read plus `admin.ADMIN_TOOLS` (any superuser dashboard as text, feature
-requests, logs, `site_health`), and **nothing on it writes**: the server makes it read-only, not a
-client prompt, because a scheduled routine runs connectors' tools with nobody there to approve.
+requests, logs, the app's crash reports, `site_health`), and **nothing on it writes**: the server makes
+it read-only, not a client prompt, because a scheduled routine runs connectors' tools with nobody
+there to approve.
 
 - **Who gets in, checked on every request** (`admin.refusal`): a superuser, over OAuth (never an
   `ak_` key), through a client in `MCP_ADMIN_CLIENT_IDS` (claude.ai's CIMD document by default:

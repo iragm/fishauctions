@@ -14549,6 +14549,48 @@ class AgentProposal(models.Model):
         return f"{self.summary} ({self.get_status_display()})"
 
 
+class AppCrash(models.Model):
+    """One crash the mobile app reported about itself, from ``POST /api/mobile/crashes/``.
+
+    The stores' own crash reports aren't readable by an agent (Apple has no API for them at all), so the
+    app sends its own: Dart errors as they happen, and the operating system's account of a native crash
+    or an ANR on the next launch. Rows sharing a ``fingerprint`` are one bug; the admin endpoint's
+    ``list_app_crashes`` groups them, and the hourly check fixes new ones. See :mod:`auctions.app_crashes`.
+    """
+
+    KIND_DART = "dart"
+    KIND_NATIVE = "native"
+    KIND_ANR = "anr"
+    KIND_CHOICES = (
+        (KIND_DART, "Dart error"),
+        (KIND_NATIVE, "Native crash"),
+        (KIND_ANR, "Not responding"),
+    )
+    PLATFORM_CHOICES = (("android", "Android"), ("ios", "iOS"))
+
+    fingerprint = models.CharField(max_length=40, db_index=True)
+    fingerprint.help_text = "Same bug, same fingerprint: the kind, the error's type and its top frames."
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES)
+    fatal = models.BooleanField(default=True)
+    fatal.help_text = "False for an error the app survived, such as one inside a button handler."
+    app_version = models.CharField(max_length=40, blank=True, default="")
+    os_version = models.CharField(max_length=100, blank=True, default="")
+    device = models.CharField(max_length=100, blank=True, default="")
+    message = models.TextField(blank=True, default="")
+    stack = models.TextField(blank=True, default="")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    occurred_at = models.DateTimeField(null=True, blank=True)
+    occurred_at.help_text = "When the phone says it happened; a native crash arrives on the next launch."
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.get_platform_display()} {self.get_kind_display()} {self.fingerprint[:8]}"
+
+
 class SignInStitch(models.Model):
     """The anonymous session a person held when they signed in.
 

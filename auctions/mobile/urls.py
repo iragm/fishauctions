@@ -11,6 +11,7 @@ from .views import (
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileConfigView,
+    MobileCrashReportView,
     MobileDeviceHeartbeatView,
     MobileDeviceRegisterView,
     MobileDeviceUnregisterView,
@@ -48,6 +49,8 @@ from .views import (
 urlpatterns = [
     # Public config (no auth) — read before sign-in
     path("config/", MobileConfigView.as_view(), name="mobile-config"),
+    # The app's own crash reports (no auth: a crash before sign-in counts too)
+    path("crashes/", MobileCrashReportView.as_view(), name="mobile-crashes"),
     # Auth
     path("auth/login/", MobileLoginView.as_view(), name="mobile-auth-login"),
     # Legacy Google-only endpoint. Superseded by auth/social/ below, which runs allauth's pipeline

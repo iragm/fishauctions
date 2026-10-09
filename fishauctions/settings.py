@@ -1115,6 +1115,8 @@ REST_FRAMEWORK = {
         "mobile_ar": "240/min",
         # The app pings at mount, on resume and every 10 minutes.
         "mobile_checkin": "30/hour",
+        # A batch of crashes a launch; a crash loop sends one batch per launch, not one a crash.
+        "mobile_crash": "30/hour",
     },
     # JSON only: the browsable API rendered view docstrings and writable-field forms to anyone with a
     # browser. Re-enabled below under DEBUG.

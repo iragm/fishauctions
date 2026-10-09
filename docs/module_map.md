@@ -32,7 +32,7 @@ this only quotes its opening sentence.
 - **`account_export.py`** (307 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_merge.py`** (420 lines)
+- **`account_merge.py`** (421 lines)
   Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
   `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
 - **`account_nav.py`** (201 lines)
@@ -51,6 +51,9 @@ this only quotes its opening sentence.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
 - **`announcements.py`** (405 lines)
   Club announcements: one message, sent to the places a club's members look.
+- **`app_crashes.py`** (131 lines)
+  Crashes the mobile app reports about itself: storing them, grouping them into bugs, and reading them back.
+  `error_type`, `fingerprint`, `record`, `recent_count`, `groups`
 - **`app_links.py`** (127 lines)
   The two files that let a site link open in the mobile app instead of a browser.
   `assetlinks`, `apple_app_site_association`
@@ -190,7 +193,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14573 lines)
+- **`models.py`** (14615 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -288,6 +291,9 @@ this only quotes its opening sentence.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
 - **`test_android_testers.py`** (60 lines)
   `AndroidTestersTests`
+- **`test_app_crashes.py`** (132 lines)
+  The mobile app's own crash reports: ``POST /api/mobile/crashes/``, grouping, and ``list_app_crashes``.
+  `crash`, `FingerprintTests`, `CrashEndpointTests`, `ListAppCrashesTests`
 - **`test_app_links.py`** (154 lines)
   Part LINKS — the two files that make a site link open in the app.
   `AppLinkFilesTests`, `AppLinksUnconfiguredTests`
@@ -820,7 +826,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1035 lines)
+- **`admin.py`** (1106 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`auth.py`** (312 lines)
   Who is calling ``/mcp/``, and what they may do.
@@ -870,10 +876,10 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`renderers.py`** (49 lines)
   DRF renderers for mobile endpoints that return raw bytes.
   `BinaryRenderer`, `PdfRenderer`, `PngRenderer`
-- **`serializers.py`** (545 lines)
+- **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
-- **`urls.py`** (138 lines)
-- **`views.py`** (1557 lines)
+- **`urls.py`** (141 lines)
+- **`views.py`** (1581 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -1067,7 +1073,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1256 lines)
+- **`settings.py`** (1258 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

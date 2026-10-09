@@ -353,6 +353,29 @@ class MobilePaymentConfirmResponseSerializer(serializers.Serializer):
 
 
 # ---------------------------------------------------------------------------
+# Crash reports
+# ---------------------------------------------------------------------------
+
+
+class AppCrashSerializer(serializers.Serializer):
+    """One crash in ``POST /api/mobile/crashes/``. Long text is cut, never refused: a crash is worth keeping."""
+
+    kind = serializers.ChoiceField(choices=["dart", "native", "anr"])
+    platform = serializers.ChoiceField(choices=["android", "ios"])
+    fatal = serializers.BooleanField(required=False, default=True)
+    message = serializers.CharField(required=False, allow_blank=True, default="", trim_whitespace=False)
+    stack = serializers.CharField(required=False, allow_blank=True, default="", trim_whitespace=False)
+    app_version = serializers.CharField(required=False, allow_blank=True, default="")
+    os_version = serializers.CharField(required=False, allow_blank=True, default="")
+    device = serializers.CharField(required=False, allow_blank=True, default="")
+    occurred_at = serializers.DateTimeField(required=False, allow_null=True, default=None)
+
+
+class AppCrashBatchSerializer(serializers.Serializer):
+    crashes = AppCrashSerializer(many=True, allow_empty=False, max_length=20)
+
+
+# ---------------------------------------------------------------------------
 # Command palette
 # ---------------------------------------------------------------------------
 
