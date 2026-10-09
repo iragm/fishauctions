@@ -664,6 +664,149 @@ def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Feature request {row.pk}, “{row.skill}”, is now {row.get_status_display().lower()}.")
 
 
+def _web_address(value: str) -> str:
+    """A typed web address with its scheme, or ``""``. "example.org" is what people paste."""
+    value = value.strip()
+    if value and not value.startswith(("http://", "https://")):
+        value = f"https://{value}"
+    return value[:255]
+
+
+def _club_fields(params: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """``add_club``'s arguments as ``Club`` fields, or ``({}, why not)``.
+
+    Run twice: when the proposal is made, so the agent hears about a duplicate while the owner is
+    still in the conversation, and again on approval, since another club may have been added since.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    from auctions import club_import
+    from auctions.models import Club
+
+    name = _str(params, "name")[:255]
+    if not name:
+        return {}, "Which club? add_club needs its name."
+    homepage = _web_address(_str(params, "homepage"))
+    facebook_page = _web_address(_str(params, "facebook_page"))
+    if homepage and not club_import.is_a_club_host(homepage):
+        return {}, (
+            f"{homepage} isn't the club's own website. A Facebook page goes in facebook_page; "
+            "leave homepage blank if it has no site of its own."
+        )
+    contact_email = _str(params, "contact_email")[:255]
+    if contact_email:
+        try:
+            validate_email(contact_email)
+        except ValidationError:
+            return {}, f"{contact_email} isn't an email address."
+    methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
+    contact_method = _str(params, "contact_method").lower()
+    if contact_method not in methods:
+        return {}, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
+    if not contact_method:
+        contact_method = Club.EMAIL if contact_email else Club.FACEBOOK if facebook_page and not homepage else ""
+    found = club_import.ImportedClub(name=name, homepage=homepage)
+    existing = club_import.find_existing(found, Club.objects.all())
+    if existing is not None:
+        return {}, f"That looks like {existing.name} (club {existing.pk}), already on the site."
+    listed = palette_actions._flag(params, "listed")
+    return {
+        "name": name,
+        "abbreviation": _str(params, "abbreviation")[:255] or None,
+        "homepage": homepage or None,
+        "facebook_page": facebook_page or None,
+        "location": _str(params, "location")[:500] or None,
+        "contact_email": contact_email or None,
+        "contact_method": contact_method,
+        "outreach_stage": Club.PROSPECT if listed is False else Club.LISTED,
+        "notes": _str(params, "notes")[:300] or None,
+    }, ""
+
+
+def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Create one club from what an agent cleaned up out of something the owner pasted.
+
+    Listed unless the proposal says otherwise: the owner reading the proposal is the look at the club
+    that :mod:`auctions.club_import` waits for before it leaves ``PROSPECT``. The meeting place is
+    geocoded here and Google's spelling of it said back, the half a person checks.
+    """
+    from auctions import geocoding
+    from auctions.models import Club
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    fields, problem = _club_fields(params)
+    if problem:
+        return _error(problem)
+    found = geocoding.geocode(fields["location"] or "")
+    if found:
+        # The pre_save signal splits this into latitude and longitude.
+        fields["location_coordinates"] = found["coordinates"]
+    club = Club.objects.create(**fields)
+    where = (
+        f" Placed on the map at {found['address']}."
+        if found
+        else " Not on the map: drag its pin on the club's settings page."
+        if fields["location"]
+        else ""
+    )
+    shown = "listed" if club.outreach_stage == Club.LISTED else "kept off the map as a prospect"
+    return _ok(f"Added {club.name} (club {club.pk}), {shown}.{where}", club=club.pk)
+
+
+def _club(params: dict[str, Any]):
+    """The club a step names, by number or exact name, and ``None`` if that isn't exactly one."""
+    from auctions.models import Club
+
+    number = _int(params, "club")
+    if number is not None:
+        return Club.objects.filter(pk=number).first()
+    named = list(Club.objects.filter(name__iexact=_str(params, "club"))[:2])
+    return named[0] if len(named) == 1 else None
+
+
+def set_club_stage(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Move a club along the outreach ladder; ``listed`` is the only stage that publishes it."""
+    from auctions.models import Club
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club = _club(params)
+    if club is None:
+        return _error("There is no one club by that number or name.")
+    stages = dict(Club.OUTREACH_STAGE_CHOICES)
+    stage = _str(params, "stage", Club.LISTED).lower()
+    if stage not in stages:
+        return _need("Which stage? One of: " + ", ".join(stages) + ".")
+    club.outreach_stage = stage
+    club.save(update_fields=["outreach_stage"])
+    return _ok(f"{club.name} is now “{stages[stage]}”.")
+
+
+def trust_user(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Mark one account trusted: it can promote auctions, take payments and email invoices."""
+    from django.contrib.auth.models import User
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    number = _int(params, "user")
+    accounts = User.objects.filter(is_active=True)
+    if number is not None:
+        user = accounts.filter(pk=number).first()
+    else:
+        username = _str(params, "user")
+        user = accounts.filter(username=username).first() or accounts.filter(username__iexact=username).first()
+    if user is None:
+        return _error("There is no active account by that number or username.")
+    userdata = user.userdata
+    if userdata.is_trusted:
+        return _ok(f"{user.username} was already trusted.")
+    userdata.is_trusted = True
+    userdata.save(update_fields=["is_trusted"])
+    return _ok(f"{user.username} is now trusted.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -686,13 +829,62 @@ APPROVAL_ONLY: dict[str, Action] = {
             idempotent=True,
             resolver=set_request_status,
         ),
+        Action(
+            name="add_club",
+            description=(
+                "Create a club the owner told you about. Check first that it isn't already on the site "
+                "(clubs_near_me, describe_club); a club that looks like one already here is refused. "
+                "Listed on the map and in club search unless listed is false."
+            ),
+            params={
+                "name": "string, required. The club's full name as it writes it, without the abbreviation.",
+                "abbreviation": "string, optional. What members call it, e.g. 'GCAS'.",
+                "homepage": "string, optional. The club's own website. Never a Facebook or Meetup page.",
+                "facebook_page": "string, optional. Its Facebook page or group.",
+                "location": "string, optional. Where it meets, as an address Google Maps would find.",
+                "contact_email": "string, optional. Where membership questions should go.",
+                "contact_method": "string, optional. email, webform or facebook: how to reach it.",
+                "notes": "string, optional. For the owner only, at most 300 characters: where this came from.",
+                "listed": "boolean, optional, default true. false keeps it off the map as a prospect.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="Add a club",
+            resolver=add_club,
+        ),
+        Action(
+            name="set_club_stage",
+            description="Approve a club for the map (listed), or move it back to prospect or contacted.",
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "stage": "string, optional, default listed. listed, contacted or prospect.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Set a club's outreach stage",
+            resolver=set_club_stage,
+        ),
+        Action(
+            name="trust_user",
+            description="Trust an account: it can then promote auctions, take payments and email invoices.",
+            params={"user": "string, required. The account's username, or its number."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Trust a user",
+            resolver=trust_user,
+        ),
     ]
 }
+
+#: Checks an :data:`APPROVAL_ONLY` step's arguments when it is proposed, so a refusal reaches the agent
+#: while somebody is still there to answer it rather than on the approval page. Each runs again,
+#: inside the change itself, on approval.
+PROPOSAL_CHECKS = {"add_club": lambda arguments: _club_fields(arguments)[1]}
 
 
 #: Registry writes a proposal may name. Short on purpose: an approved step runs with a superuser's
 #: reach, and the agent that wrote it read text strangers typed. The owner's own one-off chores are
-#: species and feature requests; a refund, an announcement or an email to a club is done by hand.
+#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs; a refund, an announcement or
+#: an email to a club is done by hand.
 PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species"})
 
 
@@ -748,6 +940,10 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
         unknown = sorted(key for key in arguments if not action.accepts(key))
         if unknown:
             return [], f"Step {number}: {action.name} takes no “{unknown[0]}”."
+        check = PROPOSAL_CHECKS.get(action.name)
+        problem = check(arguments) if check else ""
+        if problem:
+            return [], f"Step {number}: {problem}"
         steps.append({"tool": action.name, "arguments": arguments})
     if len(json.dumps(steps, default=str)) > MAX_STEPS_CHARACTERS:
         return [], "Those steps are too long to read before approving; split them."
@@ -1001,8 +1197,9 @@ def descriptors() -> list[dict[str, Any]]:
 
 
 WRITE_REFUSED = (
-    "“{name}” changes data, and nothing on this endpoint does. Species fixes and feature request "
-    "statuses can be proposed with propose_change; anything else the owner does by hand."
+    "“{name}” changes data, and nothing on this endpoint does. Species fixes, feature request "
+    "statuses, new clubs, a club's stage and trusting a user can be proposed with propose_change; "
+    "anything else the owner does by hand."
 )
 
 

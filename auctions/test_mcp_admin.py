@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from auctions import palette_actions
 from auctions.mcp import admin, protocol, tools
-from auctions.models import AgentProposal, AssistantSkillRequest, UserAPIKey
+from auctions.models import AgentProposal, AssistantSkillRequest, Club, UserAPIKey
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -404,6 +404,110 @@ class ProposalTests(AdminEndpointCase):
         response = self.client.get(reverse("agent_proposals"))
         self.assertContains(response, "Mark the refund request built")
         self.assertContains(response, "set_request_status")
+
+
+class AdminJobProposalTests(AdminEndpointCase):
+    """Adding a club, approving one for the map, and trusting an account: proposed, then approved."""
+
+    PLACE = {"latitude": 42.36, "longitude": -71.06, "coordinates": "42.36,-71.06", "address": "Boston, MA, USA"}
+
+    def propose(self, tool, arguments, summary="An admin job"):
+        return self.call("propose_change", {"summary": summary, "steps": [{"tool": tool, "arguments": arguments}]})
+
+    def approve(self):
+        proposal = AgentProposal.objects.get(status=AgentProposal.STATUS_PENDING)
+        self.client.force_login(self.owner)
+        self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
+        return proposal
+
+    def test_a_pasted_club_is_created_listed_and_on_the_map_once_approved(self):
+        result = self.propose(
+            "add_club",
+            {
+                "name": "Harbor Aquarium Society",
+                "abbreviation": "HAS",
+                "homepage": "harboraquarium.example.org",
+                "location": "Boston, MA",
+                "contact_email": "membership@harboraquarium.example.org",
+            },
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(Club.objects.filter(name="Harbor Aquarium Society").exists())
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        club = Club.objects.get(name="Harbor Aquarium Society")
+        self.assertEqual(club.outreach_stage, Club.LISTED)
+        self.assertEqual(club.homepage, "https://harboraquarium.example.org")
+        self.assertEqual(club.contact_method, Club.EMAIL)
+        self.assertAlmostEqual(club.latitude, 42.36)
+        self.assertIn("Boston, MA, USA", proposal.results[0]["said"])
+
+    def test_a_club_already_on_the_site_is_refused_when_proposed(self):
+        Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org/")
+        for arguments in (
+            {"name": "Harbour Aquarium Society"},
+            {"name": "Something else entirely", "homepage": "http://harboraquarium.example.org/join"},
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.propose("add_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn("already on the site", result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_bad_details_are_refused_when_proposed(self):
+        for arguments, expected in (
+            ({"name": ""}, "needs its name"),
+            ({"name": "Harbor Aquarium Society", "homepage": "https://facebook.com/groups/harbor"}, "facebook_page"),
+            ({"name": "Harbor Aquarium Society", "contact_email": "not an address"}, "isn't an email"),
+            ({"name": "Harbor Aquarium Society", "contact_method": "pigeon"}, "contact_method"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("add_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_a_club_added_meanwhile_stops_the_approval(self):
+        self.propose("add_club", {"name": "Harbor Aquarium Society", "location": "Boston, MA"})
+        Club.objects.create(name="Harbor Aquarium Society")
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
+        self.assertEqual(Club.objects.filter(name="Harbor Aquarium Society").count(), 1)
+
+    def test_a_prospect_stays_off_the_map_and_an_unfound_address_says_so(self):
+        self.propose("add_club", {"name": "Harbor Aquarium Society", "location": "nowhere", "listed": False})
+        with mock.patch("auctions.geocoding.geocode", return_value=None):
+            proposal = self.approve()
+        club = Club.objects.get(name="Harbor Aquarium Society")
+        self.assertEqual(club.outreach_stage, Club.PROSPECT)
+        self.assertIsNone(club.latitude)
+        self.assertIn("Not on the map", proposal.results[0]["said"])
+
+    def test_a_prospect_is_approved_for_the_map(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", outreach_stage=Club.PROSPECT)
+        self.propose("set_club_stage", {"club": club.pk})
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        club.refresh_from_db()
+        self.assertEqual(club.outreach_stage, Club.LISTED)
+
+    def test_an_account_is_trusted(self):
+        self.user.userdata.is_trusted = False
+        self.user.userdata.save(update_fields=["is_trusted"])
+        self.propose("trust_user", {"user": self.user.username.upper()})
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(self.user.userdata.is_trusted)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.user.userdata.refresh_from_db()
+        self.assertTrue(self.user.userdata.is_trusted)
+
+    def test_none_of_them_is_a_tool_anywhere(self):
+        for url in (self.url, "/mcp/"):
+            for name in ("add_club", "set_club_stage", "trust_user"):
+                response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url=url)
+                self.assertIn("error", json.loads(response.content))
 
 
 class FeatureRequestTests(AdminEndpointCase):

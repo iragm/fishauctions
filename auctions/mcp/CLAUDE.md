@@ -59,7 +59,8 @@ client prompt, because a scheduled routine runs connectors' tools with nobody th
   (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
-  `admin.APPROVAL_ONLY` (feature request status, never `planned`) can be proposed, checked again at
+  `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, a club's outreach
+  stage, trusting a user) can be proposed, checked again at
   approval. `planned` starts a build, so only the owner's click on the requests page sets it, and a
   request can't be edited once decided.
 - `read_logs` and dashboard text go through `admin.redact` on the way out. No database tool, by
