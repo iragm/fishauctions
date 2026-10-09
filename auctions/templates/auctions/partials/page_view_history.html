@@ -45,7 +45,7 @@ so the standing explanations here are text-muted instead.
 {% comment %}Chart.js sizes a responsive chart to the canvas's parent element, so the canvas gets a wrapper of its own rather than being measured against the whole scrolling modal body.  The width/height are the aspect ratio it keeps, not a fixed size.{% endcomment %}
 <div class="mb-2"><canvas id="page-view-history-chart" width="600" height="260" role="img" aria-label="Views per day from {{ history.first_day|date:'N j' }} to {{ history.last_day|date:'N j' }}: {{ history.total_views }} in total, {{ history.chart.busiest }} on the busiest day."></canvas></div>
 {% if history.has_ar_rows %}
-<small class="text-muted d-block mt-1">Lot scanning counts each person once, however many times they looked. Everything else is one view per visit.</small>
+<small class="text-muted d-block mt-1">Lot scans count each person once.</small>
 {% endif %}
 <script>
 {% comment %}Chart.js is not on the lot page or the selling dashboard, and 160KB of it for a chart most people never open is not worth loading there, so it is fetched the first time somebody opens this modal.  htmx appends a swapped-in <script src> asynchronously, which is why drawing hangs off onload rather than off a second tag below it.{% endcomment %}
@@ -130,7 +130,6 @@ so the standing explanations here are text-muted instead.
     </tbody>
   </table>
 </div>
-<small class="text-muted">Browsers usually pass along only the site somebody came from and not the page it linked from, so a link in a forum thread shows up as the forum.</small>
 {% else %}
-<small class="text-muted">No other website linked here in the last {{ history.days }} days. Only links from somewhere else are listed: most people arrive from our own pages, and the chart above counts those by source. Browsers usually pass along only the site somebody came from and not the page it linked from, so a link in a forum thread would show up here as the forum.</small>
+<small class="text-muted">No other website linked here in the last {{ history.days }} days.</small>
 {% endif %}

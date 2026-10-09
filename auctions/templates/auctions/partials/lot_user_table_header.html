@@ -1,5 +1,5 @@
 {% comment %}What this page is for, in the one help note the page is allowed (style_reference.md).  The explanation and the warnings under it used to be loose sentences separated by <br><br> above the table, which is the shape a reader skips.{% endcomment %}
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Looking to sell {{ website_focus }}?  Use this page to quickly create and manage your lots.{% if userdata.can_sell_standalone_lots %}  It's free, with or without an auction.{% endif %}</div></div>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Sell {{ website_focus }} here{% if userdata.can_sell_standalone_lots %}, free, with or without an auction{% endif %}.</div></div>
 {% comment %}Not a help note: this is a setting of theirs that needs changing, which is the alert-warning case.  Both off is its own sentence because that is the combination that costs them sales.{% endcomment %}
 {% if not userdata.email_me_when_people_comment_on_my_lots or not userdata.email_visible %}
 <div class="alert alert-warning text-dark py-2">

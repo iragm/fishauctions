@@ -61,7 +61,7 @@ regulars" from "put this on the front page". See auctions/announcements.py.{% en
       {% elif member.membership_carried_by_id %}
         <p class="text-muted small text-center mt-3">Your membership comes with {{ member.membership_carried_by }}'s.</p>
       {% elif club.charges_dues and membership_is_paid_member and not membership_is_expired and not membership_expiring_soon %}
-        <p class="text-muted small text-center mt-3">You're all paid up. You can renew again when your membership is close to expiring.</p>
+        <p class="text-muted small text-center mt-3">You're paid up.</p>
       {% endif %}
     </div>
   </div>
@@ -192,7 +192,7 @@ regulars" from "put this on the front page". See auctions/announcements.py.{% en
       </li>
       {% endfor %}
     </ul>
-    <p class="text-muted mt-2 mb-0"><small>This page shows only your 25 most recent BAP points. To see all lots you've gotten BAP points for, <a href="{% url 'selling' %}?query=bap">visit your selling dashboard and filter for BAP</a>.</small></p>
+    <p class="text-muted mt-2 mb-0"><small>Your 25 most recent; <a href="{% url 'selling' %}?query=bap">see all</a>.</small></p>
     {% else %}
     <p class="text-muted mt-3">No points recorded yet.</p>
     {% endif %}

@@ -15,12 +15,8 @@
 {% endif %}
 
 {% if show_email_routing %}
-<p class="mb-2">
-  We offer a free forwarding address for club communications &mdash; this allows your club email to stay constant even if you change the person in charge of communications.
-</p>
-
 <div class="mb-3">
-  <strong>Your club's forwarding addresses:</strong>
+  <strong>Forwarding addresses that stay the same when your volunteers change:</strong>
   <ul class="mb-0">
 <li><span class="text-warning">{{ club.slug }}-auctions@{{ email_domain }}</span> &mdash; auction-related replies</li>
     <li><span class="text-warning">{{ club.slug }}-contact@{{ email_domain }}</span> &mdash; membership contact replies</li>
@@ -29,17 +25,13 @@
 
 <div class="alert alert-info mb-3" role="alert">
   <i class="bi bi-lightbulb-fill me-1"></i>
-  If you already have a shared Gmail account you use for club communications, you should add it as a club member, grant that account auction and membership permissions, and then select that account for both options here.
+  Using a shared club Gmail? Make it a club member with auction and membership permissions, then pick it for both options.
 </div>
 
 {% if club.enable_donation_tracking %}
 <div class="alert alert-info mb-3" role="alert">
   <i class="bi bi-info-circle me-1"></i>
-  <strong>Leave the donation contact blank.</strong>
-  Vendor replies are recorded against the vendor either way. If you also forward them to a
-  person, they'll be tempted to reply from their own inbox &mdash; and that reply never reaches
-  this site, so it won't show up in the vendor's history or move their status along. Set a
-  donation contact below only if someone genuinely needs a copy in their inbox.
+  <strong>Leave the donation contact blank</strong> so vendor replies are answered here.
 </div>
 {% endif %}
 {% endif %}
@@ -48,9 +40,7 @@
 <div class="alert alert-info mb-3" role="alert">
   <i class="bi bi-envelope-paper me-1"></i>
   <strong>Mailchimp is connected.</strong>
-  Consider turning off the outgoing emails below and sending them through Mailchimp instead &mdash;
-  for example, a <strong>Customer Journey</strong> triggered by the <span class="text-warning">new-member</span>,
-  <span class="text-warning">expiring-soon</span>, or <span class="text-warning">expired</span> tags gives you more control over timing and design.
+  You can send these emails from Mailchimp instead.
   <a href="{% url 'club_mailchimp_config' club.slug %}">Mailchimp settings</a>
 </div>
 {% endif %}
@@ -59,10 +49,7 @@
 <div class="alert alert-info mb-3" role="alert">
   <i class="bi bi-send me-1"></i>
   <strong>Brevo is connected.</strong>
-  Consider turning off the outgoing emails below and sending them through Brevo instead &mdash;
-  for example, an <strong>Automation</strong> that filters on the <span class="text-warning">MEMBER_TAGS</span>
-  attribute (containing <span class="text-warning">new-member</span>, <span class="text-warning">expiring-soon</span>,
-  or <span class="text-warning">expired</span>) gives you more control over timing and design.
+  You can send these emails from Brevo instead.
   <a href="{% url 'club_brevo_config' club.slug %}">Brevo settings</a>
 </div>
 {% endif %}

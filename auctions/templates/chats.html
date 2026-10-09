@@ -7,7 +7,7 @@
   {% include 'auction_ribbon.html' %}
   <div class="help-note">
     <i class="bi bi-lightbulb-fill"></i>
-    <div>These are messages users have posted on lots in your auction.  Deleted messages will show up here, but won't be visible to users on the lot page. {% if not auction.is_chat_allowed %}Chat has been disabled in this auction.{% endif %}</div>
+    <div>Deleted messages show here but not on the lot.{% if not auction.is_chat_allowed %} Chat is off in this auction.{% endif %}</div>
   </div>
     <div class="table-responsive">
     <table class="table">

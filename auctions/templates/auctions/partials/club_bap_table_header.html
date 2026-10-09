@@ -17,7 +17,7 @@
 <div class="collapse mb-3" id="csvImportBap">
   <div class="card card-body">
     <h6>Import points from CSV</h6>
-    <small class="text-muted">Fields: <strong>Email</strong> (required, matches a club member), BAP, HAP, CAP, Date, Notes. Rows create new award records — existing awards are never modified or deleted.</small>
+    <small class="text-muted">Fields: <strong>Email</strong> (required), BAP, HAP, CAP, Date, Notes. Each row adds an award.</small>
     <form method="POST" action="{% url 'club_bap_import' club.slug %}" enctype="multipart/form-data" class="mt-2">
       {% csrf_token %}
       <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">

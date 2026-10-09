@@ -23,14 +23,14 @@
     </label>
   </div>
   {% if invoice.member_has_paypal_subscription %}
-  <small class="text-muted">This member renews automatically through a PayPal subscription, so the membership fee isn't applied here.</small>
+  <small class="text-muted">Renews through a PayPal subscription.</small>
   {% elif invoice.member_membership_carried_by %}
   <small class="text-muted">Membership carried with {{ invoice.member_membership_carried_by }}'s.</small>
   {% else %}
   <small class="text-muted">Membership status: {{ invoice.membership_status_for_invoice }}</small>
   {% endif %}
   {% if invoice.renewal_processed %}
-  <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required if this needs to be undone.</small></div>
+  <div><small class="text-danger">Renewed when this invoice was paid; undo it with an adjustment or refund.</small></div>
   {% endif %}
 </div>
 {% if is_admin and not invoice.renewal_processed and not invoice.member_has_paypal_subscription and not invoice.member_membership_carried_by %}

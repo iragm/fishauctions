@@ -23,16 +23,16 @@
   {% comment %}A <ul> is not allowed inside <small>, which is what this used to be.  It is a help note rather than a muted paragraph because it is the standing answer to "why isn't my auction on this list" -- a funnel rather than a lightbulb so it doesn't read as a second copy of the note at the top of the page.{% endcomment %}
   <div class="help-note mt-3">
     <i class="bi bi-funnel"></i>
-    <div>Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
+    <div>Besides auctions you've joined, this lists auctions that:
     <ul class="mb-0 ps-3">
-      <li>have "promote this auction" checked</li>
-      <li>are starting less than 90 days from today</li>
+      <li>are promoted</li>
+      <li>start within 90 days</li>
       <li>were created less than 2 years ago</li>
       {% if user.is_authenticated %}
         {% if user_has_location %}
-          <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of your location &mdash; <a href="{% url 'notification_preferences' %}?next=/auctions/">change these distances</a></li>
+          <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of you (<a href="{% url 'notification_preferences' %}?next=/auctions/">change</a>)</li>
         {% else %}
-          <li><a href="{% url 'contact_info' %}">Set your exact location using the map here</a> to also see nearby auctions</li>
+          <li>are near you, once you <a href="{% url 'contact_info' %}">set your location</a></li>
         {% endif %}
       {% endif %}
     </ul>

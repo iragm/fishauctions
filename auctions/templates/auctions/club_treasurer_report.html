@@ -153,7 +153,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% include "club_ribbon.html" %}
 
 <div class="text-dark bg-warning p-3 rounded mb-3">
-  This site is not financial software, data shown here are for reference only. It's up to you to verify the accuracy of your club's records
+  For reference only; this isn't accounting software.
 </div>
 
 <div id="club-money-banner" class="alert d-none"></div>
@@ -181,7 +181,6 @@ document.addEventListener("DOMContentLoaded", function() {
         <p class="mb-1"><strong>Money in:</strong> {{ currency_symbol }}{{ report_summary.money_in }}</p>
         <p class="mb-1"><strong>Money out:</strong> {{ currency_symbol }}{{ report_summary.money_out }}</p>
         <p class="mb-1"><strong>Net change:</strong> {{ currency_symbol }}{{ report_summary.net }}</p>
-        <p class="mb-1 text-muted"><small>Every dollar that moved in or out of the club in this date range. Net change is what the balance moved by.</small></p>
         <p class="mb-1 mt-2"><strong>Membership renewals:</strong> {{ report_summary.membership_renewals }} ({{ currency_symbol }}{{ report_summary.membership_dues }} dues)</p>
         <p class="mb-1"><strong>Donations:</strong> {{ currency_symbol }}{{ report_summary.donations }}</p>
       </div>
@@ -191,11 +190,11 @@ document.addEventListener("DOMContentLoaded", function() {
         <p class="mb-1"><strong>Seller payouts:</strong> {{ currency_symbol }}{{ report_summary.seller_payouts }}</p>
         <p class="mb-1"><strong>Commission (club's cut):</strong> {{ currency_symbol }}{{ report_summary.auction_commission }}</p>
         <p class="mb-1"><strong>Sales tax collected:</strong> {{ currency_symbol }}{{ report_summary.tax_collected }}
-          <br><small class="text-muted">Held on behalf of the tax authority &mdash; not club income.</small></p>
+          <br><small class="text-muted">Not club income.</small></p>
         <p class="mb-1 mt-2">
           <strong>Outstanding invoices:</strong> {{ report_summary.outstanding_invoices }}
           {% if report_summary.outstanding_invoices %}({{ currency_symbol }}{{ report_summary.outstanding_invoices_amount }} still owed to the club){% endif %}
-          <br><small class="text-muted">Unpaid invoices from auctions in this date range. These are not in the balance until paid &mdash; mark one paid to clear it.</small>
+          <br><small class="text-muted">Not in the balance until paid.</small>
         </p>
       </div>
     </div>
@@ -279,7 +278,7 @@ document.addEventListener("DOMContentLoaded", function() {
       </div>
       <div class="modal-body">
         <div class="">
-          This creates an adjustment entry to reconcile your ledger with your actual account balance. You should really only use this once to get your books balanced, multiple adjustments usually mean there is another recordkeeping problem that should be fixed first.
+          Adds one adjustment so the ledger matches your bank balance; needing more than one means something else is wrong.
         </div>
         <form id="club-money-balance-form" action="{% url 'club_money_balance' club.slug %}" method="post">
           {% csrf_token %}

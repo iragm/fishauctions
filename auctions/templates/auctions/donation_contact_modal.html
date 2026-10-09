@@ -25,9 +25,7 @@ step "blocked" is what a club sees once it has used up its donation emails for t
         {% if step == "blocked" %}
         <div class="modal-body">
           <p class="mb-0 text-muted">
-            The limit is there to keep donation tracking a tracking tool rather than a mailing
-            list. Replies that arrive in the meantime are still recorded, and anything you've
-            already written is still on the vendor's page.
+            Replies still arrive in the meantime.
           </p>
         </div>
         <div class="modal-footer">
@@ -37,8 +35,7 @@ step "blocked" is what a club sees once it has used up its donation emails for t
         {% elif step == "no_address" %}
         <div class="modal-body">
           <p class="mb-0 text-muted">
-            Every donation email has to carry your club's postal address - that's the law in the US
-            and Canada, not a setting we invented. Add it once and this dialog works from then on.
+            The law requires your club's postal address on every donation email.
           </p>
         </div>
         <div class="modal-footer">
@@ -100,7 +97,6 @@ step "blocked" is what a club sees once it has used up its donation emails for t
               {% comment %}Capped and scrollable for the same reason the email box is only seven rows: everything here competes with the buttons underneath it for the height of the modal.{% endcomment %}
               <pre id="donation-footer-preview" class="border rounded p-2 small text-muted mb-1"
                    style="white-space:pre-wrap; max-height:7rem; overflow-y:auto;">{{ footer_preview }}</pre>
-              <div class="form-text">Required on donation email: who sent it, a postal address, and a way to opt out.</div>
             </div>
             <div id="donation-regenerating" class="htmx-indicator text-center py-2">
               <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Working…</span></div>

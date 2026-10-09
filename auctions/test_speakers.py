@@ -1007,7 +1007,7 @@ class SpeakerCreateDeleteTests(TestCase):
         response = self.client.get(reverse("speaker_list"))
         self.assertTrue(response.context["has_unlisted_members"])
         self.assertContains(response, "Do any of your club members give talks?")
-        self.assertContains(response, "Add them here")
+        self.assertContains(response, "Add them</a>")
 
     def test_the_banner_names_nobody(self):
         """It's a nudge, not an accusation that a particular member gives talks."""
