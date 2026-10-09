@@ -7,16 +7,18 @@ cost of one more row must not. Each test renders the same page at two row counts
 difference, so a failure here names a real N+1.
 """
 
+import csv
 import datetime
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import AuctionTOS, Bid, Invoice, InvoiceAdjustment, Lot, LotImage
+from auctions.models import AuctionTOS, Bid, Invoice, InvoiceAdjustment, Lot, LotImage, UserBan
 from auctions.tests import StandardTestCase
 
 
@@ -233,6 +235,129 @@ class InvoiceQueryCountTests(StandardTestCase):
         Lot.objects.filter(pk=lot.pk).update(auctiontos_winner=self.tosB, winning_price=5)
         lot.refresh_from_db()
         self.assertEqual(lot.winner_as_str, str(self.tosB))
+
+
+class InvoiceTotalsQueryCountTests(StandardTestCase):
+    """The invoice number tree, for many people at once: the auction report and the stats page.
+
+    Each person's money columns read six sums -- sold, gross, club cut, bought, tax, adjustments -- once
+    six queries a person on both pages. ``Invoice.prime_totals`` fills them in for everyone with three
+    GROUP BYs, and has to answer exactly what each invoice would have on its own.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.force_login(self.admin_user)
+        self._next_bidder = 700
+
+    def _make_people(self, count):
+        """People with something in every column: an account, a lot sold and bought, an adjustment,
+        a lot of their own outside the auction and a ban."""
+        for _ in range(count):
+            self._next_bidder += 1
+            number = self._next_bidder
+            user = User.objects.create(username=f"report{number}", email=f"r{number}@example.com")
+            tos = AuctionTOS.objects.create(
+                user=user,
+                name=f"person {number}",
+                email=f"r{number}@example.com",
+                auction=self.online_auction,
+                pickup_location=self.location,
+                bidder_number=str(number),
+            )
+            for seller, winner in ((tos, self.tosB), (self.tosB, tos)):
+                Lot.objects.create(
+                    lot_name="sold",
+                    auction=self.online_auction,
+                    auctiontos_seller=seller,
+                    auctiontos_winner=winner,
+                    winning_price=7,
+                    quantity=1,
+                    active=False,
+                )
+            own = Lot.objects.create(lot_name="their own", user=user, winning_price=3, quantity=1)
+            # Inside the window the report counts as selling around the auction.
+            Lot.objects.filter(pk=own.pk).update(date_posted=self.online_auction.date_start)
+            UserBan.objects.create(user=self.admin_user, banned_user=user)
+            invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+            InvoiceAdjustment.objects.create(adjustment_type="DISCOUNT", amount=1, invoice=invoice)
+
+    def _queries_per_extra_person(self, url, extra=4):
+        self._make_people(extra)
+        self.client.get(url)
+        with CaptureQueriesContext(connection) as before:
+            self.assertEqual(self.client.get(url).status_code, 200)
+        self._make_people(extra)
+        with CaptureQueriesContext(connection) as after:
+            self.assertEqual(self.client.get(url).status_code, 200)
+        return len(after.captured_queries) - len(before.captured_queries)
+
+    def test_the_auction_report_does_not_query_per_person(self):
+        added = self._queries_per_extra_person(reverse("user_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(added, 0, f"{added} queries for 4 more people in the auction report")
+
+    def test_the_stats_page_does_not_query_per_unstamped_invoice(self):
+        # club_profit reads live totals only for invoices nobody has recalculated.
+        Invoice.objects.update(calculated_total=None)
+        added = self._queries_per_extra_person(reverse("auction_stats", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(added, 0, f"{added} queries for 4 more unstamped invoices on the stats page")
+
+    def test_the_report_prints_each_person_s_own_numbers(self):
+        self._make_people(2)
+        response = self.client.get(reverse("user_list", kwargs={"slug": self.online_auction.slug}))
+        rows = {row["Bidder number"]: row for row in csv.DictReader(response.content.decode().splitlines())}
+        row = rows["701"]
+        self.assertEqual(row["Number of lots sold outside auction"], "1")
+        self.assertEqual(row["Total value of lots sold outside auction"], "3.00")
+        self.assertEqual(row["Users who have banned this user"], "1")
+        self.assertEqual(row["Total bought"], "7.00")
+        self.assertEqual(row["Gross sold"], "7.00")
+        invoice = Invoice.objects.get(auctiontos_user__bidder_number="701", auction=self.online_auction)
+        self.assertEqual(row["Invoice total due"], f"{invoice.rounded_net:.2f}")
+
+    def test_primed_totals_match_each_invoice_s_own(self):
+        """Banned, donated, partly refunded and taxed lots, all four adjustment types, no participant."""
+        self._make_people(2)
+        seller = AuctionTOS.objects.get(bidder_number="701", auction=self.online_auction)
+        buyer = AuctionTOS.objects.get(bidder_number="702", auction=self.online_auction)
+        for banned, donation, refund in ((True, False, 0), (False, True, 0), (False, False, 40)):
+            Lot.objects.create(
+                lot_name="odd one",
+                auction=self.online_auction,
+                auctiontos_seller=seller,
+                auctiontos_winner=buyer,
+                winning_price=11,
+                quantity=1,
+                active=False,
+                banned=banned,
+                donation=donation,
+                partial_refund_percent=refund,
+            )
+        # The same seller in another auction is not on this invoice.
+        Lot.objects.create(
+            lot_name="elsewhere", auction=self.in_person_auction, auctiontos_seller=seller, winning_price=5, quantity=1
+        )
+        Invoice.objects.create(club=None, auction=None)
+        names = (
+            "total_sold",
+            "total_sold_gross",
+            "total_sold_club_cut",
+            "total_donations",
+            "total_bought",
+            "tax",
+            "adjustment_totals",
+            "rounded_net",
+        )
+        expected = {invoice.pk: [getattr(invoice, name) for name in names] for invoice in Invoice.objects.all()}
+        primed = Invoice.prime_totals(Invoice.objects.all())
+        with CaptureQueriesContext(connection) as queries:
+            answers = {invoice.pk: [invoice.total_sold, invoice.total_bought] for invoice in primed}
+        self.assertEqual(len(queries.captured_queries), 0, "primed invoices still asked for their own sums")
+        self.assertEqual(len(answers), len(expected))
+        for invoice in primed:
+            with self.subTest(invoice=invoice.pk):
+                self.assertEqual([getattr(invoice, name) for name in names], expected[invoice.pk])
 
 
 class SellerAndFeedbackQueryCountTests(QueryGrowthMixin, StandardTestCase):
