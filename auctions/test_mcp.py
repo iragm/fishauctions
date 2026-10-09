@@ -11,7 +11,7 @@ from django.test import RequestFactory, SimpleTestCase
 from django.utils import timezone
 
 from auctions import palette_actions
-from auctions.mcp import icons, prompts, protocol, resources, tools, widgets
+from auctions.mcp import icons, prompts, protocol, resources, tools
 from auctions.models import UserAPIKey, UserData
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
@@ -1382,6 +1382,8 @@ class IconTests(SimpleTestCase):
 
     def test_a_widget_document_deliberately_has_none(self):
         """Widget documents have no icon."""
+        from auctions.mcp import widgets
+
         for descriptor in widgets.resource_descriptors():
             self.assertNotIn("icons", descriptor, f"{descriptor['name']} grew an icon")
 
@@ -1502,45 +1504,6 @@ class ConfirmationTierTests(SimpleTestCase):
         action = palette_actions.get_action("review_points")
         self.assertIn("undo", action.params["decision"])
         self.assertFalse(action.destructive)
-
-
-class AskEveryCallTests(SimpleTestCase):
-    """``palette_actions.ASK_EVERY_CALL``: the host asks the person on every call."""
-
-    def flagged(self):
-        return {
-            name
-            for name, action in palette_actions.ACTIONS.items()
-            if tools.descriptor(action).get("_meta", {}).get(tools.ASK_EVERY_CALL_KEY) is True
-        }
-
-    def test_the_list_is_what_tools_list_says(self):
-        self.assertEqual(
-            self.flagged(),
-            {
-                "send_club_announcement",
-                "retract_announcement",
-                "update_auction_setting",
-                "update_auction_dates",
-                "undo_sale",
-                "place_bid",
-            },
-        )
-
-    def test_every_one_is_a_destructive_write(self):
-        for name in palette_actions.ASK_EVERY_CALL:
-            action = palette_actions.get_action(name)
-            self.assertTrue(action.destructive, name)
-            self.assertEqual(action.danger, palette_actions.DANGER_CONFIRM, name)
-
-    def test_never_the_door(self):
-        self.assertNotIn("check_in", self.flagged())
-
-    def test_it_keeps_the_widget_beside_it(self):
-        for name in palette_actions.ASK_EVERY_CALL:
-            descriptor = tools.descriptor(palette_actions.get_action(name))
-            for key, value in (widgets.tool_meta(name) or {}).items():
-                self.assertEqual(descriptor["_meta"][key], value)
 
 
 class SubmissionFileTests(SimpleTestCase):

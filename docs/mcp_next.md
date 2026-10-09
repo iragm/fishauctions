@@ -6,14 +6,18 @@ connector does tools only; prompts and resources reach Claude through a custom c
 
 ## Worth doing
 
-1. **Incremental scope consent (SEP-835).** Connect read-only, return a `401` naming `write` on the
-   first write. `mcp/auth.py` must tell "no token" from "token without this scope".
-2. **The scans themselves over MCP.** `add_document` takes the agent's transcription, so the library
+1. **The scans themselves over MCP.** `add_document` takes the agent's transcription, so the library
    has no picture to check it against. Once a client can hand over a file it is holding (tool
    arguments are text today), keep the original beside the text.
 
 ## Decided against
 
+- **`_meta["anthropic/requiresUserInteraction"]`** on the riskier writes (announcements, auction
+  settings and dates, undo_sale, place_bid): a prompt on every call, with no "always allow", is too
+  heavy for writes that aren't bad, and a routine can't run them at all.
+- **Incremental scope consent** (connect read-only, step up to `write` on a `403 insufficient_scope`):
+  a read-only connection confuses people, and whether claude.ai and ChatGPT step up is unproven. The
+  admin endpoint is where read-only lives.
 - **Source as a resource** (`source://{path}`): the path has to be searched for anyway.
 - **GitHub code search** for `read_source`: needs a credential on every deployment and fork. One
   anonymous archive download doesn't.
