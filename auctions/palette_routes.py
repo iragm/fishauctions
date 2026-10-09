@@ -539,7 +539,7 @@ ROUTE_LIST: list[Route] = [
     ),
     _r(
         "auction_disable_bidding",
-        "Turn bidding off for people who haven't paid",
+        "Stop bidding for everyone until they check in again",
         "Running an auction",
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
