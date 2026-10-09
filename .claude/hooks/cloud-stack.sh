@@ -32,6 +32,14 @@ YAML
   done
 fi
 
+# Docker Hub rate-limits the shared egress IP (429), so pull through Google's public mirror of it.
+if [ ! -f /etc/docker/daemon.json ]; then
+  mkdir -p /etc/docker
+  echo '{"registry-mirrors": ["https://mirror.gcr.io"]}' >/etc/docker/daemon.json
+  # a running daemon reads it only at start
+  pkill -x dockerd && while pgrep -x dockerd >/dev/null; do sleep 1; done
+fi
+
 nohup bash -c '
   if ! docker info >/dev/null 2>&1; then
     (dockerd >/tmp/dockerd.log 2>&1 &)
