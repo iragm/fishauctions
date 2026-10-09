@@ -29,6 +29,13 @@ should ever be the way a failure is noticed: the agent that pushed fixes it.
 A server-error fix is the exception: it branches from `master` and gets its own PR into `master`, so
 it can ship without what is waiting on staging. Merge the same branch into `staging` too.
 
+## The app repository
+
+`iragm/fishauctions-app` has no staging branch. Work there goes in as a PR into `main` that merges
+itself once its CI is green (`enable_pr_auto_merge`), because merging releases nothing: the Android
+and iOS releases are workflows the owner runs by hand. An app change that needs a site change says
+so in its PR, and the owner deploys the site before releasing the app.
+
 ## Who fixes a red run
 
 CI runs on every push, PR or not, so **whoever pushes owns that commit's runs**:

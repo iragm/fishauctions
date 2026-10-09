@@ -14443,8 +14443,9 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """A feature somebody asked for through an assistant: a tool it lacked, or something the site can't do.
 
     Written by ``request_a_skill``, read on ``/admin-dashboard/assistant-requests/``; the asker follows it
-    with ``my_requests``. ``planned`` is the site owner's go-ahead to build it. Duplicates are evidence
-    and are counted. Content is model-written: displayed escaped, never executed or matched.
+    with ``my_requests``. ``planned`` is the site owner's go-ahead to build it, in the repository
+    ``target`` names. Duplicates are evidence and are counted. Content is model-written: displayed
+    escaped, never executed or matched.
     """
 
     STATUS_NEW = "new"
@@ -14458,6 +14459,15 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
         (STATUS_DECLINED, "Not doing"),
     )
 
+    TARGET_SITE = "site"
+    TARGET_APP = "app"
+    TARGET_BOTH = "both"
+    TARGET_CHOICES = (
+        (TARGET_SITE, "Site"),
+        (TARGET_APP, "App"),
+        (TARGET_BOTH, "Site and app"),
+    )
+
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     skill = models.CharField(max_length=100, db_index=True)
     skill.help_text = "What the tool would be called, in the caller's words."
@@ -14468,6 +14478,8 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     surface = models.CharField(max_length=100, blank=True, default="")
     surface.help_text = "Which assistant asked: the OAuth application's name, the API key's, or the command palette."
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
+    target = models.CharField(max_length=10, choices=TARGET_CHOICES, default=TARGET_SITE)
+    target.help_text = "Which repository the build changes: this site, the mobile app, or both."
     notes = models.TextField(blank=True, default="")
     notes.help_text = "Site admin's note. Not shown to the person who asked."
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)

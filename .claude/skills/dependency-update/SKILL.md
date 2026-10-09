@@ -24,9 +24,9 @@ Android build, iOS build) and opens or refreshes one PR from `automation/depende
 `main`. It has no staging branch, and a cloud session can't build iOS, so the PR stays the way in.
 
 1. Find that PR. Subscribe to it.
-2. Its body says the tier. `all` with CI green: nothing to do but say it is ready for the owner.
-   `safe` or `failed`, or red CI: the PR body has the reverted constraint diff and the failing step;
-   fix the app for the new version on that branch (a merge commit, never a force-push), following
-   that repository's `CLAUDE.md`, and drive CI green. Its CI is the test: Flutter isn't installed
-   in the cloud session.
-3. Never merge it; the owner does, because a merge there ends up in a store release.
+2. Its body says the tier. `safe` or `failed`, or red CI: the PR body has the reverted constraint
+   diff and the failing step; fix the app for the new version on that branch (a merge commit, never
+   a force-push), following that repository's `CLAUDE.md`, and drive CI green. Its CI is the test:
+   Flutter isn't installed in the cloud session.
+3. `enable_pr_auto_merge` (merge method `merge`), so it merges once green, as any app PR does (the
+   `staging-flow` skill). Merging releases nothing; the owner runs the release workflows.

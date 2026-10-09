@@ -54,6 +54,9 @@
           <input type="hidden" name="filter" value="{{ status }}">
           <input type="text" name="notes" class="form-control form-control-sm" style="max-width: 24rem;"
                  placeholder="Note (only you see this)" value="{{ row.notes }}">
+          <select name="target" class="form-select form-select-sm w-auto" aria-label="Build it in">
+            {% for value, label in targets %}<option value="{{ value }}"{% if value == row.target %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
           {% for value, label, count in statuses %}
             {% if value != row.status %}
               <button type="submit" name="status" value="{{ value }}" class="btn btn-sm btn-primary">{{ label }}</button>
