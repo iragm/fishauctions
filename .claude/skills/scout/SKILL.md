@@ -21,7 +21,8 @@ names and dates.
 
 1. `site_health`. If it shows a new error kind or a migration not applied, `read_logs` with
    `level=ERROR` and `contains=` that error. Then find the cause in this repository. A real bug is a
-   `suggest_feature` naming the file and line.
+   `suggest_feature` naming the file and line. Leave 500s alone: the hourly health check fixes those
+   straight away, with a PR into `master`.
 2. `list_feature_requests status=all` first, so you don't suggest anything already there.
 3. Read, in this order, and stop when you have enough:
    - `read_admin_page usability query=days=7`
