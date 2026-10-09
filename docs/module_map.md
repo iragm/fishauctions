@@ -610,7 +610,7 @@ this only quotes its opening sentence.
   `InvoiceOpenedTests`, `MaxBidPeekTests`, `RefundDialogTests`, `GrantingAuctionAdminTests`, `SellToOnlineHighBidderTests`, `BulkInvoiceStatusTests`
 - **`test_sweep_round_two.py`** (709 lines)
   Regression tests for the second review sweep: club member merge roles, BAP award lots, the API-key member
-- **`test_tap_to_pay.py`** (1128 lines)
+- **`test_tap_to_pay.py`** (1161 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
 - **`test_template_a11y.py`** (129 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
@@ -894,7 +894,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`offline.py`** (530 lines)
   Offline mode for the app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
-- **`payments.py`** (592 lines)
+- **`payments.py`** (624 lines)
   Taking a card payment in the room, through the app's Tap to Pay.
   `PaymentVerificationError`, `PaymentAlreadyChargedError`, `TapToPayAttemptOpen`, `SquareReconnectRequired`, `PaymentService`
 - **`printers.py`** (138 lines)
