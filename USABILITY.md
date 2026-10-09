@@ -78,8 +78,6 @@ without rejections means they cannot see how to fill it in at all.
 - 8f outreach: draft per club, send by hand, record the attempt and the stall reason. The code half
   (`ClubLadderSnapshot`, month-over-month ladder counts) is done.
 - The two judgement calls in `docs/phase_9.md` under "Waiting on a decision".
-- The one survey question -- allowed once, after an invoice is paid. Needs the human to decide
-  whether to ask at all, and what.
 
 ## Decided -- do not reopen
 
