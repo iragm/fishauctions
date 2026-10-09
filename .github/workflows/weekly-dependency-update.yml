@@ -1,10 +1,9 @@
 name: Weekly dependency update
 
+# Manual only: the weekly upgrade is the dependency-update routine's (.claude/skills/), which tests
+# it, fixes what breaks and lands it on staging. A PR opened here with GITHUB_TOKEN never ran CI.
 on:
-  schedule:
-    # Every Monday at 05:00 UTC
-    - cron: "0 5 * * 1"
-  workflow_dispatch: {}   # allow manual runs
+  workflow_dispatch: {}
 
 permissions:
   contents: write
