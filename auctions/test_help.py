@@ -255,6 +255,23 @@ class HelpIsAboutYourAuctionTests(StandardTestCase):
         response = self.client.get(help_guides.guide_url("auction-rules", self.online_auction))
         self.assertContains(response, "Yours: Off")
 
+    def test_the_printable_description_steps_say_which_are_done(self):
+        done = 'bg-success fw-normal">Done'
+        self.online_auction.custom_field_1 = "allow"
+        self.online_auction.custom_field_1_name = "Description"
+        self.online_auction.use_description = True
+        self.online_auction.label_print_fields = "lot_name"
+        self.online_auction.save()
+        self.client.force_login(self.user)
+        url = help_guides.guide_url("auction-rules", self.online_auction)
+        self.assertContains(self.client.get(url), done, count=1)
+        self.online_auction.use_description = False
+        self.online_auction.label_print_fields = "lot_name,custom_field_1"
+        self.online_auction.save()
+        self.assertContains(self.client.get(url), done, count=3)
+        self.client.logout()
+        self.assertNotContains(self.client.get(url), done)
+
     def test_a_rule_for_the_other_kind_of_auction_has_no_yours_badge(self):
         from auctions.templatetags.help_tags import _rule_value
 

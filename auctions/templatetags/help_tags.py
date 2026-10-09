@@ -221,6 +221,25 @@ def rule(context, name, text=""):
     return html
 
 
+#: The printable-description tip's steps, each true when the auction already has it.
+DESCRIPTION_STEPS = {
+    "rename": lambda a: (
+        a.custom_field_1 != "disable" and (a.custom_field_1_name or "").strip().lower() == "description"
+    ),
+    "disable": lambda a: not a.use_description,
+    "print": lambda a: "custom_field_1" in (a.label_print_fields or "").split(","),
+}
+
+
+@register.simple_tag(takes_context=True)
+def description_step(context, step):
+    """A "Done" badge when the reader's own auction has already taken ``step`` of the printable-description tip."""
+    ctx = _help(context)
+    if ctx and ctx.auction and ctx.is_admin and DESCRIPTION_STEPS[step](ctx.auction):
+        return format_html('<span class="badge bg-success fw-normal">{}</span>', "Done")
+    return ""
+
+
 def _money(symbol, amount):
     amount = Decimal(amount).quantize(Decimal("0.01"))
     sign = static_html("&minus;") if amount < 0 else ""
