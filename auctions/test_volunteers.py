@@ -254,7 +254,7 @@ class VolunteerPageWarningTests(VolunteerBase):
     def test_warns_when_the_auction_has_no_check_in(self):
         self.client.force_login(self.admin)
         resp = self.client.get(self._volunteers_url())
-        self.assertContains(resp, "This auction doesn't use check-in")
+        self.assertContains(resp, "Without check-in")
 
     def test_no_warning_in_check_in_mode(self):
         club = Club.objects.create(name="C")

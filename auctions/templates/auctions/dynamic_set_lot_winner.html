@@ -1028,7 +1028,7 @@ $(document).ready(function() {
 <span class="hide-fullscreen">
 {% include 'auction_ribbon.html' %}
 
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></div></div>
+<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Press Tab to move to the next field.</div></div>
 <button id="fullscreen-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
 {% if voice_config %}
 {% comment %}
@@ -1045,9 +1045,7 @@ $(document).ready(function() {
 <span id="voice-level" class="voice-level d-none" aria-hidden="true"><span id="voice-level-bar"></span></span>
 <small id="voice-status" class="ms-2 text-muted"></small>
 <div id="voice-first-run" class="alert alert-info mt-2 d-none" role="alert">
-  <i class="bi bi-info-circle"></i> <strong>Keep the microphone near the auctioneer.</strong>
-  A phone in your pocket 20 ft from the podium can't hear well enough for this to work, and no
-  amount of software fixes that. Use a Bluetooth headset or a clip-on mic, or hold the phone up.
+  <i class="bi bi-info-circle"></i> <strong>Keep the microphone near the auctioneer</strong>: use a Bluetooth headset or clip-on mic, or hold the phone up.
   <button type="button" id="voice-first-run-dismiss" class="btn btn-sm btn-primary ms-2">Got it</button>
 </div>
 <ul id="voice-missed" class="list-unstyled small text-warning mt-1 mb-0 d-none"></ul>
@@ -1087,7 +1085,6 @@ $(document).ready(function() {
     <small class="text-muted">Fill it in, I'll check</small>
     <small class="text-muted">Only when you're sure</small>
   </div>
-  <small class="text-muted mt-1">How certain the app must be before it fills a field without flagging it. Lower catches more, and gets more wrong; higher means retyping more often.</small>
   <div id="voice-phone-settings">
     <div class="form-check mt-3">
       <input class="form-check-input" type="checkbox" id="voice-on-device">

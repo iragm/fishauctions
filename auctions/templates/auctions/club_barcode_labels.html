@@ -15,13 +15,12 @@ style_reference.md.{% endcomment %}
 <div class="help-note mt-3">
   <i class="bi bi-lightbulb-fill"></i>
   <div>
-    You can scan user's membership barcodes to add them to club auctions, assign bidder numbers, or sell T-shirts and other swag (instantly added to that user's invoice).
-    Create barcodes here, print them out, then scan them using <strong>quick check in users</strong> in any of your club auctions. Scan the barcode first, then scan the user to assign it to.
+    Print these, then scan them in <strong>quick check in users</strong> in any club auction.
   </div>
 </div>
 
 <div class="alert alert-warning text-dark py-2 small mb-3">
-  <i class="bi bi-exclamation-triangle"></i> Changes on this page will not be saved, so make sure the labels have all printed correctly before you leave.
+  <i class="bi bi-exclamation-triangle"></i> Nothing here is saved; check the printout before you leave.
 </div>
 
 <div class="mb-3">
@@ -32,10 +31,7 @@ style_reference.md.{% endcomment %}
 
 <div id="scanner-test-panel" class="border rounded p-3 mb-3 d-none">
   <p class="small mb-2">
-    Scan the test barcode below with your USB scanner while this panel is open. We'll check that it's
-    configured with an <code>F9</code> prefix and a carriage-return (Enter) suffix.
-    <br>
-    <span class="text-warning">While this test is open, keystrokes are captured for diagnostics &mdash; click <strong>Hide scanner test</strong> to type normally again.</span>
+    Scan this; it should send an <code>F9</code> prefix and an Enter suffix.
   </p>
   <div class="bg-white border rounded p-2 d-inline-block mb-2">
     <img src="{% url 'club_barcode' slug=club.slug value=1234567890 %}" alt="Test barcode" style="height:60px;width:auto;display:block;">

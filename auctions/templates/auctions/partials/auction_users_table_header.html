@@ -1,8 +1,8 @@
 {% comment %}The help note is the one block above the toolbar; every control below it lives in the single wrapping row that follows.{% endcomment %}
 {% if auction.is_club_managed %}
-  <div class="help-note d-none d-md-flex"><i class="bi bi-lightbulb-fill"></i><div>This auction's users are managed through <a href="{% url 'club_admin' slug=auction.club.slug %}">{{ auction.club.name }}</a>. Edits sync to the club member record.</div></div>
+  <div class="help-note d-none d-md-flex"><i class="bi bi-lightbulb-fill"></i><div>Edits here also change the <a href="{% url 'club_admin' slug=auction.club.slug %}">{{ auction.club.name }}</a> member record.</div></div>
 {% else %}
-  <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This is a list of people in your auction. Click on a name to edit that user.</div></div>
+  <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Click a name to edit that person.</div></div>
 {% endif %}
 
 {% comment %}One wrapping row for every control on this page. Add user and Export used to sit outside this container, and a block-level flex row after them forced a hard line break at every width -- not just when the row was actually too wide. gap-2 does the spacing once; nothing here carries its own margins.{% endcomment %}

@@ -37,7 +37,7 @@
     {% if not auction.created_by.userdata.is_trusted %}
     <small>{{ auction.untrusted_message|safe }}</small>
     {% else %}
-    <small>It will appear in <a href="{% url 'auctions' %}">the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Nearby users who asked to hear about auctions are also told about a promoted auction once, by email or in the app: a week before an in-person auction starts, or a day after bidding opens on an online one.</small>
+    <small>Only people who joined, or have the link, can find it.</small>
     {% endif %}
     <div>
       {% if auction.created_by.userdata.is_trusted %}
@@ -55,12 +55,7 @@
   {% if request.user.pk == auction.created_by.pk and auction.show_paypal_banner and auction.pk == request.user.userdata.last_auction_created.pk %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Enable payments with your PayPal account</h5>
     <small>
-      <ul>
-        <li>Users will see a button to pay on their invoices</li>
-        <li>Invoices will automatically be marked paid as users pay</li>
-        <li>Funds will go directly to your PayPal account</li>
-      </ul>
-      It's "free": we don't charge anything, but normal PayPal fees apply.  <a href='{% url "paypal_seller" %}'>Learn more about accepting payments with PayPal</a>.<br>
+      Buyers pay from their invoices, straight to you; only PayPal's fees apply. <a href='{% url "paypal_seller" %}'>Learn more</a>.<br>
     </small>
     <div>
       <a href="{% url 'paypal_connect' %}" class="btn btn-info btn-sm mt-2">Connect PayPal account and enable payments</a>
@@ -72,13 +67,8 @@
   {% if request.user.pk == auction.created_by.pk and auction.show_square_banner and auction.pk == request.user.userdata.last_auction_created.pk %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Enable payments with your Square account</h5>
     <small>
-      <ul>
-        <li>Users will see a button to pay on their invoices</li>
-        <li>Invoices will automatically be marked paid as users pay</li>
-        <li>Funds will go directly to your Square account</li>
-      </ul>
-      It's "free": we don't charge anything, but normal Square fees apply.  <a href='{% url "square_seller" %}' class="text-white">Learn more about accepting payments with Square</a>.<br>
-      {% if not request.user.userdata.square_enabled %}We review each account by hand before enabling card payments &mdash; taking cards means collecting money from other people. Ask and we'll usually have you set up the same day.<br>{% endif %}
+      Buyers pay from their invoices, straight to you; only Square's fees apply. <a href='{% url "square_seller" %}' class="text-white">Learn more</a>.<br>
+      {% if not request.user.userdata.square_enabled %}Card payments are reviewed before they're switched on, usually the same day.<br>{% endif %}
     </small>
     <div>
       {% comment %}The gate on square_enabled is disclosed here rather than hiding the banner: an organizer who was shown nothing had no button, no explanation and no way to ask, which reads as "this site can't take card payments". Same pattern as the promotion banner above. See Auction.show_square_banner.{% endcomment %}
@@ -98,7 +88,7 @@
 {% if customizable_event %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction has been added to your calendar</h5>
   <small>
-    If this auction is also your monthly meeting event, you should change the title and put information on the speaker in the description.
+    If it's also your monthly meeting, add the speaker.
   </small>
   <div>
     <a href="{% url 'club_event_edit' slug=auction.club.slug pk=customizable_event.pk %}" class="btn btn-info btn-sm mt-2">Customize this event</a>

@@ -33,9 +33,6 @@ spread one over two lines and it renders straight onto the page.
     would give them something worth showing.{% endcomment %}
     <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
       {{ snippet.unavailable_reason }}
-      {% if snippet.links %}The addresses below are still the right ones &mdash; they start working
-      again as soon as you turn it back on.{% else %}The snippet below is still correct &mdash; it
-      will start showing something as soon as you turn it on.{% endif %}
       {% if snippet.settings_url %}<a href="{{ snippet.settings_url }}">Change that here.</a>{% endif %}
     </div></div>
     {% endif %}

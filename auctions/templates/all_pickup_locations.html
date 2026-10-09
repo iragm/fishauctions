@@ -8,7 +8,7 @@ Pickup locations
 {% include 'auction_ribbon.html' %}
   <div class="help-note">
     <i class="bi bi-lightbulb-fill"></i>
-    <div>This is a list of locations associated with your auction.  Typically, in-person auctions will have a single location.  Online auctions can have one or more locations; <a href='/blog/multiple-location-auctions/'>learn about having multiple pickup locations in your auction</a></div>
+    <div>Online auctions can have <a href='/blog/multiple-location-auctions/'>more than one pickup location</a>.</div>
   </div>
       <a href="{% url 'create_auction_pickup_location' slug=auction.slug %}" class="btn btn-info btn-sm mt-2 mb-2" role="button"><i class="bi bi-geo-alt-fill"></i> Add pickup location</a>
       <div class="table-responsive">

@@ -373,7 +373,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     <span id='subscribe_success'>
                     {% if request.user.userdata.push_notifications_when_lots_sell %}
                         {% if has_app_push %}
-                        You'll get a notification in the app on your phone when bidding starts on this lot
+                        You'll get an app notification when bidding starts
                         {% else %}
                         You'll get a notification when bidding starts on this lot
                         {% endif %}
@@ -484,7 +484,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 {% else %}
                     {% if lot.auto_image %}
                         <img src="{{ lot.auto_image.display_url }}" alt="A {{ lot.lot_name }} from another lot" class="img-fluid rounded mb-1">
-                        <div class="text-muted small">This image was automatically added from another lot with the same name and may not be representative of this lot</div>
+                        <div class="text-muted small">Photo from another lot with the same name.</div>
                         {% if is_lot_creator %}
                         <div class="text-muted small mb-2">This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
                         {% endif %}
@@ -567,7 +567,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                 <div class="invalid-feedback">Enter an amount to bid</div>
                             </div>
                         </div>
-                        {% if not lot.auction %}<div class="text-muted small mt-2">Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.</div>{%endif%}
+                        {% if not lot.auction %}<div class="text-muted small mt-2">Check the seller's feedback; we don't settle disputes.</div>{%endif%}
                             <script>
                                 //$('#bid_amount').focus(); // scrolls page down
                                 document.querySelector('#bid_amount').onkeyup = function(e) {
@@ -745,7 +745,6 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                         {% endfor %}
                                     </tbody>
                                 </table>
-                                <small class="text-muted">The lot-scanning rows count each person once, no matter how many times they looked. Everything else is one row per visit.</small>
                             </div>
                         {% endif %}
                         </td>
@@ -831,7 +830,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
                             },
                             success: function() {
-                                $('#app_push_opt_in').html("You'll get a notification in the app on your phone when bidding starts on this lot");
+                                $('#app_push_opt_in').html("You'll get an app notification when bidding starts");
                             },
                             error: function() {
                                 $('#enable-app-notifications').prop("disabled", false);

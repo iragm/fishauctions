@@ -1,5 +1,5 @@
-<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>This is a list of items for sale in your auction.  Click a lot name to edit it.  {% if auction.is_online %}You probably don't need to use this page; users will add their own lots to this auction{% else %}To add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.{% endif %}</div></div>
-{% if auction.use_seller_dash_lot_numbering and not auction.admin_checklist_lots_added %}<div class="alert alert-warning text-dark py-2"><b>Change your lot numbering:</b> This auction uses seller-dash-lot numbering.  Go to the <a href="{% url 'edit_auction' slug=auction.slug %}">rules</a> and uncheck <b>Use seller dash lot numbering</b> to switch to a simpler lot numbering system that users find less confusing.  <a href='https://github.com/iragm/fishauctions/issues/269'>Read more and leave feedback here.</a></div>{% endif %}
+{% if not auction.is_online %}<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Add lots from the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a>.</div></div>{% endif %}
+{% if auction.use_seller_dash_lot_numbering and not auction.admin_checklist_lots_added %}<div class="alert alert-warning text-dark py-2">Uncheck <b>Use seller dash lot numbering</b> in the <a href="{% url 'edit_auction' slug=auction.slug %}">rules</a> for simpler lot numbers.</div>{% endif %}
 {% comment %}One wrapping row rather than five loose buttons with their own margins: on a phone they used to wrap into an uneven staircase.{% endcomment %}
 <div class="d-flex flex-wrap gap-2 mt-2 mb-2">
 {% include "auctions/partials/htmx_table_filters.html" %}
@@ -26,8 +26,8 @@
 <div class="collapse mt-3" id="csvImportLots">
   <div class="card card-body">
     <h5>Import lots from CSV</h5>
-    <small>Upload a CSV file with columns: Name, Email, Lot Number, Lot Name, Description, Quantity, Reserve Price, Buy Now Price, Category, Breeder Points, Donation{% if auction.use_custom_checkbox_field and auction.custom_checkbox_name %}, {{ auction.custom_checkbox_name }}{% endif %}{% if auction.custom_field_1 != "disable" and auction.custom_field_1_name %}, {{ auction.custom_field_1_name }}{% endif %}{% if custom_dropdown_enabled %}, {{ auction.custom_dropdown_name }}{% endif %}</small>
-    <br><small class="text-muted">If lot number is provided, the existing lot will be updated. Otherwise, a new lot will be created for the user (matched by email or name).</small>
+    <small>Columns: Name, Email, Lot Number, Lot Name, Description, Quantity, Reserve Price, Buy Now Price, Category, Breeder Points, Donation{% if auction.use_custom_checkbox_field and auction.custom_checkbox_name %}, {{ auction.custom_checkbox_name }}{% endif %}{% if auction.custom_field_1 != "disable" and auction.custom_field_1_name %}, {{ auction.custom_field_1_name }}{% endif %}{% if custom_dropdown_enabled %}, {{ auction.custom_dropdown_name }}{% endif %}</small>
+    <br><small class="text-muted">A row with a lot number updates that lot.</small>
     <form method="POST" action="{% url 'import_lots_from_csv' slug=auction.slug %}" enctype="multipart/form-data" hx-post="{% url 'import_lots_from_csv' slug=auction.slug %}" hx-encoding="multipart/form-data" class="mt-2">
       {% csrf_token %}
       <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">

@@ -190,7 +190,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14577 lines)
+- **`models.py`** (14561 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -408,7 +408,7 @@ this only quotes its opening sentence.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
 - **`test_documents.py`** (1102 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
-- **`test_donations.py`** (3015 lines)
+- **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
 - **`test_early_adds.py`** (69 lines)
   `EarlyAddsTests`

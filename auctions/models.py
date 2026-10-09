@@ -657,7 +657,7 @@ class Club(CloudflareImageMixin, models.Model):
     )
     send_membership_expiration_reminders = models.BooleanField(
         default=False,
-        help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
+        help_text="Emails members who have paid before a link to renew here; members may not expect it from this site.",
     )
     send_membership_expiration_reminders_30_days = models.BooleanField(default=False)
     send_membership_renewal_confirmation = models.BooleanField(
@@ -806,12 +806,7 @@ class Club(CloudflareImageMixin, models.Model):
     days_between_same_species_lots = models.IntegerField(
         default=0,
         verbose_name="Days between same species lots",
-        help_text=(
-            "Minimum days between awarding BAP points for lots with the same scientific name. Leave at 0 to "
-            "allow points every time. Stricter than the rule above, because it sees through what the lot was "
-            "called: “Yellow labs” and “Labidochromis caeruleus” are the same fish. A named strain counts as "
-            "its own species, so blue and red cherry shrimp both earn points."
-        ),
+        help_text="Like the rule above, but by scientific name; 0 allows points every time.",
     )
     points_per_lot = models.IntegerField(
         null=True,
@@ -1055,10 +1050,7 @@ class Club(CloudflareImageMixin, models.Model):
         choices=DONATION_EMAIL_MODE_CHOICES,
         default=DONATION_EMAIL_MODE_ROUTED,
         verbose_name="How to send donation emails",
-        help_text=(
-            "From this site, the email comes from an address that files the vendor's reply against them. "
-            "With copy/paste, you send it from your own email and record replies yourself, by hand or with an AI assistant."
-        ),
+        help_text="From this site, replies are recorded for you; with copy/paste, you record them yourself.",
     )
     donation_email_member = models.ForeignKey(
         "ClubMember",
@@ -1073,11 +1065,7 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True,
         default="",
         verbose_name="Club information for donation emails",
-        help_text=(
-            "Passed to the language model with every donation email it writes, so it doesn't have "
-            "to be retyped for each vendor. For example: “We're a non-profit club of 120 members. "
-            "Our spring auction raises money for our speaker program.”"
-        ),
+        help_text="Used in every donation email we write, e.g. “120 members; the spring auction pays for speakers.”",
     )
     mailing_address = models.TextField(
         blank=True,
@@ -3445,11 +3433,7 @@ class UserAPIKey(HashedAPIKey):
     is_active = models.BooleanField(default=True)
     allow_writes = models.BooleanField(
         default=False,
-        help_text=(
-            "Let this key add and change things — lots, check-ins, invoices, members. Off by "
-            "default: a key that can only read is a much smaller thing to lose. Either way it can "
-            "never do anything you couldn't do yourself."
-        ),
+        help_text="Lets this key add and change lots, check-ins, invoices and members.",
     )
     expires_at = models.DateTimeField(
         null=True,

@@ -301,7 +301,7 @@ function initMap() {
                                 {% if auction.lot_submission_start_date != auction.date_start %}<li class="mb-2">You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                                 {% if auction.lot_submission_end_date != auction.date_start %}<li class="mb-2">You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                             {% endif %}
-                            {% if auction.sealed_bid %}<li class="mb-2">This is a sealed bid auction - you won't be able to see how much others have bid on a lot.</li>{% endif %}
+                            {% if auction.sealed_bid %}<li class="mb-2">Sealed bids: you won't see what others bid.</li>{% endif %}
                             {% if auction.max_lots_per_user %}<li class="mb-2">You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
                             {% if auction.pre_register_lot_discount_percent %}
                                 {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li class="mb-2">For lots you pre-register on {{ domain }}, you will be charged {{ auction.currency_symbol }}{{ auction.lot_entry_fee }} plus {{ auction.template_pre_register_fee }}% of the winning price per lot you sell</li>
@@ -316,7 +316,7 @@ function initMap() {
                             {% if auction.unsold_lot_fee %}<li class="mb-2">If your lot does not sell, you will be charged {{ auction.currency_symbol }}{{ auction.unsold_lot_fee }}</li>{% endif %}
                             {% if auction.force_donation_threshold %}<li class="mb-2">If your lot sells for {{ auction.currency_symbol }}{{auction.force_donation_threshold}} or less, it will be considered a donation to the club</li>{% endif %}
                             {% if auction.minimum_bid > 2 %} <li class="mb-2">There will be a minimum bid of {{ auction.currency_symbol }}{{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
-                            {% if auction.buy_now != 'disable' %} <li class="mb-2">Sellers can set a buy now price on their lots, which will allow a lot to be sold without bidding</li> {% endif %}
+                            {% if auction.buy_now != 'disable' %} <li class="mb-2">Sellers can set a buy now price</li> {% endif %}
                         </ul>
                     </div>
                 </div>
@@ -329,7 +329,7 @@ function initMap() {
                         {% if google_maps_api_key %}
                         <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
                         {% else %}
-                        <div class="alert alert-warning m-3">Map unavailable until a Google Maps API key is configured.</div>
+                        <div class="alert alert-warning m-3">No Google Maps API key.</div>
                         {% endif %}
                     </div>
                 </div>
@@ -347,16 +347,16 @@ function initMap() {
                     <div class="card-body">
                         {% if request.user.is_authenticated %}
                             {% if auction.is_online %}
-                            <p class="mb-3">To participate in this auction, please confirm that you've read the rules and select your pickup location.</p>
+                            <p class="mb-3">Confirm you've read the rules and pick a pickup location.</p>
                             {% else %}
-                            <p class="mb-3">To participate in this auction, please confirm that you've read the rules.</p>
+                            <p class="mb-3">Confirm you've read the rules.</p>
                             {% endif %}
                             {% if show_club_join_message %}
                             <p class="mb-3"><small class="text-muted"><i class="bi bi-info-circle"></i> Joining this auction will also add you to <strong>{{ auction.club.name }}</strong>.</small></p>
                             {% endif %}
                             {% crispy form form.helper %}
                         {% else %}
-                            <p class="mb-0"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class="btn btn-primary">Please login to join the auction</a></p>
+                            <p class="mb-0"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class="btn btn-primary">Sign in to join</a></p>
                         {% endif %}
 
                         {# Single location details shown here #}
@@ -494,7 +494,6 @@ function initMap() {
         <div class="card">
             <div class="card-body">
                 <h6 class="card-title mb-3"><i class="bi bi-share-fill"></i> Share This Auction</h6>
-                <p class="text-muted small mb-3">Please spread the word about this auction — every like and share helps bring in new sellers and bidders!</p>
                 <div class="row g-2 align-items-center">
                     <div class="col-12 col-md-6">
                         <div class="input-group">
@@ -502,7 +501,7 @@ function initMap() {
                             <button class='btn btn-sm btn-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
                         </div>
                         <div class="valid-feedback d-none" id="copyFeedback">
-                            <i class="bi bi-check-circle-fill"></i> Copied! Thanks for spreading the word!
+                            <i class="bi bi-check-circle-fill"></i> Copied!
                         </div>
                     </div>
                     <div class="col-12 col-md-auto">

@@ -361,7 +361,7 @@ class UnlinkedAuctionsPageTests(StandardTestCase):
     def test_the_club_health_page_says_how_much_it_cannot_see(self):
         self.client.login(username="admin_user", password="testpassword")
         response = self.client.get(reverse("admin_club_health"))
-        self.assertContains(response, "belong to no club")
+        self.assertContains(response, "have no club")
 
     def test_linking_recomputes_that_clubs_rollup(self):
         self.client.login(username="admin_user", password="testpassword")

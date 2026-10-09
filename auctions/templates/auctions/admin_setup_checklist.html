@@ -4,20 +4,7 @@
 {% block content %}
 <h3 class="mb-2">Setup Checklist</h3>
 
-<div class="alert alert-info">
-  <p class="mb-2">
-    All configuration lives in a single <code>.env</code> file in the project root &mdash; the same
-    directory as <code>update.sh</code> and <code>docker-compose.yaml</code> (the folder you cloned
-    the repository into). Following the
-    <a href="https://12factor.net/config" target="_blank" rel="noopener">12-factor</a> approach, settings
-    are <strong>never</strong> edited in code; change them here instead.
-  </p>
-  <p class="mb-0">
-    To edit it, open a terminal on the server and run <code>nano .env</code> (or edit it however you like).
-    Each item below shows the line(s) to add or change. After saving, apply the changes by restarting:
-    <code>docker compose up -d</code> (or re-run <code>./update.sh</code>).
-  </p>
-</div>
+<p>Add each line below to <code>.env</code> in the project root, then run <code>docker compose up -d</code>.</p>
 
 {% regroup setup_items by section as setup_sections %}
 {% for section in setup_sections %}

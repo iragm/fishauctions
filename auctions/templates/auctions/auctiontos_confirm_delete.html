@@ -38,9 +38,7 @@ $(document).ready(function() {
     <p>Are you sure you want to remove {{ auctiontos.name }} from {{ auctiontos.auction }}?</p>
     {% if form.invoice_exists %}
         <div class="alert alert-warning">
-            {{ auctiontos.name }} has an invoice. Deleting them would permanently erase that invoice
-            along with any recorded payments and adjustments. To remove them, merge them into another
-            user below — their lots, adjustments, and payments will move to that user.
+            {{ auctiontos.name }} has an invoice; merge them into another user instead.
         </div>
     {% else %}
         <span class="text-warning">This cannot be undone!</span><br><br>

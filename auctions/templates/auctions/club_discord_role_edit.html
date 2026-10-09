@@ -22,8 +22,7 @@
                  {% if role.is_paid_role %}checked{% endif %}>
           <label class="form-check-label fw-semibold" for="is_paid_role">Paid membership role</label>
           <div class="form-text">
-            Assign this role to members with a current paid membership.
-            Only one role per club can be the paid role &mdash; saving this will clear the flag on any other role.
+            One per club; this replaces any other.
           </div>
         </div>
       </div>
@@ -34,8 +33,7 @@
                  {% if role.is_unpaid_role %}checked{% endif %}>
           <label class="form-check-label fw-semibold" for="is_unpaid_role">Unpaid / expired membership role</label>
           <div class="form-text">
-            Assign this role to members whose membership has expired or who have never paid.
-            Only one role per club can be the unpaid role &mdash; saving this will clear the flag on any other role.
+            One per club; this replaces any other.
           </div>
         </div>
       </div>

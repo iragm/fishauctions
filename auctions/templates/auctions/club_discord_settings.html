@@ -37,8 +37,7 @@
   <div class="card-header">Step 2 &mdash; Post the join button</div>
   <div class="card-body">
     <p class="text-muted small">
-      Once you've added the bot to your server and given it a role above the ones it manages,
-      type <code>/connect</code> and press enter, then, when prompted for a club_uuid, paste this connection code:
+      In your server, type <code>/connect</code> and paste this code:
     </p>
     <div class="input-group mb-2">
       <input type="text" class="form-control font-monospace" id="joinCommand" value="{{ club_uuid }}" readonly>
@@ -54,11 +53,7 @@
   <div class="card-header">Step 3 &mdash; Configure roles</div>
   <div class="card-body">
     <p class="text-muted small">
-      Note that the bot needs a role that is placed <strong>above</strong> any roles it needs to manage in your
-      server's role hierarchy.
-    </p>
-    <p class="text-muted small">
-      The join button matches people to members by the email they type, which isn't verified, so don't put anything private behind a paid role.
+      The bot's role must be <strong>above</strong> the roles it manages, and the email typed at the join button isn't verified.
     </p>
     <form method="post" action="{% url 'club_discord_fetch_roles' club.slug %}" class="mb-3">
       {% csrf_token %}
@@ -110,7 +105,7 @@
   <div class="card-header">Step 4 (optional) &mdash; Auction notifications</div>
   <div class="card-body">
     <p class="text-muted small">
-      To have announcements about upcoming auctions in a channel, you can use the slash command <code>/auctions_here</code>. This only works <strong>after</strong> you have connected your Discord server to a club.
+      Run <code>/auctions_here</code> in a channel to post upcoming auctions there.
     </p>
     {% if club.auction_channel_id %}
       <p class="text-success mb-3">
@@ -131,11 +126,7 @@
           Automatically create a Discord scheduled event for each promoted auction
         </label>
       </div>
-      <div class="text-muted small mt-1">
-        Events are created once an auction is at least 24 hours old. In-person auctions span the start time
-        to two hours later; online auctions span bidding open to bidding close. The event location links to
-        the auction rules page.
-      </div>
+      <div class="text-muted small mt-1">Created once an auction is a day old.</div>
     </form>
   </div>
 </div>

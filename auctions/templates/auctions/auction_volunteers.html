@@ -5,8 +5,7 @@
   <div class="container mt-3">
     <h4><i class="bi bi-people"></i> Recruit volunteers</h4>
     <div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>
-      Use this page to get help from users in your auction. This will send a notification to people
-      with the mobile app who can volunteer to help with the job you specify.
+      Notifies app users who can volunteer.
       <span tabindex="0" data-bs-toggle="tooltip"
             title="{{ helper_count }} {% if helper_count == 1 %}person has{% else %}people have{% endif %} the app with notifications turned on{% if auction.use_check_in_mode %} and {% if helper_count == 1 %}has{% else %}have{% endif %} checked in{% endif %}">
         <i class="bi bi-info-circle"></i> {{ helper_count }} reachable
@@ -16,9 +15,7 @@
     {% if not auction.use_check_in_mode %}
       <div class="alert alert-warning text-dark">
         <i class="bi bi-exclamation-triangle"></i>
-        This auction doesn't use check-in, so there's no way to tell who is actually here. Asking for
-        help notifies <b>everyone</b> who joined and has the app &mdash; including people at home who
-        haven't arrived, or who never planned to come.
+        Without check-in, this notifies <b>everyone</b> who joined, including people not here.
       </div>
     {% endif %}
 

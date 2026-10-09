@@ -54,8 +54,7 @@ members' event list was an admin control on a page most of its readers can do no
 </div>
 {% if can_manage_auctions %}
 <p class="text-muted small">
-  <i class="bi bi-info-circle"></i> Promoted auctions add themselves here, along with the pickup
-  times of an online auction with one pickup location.
+  <i class="bi bi-info-circle"></i> Promoted auctions add themselves.
 </p>
 {% endif %}
 
@@ -74,7 +73,7 @@ members' event list was an admin control on a page most of its readers can do no
           {% if event.cancelled %}<span class="badge bg-danger rounded-pill ms-1">Cancelled</span>{% endif %}
           {% if event.recurrence_summary %}
           <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
-                title="This is the next one. The whole series is on your club's Google Calendar and in the subscribe links.">
+                title="The next one in the series">
             <i class="bi bi-arrow-repeat"></i> {{ event.recurrence_summary }}
           </span>
           {% endif %}
@@ -84,7 +83,7 @@ members' event list was an admin control on a page most of its readers can do no
           {% if can_manage_auctions and event.is_automatic %}
           {# Visible label, not just a tooltip — the tooltip only adds detail (style_reference.md). #}
           <span class="badge bg-secondary rounded-pill ms-1" data-bs-toggle="tooltip"
-                title="{% if event.source == 'pickup' %}Added automatically from this auction's pickup time, and it follows that time whenever you change it.{% else %}Added automatically because this auction is promoted, and it follows the auction's dates.{% endif %} Its name and notes are yours — use Edit details.">
+                title="Follows the auction's {% if event.source == 'pickup' %}pickup time{% else %}dates{% endif %}">
             <i class="bi bi-arrow-repeat"></i> Automatic
           </span>
           {% endif %}

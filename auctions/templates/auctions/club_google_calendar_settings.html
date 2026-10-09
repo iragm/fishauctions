@@ -7,7 +7,7 @@
 {% if not google_calendar_configured %}
   <div class="alert alert-warning text-dark">
     <i class="bi bi-exclamation-triangle"></i>
-    Google Calendar is not configured on this site. Contact your site administrator.
+    Google Calendar isn't set up on this site.
   </div>
 
 {% elif not club.google_calendar_connected %}
@@ -15,14 +15,7 @@
   <div class="card mb-4">
     <div class="card-header">Connect Google Calendar</div>
     <div class="card-body">
-      <p class="text-muted">
-        Connect your club's Google account and we'll make a calendar called
-        &ldquo;{{ club.name }} events&rdquo; in it. From then on your auctions and events appear
-        there automatically, and anything you add in Google Calendar shows up on your club page.
-      </p>
-      <p class="text-muted small">
-        We can only see and change the calendar we create &mdash; not the rest of your Google account.
-      </p>
+      <p class="text-muted">Adds a &ldquo;{{ club.name }} events&rdquo; calendar to your club's Google account and keeps it in sync both ways.</p>
       <a href="{% url 'google_calendar_connect' club.slug %}" class="btn btn-primary">
         <i class="bi bi-google"></i> Connect Google Calendar
       </a>
@@ -49,13 +42,8 @@
   {% endcomment %}
   <div class="mt-2 mb-4 p-3 bg-primary text-white rounded bg-gradient bg-opacity-50">
     <h5><i class="bi bi-people"></i> One more step to let members subscribe</h5>
-    <p class="mb-2">
-      Your calendar is syncing, but it's still private, so members can't add it to their own
-      Google Calendar yet. We can't make it public for you &mdash; that would mean asking for
-      access to all of your calendars instead of just this one. Do it in Google and this notice
-      goes away on its own; we check every time we sync.
-    </p>
-    <a href="#share-with-members" class="btn btn-sm btn-light">Show me how &mdash; takes a minute</a>
+    <p class="mb-2">Your calendar is private, so members can't subscribe to it yet.</p>
+    <a href="#share-with-members" class="btn btn-sm btn-light">Make it public</a>
   </div>
   {% endif %}
   <div class="card mb-4">
@@ -88,10 +76,6 @@
         <dt class="col-sm-4">Last sync</dt>
         <dd class="col-sm-8">{{ club.google_calendar_last_sync|default:"—" }}</dd>
       </dl>
-      <p class="text-muted small mt-3 mb-0">
-        <i class="bi bi-info-circle"></i>
-        Changes sync both ways every 15 minutes, and immediately when you add an event here.
-      </p>
       {% if club.google_calendar_last_error %}
         <div class="alert alert-danger mt-3 mb-0 small">
           <i class="bi bi-exclamation-triangle-fill"></i> Last error: {{ club.google_calendar_last_error }}
@@ -133,16 +117,7 @@
       {% endif %}
     </div>
     <div class="card-body">
-      <p class="text-muted">
-        Your club page already offers a
-        <a href="{% url 'club_events_ical' club.url_key %}">subscribe link</a> that works in Google
-        Calendar, Apple Calendar and Outlook. You don't have to do anything else.
-      </p>
-      <p class="text-muted mb-2">
-        If you'd also like members to subscribe to the Google calendar itself, make it public in
-        Google Calendar &mdash; we can't do it for you, because that would mean asking for access
-        to <em>all</em> of your calendars rather than just this one:
-      </p>
+      <p class="text-muted mb-2">Your club page's <a href="{% url 'club_events_ical' club.url_key %}">subscribe link</a> already works everywhere; to share the Google calendar itself:</p>
       <ol class="text-muted small">
         <li>Open <a href="https://calendar.google.com/calendar/r/settings" target="_blank" rel="noopener">Google Calendar settings</a>.</li>
         <li>Pick <strong>{{ club.name }} events</strong> from the list on the left.</li>
@@ -152,12 +127,6 @@
       ourselves on every sync -- a shared calendar serves its iCal feed to anybody, so fetching
       that feed with no credentials is the same question a member's calendar app asks. The badge
       above is the answer, not a setting.{% endcomment %}
-      <p class="text-muted small">
-        <i class="bi bi-info-circle"></i>
-        Nothing to confirm here afterwards &mdash; we check when we sync, and the badge above
-        follows what Google will actually serve. In a hurry? <strong>Sync now</strong> checks
-        straight away.
-      </p>
       {% if club.google_calendar_is_public %}
       <div class="d-flex flex-wrap gap-2">
         <a href="{{ club.google_calendar_public_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
@@ -192,8 +161,7 @@
           <strong>Create Discord events for calendar events</strong><br>
           <small class="text-muted">
             {% if discord_connected %}
-            Meetings and other events get a Discord scheduled event. Auctions are handled by the
-            <a href="{% url 'club_discord_config' club.slug %}">Discord settings</a>, so they're never doubled up.
+            Auctions are set in <a href="{% url 'club_discord_config' club.slug %}">Discord settings</a>.
             {% else %}
             <a href="{% url 'club_discord_config' club.slug %}">Connect a Discord server</a> to use this.
             {% endif %}
