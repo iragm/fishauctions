@@ -168,16 +168,21 @@ class AuctionTOSHTMxTable(tables.Table):
             )
         if record.checked_in:
             result += static_html('<i class="bi bi-check-circle-fill text-success ms-1" title="Checked in"></i>')
-        elif record.auction.use_check_in_mode:
-            if self.can_manage_check_in:
-                check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
-                result += format_html(
-                    '<button class="btn btn-sm btn-primary ms-1" hx-get="{}" '
-                    'hx-target="#modals-here" hx-swap="innerHTML" '
-                    '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-                    "Check in</button>",
-                    check_in_url,
-                )
+        # Checking in again is how bidding comes back after AuctionDisableBidding.
+        if (
+            record.auction.use_check_in_mode
+            and self.can_manage_check_in
+            and not (record.checked_in and record.bidding_allowed)
+        ):
+            check_in_url = reverse("auction_check_in", kwargs={"pk": record.pk})
+            result += format_html(
+                '<button class="btn btn-sm btn-primary ms-1" hx-get="{}" '
+                'hx-target="#modals-here" hx-swap="innerHTML" '
+                '_="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                "{}</button>",
+                check_in_url,
+                "Allow bidding" if record.checked_in else "Check in",
+            )
         if record.email_address_status == "BAD":
             result += static_html(
                 "<i class='bi bi-envelope-exclamation-fill text-danger ms-1'"
