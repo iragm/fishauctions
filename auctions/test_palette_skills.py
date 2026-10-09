@@ -1294,6 +1294,17 @@ class AssistantSkillRequestsPageTests(StandardTestCase):
         self.assertEqual(self.row.status, "planned")
         self.assertEqual(self.row.notes, "Next release")
 
+    def test_planning_it_for_the_app_records_the_target(self):
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(self.url, {"pk": self.row.pk, "status": "planned", "target": "app"})
+        self.row.refresh_from_db()
+        self.assertEqual((self.row.status, self.row.target), ("planned", "app"))
+        self.client.post(self.url, {"pk": self.row.pk, "status": "planned", "target": "banana"})
+        self.row.refresh_from_db()
+        self.assertEqual(self.row.target, "app")
+
     def test_a_status_nobody_offers_is_ignored(self):
         self.admin_user.is_superuser = True
         self.admin_user.save()
