@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import socket
 import tempfile
@@ -27,7 +28,7 @@ from auctions.documents.extract import ExtractionError, Reader, extract
 from auctions.documents.index import chunk
 from auctions.documents.models import Visibility
 from auctions.documents.search import can_manage, search, visible_documents
-from auctions.mcp import prompts
+from auctions.mcp import prompts, resources, tools
 from auctions.models import (
     Club,
     ClubMember,
@@ -682,6 +683,50 @@ class McpToolTests(LibraryTestCase):
         self.assertIn("error", self.run_as(self.member, "delete_document", document=str(document.pk)))
         self.assertTrue(self.run_as(self.owner, "delete_document", document=str(document.pk)).get("ok"))
         self.assertFalse(Document.objects.exists())
+
+
+class ResourceTests(LibraryTestCase):
+    """``document://{n}``: a citation a client can open, never a list of anybody's papers."""
+
+    def request_as(self, user):
+        request = RequestFactory().post("/mcp/")
+        request.user = user
+        return request
+
+    def test_a_search_cites_each_document_once_as_a_resource_link(self):
+        document = self.document()
+        result = tools.call_tool(self.request_as(self.member), "search_documents", {"query": "microworms"})
+        links = [block["uri"] for block in result["content"] if block["type"] == "resource_link"]
+        self.assertEqual(links.count(f"document://{document.pk}"), 1)
+
+    def test_reading_one_never_links_to_itself(self):
+        document = self.document()
+        result = tools.call_tool(self.request_as(self.member), "read_document", {"document": str(document.pk)})
+        links = [block["uri"] for block in result["content"] if block["type"] == "resource_link"]
+        self.assertNotIn(f"document://{document.pk}", links)
+
+    def test_it_reads_as_the_tool_does_with_the_same_permission(self):
+        document = self.document()
+        uri = f"document://{document.pk}"
+        read = resources.read(self.request_as(self.member), uri)
+        self.assertEqual(json.loads(read["text"])["document"], document.pk)
+        refused = resources.read(self.request_as(self.outsider), uri)
+        self.assertIn("error", json.loads(refused["text"]))
+
+    def test_it_asks_for_as_much_as_read_document_gives(self):
+        template, arguments = resources.match("document://12")
+        self.assertEqual((template.action, arguments), ("read_document", {"document": "12"}))
+        self.assertEqual(template.extra["length"], palette_actions.READ_DOCUMENT_MAX_CHARS)
+
+    def test_only_somebody_with_the_library_is_shown_the_template(self):
+        def offered(user):
+            return {row["uriTemplate"] for row in resources.template_descriptors(user)}
+
+        self.assertIn("document://{document}", offered(self.owner))
+        self.owner.userdata.library_enabled = False
+        self.owner.userdata.save(update_fields=["library_enabled"])
+        self.assertNotIn("document://{document}", offered(self.owner))
+        self.assertNotIn("document://{document}", offered(None))
 
 
 class LifecycleTests(LibraryTestCase):

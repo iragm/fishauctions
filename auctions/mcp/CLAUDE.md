@@ -331,9 +331,10 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   client, which only works if it has one: checking for a mail connector is its first step, because
   this server cannot see what else the client is connected to.
 - **Resources** (`auctions/mcp/resources.py`): `auction://`, `lot://`, `club://` templates,
-  `me://context`, `me://activity`, `help://faq` — each names a registered **read-only** action, so
-  there's no second permission path. **Nothing that names somebody is ever listed**: `resources/list`
-  returns only the widget documents, the two `me://` reads and `help://faq` — the rule is *no slugs*,
+  `document://`, `me://context`, `me://activity`, `help://faq` — each names a registered
+  **read-only** action, so there's no second permission path. `document://{n}` is offered only to
+  people with the library, and a library search cites each document as a `resource_link` to it.
+  **Nothing that names somebody is ever listed**: `resources/list` returns only the widget documents, the two `me://` reads and `help://faq` — the rule is *no slugs*,
   not *nothing concrete*.
 
 ## Confirmation tier
@@ -341,6 +342,11 @@ the whole registry as three people who shouldn't reach a tenant's objects.
 `Action.asks_first` is the palette's confirmation card, separate from the read/write split. Three
 opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and idempotent, not
 `destructive` (`test_mcp.ConfirmationTierTests`). `undo_check_in` still asks.
+
+Over MCP the host does the asking. `palette_actions.ASK_EVERY_CALL` (name -> why) puts
+`_meta["anthropic/requiresUserInteraction"]` on six writes, so Claude asks the person on every call
+with no "always allow", and refuses where nobody is there (a routine). Each must be `destructive`,
+checked at import; never `check_in`. `test_mcp.AskEveryCallTests` pins the six.
 
 ## Housekeeping
 

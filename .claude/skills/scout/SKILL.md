@@ -23,21 +23,24 @@ names and dates.
    `level=ERROR` and `contains=` that error. Then find the cause in this repository. A real bug is a
    `suggest_feature` naming the file and line. Leave 500s alone: the hourly health check fixes those
    straight away, with a PR into `master`.
-2. `list_feature_requests status=all` first, so you don't suggest anything already there.
-3. Read, in this order, and stop when you have enough:
+2. GitHub issues: intake and closing, exactly as the `github-issues` skill says. Labelling,
+   commenting on and closing an existing issue are the only GitHub writes a scout makes.
+3. `list_feature_requests status=all` first, so you don't suggest anything already there.
+4. Read, in this order, and stop when you have enough:
    - `read_admin_page usability query=days=7`
    - `command_palette_analytics`: read the exchanges themselves. A second query soon after a first
      is chaining, not failure.
    - `assistant_skill_requests` (members' own asks)
    - `species_gaps`
    - `admin_session_replay` for the sessions behind a funnel drop
-4. File at most **five** suggestions, each with its evidence. One well-evidenced suggestion beats
+5. File at most **five** suggestions, each with its evidence. One well-evidenced suggestion beats
    five guesses.
-5. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
+6. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
    for every lot on the gaps page whose match you are sure of (`set_lot_species`).
-6. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
+7. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
    and `site_health`'s commit includes it, propose `set_request_status` → `done`.
-7. End with a few lines: what you filed, what you proposed, anything you couldn't tell.
+8. End with a few lines: issues queued and closed, what you filed, what you proposed, anything you
+   couldn't tell.
 
 ## What the owner has already decided
 

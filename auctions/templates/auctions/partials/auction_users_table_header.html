@@ -119,6 +119,13 @@
 
   {% if auction.use_check_in_mode and can_manage_check_in %}
     <a class="btn btn-sm btn-primary" href="{% url 'auction_door_prizes' slug=auction.slug %}"><i class="bi bi-gift"></i> Door prizes</a>
+    <form method="post" action="{% url 'auction_disable_bidding' slug=auction.slug %}" class="m-0 d-none d-md-block"
+          data-confirm="Each person can bid again once they're checked in again."
+          data-confirm-title="Stop bidding for everyone?"
+          data-confirm-ok="Stop bidding">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-slash-circle"></i> Stop bidding</button>
+    </form>
   {% endif %}
   {% if can_scan_club_barcodes %}
     <a class="btn btn-sm btn-primary" href="{% url 'auction_quick_check_in' slug=auction.slug %}"><i class="bi bi-upc-scan"></i> {% if auction.use_check_in_mode %}Check in{% else %}Scan club cards{% endif %}</a>
