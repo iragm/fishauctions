@@ -141,6 +141,9 @@ class Action:
     #: Permissions are never checked differently, ``go_to_page`` still reaches every page, and this
     #: is never a way to give an agent something a person may not do.
     mcp_only: bool = False
+    #: The host asks the person on every call, with no "always allow". Not set here: set from
+    #: :data:`ASK_EVERY_CALL`, which is where the reason for each one is written down.
+    ask_every_call: bool = False
 
     def accepts(self, key: str) -> bool:
         return key in self.params or key in self.aliases
@@ -15736,6 +15739,28 @@ if _unknown_skills:
     raise ValueError(msg)
 for _name in MCP_ONLY_SKILLS:
     ACTIONS[_name].mcp_only = True
+
+#: Writes an MCP host must put in front of the person every single time
+#: (``_meta["anthropic/requiresUserInteraction"]``): name -> why. Claude Code honours it in every
+#: permission mode, and refuses outright where nobody is there to ask, so a scheduled routine can
+#: never do these. Every entry is ``destructive`` -- this is the short end of that list, the writes
+#: whose mistake reaches people before anybody can take it back -- and never anything said eighty
+#: times a night: ``check_in`` would make the door unusable.
+ASK_EVERY_CALL: dict[str, str] = {
+    "send_club_announcement": "Reaches every member's phone, inbox and Discord at once, and can't be unsent.",
+    "retract_announcement": "Takes down what the club already told its members; the wrong one is gone from every channel.",
+    "update_auction_setting": "Changes the rules for everybody in the auction, mid-auction if it is running.",
+    "update_auction_dates": "Moving the end time ends or reopens bidding for everybody.",
+    "undo_sale": "The winner has already been told and invoiced.",
+    "place_bid": "A bid is binding, and it is money.",
+}
+
+for _name, _reason in ASK_EVERY_CALL.items():
+    # Import-time, like MCP_ONLY_SKILLS: a typo would silently drop the prompt.
+    if _name not in ACTIONS or not ACTIONS[_name].destructive:
+        msg = f"ASK_EVERY_CALL names {_name}, which is not a destructive action"
+        raise ValueError(msg)
+    ACTIONS[_name].ask_every_call = True
 
 
 # --- the skill audit ---------------------------------------------------------

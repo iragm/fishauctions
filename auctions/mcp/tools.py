@@ -72,6 +72,9 @@ REPEATS_ARE_MEANT = frozenset({"draw_door_prize", "undo_last"})
 
 _IN_FLIGHT = "in-flight"
 
+#: Anthropic's per-tool "ask the person every time" flag; see ``palette_actions.ASK_EVERY_CALL``.
+ASK_EVERY_CALL_KEY = "anthropic/requiresUserInteraction"
+
 
 class UnknownTool(Exception):
     """No action by that name. Never guessed at -- see :func:`palette_actions.get_action`."""
@@ -180,9 +183,11 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
         "icons": icons.for_action(action),
     }
     # Tools with a widget advertise it; the widget draws from the same structuredContent the model reads.
-    ui = widgets.tool_meta(action.name)
-    if ui:
-        built["_meta"] = ui
+    meta = dict(widgets.tool_meta(action.name) or {})
+    if action.ask_every_call:
+        meta[ASK_EVERY_CALL_KEY] = True
+    if meta:
+        built["_meta"] = meta
     return built
 
 

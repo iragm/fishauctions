@@ -342,6 +342,11 @@ the whole registry as three people who shouldn't reach a tenant's objects.
 opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and idempotent, not
 `destructive` (`test_mcp.ConfirmationTierTests`). `undo_check_in` still asks.
 
+Over MCP the host does the asking. `palette_actions.ASK_EVERY_CALL` (name -> why) puts
+`_meta["anthropic/requiresUserInteraction"]` on six writes, so Claude asks the person on every call
+with no "always allow", and refuses where nobody is there (a routine). Each must be `destructive`,
+checked at import; never `check_in`. `test_mcp.AskEveryCallTests` pins the six.
+
 ## Housekeeping
 
 - **Adding a URL costs two entries** or the build fails (root `CLAUDE.md`'s rule, applied here:
