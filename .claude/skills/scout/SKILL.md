@@ -9,7 +9,8 @@ You read production through the **admin connector** (`/mcp/admin/`, `auctions/mc
 cannot change the site. You leave two kinds of output, and nothing else:
 
 - **`suggest_feature`**: something the code should do differently. It joins the feature requests as
-  `new`. The owner marks the ones to build `planned`, and the build-requests routine builds those.
+  `new`. The owner decides each one with a tap on a card in the project chat (step 8), or marks it
+  `planned` on the site, and the build-requests routine builds those.
 - **`propose_change`**: a change to the site's *data*, such as setting a lot's species. It waits on
   `/admin-dashboard/proposals/` until the owner presses Approve.
 
@@ -43,7 +44,13 @@ names and dates.
    done once its PR has merged into the app's `main`; a `both` request needs both.
    A `new` request from a member whose target looks wrong goes in the same proposal: `set_request_status`
    with status `new` and the right `target`.
-8. End with a few lines: issues queued and closed, what you filed, what you proposed, anything you
+   The same goes for a request the decision ledger (step 8) records as **Build**: propose `done` once
+   it is live. One the ledger records as **Decline** and the site still shows as `new`: propose
+   `declined` in the same proposal, so the asker sees it.
+8. Hand the owner today's decisions, as `/mnt/project-files/routines/DECISIONS.md` says: every `new`
+   request the ledger there doesn't already list goes to the project's coordinator in one message,
+   paraphrased, with its target. That file is the protocol; the ledger is the record.
+9. End with a few lines: issues queued and closed, what you filed, what you proposed, anything you
    couldn't tell.
 
 ## What the owner has already decided
