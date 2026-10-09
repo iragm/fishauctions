@@ -61,9 +61,13 @@ def _associate_auctions_for_member(member):
 @receiver(pre_save, sender="auctions.Auction")
 def on_save_auction(sender, instance, **kwargs):
     """This is run when an auction is saved"""
-    if instance.date_end and instance.date_start:
-        # if the user entered an end time that's after the start time
-        if instance.date_end < instance.date_start:
+    if instance.date_end and instance.date_start and instance.date_end < instance.date_start:
+        if not instance.is_online:
+            # In person, the end is hidden on the edit page and posted back as it was, so an old end
+            # is stale once the start moves past it. Swapping would move the start the user just set.
+            instance.date_end = None
+        else:
+            # if the user entered an end time that's after the start time
             new_start = instance.date_end
             instance.date_end = instance.date_start
             instance.date_start = new_start
