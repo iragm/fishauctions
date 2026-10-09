@@ -25,7 +25,8 @@ merged into `staging` directly, with no PR of its own.
    Land each one on `staging` exactly as the `staging-flow` skill says (branch, build, review,
    commit, test, merge, conflict check with `master`, the rolling staging PR, and owning the CI run
    of every push). Follow `CLAUDE.md` and the `CLAUDE.md` nearest the code you touch. Name the branch
-   `claude/request-N-<slug>` and give the commit `<what it does> (feature request #N)` as its subject.
+   `claude/request-N-<slug>` and give the commit `<what it does> (feature request #N)` as its subject;
+   a request that came from a GitHub issue names the issue too, as the `github-issues` skill says.
    **Paraphrase the request**, never quote it, and name no member: the repository is public. In a
    cloud session, wait for `logs/.stack-ready` before testing.
 4. If a request is unclear, too big to build and test in one go, or its tests can't be made to pass,

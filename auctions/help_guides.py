@@ -854,7 +854,7 @@ NOT_IN_HELP: dict[str, str] = {
     "all_my_users": "Site operator only.",
     "help": "This is the help.",
     "leaderboard": "No link on the site leads to it any more.",
-    "auction_disable_bidding": "Unfinished: its button was taken off the users page (see the view's TODO).",
+    "auction_disable_bidding": "A button on the Users tab that only posts; the check-in section names it.",
     "bulk_add_lots": "The older add-lots form; only the command palette opens it. The guides describe the grid every button opens.",
     "bulk_add_lots_for_myself": "The older add-lots form; only the command palette opens it. The guides describe the grid every button opens.",
     "user_api_keys": "Redirects into the AI agents guide, and takes that guide's forms.",

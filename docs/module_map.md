@@ -256,7 +256,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1120 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1632 lines)
+- **`tables.py`** (1637 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1878 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -380,7 +380,7 @@ this only quotes its opening sentence.
 - **`test_club_settings.py`** (690 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
-- **`test_club_users.py`** (1442 lines)
+- **`test_club_users.py`** (1473 lines)
   Managing people through a club rather than through an auction, and the bid API.
   `ManageUsersThroughClubTests`, `PlaceBidApiTests`
 - **`test_clubs.py`** (1379 lines)
@@ -943,7 +943,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (841 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
-- **`auction_admin.py`** (1259 lines)
+- **`auction_admin.py`** (1263 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (734 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
