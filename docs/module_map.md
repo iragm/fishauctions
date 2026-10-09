@@ -190,7 +190,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14500 lines)
+- **`models.py`** (14561 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -560,9 +560,8 @@ this only quotes its opening sentence.
 - **`test_promo.py`** (135 lines)
   The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
   `PromoPageTests`, `PromoPhotoTests`
-- **`test_query_counts.py`** (559 lines)
+- **`test_query_counts.py`** (684 lines)
   Query-count guards for the N+1s that were fixed.
-  `QueryGrowthMixin`, `AuctionUsersTableQueryCountTests`, `AuctionLotAdminTableQueryCountTests`, `LotDetailQueryCountTests`, `InvoiceQueryCountTests`, `SellerAndFeedbackQueryCountTests`, `LongLivedInstanceTests`, `CachedPropertyWiringTests`, `LotListQueryCountTests`, `LotCachedPropertyTests`
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
 - **`test_security.py`** (596 lines)
@@ -996,7 +995,7 @@ Every view on the site, split by the part of it the view belongs to.
   The library at ``/library/``: upload, search with a written answer, read, correct, report, delete, and
 - **`embeds.py`** (623 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (953 lines)
+- **`exports.py`** (970 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`help.py`** (92 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.

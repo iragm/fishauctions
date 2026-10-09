@@ -50,6 +50,7 @@ from auctions.models import (
     Lot,
     LotHistory,
     PageView,
+    UserBan,
     add_price_info,
     find_image,
 )
@@ -135,9 +136,10 @@ class MyLotReportView(LoginRequiredMixin, View):
 
 
 def _report_counts(auction, users):
-    """Every per-person number the report prints, as four GROUP BYs.
+    """Every per-person number the report prints, one GROUP BY each.
 
-    Keyed by ``AuctionTOS`` pk (lots) or user pk (views, bids, other auctions).
+    Keyed by ``AuctionTOS`` pk (lots) or user pk (views, bids, other auctions, lots sold outside the
+    auction, bans).
     """
     tos_pks = [tos.pk for tos in users]
     user_pks = [tos.user_id for tos in users if tos.user_id]
@@ -179,7 +181,30 @@ def _report_counts(auction, users):
         row["user"]: row["total"]
         for row in AuctionTOS.objects.filter(user__in=user_pks).order_by().values("user").annotate(total=Count("pk"))
     }
+    # Lots the person put up on their own around the auction's dates, as if selling around it.
+    outside_lots = Lot.objects.exclude(is_deleted=True).filter(
+        user__in=user_pks,
+        auction__isnull=True,
+        date_posted__gte=auction.date_start - timedelta(days=2),
+    )
+    if auction.is_online:
+        outside_lots = outside_lots.filter(date_posted__lte=auction.date_end + timedelta(days=2))
+    else:
+        outside_lots = outside_lots.filter(date_posted__lte=auction.date_start + timedelta(days=5))
+    outside = {
+        row["user"]: row
+        for row in outside_lots.order_by().values("user").annotate(number=Count("pk"), total=Sum("winning_price"))
+    }
+    bans = {
+        row["banned_user"]: row["total"]
+        for row in UserBan.objects.filter(banned_user__in=user_pks)
+        .order_by()
+        .values("banned_user")
+        .annotate(total=Count("pk"))
+    }
     return {
+        "outside": outside,
+        "bans": bans,
         "submitted": submitted,
         "won": won,
         "views": views,
@@ -239,7 +264,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         )
         # tos_qs carries the has_ever_granted_permission annotation.
         users = (
-            self.auction.tos_qs.select_related("user__userdata")
+            self.auction.tos_qs.select_related("user__userdata__club")
             .select_related("pickup_location")
             .prefetch_related(
                 Prefetch(
@@ -256,6 +281,8 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         # These used to be worked out per person: six `len(queryset)` calls, an invoice lookup and a
         # count of their other auctions -- nine queries a row. Now one GROUP BY each.
         counts = _report_counts(self.auction, users)
+        # Each row's money columns, three GROUP BYs for the whole file rather than six queries a person.
+        Invoice.prime_totals(data.invoice for data in users)
         for data in users:
             distance = ""
             club = ""
@@ -263,24 +290,14 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 # Only written out if the user allows it.
                 lotsViewed = counts["views"].get(data.user_id, 0)
                 lotsBid = counts["bids"].get(data.user_id, 0)
-                lot_qs = Lot.objects.exclude(is_deleted=True).filter(
-                    user=data.user,
-                    auction__isnull=True,
-                    date_posted__gte=self.auction.date_start - timedelta(days=2),
-                )
-                if self.auction.is_online:
-                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=self.auction.date_end + timedelta(days=2))
-                else:
-                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=self.auction.date_start + timedelta(days=5))
-                numberLotsOutsideAuction = lotsOutsideAuction.count()
-                profitOutsideAuction = lotsOutsideAuction.aggregate(total=Sum("winning_price"))["total"]
-                if not profitOutsideAuction:
-                    profitOutsideAuction = 0
+                outside = counts["outside"].get(data.user_id, {})
+                numberLotsOutsideAuction = outside.get("number", 0)
+                profitOutsideAuction = outside.get("total") or 0
                 distance = data.distance_traveled or ""
                 club = getattr(data.user.userdata, "club", None)
                 username = data.user.username
                 previous_auctions = max(counts["auctions_joined"].get(data.user_id, 0) - 1, 0)
-                number_of_userbans = data.number_of_userbans
+                number_of_userbans = counts["bans"].get(data.user_id, 0)
                 account_age = data.user.date_joined
                 add_to_calendar = "Yes" if data.add_to_calendar else ""
             else:
