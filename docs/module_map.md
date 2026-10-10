@@ -550,7 +550,7 @@ this only quotes its opening sentence.
 - **`test_page_view_url.py`** (116 lines)
   The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
-- **`test_palette_account.py`** (873 lines)
+- **`test_palette_account.py`** (878 lines)
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (5259 lines)
   Tests for the command palette's natural-language assist.
