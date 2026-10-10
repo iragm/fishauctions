@@ -16,13 +16,15 @@ treatment, because a filter is a way of reading a field one yes/no answer at a t
 import datetime
 import json
 import re
+from unittest import mock
 
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Club, ClubEvent, ClubMember, GeneralInterest
+from auctions.models import AgentProposal, Club, ClubEvent, ClubMember, GeneralInterest
 
 MAP_PAYLOAD_RE = re.compile(r'id="club-map-data"[^>]*>(.*?)</script>', re.DOTALL)
 
@@ -214,3 +216,82 @@ class ClubFinderTests(TestCase):
     def test_the_finder_can_be_turned_off(self):
         response = self.client.get(reverse("clubs"))
         self.assertEqual(response.status_code, 302)
+
+
+@override_settings(ENABLE_CLUB_FINDER=True)
+class ClubAddTests(TestCase):
+    """A member adding their own club: off the finder, theirs to set up, and in the owner's approvals."""
+
+    PLACE = {"latitude": 42.36, "longitude": -71.06, "coordinates": "42.36,-71.06", "address": "Boston, MA, USA"}
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.member = User.objects.create_user("club_founder", "founder@example.com", "testpassword")
+        cls.owner = User.objects.create_superuser("site_owner", "owner@example.com", "testpassword")
+
+    def add(self, **fields):
+        self.client.force_login(self.member)
+        data = {"name": "Harbor Aquarium Society", "homepage": "harboraquarium.example.org", "location": "Boston"}
+        data.update(fields)
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            return self.client.post(reverse("club_add"), data)
+
+    def test_signed_out_visitors_are_sent_to_sign_in(self):
+        response = self.client.get(reverse("club_add"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_an_added_club_is_off_the_finder_and_its_adder_runs_it(self):
+        response = self.add()
+        club = Club.objects.get(name="Harbor Aquarium Society")
+        self.assertRedirects(response, reverse("club_setup", kwargs={"slug": club.slug}), fetch_redirect_response=False)
+        self.assertEqual(club.outreach_stage, Club.PROSPECT)
+        self.assertAlmostEqual(club.latitude, 42.36)
+        self.assertEqual(club.homepage, "https://harboraquarium.example.org")
+        self.assertTrue(ClubMember.objects.get(club=club, user=self.member).permission_admin)
+        self.assertNotIn(club, Club.objects.listed())
+        self.assertEqual(self.client.get(reverse("club_setup", kwargs={"slug": club.slug})).status_code, 200)
+
+    def test_approving_the_proposal_puts_it_on_the_map(self):
+        self.add()
+        proposal = AgentProposal.objects.get(status=AgentProposal.STATUS_PENDING)
+        self.assertEqual(proposal.proposed_by, self.member)
+        self.client.force_login(self.owner)
+        self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertEqual(Club.objects.get(name="Harbor Aquarium Society").outreach_stage, Club.LISTED)
+
+    def test_rejecting_it_leaves_it_off_the_map(self):
+        self.add()
+        proposal = AgentProposal.objects.get()
+        self.client.force_login(self.owner)
+        self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "reject"})
+        self.assertEqual(Club.objects.get(name="Harbor Aquarium Society").outreach_stage, Club.PROSPECT)
+
+    def test_a_club_already_here_is_refused_without_naming_an_unlisted_one(self):
+        Club.objects.create(name="Harbor Aquarium Society", outreach_stage=Club.LISTED)
+        self.assertContains(self.add(), "Harbor Aquarium Society is already on the site.")
+        Club.objects.create(name="Bay Killifish Association", outreach_stage=Club.PROSPECT)
+        response = self.add(name="Bay Killifish Association", homepage="")
+        self.assertContains(response, "already waiting for approval")
+        self.assertEqual(Club.objects.count(), 2)
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_a_facebook_page_is_not_a_website(self):
+        response = self.add(homepage="https://www.facebook.com/groups/harbor")
+        self.assertContains(response, "goes under Facebook")
+        self.assertFalse(Club.objects.exists())
+
+    def test_one_person_has_only_a_few_clubs_waiting(self):
+        from auctions.club_onboarding import MAX_WAITING
+
+        names = ["Harbor Aquarium Society", "Prairie Cichlid Club", "Mountain Killifish Group", "Delta Reef Keepers"]
+        for name in names[:MAX_WAITING]:
+            self.add(name=name, homepage="")
+        response = self.add(name=names[MAX_WAITING], homepage="")
+        self.assertContains(response, "still waiting for approval")
+        self.assertEqual(Club.objects.count(), MAX_WAITING)
+
+    def test_the_finder_links_to_it(self):
+        self.assertContains(self.client.get(reverse("clubs")), reverse("club_add"))

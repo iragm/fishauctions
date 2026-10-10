@@ -108,6 +108,9 @@ this only quotes its opening sentence.
 - **`club_matching.py`** (264 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
+- **`club_onboarding.py`** (137 lines)
+  Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
+  `web_address`, `club_fields`, `waiting_for`, `add_my_club`
 - **`command_palette.py`** (1531 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
@@ -152,7 +155,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6458 lines)
+- **`forms.py`** (6478 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -210,11 +213,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16405 lines)
+- **`palette_actions.py`** (16411 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1950 lines)
+- **`palette_routes.py`** (1956 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -365,9 +368,9 @@ this only quotes its opening sentence.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3001 lines)
   Tests for club events, Google Calendar sync, and Discord events.
-- **`test_club_finder.py`** (216 lines)
+- **`test_club_finder.py`** (297 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
-  `map_payload`, `ClubFinderTests`
+  `map_payload`, `ClubFinderTests`, `ClubAddTests`
 - **`test_club_health.py`** (554 lines)
   Tests for the club lifecycle rollup and the outreach queue.
 - **`test_club_import.py`** (200 lines)
@@ -490,7 +493,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1061 lines)
+- **`test_mcp_admin.py`** (1138 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -635,7 +638,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (408 lines)
+- **`test_tenancy.py`** (410 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_untrusted_text.py`** (114 lines)
@@ -671,7 +674,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1602 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1342 lines)
+- **`urls.py`** (1343 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -817,7 +820,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1601 lines)
+- **`admin.py`** (1735 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -983,9 +986,9 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_api_keys.py`** (402 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
-- **`club_finder.py`** (196 lines)
+- **`club_finder.py`** (223 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
-  `ClubFinderView`
+  `ClubFinderView`, `ClubAddView`
 - **`club_integrations.py`** (1247 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1112 lines)

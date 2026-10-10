@@ -112,6 +112,12 @@ ROUTE_LIST: list[Route] = [
         "Browsing",
         keywords=["club map", "find a club near me", "clubs near me", "aquarium society", "club list"],
     ),
+    _r(
+        "club_add",
+        "Add your club",
+        "Browsing",
+        keywords=["add my club", "list my club", "my club isn't on the map", "register a club"],
+    ),
     _r("leaderboard", "Leaderboard", "Browsing", keywords=["top sellers", "rankings"]),
     _r("my_last_auction_lots", "Lots in my most recent auction", "Browsing", keywords=["lots near me"]),
     _r("user_lots", "Lots grouped by seller", "Browsing", keywords=["sellers", "who is selling"]),

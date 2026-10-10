@@ -520,6 +520,83 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertTrue(result["isError"])
         self.assertIn("already belongs to", result["content"][0]["text"])
 
+    def test_an_account_is_made_a_club_admin_and_unmade(self):
+        from auctions.models import ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        result = self.propose("make_club_admin", {"club": club.pk, "user": self.userB.username})
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.userB).exists())
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertTrue(ClubMember.objects.get(club=club, user=self.userB).permission_admin)
+        self.propose("make_club_admin", {"club": club.name, "user": self.userB.pk, "admin": False}, "Undo")
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertFalse(ClubMember.objects.get(club=club, user=self.userB).permission_admin)
+        result = self.propose("make_club_admin", {"club": "No such club", "user": self.userB.pk}, "Bad")
+        self.assertTrue(result["isError"])
+
+    def test_a_club_is_corrected_and_moved(self):
+        from auctions.models import ClubHistory, GeneralInterest
+
+        GeneralInterest.objects.create(name="Orchids")
+        club = Club.objects.create(
+            name="Harbor Aquarium Society",
+            homepage="https://old.example.org",
+            location="Old place",
+            latitude=1.0,
+            notes="Old note",
+        )
+        result = self.propose(
+            "update_club",
+            {
+                "club": club.pk,
+                "homepage": "harboraquarium.example.org",
+                "facebook_page": "facebook.com/groups/harbor",
+                "notes": "",
+                "location": "Boston, MA",
+                "interests": "Orchids",
+            },
+        )
+        self.assertFalse(result["isError"], result)
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        club.refresh_from_db()
+        self.assertEqual(club.name, "Harbor Aquarium Society")
+        self.assertEqual(club.homepage, "https://harboraquarium.example.org")
+        self.assertEqual(club.facebook_page, "https://facebook.com/groups/harbor")
+        self.assertIsNone(club.notes)
+        self.assertAlmostEqual(club.latitude, 42.36)
+        self.assertEqual([interest.name for interest in club.interests.all()], ["Orchids"])
+        self.assertTrue(ClubHistory.objects.filter(club=club, action__contains="homepage").exists())
+
+    def test_a_meeting_place_google_cannot_find_takes_the_old_pin_off(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", location="Old place", latitude=1.0, longitude=2.0)
+        self.propose("update_club", {"club": club.pk, "location": "nowhere at all"})
+        with mock.patch("auctions.geocoding.geocode", return_value=None):
+            proposal = self.approve()
+        club.refresh_from_db()
+        self.assertIsNone(club.latitude)
+        self.assertIn("Not on the map", proposal.results[0]["said"])
+
+    def test_bad_club_corrections_are_refused_when_proposed(self):
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        Club.objects.create(name="Bay Killifish Association")
+        for arguments, expected in (
+            ({"club": club.pk}, "at least one"),
+            ({"club": club.pk, "name": ""}, "blank name"),
+            ({"club": club.pk, "name": "Bay Killifish Association"}, "already on the site"),
+            ({"club": club.pk, "homepage": "https://facebook.com/groups/harbor"}, "facebook_page"),
+            ({"club": club.pk, "contact_email": "not an address"}, "isn't an email"),
+            ({"club": club.pk, "interests": "Underwater basket weaving"}, "no interest called"),
+            ({"club": "No such club", "notes": "x"}, "no one club"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("update_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
     def test_two_accounts_are_merged_once_approved(self):
         closed, kept = self.user_who_does_not_join, self.userB
         result = self.propose("merge_accounts", {"close": closed.username, "keep": kept.pk})
