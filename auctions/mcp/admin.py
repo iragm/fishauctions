@@ -1290,6 +1290,53 @@ def set_user_features(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{user.username}: " + ", ".join(said) + ".")
 
 
+def _interest_problem(params: dict[str, Any]) -> str:
+    """Why ``set_interest`` can't run as asked, or ``""``."""
+    from auctions.models import Category
+
+    if not _str(params, "name"):
+        return "Which interest? set_interest needs its name."
+    if "aquatic" in params and palette_actions._flag(params, "aquatic") is None:
+        return "aquatic is true or false."
+    names = [name.strip() for name in _str(params, "categories").split(",") if name.strip()]
+    unknown = sorted(set(names) - set(Category.objects.filter(name__in=names).values_list("name", flat=True)))
+    if unknown:
+        return f"There is no category called {unknown[0]}. Category names are exactly as the lot filter lists them."
+    return ""
+
+
+def set_interest(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add an interest clubs can carry, or change one: whether it's aquatic, its noun, its categories.
+
+    A club whose interests are all non-aquatic gets species suggestions off in new auctions, its own
+    categories and its own noun where the site says fish (:attr:`auctions.models.Club.keeps_aquatic`).
+    """
+    from auctions.models import Category, GeneralInterest
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _interest_problem(params)
+    if problem:
+        return _error(problem)
+    name = _str(params, "name")[:255]
+    interest = GeneralInterest.objects.filter(name__iexact=name).first()
+    created = interest is None
+    if created:
+        interest = GeneralInterest(name=name)
+    if "aquatic" in params:
+        interest.aquatic = palette_actions._flag(params, "aquatic")
+    if "noun" in params:
+        interest.noun = _str(params, "noun")[:50].lower()
+    interest.save()
+    if "categories" in params:
+        names = [part.strip() for part in _str(params, "categories").split(",") if part.strip()]
+        interest.categories.set(Category.objects.filter(name__in=names))
+    kind = "aquatic" if interest.aquatic else f"not aquatic, members keep {interest.noun or 'animals'}"
+    count = interest.categories.count()
+    offers = f"{count} categor{'y' if count == 1 else 'ies'}" if count else "every category"
+    return _ok(f"{'Added' if created else 'Updated'} the interest {interest.name}: {kind}, offering {offers}.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -1373,6 +1420,24 @@ APPROVAL_ONLY: dict[str, Action] = {
             idempotent=True,
             confirm_template="Change an account's features",
             resolver=set_user_features,
+        ),
+        Action(
+            name="set_interest",
+            description=(
+                "Add an interest clubs can carry (update_club sets a club's), or change one. A club whose "
+                "interests are all non-aquatic gets species suggestions off in new auctions, only its "
+                "interests' categories, and its noun where the site says fish."
+            ),
+            params={
+                "name": "string, required. The interest's name, e.g. 'Reptiles'. An existing one is changed.",
+                "aquatic": "boolean, optional, default true for a new one. false for anything the species list doesn't cover.",
+                "noun": "string, optional. What its members keep, singular, e.g. 'reptile'.",
+                "categories": "string, optional. Comma-separated category names its clubs' auctions offer; empty offers all.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Set a club interest",
+            resolver=set_interest,
         ),
         Action(
             name="make_club_admin",
@@ -1469,6 +1534,7 @@ PROPOSAL_CHECKS = {
     "add_club": lambda arguments: club_onboarding.club_fields(arguments)[1],
     "make_club_admin": lambda arguments: _club_and_account(arguments)[2],
     "set_user_features": _features_problem,
+    "set_interest": _interest_problem,
     "update_club": lambda arguments: _club_changes(arguments)[3],
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],

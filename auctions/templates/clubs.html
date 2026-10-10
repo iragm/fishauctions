@@ -1,6 +1,6 @@
 {% extends "auctions/htmx_table_view.html" %}
 {% load static %}
-{% block title %}Find a fish club near you{% endblock %}
+{% block title %}Find a {{ kept_noun|default:'fish' }} club near you{% endblock %}
 
 {% comment %}
 The public club finder, built the way the speaker directory is: the shared htmx table page, so the

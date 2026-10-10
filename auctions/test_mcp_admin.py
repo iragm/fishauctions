@@ -638,6 +638,23 @@ class AdminJobProposalTests(AdminEndpointCase):
         people = self.call("untrusted_auction_creators", {})["structuredContent"]["people"]
         self.assertNotIn(creator.pk, [person["user"] for person in people])
 
+    def test_an_interest_is_added_and_a_club_takes_it(self):
+        from auctions.models import Category, GeneralInterest
+
+        Category.objects.create(name="Snakes test")
+        result = self.propose(
+            "set_interest", {"name": "Reptiles test", "aquatic": False, "noun": "Reptile", "categories": "Snakes test"}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        interest = GeneralInterest.objects.get(name="Reptiles test")
+        self.assertFalse(interest.aquatic)
+        self.assertEqual(interest.noun, "reptile")
+        self.assertEqual([category.name for category in interest.categories.all()], ["Snakes test"])
+        result = self.propose("set_interest", {"name": "Reptiles test", "categories": "No such category"}, "Bad")
+        self.assertTrue(result["isError"])
+        self.assertIn("no category called", result["content"][0]["text"])
+
     def test_two_accounts_are_merged_once_approved(self):
         closed, kept = self.user_who_does_not_join, self.userB
         result = self.propose("merge_accounts", {"close": closed.username, "keep": kept.pk})

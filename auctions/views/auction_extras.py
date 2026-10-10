@@ -486,14 +486,16 @@ class AddToCalendarView(LoginRequiredMixin, View):
 
 
 class CategoryFinder(APIView):
-    """API view which will return a category (or none) based on POST keyword lot_name"""
+    """A category (or none) for POST ``lot_name``, from the categories POST ``auction`` offers if given."""
 
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         lot_name = request.POST.get("lot_name") or ""
-        result = guess_category(lot_name)
+        auction_pk = request.POST.get("auction") or ""
+        auction = Auction.objects.filter(pk=auction_pk, is_deleted=False).first() if auction_pk.isdigit() else None
+        result = guess_category(lot_name, allowed=auction.lot_categories() if auction else None)
         if result:
             result = {"name": result.name, "value": result.pk}
         else:

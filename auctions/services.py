@@ -1047,6 +1047,10 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
                 action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
                 user=None,
             )
+    if auction.club and auction.use_scientific_name and not auction.club.keeps_aquatic:
+        # The species list is fish, plants and inverts; a reptile club's lots would match nothing.
+        auction.use_scientific_name = False
+        auction.save(update_fields=["use_scientific_name"])
     created_by.userdata.last_auction_used = auction
     created_by.userdata.save(update_fields=["last_auction_used"])
     # Also called from PickupLocationsCreate, once a location exists.

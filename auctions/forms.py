@@ -277,6 +277,20 @@ class SpeciesSelect(forms.Select):
         )
 
 
+def narrow_categories(field, auction, keep=None):
+    """Offer only ``auction``'s categories (:meth:`Auction.lot_categories`) in a category picker.
+
+    ``keep`` is the category a lot already has, so editing a lot filed before its club narrowed its
+    list doesn't make it pick a new one.
+    """
+    allowed = auction.lot_categories() if auction else None
+    if allowed is None:
+        return
+    if keep is not None:
+        allowed = Category.objects.filter(Q(pk__in=allowed.values("pk")) | Q(pk=keep.pk)).order_by("name")
+    field.queryset = allowed
+
+
 def configure_species_field(
     fields,
     auction,
@@ -1219,6 +1233,7 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
+        narrow_categories(self.fields["species_category"], self.auction, keep=self.lot.species_category)
         # A dal picker, no guessing (see configure_species_field). LotAdmin is auction-admin only.
         configure_species_field(self.fields, self.auction, dal_for=self.user)
         self.fields["species"].initial = self.lot.species
@@ -3111,6 +3126,13 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].help_text = ""
         # Always rendered, shown and hidden by JS with the chosen auction.
         configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
+        narrow_categories(
+            self.fields["species_category"],
+            selected_auction,
+            keep=self.instance.species_category if self.instance.pk else None,
+        )
+        if selected_auction:
+            self.fields["i_bred_this_fish"].label = selected_auction.i_bred_this_label
         if self.instance.pk:
             # The name its species was worked out from, so focusing the name box doesn't redo it.
             self.fields["species"].widget.attrs["data-last-query"] = self.instance.lot_name
@@ -4609,6 +4631,7 @@ class LotCategoryForm(forms.ModelForm):
             raise ValueError(msg)
         super().__init__(*args, **kwargs)
         self.fields["species_category"].queryset = Category.objects.all().order_by("name")
+        narrow_categories(self.fields["species_category"], self.instance.auction, keep=self.instance.species_category)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.attrs = {"hx-post": post_url, "hx-target": "#modals-here", "hx-swap": "innerHTML"}

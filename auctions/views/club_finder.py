@@ -34,7 +34,7 @@ from django.views.generic.edit import FormView
 from auctions import club_onboarding
 from auctions.filters import ClubFilter
 from auctions.forms import ClubAddForm
-from auctions.models import Club, ClubEvent, distance_to
+from auctions.models import Club, ClubEvent, GeneralInterest, distance_to
 from auctions.tables import ClubHTMxTable
 
 from .base import HTMxTableView, LocationMixin
@@ -197,6 +197,13 @@ class ClubFinderView(LocationMixin, HTMxTableView):
                 context["no_results"] = (
                     "<div class='text-center py-3'><p class='text-muted mb-0'>No clubs match these filters.</p></div>"
                 )
+        # "Find a reptile club" when the interest picked isn't aquatic; fish otherwise.
+        picked = (
+            GeneralInterest.objects.filter(pk=selected_interest, aquatic=False).first()
+            if selected_interest.isdigit()
+            else None
+        )
+        context["kept_noun"] = picked.noun if picked and picked.noun else "fish"
         context["default_view"] = "map" if self.request.GET.get("view") == "map" else "list"
         return context
 
