@@ -9,7 +9,7 @@ You read production through the **admin connector** (`/mcp/admin/`, `auctions/mc
 cannot change the site. You leave two kinds of output, and nothing else:
 
 - **`suggest_feature`**: something the code should do differently. It joins the feature requests as
-  `new`. The owner decides each one with a tap on a card in the project chat (step 8), or marks it
+  `new`. The owner decides each one with a tap on a card in the project chat (step 9), or marks it
   `planned` on the site, and the build-requests routine builds those.
 - **`propose_change`**: a change to the site's *data*, such as setting a lot's species. It waits on
   `/admin-dashboard/proposals/` until the owner presses Approve.
@@ -39,18 +39,24 @@ names and dates.
    five guesses.
 6. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
    for every lot on the gaps page whose match you are sure of (`set_lot_species`).
-7. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
+7. **Trust new organizers** (skip if the connector has no `untrusted_auction_creators` yet). It lists who created an auction lately and
+   isn't trusted. Trust someone whose facts say a real club or seller: a verified email, a listed club
+   they run or an auction filed under one, earlier lots here, an auction with real lots or people in
+   it. Leave alone a brand-new account with an empty auction and nothing else, a title or name that
+   reads as spam, or anything you can't tell; say so in the summary. One proposal with a `trust_user`
+   step per person, the reason giving the facts (counts, never their words).
+8. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
    and `site_health`'s commit includes it, propose `set_request_status` → `done`. An `app` request is
    done once its PR has merged into the app's `main`; a `both` request needs both.
    A `new` request from a member whose target looks wrong goes in the same proposal: `set_request_status`
    with status `new` and the right `target`.
-   The same goes for a request the decision ledger (step 8) records as **Build**: propose `done` once
+   The same goes for a request the decision ledger (step 9) records as **Build**: propose `done` once
    it is live. One the ledger records as **Decline** and the site still shows as `new`: propose
    `declined` in the same proposal, so the asker sees it.
-8. Hand the owner today's decisions, as `/mnt/project-files/routines/DECISIONS.md` says: every `new`
+9. Hand the owner today's decisions, as `/mnt/project-files/routines/DECISIONS.md` says: every `new`
    request the ledger there doesn't already list goes to the project's coordinator in one message,
    paraphrased, with its target. That file is the protocol; the ledger is the record.
-9. End with a few lines: issues queued and closed, what you filed, what you proposed, anything you
+10. End with a few lines: issues queued and closed, what you filed, what you proposed, who you proposed trusting, anything you
    couldn't tell.
 
 ## What the owner has already decided

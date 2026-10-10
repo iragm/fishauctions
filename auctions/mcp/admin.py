@@ -14,7 +14,8 @@ differences, all enforced here or in the transport rather than by any client's a
 * **Its own reads**, :data:`ADMIN_TOOLS`: any superuser dashboard as text (and the reports in
   :data:`MCP_ONLY_PAGES`, which have no URL), the feature requests, the
   mobile app's crash reports, the logs (redacted on the way out), the deploy's health, and two that
-  were management commands: palette shortcut candidates and Square sellers who must reconnect.
+  were management commands: palette shortcut candidates and Square sellers who must reconnect, and
+  the auctions' untrusted creators for the scout's daily trust check.
 
 Two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
 requests (``planned`` is what starts work, and only a person sets it), and a change to the site's data
@@ -60,7 +61,7 @@ INSTRUCTIONS = (
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
     "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
-    "palette_shortcut_candidates and square_reconnects. Nothing here "
+    "palette_shortcut_candidates, square_reconnects and untrusted_auction_creators. Nothing here "
     "changes the site. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -776,6 +777,78 @@ def square_reconnects(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def untrusted_auction_creators(request, params: dict[str, Any]) -> dict[str, Any]:
+    """People who created an auction lately and aren't trusted yet, with what says whether they look real.
+
+    The scout reads this daily and proposes ``trust_user`` for the ones that do. Facts only, no verdict:
+    the account's age and sign-in, its history here, and each new auction's size and club.
+    """
+    from allauth.account.models import EmailAddress
+    from allauth.socialaccount.models import SocialAccount
+    from django.db.models import Q
+
+    from auctions.models import Auction, AuctionTOS, ClubMember, Lot
+
+    days = max(1, min(_int(params, "days") or 7, 60))
+    since = timezone.now() - timedelta(days=days)
+    auctions = (
+        Auction.objects.filter(is_deleted=False, date_posted__gte=since, created_by__isnull=False)
+        .filter(created_by__is_active=True, created_by__userdata__is_trusted=False)
+        .select_related("created_by", "club")
+        .order_by("created_by_id", "date_posted")
+    )
+    people: dict[int, dict[str, Any]] = {}
+    for auction in auctions[:200]:
+        user = auction.created_by
+        if user.pk not in people:
+            people[user.pk] = {
+                "user": user.pk,
+                "username": palette_actions.untrusted_short(user.username),
+                "account_age_days": (timezone.now() - user.date_joined).days,
+                "email_verified": EmailAddress.objects.filter(user=user, verified=True).exists(),
+                "signed_in_with": sorted(
+                    set(SocialAccount.objects.filter(user=user).values_list("provider", flat=True))
+                ),
+                "auctions_created_before": Auction.objects.filter(
+                    created_by=user, is_deleted=False, date_posted__lt=since
+                ).count(),
+                "lots_sold_before": Lot.objects.filter(
+                    Q(user=user) | Q(auctiontos_seller__user=user), is_deleted=False, date_posted__lt=since
+                ).count(),
+                "lots_won_before": Lot.objects.filter(
+                    Q(winner=user) | Q(auctiontos_winner__user=user), date_posted__lt=since
+                ).count(),
+                "club_admin_of": sorted(
+                    ClubMember.objects.filter(user=user, is_deleted=False, permission_admin=True).values_list(
+                        "club__name", flat=True
+                    )
+                ),
+                "new_auctions": [],
+            }
+        people[user.pk]["new_auctions"].append(
+            {
+                "auction": auction.slug,
+                "title": palette_actions.untrusted_short(auction.title),
+                "posted": auction.date_posted.date().isoformat(),
+                "starts": auction.date_start.date().isoformat() if auction.date_start else "",
+                "online": auction.is_online,
+                "promoted": auction.promote_this_auction,
+                "club": auction.club.name if auction.club_id else "",
+                "club_listed": bool(auction.club_id and auction.club.is_listed),
+                "lots": Lot.objects.filter(auction=auction, is_deleted=False).count(),
+                "participants": AuctionTOS.objects.filter(auction=auction).count(),
+            }
+        )
+    rows = list(people.values())
+    if not rows:
+        return _ok(f"Nobody untrusted created an auction in the last {days} days.", people=[])
+    return _ok(
+        f"{len(rows)} untrusted {'person' if len(rows) == 1 else 'people'} created an auction in the last "
+        f"{days} days. Propose trust_user for the ones who look like a real club or seller.",
+        people=rows,
+    )
+
+
 # --- changes that only a proposal makes --------------------------------------------------------------
 
 
@@ -1175,6 +1248,48 @@ def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Updated {club.name}: {', '.join(changed)}.{where}", club=club.pk)
 
 
+#: What ``set_user_features`` may switch for one account: its parameter -> the ``UserData`` field and
+#: what to call it. Each is off for new accounts unless its ``*_ENABLED_FOR_USERS`` setting says so;
+#: the site-wide ``change_*`` commands stay with the owner, paired with ``.env``.
+USER_FEATURES = {
+    "paypal": ("paypal_enabled", "PayPal"),
+    "square": ("square_enabled", "Square"),
+    "library": ("library_enabled", "the library"),
+    "voice_cloud": ("voice_cloud_enabled", "listening through OpenAI"),
+    "club_auctions": ("can_create_club_auctions", "creating auctions"),
+}
+
+
+def _features_problem(params: dict[str, Any]) -> str:
+    """Why ``set_user_features`` can't run as asked, or ``""``."""
+    if _account(params, "user") is None:
+        return "There is no active account by that number or username."
+    if all(palette_actions._flag(params, name) is None for name in USER_FEATURES):
+        return "Turn at least one on or off: " + ", ".join(USER_FEATURES) + "."
+    return ""
+
+
+def set_user_features(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Turn PayPal, Square, the library, cloud listening or auction creation on or off for one account."""
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _features_problem(params)
+    if problem:
+        return _error(problem)
+    user = _account(params, "user")
+    userdata = user.userdata
+    said, fields = [], []
+    for name, (field, label) in USER_FEATURES.items():
+        wanted = palette_actions._flag(params, name)
+        if wanted is None:
+            continue
+        setattr(userdata, field, wanted)
+        fields.append(field)
+        said.append(f"{label} {'on' if wanted else 'off'}")
+    userdata.save(update_fields=fields)
+    return _ok(f"{user.username}: " + ", ".join(said) + ".")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -1239,6 +1354,25 @@ APPROVAL_ONLY: dict[str, Action] = {
             idempotent=True,
             confirm_template="Trust a user",
             resolver=trust_user,
+        ),
+        Action(
+            name="set_user_features",
+            description=(
+                "Turn features on or off for one account: PayPal, Square, the library, listening through "
+                "OpenAI on Set lot winners, and creating auctions. Name only the ones to change."
+            ),
+            params={
+                "user": "string, required. The account's username, or its number.",
+                "paypal": "boolean, optional. Let them connect PayPal and take payments through it.",
+                "square": "boolean, optional. Let them connect Square and take payments through it.",
+                "library": "boolean, optional. Show them /library/ and its tools.",
+                "voice_cloud": "boolean, optional. Let them listen through OpenAI on Set lot winners.",
+                "club_auctions": "boolean, optional. Let them create auctions.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Change an account's features",
+            resolver=set_user_features,
         ),
         Action(
             name="make_club_admin",
@@ -1334,6 +1468,7 @@ APPROVAL_ONLY: dict[str, Action] = {
 PROPOSAL_CHECKS = {
     "add_club": lambda arguments: club_onboarding.club_fields(arguments)[1],
     "make_club_admin": lambda arguments: _club_and_account(arguments)[2],
+    "set_user_features": _features_problem,
     "update_club": lambda arguments: _club_changes(arguments)[3],
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
@@ -1632,6 +1767,18 @@ ADMIN_TOOLS: dict[str, Action] = {
             },
             danger=DANGER_SAFE,
             resolver=palette_shortcut_candidates,
+        ),
+        Action(
+            name="untrusted_auction_creators",
+            description=(
+                "People who created an auction lately and aren't trusted, with the facts that say whether "
+                "they look real: account age, verified email, social sign-in, earlier auctions and lots, "
+                "clubs they run, and each new auction's club, lots and participants. trust_user them by "
+                "proposal."
+            ),
+            params={"days": "integer, optional, default 7. How far back to look, at most 60."},
+            danger=DANGER_SAFE,
+            resolver=untrusted_auction_creators,
         ),
         Action(
             name="square_reconnects",
