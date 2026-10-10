@@ -1,11 +1,9 @@
 """``UserData`` and ``AuctionTOS`` properties, and merging one user into another."""
 
 import datetime
-import io
 from decimal import Decimal
 
 from django.contrib.auth.models import User
-from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
@@ -290,23 +288,3 @@ class UserDataMergeIntoTests(TestCase):
         self.assertFalse(SquareSeller.objects.filter(user=self.source_user).exists())
         self.assertTrue(PayPalSeller.objects.filter(user=self.target_user, paypal_merchant_id="paypal_123").exists())
         self.assertTrue(SquareSeller.objects.filter(user=self.target_user, square_merchant_id="square_123").exists())
-
-    def test_management_command_calls_merge_into(self):
-        out = io.StringIO()
-
-        call_command(
-            "empty_account_and_move_data",
-            self.source_user.username,
-            self.target_user.username,
-            stdout=out,
-        )
-
-        self.membership_invoice.refresh_from_db()
-        self.target_user.userdata.refresh_from_db()
-        self.assertIn(
-            f"Moved data from {self.source_user.username} to {self.target_user.username}.",
-            out.getvalue(),
-        )
-        self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
-        self.assertEqual(self.membership_invoice.buyer, self.target_user)
-        self.assertEqual(self.target_user.userdata.phone_number, "555-0000")

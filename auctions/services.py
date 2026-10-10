@@ -1056,9 +1056,9 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
 def link_auction_to_club(auction, club, *, note, actor=None, grant_admin=True):
     """Attach an auction to a club after the fact, and optionally make its creator a club admin.
 
-    For organizers whose auctions predate their club. Shared by ``assign_auction_to_club`` and
-    ``LinkAuctionToClub``. ``save()``, not ``update()``: attaching a club books settled invoices to the
-    club ledger. Returns True when an admin was granted.
+    For organizers whose auctions predate their club. Shared by ``LinkAuctionsToClub`` and the
+    ``link_auction_to_club`` proposal on ``/mcp/admin/``. ``save()``, not ``update()``: attaching a
+    club books settled invoices to the club ledger. Returns True when an admin was granted.
     """
     auction.club = club
     auction.save(update_fields=["club"])

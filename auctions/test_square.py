@@ -9,7 +9,6 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -96,25 +95,22 @@ class SquarePaymentTests(StandardTestCase):
         self.square_seller.save()
         self.assertFalse(self.square_seller.supports_tap_to_pay)
 
-    def test_find_square_reconnects_command(self):
-        """The audit command lists legacy sellers until they have the scope."""
-        from io import StringIO
+    def test_square_reconnects_on_the_admin_endpoint(self):
+        """The admin read lists legacy sellers until they have the scope."""
+        from django.test import RequestFactory
 
+        from auctions.mcp import admin
         from auctions.models import SQUARE_OAUTH_SCOPES
 
-        out = StringIO()
-        call_command("find_square_reconnects", stdout=out)
-        output = out.getvalue()
-        self.assertIn("Need to reconnect: 1", output)
-        self.assertIn(self.admin_user.username, output)
+        request = RequestFactory().get("/")
+        request.user = self.admin_user
+        result = admin.square_reconnects(request, {})
+        self.assertIn("1 Square seller must reconnect", result["summary"])
+        self.assertEqual([seller["user"] for seller in result["sellers"]], [self.admin_user.username])
 
         self.square_seller.scopes = " ".join(SQUARE_OAUTH_SCOPES)
         self.square_seller.save()
-        out = StringIO()
-        call_command("find_square_reconnects", stdout=out)
-        output = out.getvalue()
-        self.assertIn("Need to reconnect: 0", output)
-        self.assertNotIn(self.admin_user.username, output)
+        self.assertEqual(admin.square_reconnects(request, {})["sellers"], [])
 
     def test_winner_invoice_property(self):
         """Test Lot.winner_invoice property"""

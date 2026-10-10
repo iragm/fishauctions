@@ -806,7 +806,7 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
             return
         # Count before saving: granting permission_admin files these auctions via a signal.
         assigned_count = Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False).count()
-        # Shared with assign_auction_to_club and the unlinked auctions page.
+        # Shared with the unlinked auctions page and the link_auction_to_club proposal.
         note = "via the auction admin panel" + (
             f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
         )

@@ -1,7 +1,6 @@
 """Merging two accounts: the two-sided request, what moves, and what a stranger can't do with it."""
 
 import datetime
-import io
 from unittest.mock import patch
 
 from allauth.account.models import EmailAddress
@@ -9,7 +8,6 @@ from allauth.socialaccount.models import SocialAccount
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
-from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -245,8 +243,3 @@ class MergeTests(MergeTestCase):
         accept_merge(self.target, self.source.pk)
         with self.assertRaises(MergeRefused):
             accept_merge(self.target, self.source.pk)
-
-    def test_the_management_command_closes_the_source_too(self):
-        call_command("empty_account_and_move_data", "oldme", "newme", stdout=io.StringIO())
-        self.source.refresh_from_db()
-        self.assertFalse(self.source.is_active)

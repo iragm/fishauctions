@@ -5,14 +5,12 @@ import inspect
 import json
 import re
 import time
-from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
-from django.core.management import call_command
 from django.test import Client, SimpleTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -965,10 +963,26 @@ class ShortcutMiningTests(PaletteAssistTestCase):
                 success=success,
             )
 
-    def _mine(self, *args):
-        out = StringIO()
-        call_command("mine_palette_shortcuts", *args, stdout=out)
-        return out.getvalue()
+    def _candidates(self):
+        """What ``palette_shortcut_candidates`` on ``/mcp/admin/`` offers."""
+        from auctions.mcp import admin
+
+        return admin.palette_shortcut_candidates(self._owner_request(), {})
+
+    def _apply(self):
+        """Approve an ``add_palette_shortcut`` for every candidate, as the owner would."""
+        from auctions.mcp import admin
+
+        for candidate in self._candidates()["candidates"]:
+            admin.add_palette_shortcut(self._owner_request(), {"phrase": candidate["phrase"]})
+
+    def _owner_request(self):
+        from django.contrib.auth.models import User
+
+        owner = User.objects.filter(username="shortcut_owner").first() or User.objects.create_superuser(
+            "shortcut_owner", "shortcut_owner@example.com", "pw"
+        )
+        return self._request_for(owner)
 
     def test_a_navigation_records_where_it_landed(self):
         LLMUsage.objects.all().delete()
@@ -979,7 +993,7 @@ class ShortcutMiningTests(PaletteAssistTestCase):
     def test_a_consistently_answered_phrase_becomes_a_shortcut(self):
         LLMUsage.objects.all().delete()
         self._usage("Where do I see my watched lots?", "watched", count=5)
-        self._mine("--apply")
+        self._apply()
         page = CommandPalettePage.objects.get(target="route:watched")
         self.assertEqual(page.search_term, "where do i see my watched lots")
 
@@ -987,28 +1001,42 @@ class ShortcutMiningTests(PaletteAssistTestCase):
         LLMUsage.objects.all().delete()
         self._usage("show me the invoices", "my_invoices", count=4)
         self._usage("show me the invoices", "auction_invoices", count=4)
-        output = self._mine("--apply")
+        self.assertEqual(self._candidates()["answered_two_ways"], 1)
+        self._apply()
         self.assertFalse(CommandPalettePage.objects.filter(target__startswith="route:").exists())
-        self.assertIn("resolved inconsistently", output)
 
     def test_an_uncommon_phrase_is_left_alone(self):
         LLMUsage.objects.all().delete()
         self._usage("some one-off thing somebody typed once", "watched", count=2)
-        self._mine("--apply")
+        self._apply()
         self.assertFalse(CommandPalettePage.objects.filter(target__startswith="route:").exists())
 
-    def test_it_reports_without_writing_unless_asked(self):
+    def test_listing_candidates_writes_nothing(self):
         LLMUsage.objects.all().delete()
         self._usage("where do I see my watched lots", "watched", count=5)
-        output = self._mine()
-        self.assertIn("watched", output)
-        self.assertIn("Re-run with --apply", output)
+        candidates = self._candidates()["candidates"]
+        self.assertEqual([candidate["times"] for candidate in candidates], [5])
+        self.assertIn("where do i see my watched lots", candidates[0]["phrase"])
         self.assertFalse(CommandPalettePage.objects.filter(target__startswith="route:").exists())
+
+    def test_only_a_phrase_the_model_always_answered_the_same_way_can_be_added(self):
+        """The agent picks phrases; the model's own past answers decide where each goes."""
+        from auctions.mcp import admin
+
+        LLMUsage.objects.all().delete()
+        self._usage("where do I see my watched lots", "watched", count=2)
+        result = admin.add_palette_shortcut(self._owner_request(), {"phrase": "where do I see my watched lots"})
+        self.assertIn("always answered the same way", result["error"])
+        self._usage("where do I see my watched lots", "watched", count=3)
+        self._apply()
+        result = admin.add_palette_shortcut(self._owner_request(), {"phrase": "where do I see my watched lots"})
+        self.assertIn("already has a shortcut", result["error"])
+        self.assertEqual(CommandPalettePage.objects.filter(target="route:watched").count(), 1)
 
     def test_a_mined_shortcut_then_answers_without_any_model_call(self):
         LLMUsage.objects.all().delete()
         self._usage("where do I see my watched lots", "watched", count=5)
-        self._mine("--apply")
+        self._apply()
 
         self._script()  # no scripted replies: touching the provider at all would raise
         response = self._assist("where do I see my watched lots")
@@ -3187,11 +3215,18 @@ class LookupPreloadTests(PaletteAssistTestCase):
         self.assertEqual(palette_assist._answered_from(without), "lookup:auction_numbers")
 
     def test_the_miner_does_not_turn_a_lookup_into_a_page_shortcut(self):
+        from django.contrib.auth.models import User
+
+        from auctions.mcp import admin
+
         self._record("how is it going", "lookup:auction_numbers", palette_assist.PRELOAD_MIN_COUNT)
-        out = StringIO()
-        call_command("mine_palette_shortcuts", "--apply", stdout=out)
+        request = self._request_for(User.objects.create_superuser("lookup_owner", "lookup_owner@example.com", "pw"))
+        result = admin.palette_shortcut_candidates(request, {})
+        self.assertEqual(result["candidates"], [])
+        self.assertIn("1 answered from one lookup", result["summary"])
+        result = admin.add_palette_shortcut(request, {"phrase": "how is it going"})
+        self.assertIn("error", result)
         self.assertFalse(CommandPalettePage.objects.filter(search_term="how is it going").exists())
-        self.assertIn("answered from a single lookup", out.getvalue())
 
 
 class FailureReportTests(PaletteAssistTestCase):

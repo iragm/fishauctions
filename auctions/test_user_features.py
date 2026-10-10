@@ -3,7 +3,6 @@
 import datetime
 
 from django.contrib.auth.models import User
-from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -449,29 +448,6 @@ class UserTrustSystemTests(StandardTestCase):
         # The trust link only appears for an unpromoted auction.
         if not self.untrusted_auction.promote_this_auction:
             self.assertContains(response, 'value="trust_creator"')
-
-    def test_email_invoice_skips_untrusted_users(self):
-        """Test that email_invoice management command skips untrusted users"""
-
-        # Create an invoice for untrusted auction
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        location = PickupLocation.objects.create(name="location", auction=self.untrusted_auction, pickup_time=theFuture)
-        tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.untrusted_auction, pickup_location=location
-        )
-        invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos)
-        invoice.status = "UNPAID"
-        invoice.email_sent = False
-        invoice.save()
-        # Enable email sending
-        self.untrusted_auction.email_users_when_invoices_ready = True
-        self.untrusted_auction.save()
-        # Run command
-        call_command("email_invoice")
-        # Reload invoice
-        invoice.refresh_from_db()
-        # Email should be marked sent but not actually sent
-        self.assertTrue(invoice.email_sent)
 
 
 class WatchOrUnwatchViewTests(StandardTestCase):

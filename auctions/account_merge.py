@@ -5,7 +5,7 @@ Two-sided, served by :class:`auctions.views.AccountMergeView`: the account being
 (:func:`accept_merge`) within :data:`REQUEST_HOURS`. Being signed in to both is the proof of owning
 both, so the kept account is never emailed and a stranger's request is a row nobody acts on.
 
-:func:`merge_accounts` does the work, for the page and for ``empty_account_and_move_data`` alike.
+:func:`merge_accounts` does the work, for the page and for an approved ``merge_accounts`` proposal alike.
 Every relation to ``User`` is in exactly one of the tables below (``AccountMergeCoverageTests``), so a
 new one fails a test until someone decides where it goes. Sign-ins with Google, Apple or Facebook
 and AI agents move, which is the point; email addresses don't, and phones signed in to the closed

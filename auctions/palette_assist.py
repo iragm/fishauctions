@@ -639,7 +639,7 @@ def _looks_like_a_command(query: str) -> bool:
 
 
 def normalize_query(query: str) -> str:
-    """Lowercase, depunctuated, single-spaced. Shared with ``mine_palette_shortcuts`` so phrases match."""
+    """Lowercase, depunctuated, single-spaced. Shared with ``palette_shortcut_candidates`` on ``/mcp/admin/`` so phrases match."""
     return " ".join(re.findall(r"[a-z0-9']+", (query or "").lower()))
 
 
