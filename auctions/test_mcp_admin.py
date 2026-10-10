@@ -597,6 +597,47 @@ class AdminJobProposalTests(AdminEndpointCase):
                 self.assertIn(expected, result["content"][0]["text"])
         self.assertFalse(AgentProposal.objects.exists())
 
+    def test_an_accounts_features_are_switched(self):
+        userdata = self.userB.userdata
+        userdata.paypal_enabled = userdata.library_enabled = False
+        userdata.square_enabled = True
+        userdata.save()
+        result = self.propose(
+            "set_user_features", {"user": self.userB.username, "paypal": True, "library": "on", "square": False}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        userdata.refresh_from_db()
+        self.assertTrue(userdata.paypal_enabled)
+        self.assertTrue(userdata.library_enabled)
+        self.assertFalse(userdata.square_enabled)
+        for arguments, expected in (
+            ({"user": self.userB.username}, "at least one"),
+            ({"user": "nobody_at_all", "paypal": True}, "no active account"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("set_user_features", arguments, expected)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+
+    def test_new_auctions_by_untrusted_creators_are_listed_with_their_facts(self):
+        from auctions.models import Auction
+
+        creator = self.online_auction.created_by
+        creator.userdata.is_trusted = False
+        creator.userdata.save(update_fields=["is_trusted"])
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_posted=timezone.now())
+        result = self.call("untrusted_auction_creators", {"days": 3})
+        self.assertFalse(result["isError"], result)
+        people = result["structuredContent"]["people"]
+        row = next(person for person in people if person["user"] == creator.pk)
+        self.assertIn(self.online_auction.slug, [auction["auction"] for auction in row["new_auctions"]])
+        self.assertIn("account_age_days", row)
+        creator.userdata.is_trusted = True
+        creator.userdata.save(update_fields=["is_trusted"])
+        people = self.call("untrusted_auction_creators", {})["structuredContent"]["people"]
+        self.assertNotIn(creator.pk, [person["user"] for person in people])
+
     def test_two_accounts_are_merged_once_approved(self):
         closed, kept = self.user_who_does_not_join, self.userB
         result = self.propose("merge_accounts", {"close": closed.username, "keep": kept.pk})
