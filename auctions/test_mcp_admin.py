@@ -699,6 +699,14 @@ class SiteHealthTests(AdminEndpointCase):
         self.assertEqual(result["structuredContent"]["disk"]["free_gb"], 8.0)
         self.assertIn("disk over 85% used", result["content"][0]["text"])
 
+    def test_it_says_when_a_deploy_would_hurt(self):
+        quiet = self.call("site_health")
+        self.assertIn("verdict", quiet["structuredContent"]["deploy_window"])
+        busy = {"verdict": "busy", "reasons": ["lots of traffic"], "usually_quietest_at": "04:00 EDT"}
+        with mock.patch("auctions.deploy_window.deploy_window", return_value={**busy, "auctions_in_play": []}):
+            text = self.call("site_health")["content"][0]["text"]
+        self.assertIn("Probably not a good time to deploy: lots of traffic.", text)
+
 
 #: Writes a read may make: its caller's own "last auction used" pointer.
 _ALLOWED_WRITES = ("UPDATE `auctions_userdata` SET `last_auction_used_id`",)

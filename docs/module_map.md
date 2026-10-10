@@ -119,6 +119,9 @@ this only quotes its opening sentence.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
   `is_crawler`
+- **`deploy_window.py`** (135 lines)
+  Whether now is a quiet time to deploy production: traffic against its usual lows, and auctions in play.
+  `hourly_views`, `quietest_hour`, `auctions_in_play`, `deploy_window`, `summary`
 - **`discord_events.py`** (341 lines)
   Discord scheduled events for clubs.
   `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`
@@ -405,6 +408,9 @@ this only quotes its opening sentence.
 - **`test_data_migrations.py`** (30 lines)
   Data migrations meet prod's rows, not a fresh database's, and one that raises stops the deploy
   `DoubledRowsTests`
+- **`test_deploy.py`** (227 lines)
+  Production deploys: the server's poller (``deploy/poller.py``) refusing what it should, and
+  `PollerVerifyTests`, `PollerPollTests`, `DeployWindowTests`
 - **`test_direct_sales_off.py`** (109 lines)
   Selling outside an auction, switched off by ``ALLOW_USERS_TO_CREATE_LOTS``: nothing user facing offers it,
   `DirectSalesOffTests`
@@ -482,7 +488,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (827 lines)
+- **`test_mcp_admin.py`** (835 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -747,6 +753,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`delete_pending_accounts.py`** (18 lines)
   Delete accounts whose deletion grace period has expired.
   `Command`
+- **`deploy_window.py`** (19 lines)
+  Print whether now is a quiet time to deploy production. Advice only; see auctions/deploy_window.py.
+  `Command`
 - **`email_invoice.py`** (44 lines)
   `Command`
 - **`email_unseen_chats.py`** (53 lines)
@@ -824,7 +833,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1331 lines)
+- **`admin.py`** (1346 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`auth.py`** (312 lines)
   Who is calling ``/mcp/``, and what they may do.
@@ -1050,6 +1059,12 @@ Every view on the site, split by the part of it the view belongs to.
 - **`webhooks.py`** (971 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`
+
+## `deploy/`
+
+- **`poller.py`** (287 lines)
+  The production server's half of a deploy: picks up a signed request from GitHub and runs update.sh.
+  `Rejected`, `signature`, `make_payload`, `verify`, `load_handled`, `remember`, `run_update`, `poll`, `main`
 
 ## `fishauctions/`
 
