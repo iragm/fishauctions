@@ -11,6 +11,7 @@
         {% if event.repeats %}<span class="ew-badge">{{ event.repeats }}</span>{% endif %}
         <span class="ew-line">{{ event.when }}</span>
         {% if event.location %}<span class="ew-line">{{ event.location }}</span>{% endif %}
+        {% if event.details %}<span class="ew-line">{{ event.details|linebreaksbr }}</span>{% endif %}
       </li>
       {% endfor %}
     </ul>

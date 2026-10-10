@@ -28,6 +28,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
+from django.utils.text import Truncator
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.generic import TemplateView, View
 
@@ -73,6 +74,7 @@ SCRIPT_EMBED_CSS = (
     ".club-embed .club-event-when,.club-embed .club-event-where,.club-embed .club-auction-when,"
     ".club-embed .club-auction-where,.club-embed .club-auction-lots{display:block;opacity:.75;font-size:.9em}"
     ".club-embed .club-event-cancelled .club-event-title{text-decoration:line-through}"
+    ".club-embed .club-event-details,.club-embed .club-auction-details{display:block;white-space:pre-line}"
     ".club-embed .club-event-badge,.club-embed .club-event-repeats{font-size:.75em;border:1px solid;"
     "border-radius:1em;padding:0 .5em;margin-left:.4em;white-space:nowrap}"
     ".club-embed .club-announcement-text{margin:0;white-space:pre-wrap}"
@@ -185,6 +187,19 @@ class BapEmbedView(View):
 CLUB_EVENTS_EMBED_MAX = 10
 
 
+#: How much of an event's description an embed row carries.
+EMBED_DETAILS_LIMIT = 400
+
+
+def _embed_details(event):
+    """The description a club admin wrote for *event* (who the speaker is, say), or "" when it is the
+    auction blurb this site generated.
+    """
+    if not event or (event.is_automatic and not event.description_is_custom):
+        return ""
+    return Truncator(event.description.strip()).chars(EMBED_DETAILS_LIMIT, truncate="…")
+
+
 def _club_events_embed_rows(request, club, count, *, past=False):
     """The club's next events for the embed, without pickup events. Public data only.
 
@@ -205,6 +220,7 @@ def _club_events_embed_rows(request, club, count, *, past=False):
                 "starts": start.isoformat(),
                 "all_day": event.all_day,
                 "location": event.location,
+                "details": _embed_details(event),
                 "cancelled": event.cancelled,
                 "repeats": event.recurrence_summary,
                 "url": request.build_absolute_uri(event.get_absolute_url()),
@@ -348,9 +364,12 @@ def _club_current_auction(club):
 
 
 def _club_auction_embed_row(request, auction):
-    """The handful of facts about an auction worth putting on somebody else's website."""
+    """The handful of facts about an auction worth putting on somebody else's website. Its calendar
+    event's title and description win over the auction's own, as they do on the events embed.
+    """
     if not auction:
         return None
+    event = auction.calendar_events.filter(is_deleted=False).first()
     start = timezone.localtime(auction.date_start)
     when = f"{date_format(start, 'D, N j, Y')} at {date_format(start, 'g:i A')}"
     if auction.is_online and auction.date_end and auction.date_end > auction.date_start:
@@ -361,7 +380,8 @@ def _club_auction_embed_row(request, auction):
         deadline = timezone.localtime(auction.lot_submission_end_date)
         lots_open = f"Lots can be entered until {date_format(deadline, 'N j, Y')}"
     return {
-        "title": auction.title,
+        "title": event.title if event and event.title_is_custom else auction.title,
+        "details": _embed_details(event),
         "when": when,
         "starts": timezone.localtime(auction.date_start).isoformat(),
         "is_online": auction.is_online,
