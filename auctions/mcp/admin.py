@@ -630,8 +630,19 @@ def _recent_errors() -> dict[str, Any]:
     return {"total": total, "most_common": [{"error": kind, "times": times} for kind, times in ranked]}
 
 
+def _deploy_window() -> dict[str, Any]:
+    """:mod:`auctions.deploy_window`, with the auction titles fenced like any other field from outside."""
+    from auctions import deploy_window
+
+    window = deploy_window.deploy_window()
+    for auction in window["auctions_in_play"]:
+        auction["title"] = palette_actions.untrusted_short(auction["title"])
+    return {**window, "advice": deploy_window.summary(window)}
+
+
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
-    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host."""
+    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host,
+    and whether now is a quiet time to deploy."""
     from auctions import app_crashes
 
     deployed = _deployed_commit()
@@ -639,6 +650,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     errors = _recent_errors()
     crashes = app_crashes.recent_count()
     host = _host()
+    window = _deploy_window()
     facts = {
         **deployed,
         # Short: a full 40-character hash is exactly what redact() takes for a credential.
@@ -650,6 +662,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "app_crashes_last_24h": crashes,
         **host,
         "debug": settings.DEBUG,
+        "deploy_window": window,
         "checked_at": timezone.now().isoformat(),
     }
     summary = (
@@ -661,6 +674,8 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f"; the app reported {crashes['crashes']} crash{'es' if crashes['crashes'] != 1 else ''}"
     full = [name for name in ("disk", "memory") if host[name].get("used_percent", 0) >= HOST_WARN_PERCENT]
     summary += f"; {' and '.join(full)} over {HOST_WARN_PERCENT}% used." if full else "."
+    if window["verdict"] != "quiet":
+        summary += " " + window["advice"]
     return _ok(summary, **facts)
 
 
