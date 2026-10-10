@@ -7,6 +7,7 @@ CSRF-exempt write endpoint. A credential only narrows its owner's permissions.
 
 from __future__ import annotations
 
+import datetime
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -280,33 +281,87 @@ def throttle_registration(view):
     return guarded
 
 
-def connected_apps(user) -> list[dict]:
-    """Applications ``user`` has signed in from, grouped by application rather than token, newest first.
+def _for_admin(resource) -> bool:
+    """Whether a token's RFC 8707 ``resource`` names the admin endpoint."""
+    from urllib.parse import urlsplit
 
-    ``{"pk", "name", "connected", "live", "writes"}`` each; ``live`` once any token is unexpired.
+    return any(is_admin_path(urlsplit(str(uri)).path) for uri in resource or [])
+
+
+def connected_apps(user) -> list[dict]:
+    """What ``user`` has signed in from, one row per application and endpoint, newest first.
+
+    ``{"pk", "admin", "name", "connected", "live", "writes", "connections"}`` each. A connection is
+    a refresh token family: rotation adds a row to the family and revokes the one before, so one
+    connection holds one live refresh token however often it refreshes. Access tokens last an hour;
+    one that has run out says nothing, because the next call refreshes it. ``live`` is a connection
+    that can still refresh (or an access token still good), and ``connections`` counts those. The
+    admin endpoint is its own row: a connector to ``/mcp/admin/`` beside one to ``/mcp/`` is two
+    connectors, not one twice. ``connected`` is the newest token, so roughly the last time it was used.
     """
     if not oauth_enabled():
         return []
-    from oauth2_provider.models import get_access_token_model
+    from oauth2_provider.models import get_access_token_model, get_refresh_token_model
+    from oauth2_provider.settings import oauth2_settings
 
+    now = timezone.now()
+    refresh_cutoff = now - datetime.timedelta(seconds=oauth2_settings.REFRESH_TOKEN_EXPIRE_SECONDS or 0)
     rows = {}
-    tokens = get_access_token_model().objects.filter(user=user).select_related("application").order_by("-created")
-    for token in tokens:
-        application = token.application
-        if application is None:
-            continue
+
+    def row_for(token):
+        admin = _for_admin(token.resource)
         row = rows.setdefault(
-            application.pk,
+            (token.application_id, admin),
             {
-                "pk": application.pk,
-                "name": application.name or "An AI agent",
+                "pk": token.application_id,
+                "admin": admin,
+                "name": token.application.name or "An AI agent",
                 "connected": token.created,
                 "live": False,
                 "writes": False,
+                "connections": set(),
+                "scope_from": None,
             },
         )
         row["connected"] = max(row["connected"], token.created)
+        return row
+
+    access_tokens = get_access_token_model().objects.filter(user=user, application__isnull=False)
+    for token in access_tokens.select_related("application"):
+        row = row_for(token)
         if not token.is_expired():
             row["live"] = True
-            row["writes"] = row["writes"] or SCOPE_WRITE in (token.scope or "").split()
+        # What it may do is the newest grant's scope, signed out or not: an hour-old token still says it.
+        if row["scope_from"] is None or token.created > row["scope_from"]:
+            row["scope_from"] = token.created
+            row["writes"] = not row["admin"] and SCOPE_WRITE in (token.scope or "").split()
+    refresh_tokens = get_refresh_token_model().objects.filter(
+        user=user, application__isnull=False, revoked__isnull=True
+    )
+    for token in refresh_tokens.select_related("application"):
+        row = row_for(token)
+        if not oauth2_settings.REFRESH_TOKEN_EXPIRE_SECONDS or token.created > refresh_cutoff:
+            row["live"] = True
+            row["connections"].add(token.token_family or token.pk)
+    for row in rows.values():
+        row["connections"] = len(row["connections"])
+        del row["scope_from"]
     return sorted(rows.values(), key=lambda row: row["connected"], reverse=True)
+
+
+def disconnect_app(user, application_pk, admin=False) -> bool:
+    """End every session ``user`` has with one application on one endpoint (``/mcp/admin/`` when
+    ``admin``): access tokens, refresh tokens and grants. Returns True if there was one.
+    """
+    if not oauth_enabled():
+        return False
+    from oauth2_provider.models import get_access_token_model, get_grant_model, get_refresh_token_model
+
+    removed = 0
+    for model in (get_refresh_token_model(), get_access_token_model(), get_grant_model()):
+        rows = model.objects.filter(user=user, application_id=application_pk).only("pk", "resource")
+        doomed = [row.pk for row in rows if _for_admin(row.resource) == admin]
+        if doomed:
+            deleted, _ = model.objects.filter(pk__in=doomed).delete()
+            removed += deleted
+    return bool(removed)

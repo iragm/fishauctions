@@ -168,7 +168,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (983 lines)
+- **`help_guides.py`** (977 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (907 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -447,7 +447,7 @@ this only quotes its opening sentence.
   Tests for the friction instrument: which form, which field, how many attempts, did they finish.
 - **`test_free_text_usage.py`** (46 lines)
   `FreeTextUsageTests`
-- **`test_help.py`** (836 lines)
+- **`test_help.py`** (880 lines)
   The help guides: that they cover every page and rule, that they are public, and that they talk about your auction.
 - **`test_helpers.py`** (1385 lines)
   Tests for helper functions, model utilities, template tags and context processors.
@@ -840,7 +840,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
   `species_dashboard`, `species_backfill`, `approve_species`, `merge_species`, `dismiss_species_duplicate`, `forget_species_answer`, `allow_species_pairing_again`, `backfill_species`, `set_species_on_lot_names`, `remember_not_a_species`
-- **`auth.py`** (312 lines)
+- **`auth.py`** (367 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
   Client ID Metadata Document handling for the clients that actually turn up.
@@ -1037,7 +1037,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (537 lines)
+- **`palette.py`** (520 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1075 lines)
   Connecting PayPal and Square accounts and taking payments through them.

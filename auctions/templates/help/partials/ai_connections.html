@@ -5,17 +5,18 @@
   {% if connected_apps %}
   <div class="table-responsive mb-3">
     <table class="table table-sm align-middle">
-      <thead><tr><th>Agent</th><th>Can change things</th><th>Connected</th><th></th></tr></thead>
+      <thead><tr><th>Agent</th><th>Can change things</th><th>Last used</th><th></th></tr></thead>
       <tbody>
         {% for app in connected_apps %}
         <tr{% if not app.live %} class="text-muted"{% endif %}>
-          <td>{{ app.name }}{% if not app.live %} <span class="badge bg-secondary rounded-pill">Signed out</span>{% endif %}</td>
+          <td>{{ app.name }}{% if app.admin %} (admin){% endif %}{% if not app.live %} <span class="badge bg-secondary rounded-pill">Signed out</span>{% endif %}</td>
           <td>{% if app.writes %}Yes{% else %}No, read only{% endif %}</td>
           <td>{{ app.connected|timesince }} ago</td>
           <td class="text-end">
             <form method="post" action="{% url 'user_api_keys' %}" data-confirm="Disconnect {{ app.name }}? It stops working straight away, and you'll be asked to sign in again if you reconnect it." data-confirm-title="Disconnect {{ app.name }}?" data-confirm-ok="Disconnect" data-confirm-variant="danger">
               <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
               <input type="hidden" name="disconnect" value="{{ app.pk }}">
+              {% if app.admin %}<input type="hidden" name="endpoint" value="admin">{% endif %}
               <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-x-lg"></i> Disconnect</button>
             </form>
           </td>

@@ -484,27 +484,21 @@ class HelpContext:
     def ai_duplicates(self) -> list[dict]:
         """AI agents the reader has connected more than once, as ``{"name", "count"}``.
 
-        A connection is a live refresh token (they rotate, so one connection holds one). Counted by the
-        client's name, not its row: Claude's connector is one client however many times it's added, but a
-        client that registers itself each time (DCR) is a new row per connection.
+        Counts ``mcp.auth.connected_apps``' live connections by the client's name, not its row:
+        Claude's connector is one client however many times it's added, but a client that registers
+        itself each time (DCR) is a new row per connection. The admin endpoint is counted apart, so a
+        superuser's admin connector beside the ordinary one isn't a duplicate.
         """
         if not self.signed_in:
             return []
-        from auctions.mcp import auth as mcp_auth
-
-        if not mcp_auth.oauth_enabled():
-            return []
         from collections import Counter
 
-        from oauth2_provider.models import get_refresh_token_model
+        from auctions.mcp.auth import connected_apps
 
-        names = (
-            get_refresh_token_model()
-            .objects.filter(user=self.user, revoked__isnull=True)
-            .values_list("application__name", flat=True)
-        )
-        counts = Counter(name for name in names if name)
-        return [{"name": name, "count": count} for name, count in counts.items() if count > 1]
+        counts = Counter()
+        for app in connected_apps(self.user):
+            counts[(app["name"], app["admin"])] += app["connections"]
+        return [{"name": name, "count": count} for (name, _admin), count in counts.items() if count > 1]
 
     @cached_property
     def club_active_members(self) -> int:
