@@ -47,7 +47,7 @@ from django.core.exceptions import PermissionDenied
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 
-from auctions import palette_actions, palette_routes
+from auctions import club_onboarding, palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
@@ -813,66 +813,6 @@ def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Feature request {row.pk}, “{row.skill}”, is now {row.get_status_display().lower()}.")
 
 
-def _web_address(value: str) -> str:
-    """A typed web address with its scheme, or ``""``. "example.org" is what people paste."""
-    value = value.strip()
-    if value and not value.startswith(("http://", "https://")):
-        value = f"https://{value}"
-    return value[:255]
-
-
-def _club_fields(params: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    """``add_club``'s arguments as ``Club`` fields, or ``({}, why not)``.
-
-    Run twice: when the proposal is made, so the agent hears about a duplicate while the owner is
-    still in the conversation, and again on approval, since another club may have been added since.
-    """
-    from django.core.exceptions import ValidationError
-    from django.core.validators import validate_email
-
-    from auctions import club_import
-    from auctions.models import Club
-
-    name = _str(params, "name")[:255]
-    if not name:
-        return {}, "Which club? add_club needs its name."
-    homepage = _web_address(_str(params, "homepage"))
-    facebook_page = _web_address(_str(params, "facebook_page"))
-    if homepage and not club_import.is_a_club_host(homepage):
-        return {}, (
-            f"{homepage} isn't the club's own website. A Facebook page goes in facebook_page; "
-            "leave homepage blank if it has no site of its own."
-        )
-    contact_email = _str(params, "contact_email")[:255]
-    if contact_email:
-        try:
-            validate_email(contact_email)
-        except ValidationError:
-            return {}, f"{contact_email} isn't an email address."
-    methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
-    contact_method = _str(params, "contact_method").lower()
-    if contact_method not in methods:
-        return {}, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
-    if not contact_method:
-        contact_method = Club.EMAIL if contact_email else Club.FACEBOOK if facebook_page and not homepage else ""
-    found = club_import.ImportedClub(name=name, homepage=homepage)
-    existing = club_import.find_existing(found, Club.objects.all())
-    if existing is not None:
-        return {}, f"That looks like {existing.name} (club {existing.pk}), already on the site."
-    listed = palette_actions._flag(params, "listed")
-    return {
-        "name": name,
-        "abbreviation": _str(params, "abbreviation")[:255] or None,
-        "homepage": homepage or None,
-        "facebook_page": facebook_page or None,
-        "location": _str(params, "location")[:500] or None,
-        "contact_email": contact_email or None,
-        "contact_method": contact_method,
-        "outreach_stage": Club.PROSPECT if listed is False else Club.LISTED,
-        "notes": _str(params, "notes")[:300] or None,
-    }, ""
-
-
 def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
     """Create one club from what an agent cleaned up out of something the owner pasted.
 
@@ -885,7 +825,7 @@ def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
 
     if not request.user.is_superuser:
         raise PermissionDenied
-    fields, problem = _club_fields(params)
+    fields, problem = club_onboarding.club_fields(params)
     if problem:
         return _error(problem)
     found = geocoding.geocode(fields["location"] or "")
@@ -1083,6 +1023,158 @@ def add_palette_shortcut(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"“{phrase}” now goes straight to {label}.")
 
 
+def _club_and_account(params: dict[str, Any]):
+    """``make_club_admin``'s club and account as ``(club, user, "")``, or ``(None, None, why not)``."""
+    club = _club(params)
+    if club is None:
+        return None, None, "There is no one club by that number or name."
+    user = _account(params, "user")
+    if user is None:
+        return None, None, "There is no active account by that number or username."
+    return club, user, ""
+
+
+def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Give one account full admin rights on one club, or take them away when ``admin`` is false."""
+    from auctions import services
+    from auctions.models import ClubHistory, ClubMember
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club, user, problem = _club_and_account(params)
+    if problem:
+        return _error(problem)
+    if palette_actions._flag(params, "admin") is False:
+        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False, permission_admin=True).first()
+        if member is None:
+            return _ok(f"{user.username} wasn't an admin of {club.name}.")
+        member.permission_admin = False
+        member.save()
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Removed admin permissions from {member.name} through an approved proposal.",
+            applies_to="MEMBERS",
+        )
+        return _ok(f"{user.username} is no longer an admin of {club.name}.")
+    if not services.ensure_club_admin(club, user, note="through an approved proposal", actor=request.user):
+        return _ok(f"{user.username} was already an admin of {club.name}.")
+    return _ok(f"{user.username} is now an admin of {club.name}.")
+
+
+#: What ``update_club`` may change, with each field's length. The facts a club's settings page and
+#: ``add_club`` already hold; money, email and integrations stay with the club's own admins.
+UPDATABLE_CLUB_FIELDS = {
+    "name": 255,
+    "abbreviation": 255,
+    "homepage": 255,
+    "facebook_page": 255,
+    "discord_invite_link": 255,
+    "location": 500,
+    "contact_email": 255,
+    "contact_method": 20,
+    "notes": 300,
+}
+
+
+def _club_changes(params: dict[str, Any]):
+    """``update_club``'s club and its changes as ``(club, changes, interests, "")``, or a reason in the last place.
+
+    Only the fields the step names change; an empty value clears one (never the name). ``interests`` is
+    ``None`` when the step doesn't name them.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    from auctions import club_import
+    from auctions.models import Club, GeneralInterest
+
+    club = _club(params)
+    if club is None:
+        return None, {}, None, "There is no one club by that number or name."
+    changes = {}
+    for field, length in UPDATABLE_CLUB_FIELDS.items():
+        if field in params:
+            value = _str(params, field)
+            if field in ("homepage", "facebook_page", "discord_invite_link"):
+                value = club_onboarding.web_address(value)
+            changes[field] = value[:length]
+    if "name" in changes:
+        if not changes["name"]:
+            return club, {}, None, "A club can't have a blank name."
+        others = Club.objects.exclude(pk=club.pk)
+        existing = club_import.find_existing(club_import.ImportedClub(name=changes["name"], homepage=""), others)
+        if existing is not None:
+            return club, {}, None, f"That name looks like {existing.name} (club {existing.pk}), already on the site."
+    if changes.get("homepage") and not club_import.is_a_club_host(changes["homepage"]):
+        problem = f"{changes['homepage']} isn't the club's own website. A Facebook page goes in facebook_page."
+        return club, {}, None, problem
+    if changes.get("contact_email"):
+        try:
+            validate_email(changes["contact_email"])
+        except ValidationError:
+            return club, {}, None, f"{changes['contact_email']} isn't an email address."
+    if "contact_method" in changes:
+        changes["contact_method"] = changes["contact_method"].lower()
+        methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
+        if changes["contact_method"] not in methods:
+            return club, {}, None, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
+    interests = None
+    if "interests" in params:
+        names = [name.strip() for name in _str(params, "interests").split(",") if name.strip()]
+        interests = list(GeneralInterest.objects.filter(name__in=names))
+        unknown = sorted(set(names) - {interest.name for interest in interests})
+        if unknown:
+            known = ", ".join(GeneralInterest.objects.order_by("name").values_list("name", flat=True))
+            return club, {}, None, f"There is no interest called {unknown[0]}. The interests are: {known}."
+    if not changes and interests is None:
+        return club, {}, None, "Name at least one thing to change."
+    return club, changes, interests, ""
+
+
+def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Correct a club's public details: its name, website, Facebook, meeting place, contact and interests.
+
+    A new meeting place is geocoded as ``add_club`` geocodes one; when Google can't find it the old pin
+    comes off rather than staying somewhere the club no longer meets.
+    """
+    from auctions import geocoding
+    from auctions.models import ClubHistory
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club, changes, interests, problem = _club_changes(params)
+    if problem:
+        return _error(problem)
+    where = ""
+    if "location" in changes:
+        found = geocoding.geocode(changes["location"])
+        # The pre_save signal splits the coordinates into latitude and longitude.
+        club.location_coordinates = found["coordinates"] if found else None
+        if not found:
+            club.latitude = club.longitude = None
+        where = (
+            f" Placed on the map at {found['address']}."
+            if found
+            else " Not on the map: drag its pin on the club's settings page."
+            if changes["location"]
+            else ""
+        )
+    for field, value in changes.items():
+        setattr(club, field, value or (None if field != "contact_method" else ""))
+    club.save()
+    if interests is not None:
+        club.interests.set(interests)
+    changed = sorted([*changes, *(["interests"] if interests is not None else [])])
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action="Changed " + ", ".join(changed) + " through an approved proposal.",
+        applies_to="SETTINGS",
+    )
+    return _ok(f"Updated {club.name}: {', '.join(changed)}.{where}", club=club.pk)
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -1149,6 +1241,46 @@ APPROVAL_ONLY: dict[str, Action] = {
             resolver=trust_user,
         ),
         Action(
+            name="make_club_admin",
+            description=(
+                "Make an account a club admin, with every permission on that club, or take admin away "
+                "with admin false. describe_club and find_person find the numbers."
+            ),
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "user": "string, required. The account's username, or its number.",
+                "admin": "boolean, optional, default true. false removes their admin rights.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Change a club's admins",
+            resolver=make_club_admin,
+        ),
+        Action(
+            name="update_club",
+            description=(
+                "Correct a club's details. Only the fields you name change; an empty value clears one. "
+                "A new location is placed on the map."
+            ),
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "name": "string, optional. Its full name; this changes the club page's address.",
+                "abbreviation": "string, optional. What members call it, e.g. 'GCAS'.",
+                "homepage": "string, optional. The club's own website. Never a Facebook or Meetup page.",
+                "facebook_page": "string, optional. Its Facebook page or group.",
+                "discord_invite_link": "string, optional. An invite to its Discord server.",
+                "location": "string, optional. Where it meets, as an address Google Maps would find.",
+                "contact_email": "string, optional. Where membership questions should go.",
+                "contact_method": "string, optional. email, webform or facebook: how to reach it.",
+                "notes": "string, optional. For the owner only, at most 300 characters.",
+                "interests": "string, optional. Comma-separated interest names, replacing the club's.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Update a club",
+            resolver=update_club,
+        ),
+        Action(
             name="link_auction_to_club",
             description=(
                 "File one auction that has no club under a club, and make its creator a club admin. "
@@ -1200,7 +1332,9 @@ APPROVAL_ONLY: dict[str, Action] = {
 #: while somebody is still there to answer it rather than on the approval page. Each runs again,
 #: inside the change itself, on approval.
 PROPOSAL_CHECKS = {
-    "add_club": lambda arguments: _club_fields(arguments)[1],
+    "add_club": lambda arguments: club_onboarding.club_fields(arguments)[1],
+    "make_club_admin": lambda arguments: _club_and_account(arguments)[2],
+    "update_club": lambda arguments: _club_changes(arguments)[3],
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
     "add_palette_shortcut": _shortcut_problem,

@@ -47,7 +47,7 @@ page. Why is in auctions/views/club_finder.py.
 </div>
 
 {% comment %}Was: sign in to see the address. That asked somebody to make an account before they could report a wrong pin on a map, and printed the address to every account that did. /support/ takes the message from either.{% endcomment %}
-<div class="mt-3">Something missing? <a href="{% url 'support' %}">Let us know</a>.</div>
+<div class="mt-3">Something missing? <a href="{% url 'club_add' %}">Add your club</a> or <a href="{% url 'support' %}">let us know</a>.</div>
 {% endblock %}
 
 {% block extra_js %}

@@ -31,6 +31,8 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "blog_post", "privacy_policy", "tos", "support", "dmca", "dmca_notice", "report_lot", "help",
         "help_guide",
         "club_detail", "speakers", "speaker_detail",
+        # An empty form for adding a club; what it creates belongs to the caller.
+        "club_add",
         # Account pages: their content is the caller's own, or a sign-in form. feature_requests lists
         # only the caller's own requests.
         "feature_requests",

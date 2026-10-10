@@ -4502,6 +4502,26 @@ class ClubAnnouncementForm(forms.ModelForm):
         return cleaned_data
 
 
+class ClubAddForm(forms.Form):
+    """A member adding a club they run; :func:`auctions.club_onboarding.add_my_club` does the rest."""
+
+    name = forms.CharField(max_length=255, label="Club name")
+    abbreviation = forms.CharField(max_length=255, required=False)
+    homepage = forms.CharField(max_length=255, required=False, label="Website")
+    facebook_page = forms.CharField(max_length=255, required=False, label="Facebook page or group")
+    location = forms.CharField(max_length=500, required=False, label="Where you meet")
+    contact_email = forms.EmailField(max_length=255, required=False, label="Membership email address")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["homepage"].widget.attrs["placeholder"] = "https://www.yourclub.org"
+        self.fields["facebook_page"].widget.attrs["placeholder"] = "https://www.facebook.com/groups/yourclub"
+        self.fields["location"].widget.attrs["placeholder"] = "An address or city"
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Add club", css_class="btn-primary"))
+
+
 class ClubEditForm(forms.ModelForm):
     """Form for club admins to edit their club settings."""
 

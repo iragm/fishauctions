@@ -16062,6 +16062,12 @@ NOT_A_SKILL: dict[str, str] = {
         "creator or making them their club's admin, a judgement about a stranger made while reading "
         "the auction they just created."
     ),
+    "ClubAddView": (
+        "Someone claiming to run a real club, and becoming its admin on that claim until the site's "
+        "owner reviews it. Who runs a club is the person's own statement to make, typed by them, not "
+        "something an assistant composes from a conversation; the site's administrators add clubs "
+        "with add_club on /mcp/admin/."
+    ),
     "AuctionSurvey": (
         "The organizers asking the people who came how it went, answered once each in that person's "
         "own words. An assistant writing the answer would be composing the review it exists to "
