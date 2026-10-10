@@ -301,7 +301,12 @@ deploy_branch="${DEPLOY_BRANCH:-$current_branch}"
 
 echo "Deploying branch: $deploy_branch"
 echo "This will erase any local uncommited changes. Did you make a snapshot? (y/n)"
-if [ -t 0 ]; then
+# deploy/poller.py answers for the "Deploy production" workflow, which only reaches the server once
+# its own Hostinger snapshot has finished. Nothing else should set this.
+if [ "${DEPLOY_SNAPSHOT_TAKEN:-}" = "1" ]; then
+    echo "y (snapshot taken by the deploy workflow)"
+    response="y"
+elif [ -t 0 ]; then
     read -r response
 else
     echo "Non-interactive mode detected; cancelling update by default."
