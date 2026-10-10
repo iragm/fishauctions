@@ -61,8 +61,8 @@ there to approve.
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
   `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, a club's outreach
-  stage, trusting a user) can be proposed, checked again at
-  approval. `planned` starts a build, so only the owner sets it (the project chat's decision cards,
+  stage, trusting a user, filing an auction under a club, merging two accounts, a palette shortcut)
+  can be proposed, checked again at approval. `planned` starts a build, so only the owner sets it (the project chat's decision cards,
   or Django admin), and a request can't be edited once decided.
 - `read_logs` and dashboard text go through `admin.redact` on the way out. No database tool, by
   decision.
@@ -198,9 +198,10 @@ guess made on somebody's behalf; **`tools_offered`** names the tier (`all`/`read
 so a turn that quietly lost its write tools isn't just another navigation. The page also shows
 whether the breaker is open right now, which was previously visible only as slow answers.
 
-`manage.py mine_palette_shortcuts` turns phrases the assistant has answered the same way every
-single time into shortcuts. An accepted phrase stops reaching the model at all: no call, no wait, and
-no way for it to come back wrong.
+`palette_shortcut_candidates` on `/mcp/admin/` lists the phrases the assistant has answered the same
+way every single time, and an approved `add_palette_shortcut` proposal turns one into a shortcut. An
+accepted phrase stops reaching the model at all: no call, no wait, and no way for it to come back
+wrong.
 
 ## Transport and auth
 

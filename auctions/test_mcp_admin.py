@@ -503,9 +503,48 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.user.userdata.refresh_from_db()
         self.assertTrue(self.user.userdata.is_trusted)
 
+    def test_an_auction_with_no_club_is_filed_under_one(self):
+        from auctions.models import Auction, ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        self.assertIsNone(self.online_auction.club)
+        result = self.propose("link_auction_to_club", {"auction": self.online_auction.slug, "club": club.name})
+        self.assertFalse(result["isError"], result)
+        self.assertIsNone(Auction.objects.get(pk=self.online_auction.pk).club)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertEqual(Auction.objects.get(pk=self.online_auction.pk).club, club)
+        self.assertTrue(
+            ClubMember.objects.filter(club=club, user=self.online_auction.created_by, permission_admin=True).exists()
+        )
+        result = self.propose("link_auction_to_club", {"auction": self.online_auction.pk, "club": club.pk}, "Again")
+        self.assertTrue(result["isError"])
+        self.assertIn("already belongs to", result["content"][0]["text"])
+
+    def test_two_accounts_are_merged_once_approved(self):
+        closed, kept = self.user_who_does_not_join, self.userB
+        result = self.propose("merge_accounts", {"close": closed.username, "keep": kept.pk})
+        self.assertFalse(result["isError"], result)
+        closed.refresh_from_db()
+        self.assertTrue(closed.is_active)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        closed.refresh_from_db()
+        self.assertFalse(closed.is_active)
+
+    def test_a_merge_is_refused_for_staff_the_same_account_or_nobody(self):
+        for arguments, expected in (
+            ({"close": self.owner.username, "keep": self.userB.username}, "Staff"),
+            ({"close": self.userB.username, "keep": self.userB.pk}, "same account"),
+            ({"close": "nobody_at_all", "keep": self.userB.username}, "no active account"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("merge_accounts", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
     def test_none_of_them_is_a_tool_anywhere(self):
         for url in (self.url, "/mcp/"):
-            for name in ("add_club", "set_club_stage", "trust_user"):
+            for name in admin.APPROVAL_ONLY:
                 response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url=url)
                 self.assertIn("error", json.loads(response.content))
 
