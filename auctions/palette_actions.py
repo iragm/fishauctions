@@ -4716,11 +4716,37 @@ def _narrow_history(request, params: dict[str, Any], history, filterset, words: 
             return None, _error("“days” has to be a whole number of days to look back, at least 1."), ""
         history = history.filter(timestamp__gte=timezone.now() - timezone.timedelta(days=days))
         said.append("in the last day" if days == 1 else f"in the last {days} days")
+    if params.get("hours") not in (None, ""):
+        hours = _int(params, "hours")
+        if hours is None or hours < 1:
+            return None, _error("“hours” has to be a whole number of hours to look back, at least 1."), ""
+        history = history.filter(timestamp__gte=timezone.now() - timezone.timedelta(hours=hours))
+        said.append("in the last hour" if hours == 1 else f"in the last {hours} hours")
+    for key, lookup, word in (("since", "timestamp__gte", "since"), ("until", "timestamp__lte", "until")):
+        when, problem = _parse_when(user, _str(params, key))
+        if problem:
+            return None, _error(problem), ""
+        if when:
+            history = history.filter(**{lookup: when})
+            said.append(f"{word} {user_time(user, when)}")
+    by = plain_text(_str(params, "by"), limit=80)
+    if by:
+        history = history.filter(_actor_q(by))
+        said.append(f"made by “{by}”")
     search = plain_text(_str(params, "search") or _str(params, "query"), limit=80)
     if search:
         history = filterset({"query": search}, queryset=history).qs
         said.append(f"matching “{search}”")
     return history, None, " ".join(said)
+
+
+def _actor_q(name: str) -> Q:
+    """Who made a history line, by username or any part of their name; ``"first last"`` matches both."""
+    match = Q(user__username__iexact=name) | Q(user__first_name__icontains=name) | Q(user__last_name__icontains=name)
+    first, _, last = name.partition(" ")
+    if last.strip():
+        match |= Q(user__first_name__icontains=first, user__last_name__icontains=last.strip())
+    return match
 
 
 def _history_row(entry, when: str | None) -> dict[str, Any]:
@@ -4747,29 +4773,71 @@ def _history_summary(subject: str, total: int, label: str, limit: int, offset: i
     return f"{total} changes in {subject}{described}, newest first.{_showing(total, limit, offset)}"
 
 
+#: What a superuser types for "every auction" or "every club" instead of naming one.
+EVERYWHERE_WORDS = frozenset({"all", "any", "every", "everywhere", "*"})
+
+
+def _site_wide(user, params: dict[str, Any], key: str) -> bool:
+    """A superuser asking for every auction or club at once: ``all_<key>s`` or ``<key>="all"``."""
+    if not getattr(user, "is_superuser", False):
+        return False
+    return bool(_flag(params, f"all_{key}s")) or _str(params, key).lower() in EVERYWHERE_WORDS
+
+
+def _history_page(history, params: dict[str, Any], when, extra) -> tuple[int, list[dict[str, Any]], int, int]:
+    """``(total, rows, limit, offset)`` for a narrowed history queryset, newest first."""
+    total = history.count()
+    limit, offset = _slice(params)
+    rows = [
+        {**_history_row(entry, when(entry)), **extra(entry)}
+        for entry in history.order_by("-timestamp")[offset : offset + limit]
+    ]
+    return total, rows, limit, offset
+
+
 def recent_changes(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Changes in an auction, newest first, with ``search``, ``about`` and ``days``. Admins only."""
+    """Changes in an auction, newest first, with ``search``, ``about``, ``by`` and a time range. Admins only.
+
+    A superuser may read any auction, or every auction at once (``all_auctions``), each row then naming
+    its auction -- how a run of club links made from ``/admin-unlinked-auctions/`` gets checked.
+    """
     from .filters import AuctionHistoryFilter
     from .models import AuctionHistory
 
     user = request.user
+    words = history_words(AuctionHistory, _AUCTION_HISTORY_WORDS)
+    if _site_wide(user, params, "auction"):
+        history = AuctionHistory.objects.filter(auction__isnull=False).select_related("user", "auction")
+        history, problem, label = _narrow_history(request, params, history, AuctionHistoryFilter, words)
+        if problem:
+            return problem
+        total, rows, limit, offset = _history_page(
+            history,
+            params,
+            lambda entry: user_time(user, entry.timestamp),
+            lambda entry: {"auction": untrusted_short(entry.auction.title), "auction_slug": entry.auction.slug},
+        )
+        return {
+            "found": bool(rows),
+            "auction": "every auction",
+            "changes": rows,
+            "count": total,
+            "showing": len(rows),
+            "offset": offset,
+            "summary": _history_summary("every auction", total, label, limit, offset),
+        }
     auction, problem = _auction_or_problem(request, params)
     if problem:
         return problem
     if not _is_auction_admin(user, auction):
         return _error(f"Only admins of {auction.title} can see its history.")
     history = AuctionHistory.objects.filter(auction=auction).select_related("user")
-    history, problem, label = _narrow_history(
-        request, params, history, AuctionHistoryFilter, history_words(AuctionHistory, _AUCTION_HISTORY_WORDS)
-    )
+    history, problem, label = _narrow_history(request, params, history, AuctionHistoryFilter, words)
     if problem:
         return problem
-    total = history.count()
-    limit, offset = _slice(params)
-    rows = [
-        _history_row(entry, local_time(auction, entry.timestamp))
-        for entry in history.order_by("-timestamp")[offset : offset + limit]
-    ]
+    total, rows, limit, offset = _history_page(
+        history, params, lambda entry: local_time(auction, entry.timestamp), lambda entry: {}
+    )
     return {
         "found": bool(rows),
         "auction": auction.title,
@@ -4782,32 +4850,63 @@ def recent_changes(request, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _any_club(hint: str):
+    """Any club on the site by slug, name or abbreviation, then by part of its name. Superusers only."""
+    from .models import Club
+
+    for lookup in ("slug__iexact", "name__iexact", "abbreviation__iexact", "name__icontains"):
+        club = Club.objects.filter(**{lookup: hint}).order_by("pk").first()
+        if club:
+            return club
+    return None
+
+
 def club_history(request, params: dict[str, Any]) -> dict[str, Any]:
     """Changes in a club, newest first, filtered like ``recent_changes``. Needs ``permission_view`` (as
     ``ClubHistoryView``). Times in the asker's timezone.
+
+    A superuser may read any club, not only their own, or every club at once (``all_clubs``).
     """
     from .filters import ClubHistoryFilter
     from .models import ClubHistory
 
     user = request.user
+    words = history_words(ClubHistory, _CLUB_HISTORY_WORDS)
+
+    def when(entry):
+        return user_time(user, entry.timestamp)
+
+    if _site_wide(user, params, "club"):
+        history = ClubHistory.objects.filter(club__isnull=False).select_related("user", "club")
+        history, problem, label = _narrow_history(request, params, history, ClubHistoryFilter, words)
+        if problem:
+            return problem
+        total, rows, limit, offset = _history_page(
+            history, params, when, lambda entry: {"club": entry.club.name, "club_slug": entry.club.slug}
+        )
+        return {
+            "found": bool(rows),
+            "club": "every club",
+            "changes": rows,
+            "count": total,
+            "showing": len(rows),
+            "offset": offset,
+            "summary": _history_summary("every club", total, label, limit, offset),
+        }
     # No ``also="name"``: here ``name`` is likelier the member than the club.
     club, problem = _club_or_problem(request, params)
+    if problem and user.is_superuser and _str(params, "club"):
+        club = _any_club(_str(params, "club"))
+        problem = None if club else problem
     if problem:
         return problem
     if not command_palette._perm(user, club, "permission_view"):
         return _error(f"You don't have permission to see {club.name}'s history.")
     history = ClubHistory.objects.filter(club=club).select_related("user")
-    history, problem, label = _narrow_history(
-        request, params, history, ClubHistoryFilter, history_words(ClubHistory, _CLUB_HISTORY_WORDS)
-    )
+    history, problem, label = _narrow_history(request, params, history, ClubHistoryFilter, words)
     if problem:
         return problem
-    total = history.count()
-    limit, offset = _slice(params)
-    rows = [
-        _history_row(entry, user_time(user, entry.timestamp))
-        for entry in history.order_by("-timestamp")[offset : offset + limit]
-    ]
+    total, rows, limit, offset = _history_page(history, params, when, lambda entry: {})
     return {
         "found": bool(rows),
         "club": club.name,
@@ -13981,7 +14080,20 @@ register(
             "'who checked Bob in?', 'when did that bidder number change?'."
         ),
         params={
-            "auction": "string, optional. Auction slug or title. See my_context.",
+            "auction": (
+                "string, optional. Auction slug or title. See my_context. Site admins may name any "
+                "auction, or 'all' for every auction at once."
+            ),
+            "all_auctions": (
+                "boolean, optional. Site admins only: every auction's changes at once, each row naming its auction."
+            ),
+            "by": ("string, optional. Only changes made by this person: a username or any part of their name."),
+            "hours": "integer, optional. Only changes from the last this many hours.",
+            "since": (
+                "string, optional. Only changes at or after this date and time, ISO 8601 "
+                "(2026-10-10T10:00); without a zone it is the asker's own time."
+            ),
+            "until": "string, optional. Only changes at or before this date and time, read like since.",
             "search": (
                 "string, optional. Words to look for in the change itself, in the name of "
                 "whoever made it, or in the kind of change it was — 'joe' finds the invoice "
@@ -14018,7 +14130,20 @@ register(
             "actually go out?'."
         ),
         params={
-            "club": "string, optional. Club name. See my_context.",
+            "club": (
+                "string, optional. Club name. See my_context. Site admins may name any club, or "
+                "'all' for every club at once."
+            ),
+            "all_clubs": (
+                "boolean, optional. Site admins only: every club's changes at once, each row naming its club."
+            ),
+            "by": ("string, optional. Only changes made by this person: a username or any part of their name."),
+            "hours": "integer, optional. Only changes from the last this many hours.",
+            "since": (
+                "string, optional. Only changes at or after this date and time, ISO 8601 "
+                "(2026-10-10T10:00); without a zone it is the asker's own time."
+            ),
+            "until": "string, optional. Only changes at or before this date and time, read like since.",
             "search": (
                 "string, optional. Words to look for in the change itself, in the name of "
                 "whoever made it, or in the kind of change it was — a member's name finds "

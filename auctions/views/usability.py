@@ -12,7 +12,7 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.models import User
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import redirect
 from django.urls import reverse
 from django.views import View
 from django.views.generic import TemplateView
@@ -65,7 +65,8 @@ class UnlinkedAuctions(AdminOnlyViewMixin, TemplateView):
         page = list(unlinked.order_by("-date_start", "-pk")[:UNLINKED_PAGE_SIZE])
         clubs = list(Club.objects.all().order_by("name"))
         suggestions = club_matching.suggest_clubs(page, clubs)
-        groups: dict[int, dict] = {}
+        # Keyed by confidence too, so a guess never shares a header (and ticked boxes) with a sure thing.
+        groups: dict[tuple, dict] = {}
         unmatched: list = []
         for auction in page:
             suggestion = suggestions.get(auction.pk)
@@ -73,7 +74,7 @@ class UnlinkedAuctions(AdminOnlyViewMixin, TemplateView):
                 unmatched.append(auction)
                 continue
             group = groups.setdefault(
-                suggestion.club.pk,
+                (suggestion.club.pk, suggestion.confidence),
                 {"club": suggestion.club, "reason": suggestion.reason, "confidence": suggestion.confidence, "rows": []},
             )
             group["rows"].append({"auction": auction, "reason": suggestion.reason})
@@ -91,7 +92,11 @@ class LinkAuctionsToClub(AdminOnlyViewMixin, View):
     http_method_names = ["post"]
 
     def post(self, request, *args, **kwargs):
-        club = get_object_or_404(Club, pk=request.POST.get("club") or 0)
+        wanted = request.POST.get("club") or ""
+        club = Club.objects.filter(pk=wanted).first() if wanted.isdigit() else None
+        if club is None:
+            messages.info(request, "Pick a club first.")
+            return redirect(reverse("admin_unlinked_auctions"))
         # Only still-unlinked auctions, against double submits.
         auctions = Auction.objects.filter(
             pk__in=request.POST.getlist("auction"), club__isnull=True, is_deleted=False

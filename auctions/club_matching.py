@@ -50,6 +50,9 @@ NAME_MATCH_THRESHOLD = 0.82
 #: A shorter abbreviation matches too much ordinary text to be evidence.
 MIN_ABBREVIATION = 3
 
+#: The shortest normalised club name looked for inside an auction title; shorter is ordinary text.
+MIN_NAME_IN_TITLE = 5
+
 _PUNCTUATION = re.compile(r"[^a-z0-9\s]+")
 _WHITESPACE = re.compile(r"\s+")
 
@@ -141,20 +144,40 @@ class Suggestion:
     confidence: str
 
 
-def _club_name_in_title(auction, clubs):
-    """A club whose name or abbreviation is in this auction's title.
+def _title_names(title: str, club) -> str:
+    """Why ``title`` names ``club`` -- its abbreviation as a whole word ("NEC" is inside "connect"), or
+    its normalised name as whole words -- or ``""``.
+    """
+    abbreviation = (club.abbreviation or "").strip()
+    if len(abbreviation) >= MIN_ABBREVIATION and re.search(rf"\b{re.escape(abbreviation)}\b", title, re.IGNORECASE):
+        return f"{abbreviation} is in the auction name"
+    # "Lehigh Valley Aquarium Society June 18th" is far from the bare name as a whole string.
+    name = normalize(club.name)
+    if len(name) >= MIN_NAME_IN_TITLE and f" {name} " in f" {normalize(title)} ":
+        return f"{club.name} is in the auction name"
+    return ""
 
-    An abbreviation must be a whole word: "NEC" is inside "connect".
+
+def _club_name_in_title(auction, clubs):
+    """A club whose name or abbreviation is in this auction's title: ``(club, reason, written_out)``.
+    ``written_out`` is False for the fuzzy whole-title match, too weak to overrule anything.
+
+    Abbreviations first, then the longest name, so "Boston Guppy" beats "Boston".
     """
     title = auction.title or ""
+    abbreviated, spelled = [], []
     for club in sorted(clubs, key=lambda candidate: candidate.pk):
-        abbreviation = (club.abbreviation or "").strip()
-        if len(abbreviation) >= MIN_ABBREVIATION and re.search(rf"\b{re.escape(abbreviation)}\b", title, re.IGNORECASE):
-            return club, f"{abbreviation} is in the auction name"
+        reason = _title_names(title, club)
+        if reason:
+            (spelled if reason.startswith(f"{club.name} ") else abbreviated).append((club, reason))
+    if abbreviated:
+        return (*abbreviated[0], True)
+    if spelled:
+        return (*max(spelled, key=lambda pair: len(normalize(pair[0].name))), True)
     club, score = best_match(title, clubs)
     if club:
-        return club, f"auction name looks like {club.name} ({score:.0%})"
-    return None, ""
+        return club, f"auction name looks like {club.name} ({score:.0%})", False
+    return None, "", False
 
 
 def suggest_clubs(auctions, clubs=None) -> dict[int, Suggestion]:
@@ -166,6 +189,9 @@ def suggest_clubs(auctions, clubs=None) -> dict[int, Suggestion]:
     2. The organizer's own ``UserData.club`` -- typed, but possibly years stale.
     3. The organizer belongs to exactly one club.
     4. The auction's name looks like a club's -- marked ``low``, meant to be read before approving.
+
+    A title naming a different club than signals 1-3 overrules them, marked ``low``: the organizer's
+    account club can be years stale, and signal 1 repeats whatever an earlier link chose.
 
     Three bulk queries whatever the size of ``auctions``, since the backlog is in the hundreds.
     """
@@ -205,23 +231,33 @@ def suggest_clubs(auctions, clubs=None) -> dict[int, Suggestion]:
     for auction in auctions:
         creator_id = auction.created_by_id
         club_id = None
-        reason, confidence = "", "high"
+        reason, source, confidence = "", "", "high"
         if creator_id and linked.get(creator_id):
             club_id, count = linked[creator_id].most_common(1)[0]
             reason = f"this organizer's other auction{'s' if count > 1 else ''} ({count}) are filed here"
+            source = "the organizer's other auctions are filed under"
         elif creator_id and affiliation.get(creator_id):
             club_id = affiliation[creator_id]
             reason = "the club on the organizer's account"
+            source = "the organizer's account says"
             confidence = "medium"
         elif creator_id and len(memberships.get(creator_id, ())) == 1:
             club_id = next(iter(memberships[creator_id]))
             reason = "the only club the organizer belongs to"
+            source = "the organizer's only club is"
             confidence = "medium"
+        named, named_reason, written_out = _club_name_in_title(auction, clubs)
         if club_id is None or club_id not in by_pk:
-            club, reason = _club_name_in_title(auction, clubs)
+            club, reason = named, named_reason
             confidence = "low"
             if not club:
                 continue
+        elif written_out and named.pk != club_id and not _title_names(auction.title or "", by_pk[club_id]):
+            # The title names another club: a stale account club or one earlier wrong link must not
+            # be preselected over it, so the title wins and the row is left for a person to tick.
+            club = named
+            reason = f"{named_reason}, though {source} {by_pk[club_id].name}"
+            confidence = "low"
         else:
             club = by_pk[club_id]
         suggestions[auction.pk] = Suggestion(club=club, reason=reason, confidence=confidence)
