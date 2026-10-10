@@ -61,9 +61,13 @@ there to approve.
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
   `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, a club's outreach
-  stage, trusting a user) can be proposed, checked again at
+  stage, trusting a user; the species list's upkeep from `admin_species`) can be proposed, checked again at
   approval. `planned` starts a build, so only the owner sets it (the project chat's decision cards,
   or Django admin), and a request can't be edited once decided.
+- **Species upkeep** (`admin_species.py`): `species_dashboard` and `species_backfill` read the gaps page
+  and `backfill_lot_species` as data with the numbers a step names; every button and every review answer
+  is an `APPROVAL_ONLY` step calling the same `auctions.species_admin` function the page and command
+  call. The reads pass `record=False`, so a preview never bumps a cache row's hits.
 - `read_logs` and dashboard text go through `admin.redact` on the way out. No database tool, by
   decision.
 - `test_mcp_admin.ReadOnlyToolsDontWriteTests` runs every registry read as a superuser and fails on

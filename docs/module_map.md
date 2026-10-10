@@ -251,10 +251,12 @@ this only quotes its opening sentence.
 - **`speaker_topics.py`** (200 lines)
   The speaker directory's fixed topic vocabulary.
   `canonical_topic_name`, `topic_needs_review`, `ensure_speaker_topics`
+- **`species_admin.py`** (450 lines)
+  The species list's upkeep: every superuser decision about it, written once.
 - **`species_categories.py`** (421 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
-- **`species_matching.py`** (1120 lines)
+- **`species_matching.py`** (1123 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1637 lines)
   The ``django_tables2`` tables behind every list on the site.
@@ -482,7 +484,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (827 lines)
+- **`test_mcp_admin.py`** (1014 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -715,9 +717,9 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`backfill_club_members_into_auctions.py`** (95 lines)
   `Command`
-- **`backfill_lot_species.py`** (497 lines)
+- **`backfill_lot_species.py`** (384 lines)
   Attach a species to lots that predate the species list.
-  `group_key`, `NameGroup`, `Command`
+  `Command`
 - **`backfill_sales_recorded.py`** (109 lines)
   Count ``Lot.sales_recorded`` for in-person lots sold before it was counted, from their history.
   `price_only_edit`, `count_sales`, `Command`
@@ -824,8 +826,11 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1331 lines)
+- **`admin.py`** (1335 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
+- **`admin_species.py`** (630 lines)
+  The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
+  `species_dashboard`, `species_backfill`, `approve_species`, `merge_species`, `dismiss_species_duplicate`, `forget_species_answer`, `allow_species_pairing_again`, `backfill_species`, `set_species_on_lot_names`, `remember_not_a_species`
 - **`auth.py`** (312 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
@@ -1039,7 +1044,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (532 lines)
+- **`species.py`** (361 lines)
   Adding species and common names, and the superuser's cleanup queue.
 - **`usability.py`** (165 lines)
   The usability reports, and linking auctions to clubs.

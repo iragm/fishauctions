@@ -50,14 +50,15 @@ from auctions import palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
-from . import tools
+from . import admin_species, tools
 
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, list_feature_requests, read_logs, list_app_crashes and site_health. Nothing here "
+    "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
+    "list_feature_requests, read_logs, list_app_crashes and site_health. Nothing here "
     "changes the site. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -953,18 +954,20 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Trust a user",
             resolver=trust_user,
         ),
+        # The species gaps page's buttons and the backfill command's answers.
+        *admin_species.APPROVAL_ONLY,
     ]
 }
 
 #: Checks an :data:`APPROVAL_ONLY` step's arguments when it is proposed, so a refusal reaches the agent
 #: while somebody is still there to answer it rather than on the approval page. Each runs again,
 #: inside the change itself, on approval.
-PROPOSAL_CHECKS = {"add_club": lambda arguments: _club_fields(arguments)[1]}
+PROPOSAL_CHECKS = {"add_club": lambda arguments: _club_fields(arguments)[1], **admin_species.PROPOSAL_CHECKS}
 
 
 #: Registry writes a proposal may name. Short on purpose: an approved step runs with a superuser's
 #: reach, and the agent that wrote it read text strangers typed. The owner's own one-off chores are
-#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs; a refund, an announcement or
+#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs (the species list's upkeep among them); a refund, an announcement or
 #: an email to a club is done by hand.
 PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species"})
 
@@ -1240,6 +1243,7 @@ ADMIN_TOOLS: dict[str, Action] = {
             danger=DANGER_SAFE,
             resolver=list_app_crashes,
         ),
+        *admin_species.READS,
         Action(
             name="suggest_feature",
             description=(
@@ -1296,9 +1300,9 @@ def descriptors() -> list[dict[str, Any]]:
 
 
 WRITE_REFUSED = (
-    "“{name}” changes data, and nothing on this endpoint does. Species fixes, feature request "
-    "statuses, new clubs, a club's stage and trusting a user can be proposed with propose_change; "
-    "anything else the owner does by hand."
+    "“{name}” changes data, and nothing on this endpoint does. Species fixes and the species list's "
+    "upkeep, feature request statuses, new clubs, a club's stage and trusting a user can be proposed "
+    "with propose_change; anything else the owner does by hand."
 )
 
 
