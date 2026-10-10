@@ -13,7 +13,8 @@ differences, all enforced here or in the transport rather than by any client's a
   with nobody there to approve anything, so the server is the only place a "read only" can live.
 * **Its own reads**, :data:`ADMIN_TOOLS`: any superuser dashboard as text (and the reports in
   :data:`MCP_ONLY_PAGES`, which have no URL), the feature requests, the
-  mobile app's crash reports, the logs (redacted on the way out) and the deploy's health.
+  mobile app's crash reports, the logs (redacted on the way out), the deploy's health, and two that
+  were management commands: palette shortcut candidates and Square sellers who must reconnect.
 
 Two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
 requests (``planned`` is what starts work, and only a person sets it), and a change to the site's data
@@ -50,14 +51,16 @@ from auctions import palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
-from . import tools
+from . import admin_species, tools
 
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, list_feature_requests, read_logs, list_app_crashes and site_health. Nothing here "
+    "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
+    "list_feature_requests, read_logs, list_app_crashes, site_health, "
+    "palette_shortcut_candidates and square_reconnects. Nothing here "
     "changes the site. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -628,8 +631,19 @@ def _recent_errors() -> dict[str, Any]:
     return {"total": total, "most_common": [{"error": kind, "times": times} for kind, times in ranked]}
 
 
+def _deploy_window() -> dict[str, Any]:
+    """:mod:`auctions.deploy_window`, with the auction titles fenced like any other field from outside."""
+    from auctions import deploy_window
+
+    window = deploy_window.deploy_window()
+    for auction in window["auctions_in_play"]:
+        auction["title"] = palette_actions.untrusted_short(auction["title"])
+    return {**window, "advice": deploy_window.summary(window)}
+
+
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
-    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host."""
+    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host,
+    and whether now is a quiet time to deploy."""
     from auctions import app_crashes
 
     deployed = _deployed_commit()
@@ -637,6 +651,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     errors = _recent_errors()
     crashes = app_crashes.recent_count()
     host = _host()
+    window = _deploy_window()
     facts = {
         **deployed,
         # Short: a full 40-character hash is exactly what redact() takes for a credential.
@@ -648,6 +663,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "app_crashes_last_24h": crashes,
         **host,
         "debug": settings.DEBUG,
+        "deploy_window": window,
         "checked_at": timezone.now().isoformat(),
     }
     summary = (
@@ -659,6 +675,8 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f"; the app reported {crashes['crashes']} crash{'es' if crashes['crashes'] != 1 else ''}"
     full = [name for name in ("disk", "memory") if host[name].get("used_percent", 0) >= HOST_WARN_PERCENT]
     summary += f"; {' and '.join(full)} over {HOST_WARN_PERCENT}% used." if full else "."
+    if window["verdict"] != "quiet":
+        summary += " " + window["advice"]
     return _ok(summary, **facts)
 
 
@@ -706,6 +724,56 @@ def list_app_crashes(request, params: dict[str, Any]) -> dict[str, Any]:
     summary = f"{counts['crashes']} app crash{'es' if counts['crashes'] != 1 else ''} in {days} days"
     summary += f", {counts['bugs']} distinct." if counts["crashes"] else "."
     return _ok(summary, bugs=found)
+
+
+# --- reads that were management commands -------------------------------------------------------------
+
+#: Phrases ``palette_shortcut_candidates`` lists at most, most asked first.
+SHORTCUT_CANDIDATES_SHOWN = 50
+
+
+def palette_shortcut_candidates(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Phrases the assistant has always answered with the same page, which ``add_palette_shortcut`` can
+    answer with no model call; and how many it answered two ways, which stay with the model."""
+    from auctions import palette_assist
+
+    min_count = max(_int(params, "min_count", palette_assist.MINE_MIN_COUNT) or 0, palette_assist.MINE_MIN_COUNT)
+    candidates, disputed = palette_assist.mine_shortcuts(min_count)
+    existing = palette_assist.phrases_with_a_shortcut()
+    found = []
+    for phrase, (route_key, count) in sorted(candidates.items(), key=lambda item: -item[1][1]):
+        if phrase in existing:
+            continue
+        route = palette_routes.get_route(route_key)
+        # Members typed these phrases.
+        found.append(
+            {
+                "phrase": palette_actions.untrusted_short(phrase),
+                "goes_to": route.label if route else route_key,
+                "times": count,
+            }
+        )
+    lookups = palette_assist.mine_preloaded_lookups(min_count)
+    summary = f"{len(found)} phrase{'s' if len(found) != 1 else ''} the assistant always sends to the same page"
+    summary += f", {len(disputed)} it answers more than one way, {len(lookups)} answered from one lookup."
+    return _ok(summary, candidates=found[:SHORTCUT_CANDIDATES_SHOWN], answered_two_ways=len(disputed))
+
+
+def square_reconnects(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Square sellers whose connection predates the Tap to Pay scope, from the scopes we recorded."""
+    from auctions.models import SquareSeller
+
+    sellers = SquareSeller.objects.select_related("user", "club").order_by("user__username")
+    stale = [
+        {"user": seller.user.username, "club": seller.club.name if seller.club_id else ""}
+        for seller in sellers
+        if not seller.supports_tap_to_pay
+    ]
+    if not stale:
+        return _ok("Every Square seller has the Tap to Pay scope.", sellers=[])
+    return _ok(
+        f"{len(stale)} Square seller{'s' if len(stale) != 1 else ''} must reconnect for Tap to Pay.", sellers=stale
+    )
 
 
 # --- changes that only a proposal makes --------------------------------------------------------------
@@ -888,6 +956,133 @@ def trust_user(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{user.username} is now trusted.")
 
 
+def _account(params: dict[str, Any], key: str):
+    """The active account a step names, by number or username, or ``None``."""
+    from django.contrib.auth.models import User
+
+    accounts = User.objects.filter(is_active=True)
+    number = _int(params, key)
+    if number is not None:
+        return accounts.filter(pk=number).first()
+    username = _str(params, key)
+    return accounts.filter(username=username).first() or accounts.filter(username__iexact=username).first()
+
+
+def _merge_pair(params: dict[str, Any]):
+    """``merge_accounts``' two accounts as ``(closed, kept, "")``, or ``(None, None, why not)``.
+
+    Staff accounts are refused, as the merge page refuses them: a merge can't be undone, and the
+    agent that proposed it read text strangers typed.
+    """
+    closed, kept = _account(params, "close"), _account(params, "keep")
+    if closed is None or kept is None:
+        return (
+            None,
+            None,
+            f"There is no active account by that number or username for {'close' if closed is None else 'keep'}.",
+        )
+    if closed == kept:
+        return None, None, "Those are the same account."
+    if any(user.is_staff or user.is_superuser for user in (closed, kept)):
+        return None, None, "Staff accounts aren't merged through a proposal."
+    return closed, kept, ""
+
+
+def merge_accounts(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Move everything one account has to another and close the first: the merge page's work, approved."""
+    from auctions.account_merge import merge_accounts as merge
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    closed, kept, problem = _merge_pair(params)
+    if problem:
+        return _error(problem)
+    name = closed.username
+    merge(closed, kept)
+    return _ok(f"Moved everything from {name} to {kept.username} and closed {name}.")
+
+
+def _auction_and_club(params: dict[str, Any]):
+    """``link_auction_to_club``'s auction and club as ``(auction, club, "")``, or ``(None, None, why not)``."""
+    from auctions.models import Auction
+
+    number = _int(params, "auction")
+    auctions = Auction.objects.filter(is_deleted=False)
+    auction = (
+        auctions.filter(pk=number).first()
+        if number is not None
+        else auctions.filter(slug=_str(params, "auction")).first()
+    )
+    if auction is None:
+        return None, None, "There is no auction by that number or slug."
+    if auction.club_id:
+        return None, None, f"{auction.title} already belongs to {auction.club.name}."
+    club = _club(params)
+    if club is None:
+        return None, None, "There is no one club by that number or name."
+    return auction, club, ""
+
+
+def link_auction_to_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """File an auction with no club under one, as the unlinked auctions page does, one auction a step."""
+    from auctions import club_health, services
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    auction, club, problem = _auction_and_club(params)
+    if problem:
+        return _error(problem)
+    grant_admin = palette_actions._flag(params, "make_creator_admin") is not False
+    granted = services.link_auction_to_club(
+        auction, club, note="through an approved proposal", actor=request.user, grant_admin=grant_admin
+    )
+    club_health.compute_club_health(club)
+    admin_note = f" {auction.created_by.username} is now a club admin." if granted else ""
+    return _ok(f"{auction.title} now belongs to {club.name}.{admin_note}")
+
+
+def _shortcut_problem(params: dict[str, Any]) -> str:
+    """Why ``phrase`` can't become a shortcut, or ``""``.
+
+    The phrase has to be one the assistant has answered the same way every time, at least
+    ``MINE_MIN_COUNT`` times, so the agent picks which ones and the model's own answers say where
+    each goes: nothing an agent writes becomes a destination.
+    """
+    from auctions import palette_assist
+
+    phrase = palette_assist.normalize_query(_str(params, "phrase"))
+    if not phrase:
+        return "Which phrase? palette_shortcut_candidates lists them."
+    if phrase in palette_assist.phrases_with_a_shortcut():
+        return f"“{phrase}” already has a shortcut."
+    if phrase not in palette_assist.mine_shortcuts()[0]:
+        return f"“{phrase}” isn't one the assistant has always answered the same way. palette_shortcut_candidates lists those."
+    return ""
+
+
+def add_palette_shortcut(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Answer one phrase from the route catalogue from now on, with no model call."""
+    from auctions import command_palette, palette_assist
+    from auctions.models import CommandPalettePage
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _shortcut_problem(params)
+    if problem:
+        return _error(problem)
+    phrase = palette_assist.normalize_query(_str(params, "phrase"))
+    route_key = palette_assist.mine_shortcuts()[0][phrase][0]
+    route = palette_routes.get_route(route_key)
+    label = route.label if route else route_key
+    CommandPalettePage.objects.create(
+        search_term=phrase[:200],
+        target=f"{command_palette.ROUTE_TARGET_PREFIX}{route_key}"[:100],
+        title=label[:200],
+        description="Added through an approved proposal from repeated assistant answers.",
+    )
+    return _ok(f"“{phrase}” now goes straight to {label}.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -953,18 +1148,69 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Trust a user",
             resolver=trust_user,
         ),
+        Action(
+            name="link_auction_to_club",
+            description=(
+                "File one auction that has no club under a club, and make its creator a club admin. "
+                "read_admin_page admin_unlinked_auctions lists them, with the club each probably belongs to."
+            ),
+            params={
+                "auction": "string, required. The auction's number or slug.",
+                "club": "string, required. The club's number, or its exact name.",
+                "make_creator_admin": "boolean, optional, default true. false files it without the admin grant.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="File an auction under a club",
+            resolver=link_auction_to_club,
+        ),
+        Action(
+            name="merge_accounts",
+            description=(
+                "Move everything one account has (lots, bids, invoices, memberships, sign-ins) to another "
+                "and close the first. Can't be undone. Not for staff accounts."
+            ),
+            params={
+                "close": "string, required. The account to empty and close: its username, or its number.",
+                "keep": "string, required. The account everything moves to: its username, or its number.",
+            },
+            danger=DANGER_CONFIRM,
+            destructive=True,
+            confirm_template="Merge two accounts",
+            resolver=merge_accounts,
+        ),
+        Action(
+            name="add_palette_shortcut",
+            description=(
+                "Answer one phrase from the command palette straight from the page catalogue, with no "
+                "model call. Only a phrase palette_shortcut_candidates lists; where it goes comes from "
+                "the assistant's own past answers."
+            ),
+            params={"phrase": "string, required. The phrase, as palette_shortcut_candidates gives it."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Add a command palette shortcut",
+            resolver=add_palette_shortcut,
+        ),
+        # The species gaps page's buttons and the backfill command's answers.
+        *admin_species.APPROVAL_ONLY,
     ]
 }
 
 #: Checks an :data:`APPROVAL_ONLY` step's arguments when it is proposed, so a refusal reaches the agent
 #: while somebody is still there to answer it rather than on the approval page. Each runs again,
 #: inside the change itself, on approval.
-PROPOSAL_CHECKS = {"add_club": lambda arguments: _club_fields(arguments)[1]}
+PROPOSAL_CHECKS = {
+    "add_club": lambda arguments: _club_fields(arguments)[1],
+    "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
+    "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
+    "add_palette_shortcut": _shortcut_problem,
+    **admin_species.PROPOSAL_CHECKS,
+}
 
 
 #: Registry writes a proposal may name. Short on purpose: an approved step runs with a superuser's
 #: reach, and the agent that wrote it read text strangers typed. The owner's own one-off chores are
-#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs; a refund, an announcement or
+#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs (the species list's upkeep among them); a refund, an announcement or
 #: an email to a club is done by hand.
 PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species"})
 
@@ -1240,6 +1486,29 @@ ADMIN_TOOLS: dict[str, Action] = {
             danger=DANGER_SAFE,
             resolver=list_app_crashes,
         ),
+        *admin_species.READS,
+        Action(
+            name="palette_shortcut_candidates",
+            description=(
+                "Phrases people type into the command palette that the assistant has sent to the same "
+                "page every time, and have no shortcut yet. Each can be proposed as add_palette_shortcut."
+            ),
+            params={
+                "min_count": "integer, optional, default 5, at least 5. How many times a phrase must have been asked.",
+            },
+            danger=DANGER_SAFE,
+            resolver=palette_shortcut_candidates,
+        ),
+        Action(
+            name="square_reconnects",
+            description=(
+                "Square sellers whose connection is missing the Tap to Pay scope and who must reconnect "
+                "before Tap to Pay works. Reads what we recorded; never calls Square."
+            ),
+            params={},
+            danger=DANGER_SAFE,
+            resolver=square_reconnects,
+        ),
         Action(
             name="suggest_feature",
             description=(
@@ -1296,8 +1565,9 @@ def descriptors() -> list[dict[str, Any]]:
 
 
 WRITE_REFUSED = (
-    "“{name}” changes data, and nothing on this endpoint does. Species fixes, feature request "
-    "statuses, new clubs, a club's stage and trusting a user can be proposed with propose_change; "
+    "“{name}” changes data, and nothing on this endpoint does. Species fixes and the species list's "
+    "upkeep, feature request statuses, new clubs, a club's stage, trusting a user, filing an auction "
+    "under a club, merging two accounts and palette shortcuts can be proposed with propose_change; "
     "anything else the owner does by hand."
 )
 

@@ -37,6 +37,10 @@ docker exec -it django python3 manage.py backfill_lot_species --review --include
 - Only `--review` writes `SpeciesSearchCache`. A question groups spellings by `group_key` **and**
   candidates. `--scan 0` scans every name.
 
+The same passes and every gaps-page button are on `/mcp/admin/` (`species_dashboard`,
+`species_backfill`, and proposal steps from `auctions/mcp/admin_species.py`), all through
+`auctions/species_admin.py`. A change there goes in that module, never in the view or command alone.
+
 ## Species shapes
 
 - **Cultivar**: `variety` set, `parent` is the nominal species. Show `full_scientific_name`, never

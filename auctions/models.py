@@ -7910,7 +7910,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     # deactivated at wind-down, and costs its seller nothing. Cleared by _do_save on a sale or reopen.
     ended_unsold = models.BooleanField(default=False)
     # Counted by add_winner_message; above 1 means the sale was corrected. Lots sold before this was
-    # counted were backfilled from their history by ``manage.py backfill_sales_recorded``.
+    # counted were backfilled from their history once, in September 2026.
     sales_recorded = models.PositiveSmallIntegerField(default=0)
     sales_recorded.help_text = "How many times a winner or sell price was recorded for this lot"
     refunded = models.BooleanField(default=False)
@@ -13439,7 +13439,7 @@ class LLMUsage(models.Model):
         db_index=True,
         help_text=(
             "For a navigation, the palette_routes key it landed on. This is what "
-            "`manage.py mine_palette_shortcuts` reads: a query that resolves to the same "
+            "palette_shortcut_candidates on /mcp/admin/ reads: a query that resolves to the same "
             "destination every time never needs to be asked about again."
         ),
     )

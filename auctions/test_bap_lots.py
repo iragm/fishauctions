@@ -5,7 +5,6 @@ import importlib.util
 from decimal import Decimal
 
 from django.contrib.auth.models import User
-from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -294,30 +293,6 @@ class LotBapEligibilityTests(TestCase):
         lot.auto_award_bap_points()
         lot.refresh_from_db()
         self.assertEqual(lot.bap_points_awarded, 12)
-
-    def test_backfill_bap_reasons_command_updates_only_ineligible_lots(self):
-        eligible = self._make_lot(lot_name="Eligible fish")
-        ineligible = self._make_lot(lot_name="Not bred fish", i_bred_this_fish=False)
-        ineligible.bap_auto_reason = ""
-        ineligible.save(update_fields=["bap_auto_reason"])
-
-        call_command("backfill_bap_reasons")
-
-        eligible.refresh_from_db()
-        ineligible.refresh_from_db()
-        self.assertEqual(eligible.bap_auto_reason, "")
-        self.assertEqual(ineligible.bap_auto_reason, "not_bred")
-
-    def test_backfill_bap_reasons_command_skips_unsold_lots(self):
-        sold_ineligible = self._make_lot(lot_name="Sold not bred fish", i_bred_this_fish=False)
-        unsold = self._make_lot(lot_name="Unsold fish", winning_price=None, auctiontos_winner=None)
-
-        call_command("backfill_bap_reasons")
-
-        sold_ineligible.refresh_from_db()
-        unsold.refresh_from_db()
-        self.assertEqual(sold_ineligible.bap_auto_reason, "not_bred")
-        self.assertEqual(unsold.bap_auto_reason, "")
 
     def test_not_donation_when_only_donation_lots_required(self):
         self.club.only_donation_lots = True

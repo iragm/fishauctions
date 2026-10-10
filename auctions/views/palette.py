@@ -366,7 +366,7 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     """Palette searches and the assistant's exchanges, read by agents through ``read_admin_page``.
 
-    No URL: ``mcp.admin.MCP_ONLY_PAGES`` renders it. ``manage.py mine_palette_shortcuts`` adds shortcuts.
+    No URL: ``mcp.admin.MCP_ONLY_PAGES`` renders it. ``add_palette_shortcut`` proposals add shortcuts.
     """
 
     template_name = "command_palette_analytics.html"

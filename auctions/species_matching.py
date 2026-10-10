@@ -1024,12 +1024,14 @@ def _is_somebody_elses_name(normalized, species, user=None, club=None):
     return not visible_common_names(user, club).filter(name_normalized=normalized, species=species).exists()
 
 
-def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None):
+def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None, record=True):
     """The one call views make: ``(species_list, source)`` for a typed lot name.
 
     *source* (``cache``/``exact``/``search``/``llm``/``none``) is for debugging. An empty list is a
     real answer. *budget* is whose model allowance is spent (:class:`LLMBudget`). *category* only
-    re-orders (:func:`_rank`). *club* only widens visibility (:func:`visible_species`).
+    re-orders (:func:`_rank`). *club* only widens visibility (:func:`visible_species`). ``record=False``
+    with ``use_llm=False`` writes nothing: no hit is counted and a healed gap row isn't written back,
+    for a preview that answers the same question without serving anybody.
     """
     normalized = normalize(text)
     if not normalized:
@@ -1042,8 +1044,9 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
 
     cached = SpeciesSearchCache.objects.filter(search_text=normalized).select_related("species").first()
     if cached:
-        # Racy on purpose; it only shows which names carry the cache.
-        SpeciesSearchCache.objects.filter(pk=cached.pk).update(hits=cached.hits + 1)
+        if record:
+            # Racy on purpose; it only shows which names carry the cache.
+            SpeciesSearchCache.objects.filter(pk=cached.pk).update(hits=cached.hits + 1)
         remembered = cached.species
         # A gap row healing itself: the fish may have been imported since. One lookup, no model call.
         healed = False
@@ -1062,7 +1065,7 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
             seen = False
         if seen:
             # Written back only when approved; this row is served site-wide.
-            if healed and remembered.approved:
+            if healed and remembered.approved and record:
                 SpeciesSearchCache.objects.filter(pk=cached.pk).update(species=remembered)
             return ([remembered] if remembered else []), "cache"
 
