@@ -60,7 +60,7 @@ there to approve.
   (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
-  `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, its details and admins, an account's features (PayPal, Square, library), a club's outreach
+  `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, its details, admins and interests, an account's features (PayPal, Square, library), a club's outreach
   stage, trusting a user, filing an auction under a club, merging two accounts, a palette shortcut;
   the species list's upkeep from `admin_species`) can be proposed, checked again at approval.
   `planned` starts a build, so only the owner sets it (the project chat's decision cards,

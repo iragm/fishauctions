@@ -9,7 +9,6 @@ import re
 from datetime import timezone as date_tz
 from urllib.parse import quote_plus
 
-from django.conf import settings
 from rest_framework import serializers
 from rest_framework.fields import empty
 
@@ -765,7 +764,7 @@ class ClubApiAuctionSerializer(PrivateBlockMixin, serializers.ModelSerializer):
             "use_scientific_name": obj.use_scientific_name,
             "use_donation_field": obj.use_donation_field,
             "use_i_bred_this_fish_field": obj.use_i_bred_this_fish_field,
-            "i_bred_this_fish_label": settings.I_BRED_THIS_FISH_LABEL,
+            "i_bred_this_fish_label": obj.i_bred_this_label,
             "use_custom_checkbox_field": obj.use_custom_checkbox_field,
             "custom_checkbox_name": obj.custom_checkbox_name or "",
             "custom_field_1": obj.custom_field_1,

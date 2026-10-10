@@ -296,7 +296,7 @@ $(document).ready(function() {
                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
             },
             url: "{% url 'guess_category' %}",
-            data: {'lot_name': this.value},
+            data: {'lot_name': this.value, 'auction': $('#id_auction').val() || ''},
             success : function(result) {
                 if (result['value'] && result['name'] !== "Uncategorized") {
                     $('#id_species_category').val(result['value']);
