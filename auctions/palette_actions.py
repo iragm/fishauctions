@@ -9214,8 +9214,8 @@ def club_website_snippets(request, params: dict[str, Any]) -> dict[str, Any]:
         "found": True,
         "club": club.name,
         "embeds": snippets,
-        "calendar_subscribe_url": club.calendar_subscribe_url,
-        "calendar_feed_url": club.calendar_feed_url,
+        "calendar_subscribe_url": club.calendar_subscribe_url(request.get_host()),
+        "calendar_feed_url": club.calendar_feed_url(request.get_host()),
         "copy_the_code_from_url": reverse("club_website_integration", kwargs={"slug": club.slug}),
         "summary": (
             f"{club.name} can embed {len(snippets)} things on its own website, and hand out a "
