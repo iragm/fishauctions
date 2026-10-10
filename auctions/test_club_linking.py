@@ -282,6 +282,50 @@ class SuggestClubsTests(StandardTestCase):
         Club.objects.create(name="Northeast Council", abbreviation="NEC")
         self.assertEqual(suggest_clubs([self._auction(title="Connecticut spring sale")]), {})
 
+    def test_a_club_spelled_out_in_the_title_beats_a_stale_account_club(self):
+        """The bug: an account club from years ago was preselected over the club the auction is named for."""
+        stale = Club.objects.create(name="Cichlid Club of Elsewhere")
+        named = Club.objects.create(name="Lehigh Valley Aquarium Society")
+        userdata = self.user.userdata
+        userdata.club = stale
+        userdata.save()
+        suggestion = next(
+            iter(suggest_clubs([self._auction(title="Lehigh Valley Aquarium Society June 18th")]).values())
+        )
+        self.assertEqual(suggestion.club, named)
+        self.assertEqual(suggestion.confidence, "low")
+        self.assertIn("Cichlid Club of Elsewhere", suggestion.reason)
+
+    def test_an_abbreviation_in_the_title_beats_an_earlier_link(self):
+        """One wrong link must not spread to every other auction the organizer ran."""
+        earlier = Club.objects.create(name="Earlier Society")
+        named = Club.objects.create(name="Aquarium Club of Lancaster County", abbreviation="ACLC")
+        linked = self._auction(title="Last year")
+        linked.club = earlier
+        linked.save()
+        suggestion = next(iter(suggest_clubs([self._auction(title="Preorder for the ACLC swap")]).values()))
+        self.assertEqual(suggestion.club, named)
+        self.assertEqual(suggestion.confidence, "low")
+
+    def test_a_title_naming_the_suggested_club_changes_nothing(self):
+        club = Club.objects.create(name="Greater Seattle Aquarium Society", abbreviation="GSAS")
+        Club.objects.create(name="Seattle Society")
+        userdata = self.user.userdata
+        userdata.club = club
+        userdata.save()
+        suggestion = next(iter(suggest_clubs([self._auction(title="GSAS spring auction")]).values()))
+        self.assertEqual(suggestion.club, club)
+        self.assertEqual(suggestion.confidence, "medium")
+
+    def test_a_fuzzy_title_match_does_not_overrule_the_account(self):
+        club = Club.objects.create(name="Declared Society")
+        Club.objects.create(name="Greater Seattle Aquarium Society")
+        userdata = self.user.userdata
+        userdata.club = club
+        userdata.save()
+        suggestion = next(iter(suggest_clubs([self._auction(title="Greater Seatle Aquarium Society")]).values()))
+        self.assertEqual(suggestion.club, club)
+
     def test_it_does_not_go_back_to_the_database_per_auction(self):
         club = Club.objects.create(name="Bulk Society")
         userdata = self.user.userdata
@@ -335,6 +379,25 @@ class UnlinkedAuctionsPageTests(StandardTestCase):
         self.unlinked.refresh_from_db()
         self.assertEqual(self.unlinked.club, self.club)
         self.assertFalse(ClubMember.objects.filter(club=self.club, user=self.user_with_no_lots).exists())
+
+    def test_a_guess_arrives_unticked_and_without_the_admin_grant(self):
+        Club.objects.create(name="Belongs Aquarium Society", abbreviation="BAQS")
+        self.unlinked.title = "BAQS spring swap"
+        self.unlinked.save()
+        self.client.login(username="admin_user", password="testpassword")
+        content = self.client.get(reverse("admin_unlinked_auctions")).content.decode()
+        row = content[content.index(f'value="{self.unlinked.pk}"') :][:80]
+        self.assertNotIn("checked", row)
+        self.assertNotIn('name="grant_admin" id="grant-admin-1" checked', content)
+        self.assertIn('autocomplete="off"', content)
+
+    def test_linking_with_no_club_picked_links_nothing(self):
+        """The "No idea" group used to default to the first club in the alphabet."""
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.post(reverse("link_auctions_to_club"), {"auction": [self.unlinked.pk]})
+        self.assertEqual(response.status_code, 302)
+        self.unlinked.refresh_from_db()
+        self.assertIsNone(self.unlinked.club)
 
     def test_an_auction_that_already_has_a_club_is_left_alone(self):
         """Two admins on the same page, or one double submit, must not re-file somebody's answer."""

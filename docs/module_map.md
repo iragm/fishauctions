@@ -105,7 +105,7 @@ this only quotes its opening sentence.
 - **`club_import.py`** (244 lines)
   Getting a list of aquarium clubs onto this site from a curated CSV.
   `ImportedClub`, `IngestReport`, `domain_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
-- **`club_matching.py`** (228 lines)
+- **`club_matching.py`** (264 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
 - **`command_palette.py`** (1531 lines)
@@ -207,7 +207,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16280 lines)
+- **`palette_actions.py`** (16405 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -373,7 +373,7 @@ this only quotes its opening sentence.
 - **`test_club_ledger.py`** (1118 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
   `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (421 lines)
+- **`test_club_linking.py`** (484 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_money.py`** (761 lines)
@@ -444,6 +444,9 @@ this only quotes its opening sentence.
 - **`test_helpers.py`** (1385 lines)
   Tests for helper functions, model utilities, template tags and context processors.
   `HelperFunctionsTestCase`, `ModelUtilityFunctionsTestCase`, `FormsUtilityTestCase`, `TemplateTagsTestCase`, `ContextProcessorsTestCase`, `FooterIconTests`, `SiteWebmanifestTests`, `GoogleLoginTemplateVisibilityTests`, `AdminSetupChecklistViewTests`
+- **`test_history_tools.py`** (108 lines)
+  ``recent_changes`` and ``club_history``: the filters, and a superuser reading every auction or club.
+  `HistoryToolTests`
 - **`test_invoice_models.py`** (221 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
@@ -1038,7 +1041,7 @@ Every view on the site, split by the part of it the view belongs to.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (532 lines)
   Adding species and common names, and the superuser's cleanup queue.
-- **`usability.py`** (160 lines)
+- **`usability.py`** (165 lines)
   The usability reports, and linking auctions to clubs.
   `AdminUsability`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminFreeTextUsage`, `AdminSessionReplay`
 - **`voice.py`** (188 lines)
