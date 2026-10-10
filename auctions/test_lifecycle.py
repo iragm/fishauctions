@@ -19,6 +19,7 @@ from auctions.models import (
     PickupLocation,
     SignInStitch,
 )
+from auctions.test_support import mcp_only_page
 from auctions.tests import StandardTestCase
 from auctions.usability_report import route_name
 
@@ -351,8 +352,8 @@ class MilestoneReachTests(StandardTestCase):
         self.assertEqual(lifecycle.milestone_reach([]), {})
 
 
-class LifecyclePageTests(StandardTestCase):
-    """Both pages are admin-only and render on a site with data in it.
+class SessionReplayPageTests(StandardTestCase):
+    """The session replay report is superuser-only and renders on a site with data in it.
 
     ``StandardTestCase.admin_user`` is an *auction* admin, which is different: ``AdminOnlyViewMixin``
     gates on ``is_superuser``.
@@ -361,43 +362,10 @@ class LifecyclePageTests(StandardTestCase):
     def _as_site_admin(self):
         self.admin_user.is_superuser = True
         self.admin_user.save()
-        self.client.force_login(self.admin_user)
-
-    def _with_a_club(self):
-        """Attach the fixture's auctions to a club, because every panel groups by one.
-
-        Without this the page renders its "no club has an auction yet" branch, which is a real state of the
-        site but not the one that proves the panels work.
-        """
-        club = Club.objects.create(name="Lifecycle page club")
-        Auction.objects.filter(pk__in=[self.online_auction.pk, self.in_person_auction.pk]).update(club=club)
-        return club
-
-    def test_the_lifecycle_page_needs_an_admin(self):
-        self.client.force_login(self.user)
-        response = self.client.get(reverse("admin_lifecycle"))
-        self.assertNotEqual(response.status_code, 200)
-
-    def test_the_lifecycle_page_renders(self):
-        self._with_a_club()
-        self._as_site_admin()
-        response = self.client.get(reverse("admin_lifecycle"))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Milestones reached")
-        self.assertContains(response, "Cohorts, one auction to the next")
-        self.assertContains(response, "The median member")
-
-    def test_the_lifecycle_page_says_what_share_of_the_site_it_can_see(self):
-        """Not a footnote: every club number on it is computed from the linked fifth."""
-        self._as_site_admin()
-        response = self.client.get(reverse("admin_lifecycle"))
-        self.assertContains(response, "auctions")
-        self.assertIn("coverage", response.context)
-        self.assertLessEqual(response.context["coverage"]["linked"], response.context["coverage"]["total"])
 
     def test_the_session_replay_page_renders_with_no_subject(self):
         self._as_site_admin()
-        response = self.client.get(reverse("admin_session_replay"))
+        response = mcp_only_page(self.admin_user, "admin_session_replay")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Busiest sessions")
 
@@ -405,9 +373,11 @@ class LifecyclePageTests(StandardTestCase):
         key = _session_key("replay-me")
         PageView.objects.create(url="/lots/", title="t", session_id=key)
         self._as_site_admin()
-        response = self.client.get(reverse("admin_session_replay"), {"session": key[: lifecycle.SESSION_KEY_PREFIX]})
+        response = mcp_only_page(
+            self.admin_user, "admin_session_replay", {"session": key[: lifecycle.SESSION_KEY_PREFIX]}
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.context["timeline"]), 1)
+        self.assertEqual(len(response.context_data["timeline"]), 1)
 
     def test_the_index_never_prints_a_whole_session_key(self):
         """The index never prints a whole session key.
@@ -418,18 +388,17 @@ class LifecyclePageTests(StandardTestCase):
         key = _session_key("wholekeyleak")
         PageView.objects.create(url="/lots/", title="t", session_id=key)
         self._as_site_admin()
-        response = self.client.get(reverse("admin_session_replay"))
+        response = mcp_only_page(self.admin_user, "admin_session_replay")
         self.assertNotContains(response, key)
         self.assertContains(response, key[: lifecycle.SESSION_KEY_PREFIX])
 
     def test_a_user_that_is_not_a_number_is_not_a_500(self):
         """``filter(pk="abc")`` raises ValueError, and this page exists to be poked at by hand."""
         self._as_site_admin()
-        response = self.client.get(reverse("admin_session_replay"), {"user": "abc"})
+        response = mcp_only_page(self.admin_user, "admin_session_replay", {"user": "abc"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["timeline"], [])
+        self.assertEqual(response.context_data["timeline"], [])
 
     def test_the_session_replay_page_needs_an_admin(self):
-        self.client.force_login(self.user)
-        response = self.client.get(reverse("admin_session_replay"))
+        response = mcp_only_page(self.user, "admin_session_replay")
         self.assertNotEqual(response.status_code, 200)

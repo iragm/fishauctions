@@ -25,7 +25,7 @@ from auctions.models import (
     Lot,
     PickupLocation,
 )
-from auctions.test_support import isolated_cache
+from auctions.test_support import isolated_cache, mcp_only_page
 from auctions.tests import StandardTestCase
 
 
@@ -625,12 +625,10 @@ class CommandPaletteTests(StandardTestCase):
 
     def test_analytics_view_is_admin_only(self):
         CommandPaletteSearch.objects.create(user=self.user, search="needle", result="bounce")
-        self._login(self.user)
-        resp = self.client.get(reverse("command_palette_analytics"))
+        resp = mcp_only_page(self.user, "command_palette_analytics")
         self.assertEqual(resp.status_code, 302)  # non-superuser redirected
         superuser = User.objects.create_superuser("cp_super", "cp_super@example.com", "testpassword")
-        self.client.force_login(superuser)
-        resp = self.client.get(reverse("command_palette_analytics"))
+        resp = mcp_only_page(superuser, "command_palette_analytics")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "needle")
 

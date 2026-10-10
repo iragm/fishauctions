@@ -2,17 +2,10 @@
 {% block title %}Auctions with no club{% endblock %}
 {% block content %}
 <h3>Auctions with no club</h3>
-<div class="help-note">
-  <i class="bi bi-lightbulb-fill" aria-hidden="true"></i>
-  <div>Every club number on this site &mdash; the cadence, the ladder, the check-in queue &mdash; counts
-  only auctions that have a <code>club</code>, and an auction gets one at creation only if its creator
-  had already named a club on their account <em>and</em> held a permission in it. Most had neither.
-  Linking one here also makes its creator an admin of that club, which is what lets them pick it on
-  their next auction without anybody doing this again.</div>
-</div>
+<p class="text-muted small">Club numbers count only auctions with a club; linking one also makes its creator a club admin.</p>
 <p class="text-muted small">
-  {{ unlinked_total }} auction(s) have no club and {{ linked_total }} do.
-  {% if unlinked_total > shown %}Showing the {{ shown }} most recent; link these and the next lot appear.{% endif %}
+  {{ unlinked_total }} without a club, {{ linked_total }} with.
+  {% if unlinked_total > shown %}Showing the {{ shown }} most recent.{% endif %}
 </p>
 
 {% for group in groups %}

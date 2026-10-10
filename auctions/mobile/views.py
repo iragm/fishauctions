@@ -50,6 +50,7 @@ from .menu import menu_for
 from .permissions import IsMobileAuthenticated
 from .renderers import PdfRenderer, PngRenderer
 from .serializers import (
+    AppCrashBatchSerializer,
     ArEventBatchSerializer,
     ArObservationBatchSerializer,
     CheckinJoinSerializer,
@@ -1244,6 +1245,29 @@ class MobileCommandPaletteLogView(APIView):
             result_object_id=data.get("result_object_id"),
         )
         return Response({"id": search_id})
+
+
+class MobileCrashReportView(APIView):
+    """POST /api/mobile/crashes/ {crashes: [...]} — the app's own crash reports, stored for the hourly check.
+
+    Open to signed-out phones (a crash on the sign-in screen counts), so a bad token is anonymous, not a
+    401. Everything in a report is untrusted: see :mod:`auctions.app_crashes`.
+    """
+
+    authentication_classes = [OptionalJWTAuthentication]
+    permission_classes = []
+    throttle_scope = "mobile_crash"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from auctions import app_crashes
+
+        serializer = AppCrashBatchSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        for report in serializer.validated_data["crashes"]:
+            app_crashes.record(request.user, report)
+        return Response({"accepted": len(serializer.validated_data["crashes"])}, status=status.HTTP_201_CREATED)
 
 
 class MobileLastUsedAuctionView(APIView):

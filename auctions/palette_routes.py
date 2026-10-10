@@ -83,6 +83,13 @@ def _r(key, label, section, scope=SCOPE_NONE, admin=ADMIN_NONE, keywords=(), fix
     )
 
 
+def _play_closed_test(user) -> bool:
+    """The Android app is in Google Play's closed test, which is open to anyone who joins."""
+    from django.conf import settings
+
+    return bool(settings.PLAY_TESTERS_GROUP_URL and not settings.PLAY_STORE_URL)
+
+
 def _has_library(user) -> bool:
     from .documents.search import can_use_library
 
@@ -148,6 +155,13 @@ ROUTE_LIST: list[Route] = [
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
     _r(
+        "android_testers",
+        "Test the Android app",
+        "Browsing",
+        keywords=["android", "beta", "google play", "tester", "get the app"],
+        gate=_play_closed_test,
+    ),
+    _r(
         "dmca",
         "Copyright and DMCA policy",
         "Browsing",
@@ -173,9 +187,13 @@ ROUTE_LIST: list[Route] = [
             "tutorial",
             "video",
             "who runs this",
-            "suggest",
-            "bug report",
         ],
+    ),
+    _r(
+        "feature_requests",
+        "Report a bug or request a feature",
+        "Browsing",
+        keywords=["bug report", "report a bug", "feature request", "suggest", "my requests", "github issue"],
     ),
     # --- My stuff ---
     _r("selling", "Lots I am selling", "My stuff", keywords=["my lots", "what am i selling"]),
@@ -539,7 +557,7 @@ ROUTE_LIST: list[Route] = [
     ),
     _r(
         "auction_disable_bidding",
-        "Turn bidding off for people who haven't paid",
+        "Stop bidding for everyone until they check in again",
         "Running an auction",
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
@@ -1086,28 +1104,6 @@ ROUTE_LIST: list[Route] = [
         keywords=["setup", "env", "integrations", "configure the site"],
     ),
     _r(
-        "command_palette_analytics",
-        "Command palette analytics",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["palette", "what do people search for", "llm usage"],
-    ),
-    _r(
-        "assistant_skill_requests",
-        "Feature requests",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=[
-            "feature requests",
-            "what people asked for",
-            "skill requests",
-            "what agents asked for",
-            "missing tools",
-            "mcp requests",
-            "what can't the assistant do",
-        ],
-    ),
-    _r(
         "agent_proposals",
         "Changes agents proposed",
         "Site admin",
@@ -1143,42 +1139,12 @@ ROUTE_LIST: list[Route] = [
     ),
     _r("admin_traffic", "Site traffic", "Site admin", admin=ADMIN_SUPERUSER, keywords=["traffic", "pageviews"]),
     _r("admin_referrers", "Where visitors come from", "Site admin", admin=ADMIN_SUPERUSER, keywords=["referrers"]),
-    _r("admin_usability", "Usability report", "Site admin", admin=ADMIN_SUPERUSER, keywords=["usability", "friction"]),
-    _r("admin_club_health", "Club health", "Site admin", admin=ADMIN_SUPERUSER, keywords=["dormant clubs", "outreach"]),
     _r(
         "admin_unlinked_auctions",
         "Auctions with no club",
         "Site admin",
         admin=ADMIN_SUPERUSER,
         keywords=["unlinked auctions", "assign auction to club"],
-    ),
-    _r(
-        "admin_lifecycle",
-        "Buyer and seller lifecycle",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["milestones", "cohorts", "retention", "lapsed members", "median member", "new people"],
-    ),
-    _r(
-        "admin_early_adds",
-        "Early lots and gross",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["lots added early", "does adding lots early help", "early signups", "gross correlation"],
-    ),
-    _r(
-        "admin_free_text",
-        "Adjustments and custom fields",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["invoice adjustments", "custom fields", "what are adjustments used for", "custom field names"],
-    ),
-    _r(
-        "admin_session_replay",
-        "Read one person's session",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["session replay", "what did this person do", "page history", "one visitor"],
     ),
     _r("admin_user_map", "Map of users", "Site admin", admin=ADMIN_SUPERUSER, keywords=["user map", "where users are"]),
     _r("admin_user_signups", "New signups", "Site admin", admin=ADMIN_SUPERUSER, keywords=["signups", "new users"]),
@@ -1388,7 +1354,6 @@ EXCLUDED: dict[str, str] = {
     "auction_stats_referrers": _API,
     "form_abandoned": "A beacon the page fires on its way out. There is no page here to send anybody to.",
     "lot_bid_abandoned": "A beacon the lot page fires on its way out. There is no page here to send anybody to.",
-    "club_mark_contacted": "POST-only button on the club health queue; the page it sits on is admin_club_health.",
     "link_auctions_to_club": (
         "POST-only button on the unlinked auctions page; the page it sits on is admin_unlinked_auctions."
     ),

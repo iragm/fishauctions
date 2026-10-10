@@ -829,25 +829,6 @@ def phrases_with_a_shortcut() -> set[str]:
     return phrases
 
 
-def shortcut_proposals(min_count: int = MINE_MIN_COUNT) -> list[dict[str, Any]]:
-    """Shortcuts worth creating, for the analytics page's approval queue.
-
-    The mining has always been there; nothing ran it, so nothing was ever mined. Every one of these
-    accepted is a query that stops costing a model call and stops being able to come back wrong.
-    """
-    candidates, _ = mine_shortcuts(min_count)
-    existing = phrases_with_a_shortcut()
-    proposals = []
-    for phrase, (route_key, count) in sorted(candidates.items(), key=lambda item: -item[1][1]):
-        if phrase in existing:
-            continue
-        route = palette_routes.get_route(route_key)
-        proposals.append(
-            {"phrase": phrase, "route": route_key, "label": route.label if route else route_key, "count": count}
-        )
-    return proposals
-
-
 def _answered_from(lookups_run: set[tuple[str, str]]) -> str:
     """The ``destination`` to record: the single parameterless lookup behind an answer, or ""."""
     if len(lookups_run) != 1:

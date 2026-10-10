@@ -11,8 +11,8 @@ this project offers over a spreadsheet.
 | 0 | Path in `PageView.url`; `AdminUserFlow` deleted; One Tap rationed on intent | done |
 | 1 | Friction instrument: which form, which field, how many attempts, and whether they gave up without submitting | done |
 | 1b | `AuctionHistory.changed_fields` / `ClubHistory.changed_fields` as JSON | done |
-| 1.5 | Reach / failure / adoption dashboard, `/admin-usability/` | done |
-| 2 | Club health rollup + due-for-check-in queue, `/admin-club-health/` | done |
+| 1.5 | Reach / failure / adoption dashboard, `read_admin_page admin_usability` on `/mcp/admin/` | done |
+| 2 | Club health rollup + due-for-check-in queue (page removed 2026-10) | done |
 | 3 | Progressive disclosure on `AuctionEditForm` | done |
 | 4 | Contextual help notes | scrapped -- the human writes these page by page |
 | 5 | Accessibility debt (`template_a11y.py`) | done |
@@ -77,9 +77,6 @@ without rejections means they cannot see how to fill it in at all.
 - Work `/admin-unlinked-auctions/` down. Prerequisite for every club-grouped number.
 - 8f outreach: draft per club, send by hand, record the attempt and the stall reason. The code half
   (`ClubLadderSnapshot`, month-over-month ladder counts) is done.
-- The two judgement calls in `docs/phase_9.md` under "Waiting on a decision".
-- The one survey question -- allowed once, after an invoice is paid. Needs the human to decide
-  whether to ask at all, and what.
 
 ## Decided -- do not reopen
 

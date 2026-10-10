@@ -21,9 +21,7 @@ style_reference.md.{% endcomment %}
 {% if needs_mailing_address %}
 <div class="alert alert-warning text-dark py-2" role="alert">
   <i class="bi bi-exclamation-triangle me-1"></i>
-  <strong>Add a mailing address before sending.</strong>
-  Donation emails sent from this site have to carry a postal address for the club.
-  <a href="{% url 'club_edit' club.slug %}">Add one in club settings</a>.
+  <a href="{% url 'club_edit' club.slug %}">Add a mailing address</a> before sending.
 </div>
 {% endif %}
 
@@ -58,13 +56,11 @@ style_reference.md.{% endcomment %}
   {% if quota.exhausted %}
   <div class="alert alert-warning text-dark py-2 mt-2 mb-0" role="alert">
     <i class="bi bi-exclamation-triangle me-1"></i>
-    That's all {{ quota.limit }} donation emails for today &mdash; you can start again {{ quota.resets_in_words }}.
-    Replies still arrive and are recorded in the meantime.
+    Daily limit reached; it resets {{ quota.resets_in_words }}.
   </div>
   {% else %}
   <div class="form-text">
-    {{ quota.remaining }} left before the daily limit; it resets {{ quota.resets_in_words }}.
-    {% if assist_enabled %}Asking for an email to be written counts, even if you don't send it.{% endif %}
+    {{ quota.remaining }} left; resets {{ quota.resets_in_words }}.
   </div>
   {% endif %}
 </div>

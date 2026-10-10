@@ -1,5 +1,5 @@
-"""Pages that belong to the site rather than to an auction or club: the FAQ, support, the promo site,
-the privacy policy, the blog, unsubscribe, and the landing redirect.
+"""Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
+the privacy policy, the blog, unsubscribe, joining the Android app's test, and the landing redirect.
 """
 
 import logging
@@ -43,10 +43,12 @@ from auctions.filters import (
 )
 from auctions.forms import (
     ContactForm,
+    FeatureRequestForm,
 )
 from auctions.models import (
     FAQ,
     PRIVACY_POLICY_SLUG,
+    AssistantSkillRequest,
     Auction,
     AuctionTOS,
     BlogPost,
@@ -92,7 +94,7 @@ class FAQ(ListView):
 class SupportView(FormView):
     """Every way to get help on one page, ending in a way to reach a human with no account.
 
-    Leads with connecting an AI agent (``/ai/``), then the FAQ, the two tutorial videos, and the message
+    Leads with connecting an AI agent (``/ai/``), then the help guides, feature requests, and the message
     form. The App Store's Support URL is opened with no session, so nothing here requires one; the site
     owner's address is never rendered (scrapers), and the message is emailed to ``settings.ADMINS[0][1]``
     with the sender as ``Reply-To``. reCAPTCHA stands in for the login.
@@ -102,15 +104,6 @@ class SupportView(FormView):
 
     template_name = "support.html"
     form_class = ContactForm
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # The same two videos and chapter lists as the help: one online, one in person.
-        context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
-        context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
-        context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
-        context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
-        return context
 
     #: Messages one address may send in an hour: the floor under reCAPTCHA, which a site with no
     #: keys doesn't have at all.
@@ -168,6 +161,62 @@ class SupportView(FormView):
             self.request,
             f"Thanks - your message is on its way. We'll reply to {email}.",
         )
+        return super().form_valid(form)
+
+
+class FeatureRequestsView(LoginRequiredMixin, FormView):
+    """``/requests/``: report a bug or ask for a feature, and see where your earlier ones stand.
+
+    The web face of ``request_a_skill`` and ``my_requests``: the same queue the site owner marks
+    planned, so a request from here is built exactly like one an assistant filed. GitHub's new-issue
+    page sends people here. The owner's note is never shown.
+    """
+
+    template_name = "feature_requests.html"
+    form_class = FeatureRequestForm
+    #: Requests one person may send in a day.
+    PER_DAY = 10
+    #: How each status reads to the person who asked.
+    STATUS_LABELS = {
+        AssistantSkillRequest.STATUS_NEW: "Received",
+        AssistantSkillRequest.STATUS_PLANNED: "Planned",
+        AssistantSkillRequest.STATUS_DONE: "Live",
+        AssistantSkillRequest.STATUS_DECLINED: "Not planned",
+    }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        rows = AssistantSkillRequest.objects.filter(user=self.request.user).order_by("-createdon")
+        context["past"] = [
+            {
+                "what": row.skill,
+                "status": self.STATUS_LABELS.get(row.status, row.status),
+                "status_key": row.status,
+                "on": row.createdon,
+            }
+            for row in rows
+        ]
+        return context
+
+    def get_success_url(self):
+        return reverse("feature_requests")
+
+    def form_valid(self, form):
+        from auctions import palette_actions
+
+        since = timezone.now() - timedelta(days=1)
+        if AssistantSkillRequest.objects.filter(user=self.request.user, createdon__gte=since).count() >= self.PER_DAY:
+            messages.error(self.request, "That's a lot for one day; send the rest tomorrow.")
+            return self.form_invalid(form)
+        self.request.assistant_surface = "requests page"
+        result = palette_actions.request_a_skill(
+            self.request, {"skill": form.short_name, "reason": form.cleaned_data["request"]}
+        )
+        row = AssistantSkillRequest.objects.filter(pk=result.get("request_id")).first()
+        if row and row.status != AssistantSkillRequest.STATUS_NEW:
+            messages.info(self.request, "That one's already decided; word it differently if it's something new.")
+        else:
+            messages.success(self.request, "Thanks, it's on the list.")
         return super().form_valid(form)
 
 
@@ -605,4 +654,27 @@ class UnsubscribeView(TemplateView):
         else:
             userData.unsubscribe_from_all()
         context = super().get_context_data(**kwargs)
+        return context
+
+
+class AndroidTesters(TemplateView):
+    """How to join the Android app's closed test on Google Play: join the testers' Google Group, then opt in.
+
+    Not found until ``PLAY_TESTERS_GROUP_URL`` is set; once ``PLAY_STORE_URL`` is, it sends people to the
+    store instead.
+    """
+
+    template_name = "android_testers.html"
+
+    def get(self, request, *args, **kwargs):
+        if settings.PLAY_STORE_URL:
+            return redirect(settings.PLAY_STORE_URL)
+        if not settings.PLAY_TESTERS_GROUP_URL:
+            raise Http404
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["group_url"] = settings.PLAY_TESTERS_GROUP_URL
+        context["testing_url"] = settings.PLAY_TESTING_URL
         return context

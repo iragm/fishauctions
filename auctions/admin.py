@@ -1567,12 +1567,12 @@ admin.site.register(SpeakerComment, SpeakerCommentAdmin)
 
 @admin.register(AssistantSkillRequest)
 class AssistantSkillRequestAdmin(admin.ModelAdmin):
-    """Agent skill requests. Decisions are made on ``/admin-dashboard/assistant-requests/``; this is for
-    bulk edits and search.
+    """Feature requests. The owner decides new ones in the project chat; this is where ``planned`` is set by
+    hand, and for bulk edits and search.
     """
 
-    list_display = ("skill", "user", "status", "surface", "createdon")
-    list_filter = ("status", "surface")
+    list_display = ("skill", "user", "status", "target", "surface", "createdon")
+    list_filter = ("status", "target", "surface")
     search_fields = ("skill", "reason", "params", "user__username")
     readonly_fields = ("createdon", "updatedon")
     list_select_related = ("user",)

@@ -22,9 +22,6 @@
         <label for="membership_expiration_date" class="form-label">Expiration date</label>
         <input type="date" class="form-control" id="membership_expiration_date" name="membership_expiration_date"
           value="{{ default_date|date:'Y-m-d' }}" required>
-        <div class="form-text">
-          Use <em>Renew</em> from the member list for a one-click extension based on the club's renewal rules.
-        </div>
       </div>
       <div class="d-flex gap-2">
         <a href="{% if next_url %}{{ next_url }}{% else %}{% url 'club_admin' club.slug %}{% endif %}" class="btn btn-secondary">Cancel</a>

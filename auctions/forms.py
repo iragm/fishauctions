@@ -3494,6 +3494,36 @@ class ContactForm(forms.Form):
         return self.cleaned_data.get("email", "")
 
 
+class FeatureRequestForm(forms.Form):
+    """A bug report or feature request from ``/requests/``: one box, nothing else to fill out."""
+
+    request = forms.CharField(
+        widget=forms.Textarea(
+            attrs={
+                "rows": 6,
+                "placeholder": "A bug or an idea. Include as much detail as you can: what you were "
+                "doing, where, and what you expected.",
+            }
+        ),
+        max_length=2000,
+        label="",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Send", css_class="btn-success text-dark"))
+
+    @property
+    def short_name(self) -> str:
+        """The queue's one-line name: the first line, cut at a word within 80 characters."""
+        first = self.cleaned_data["request"].strip().splitlines()[0].strip()
+        if len(first) <= 80:
+            return first
+        return first[:80].rsplit(" ", 1)[0] + "…"
+
+
 class CustomResetPasswordForm(ResetPasswordForm):
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 

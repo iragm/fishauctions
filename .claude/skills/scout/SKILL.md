@@ -9,7 +9,8 @@ You read production through the **admin connector** (`/mcp/admin/`, `auctions/mc
 cannot change the site. You leave two kinds of output, and nothing else:
 
 - **`suggest_feature`**: something the code should do differently. It joins the feature requests as
-  `new`. The owner marks the ones to build `planned`, and the build-requests routine builds those.
+  `new`. The owner decides each one with a tap on a card in the project chat (step 8), or marks it
+  `planned` on the site, and the build-requests routine builds those.
 - **`propose_change`**: a change to the site's *data*, such as setting a lot's species. It waits on
   `/admin-dashboard/proposals/` until the owner presses Approve.
 
@@ -21,22 +22,36 @@ names and dates.
 
 1. `site_health`. If it shows a new error kind or a migration not applied, `read_logs` with
    `level=ERROR` and `contains=` that error. Then find the cause in this repository. A real bug is a
-   `suggest_feature` naming the file and line.
-2. `list_feature_requests status=all` first, so you don't suggest anything already there.
-3. Read, in this order, and stop when you have enough:
+   `suggest_feature` naming the file and line. Leave 500s alone: the hourly health check fixes those
+   straight away, with a PR into `master`.
+2. GitHub issues: intake and closing, exactly as the `github-issues` skill says. Labelling,
+   commenting on and closing an existing issue are the only GitHub writes a scout makes.
+3. `list_feature_requests status=all` first, so you don't suggest anything already there. Its `new`
+   rows are also members' own asks.
+4. Read, in this order, and stop when you have enough:
    - `read_admin_page usability query=days=7`
    - `command_palette_analytics`: read the exchanges themselves. A second query soon after a first
      is chaining, not failure.
-   - `assistant_skill_requests` (members' own asks)
    - `species_gaps`
    - `admin_session_replay` for the sessions behind a funnel drop
-4. File at most **five** suggestions, each with its evidence. One well-evidenced suggestion beats
+5. File at most **five** suggestions, each with its evidence and its `target`: `app` when only the
+   mobile app has to change, `both` when the app needs the site to change too, otherwise `site`. One well-evidenced suggestion beats
    five guesses.
-5. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
+6. Fix data in batches with `propose_change`, one proposal per kind of fix: for example, the species
    for every lot on the gaps page whose match you are sure of (`set_lot_species`).
-6. For each `planned` request: if its PR (`feature request #N` in the title) is merged and
-   `site_health`'s commit includes it, propose `set_request_status` → `done`.
-7. End with a few lines: what you filed, what you proposed, anything you couldn't tell.
+7. For each `planned` request: if its commit (`feature request #N` in the subject) is on `master`
+   and `site_health`'s commit includes it, propose `set_request_status` → `done`. An `app` request is
+   done once its PR has merged into the app's `main`; a `both` request needs both.
+   A `new` request from a member whose target looks wrong goes in the same proposal: `set_request_status`
+   with status `new` and the right `target`.
+   The same goes for a request the decision ledger (step 8) records as **Build**: propose `done` once
+   it is live. One the ledger records as **Decline** and the site still shows as `new`: propose
+   `declined` in the same proposal, so the asker sees it.
+8. Hand the owner today's decisions, as `/mnt/project-files/routines/DECISIONS.md` says: every `new`
+   request the ledger there doesn't already list goes to the project's coordinator in one message,
+   paraphrased, with its target. That file is the protocol; the ledger is the record.
+9. End with a few lines: issues queued and closed, what you filed, what you proposed, anything you
+   couldn't tell.
 
 ## What the owner has already decided
 

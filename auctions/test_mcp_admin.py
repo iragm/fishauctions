@@ -5,18 +5,20 @@ import datetime
 import json
 import secrets
 import tempfile
+from collections import namedtuple
 from pathlib import Path
+from unittest import mock
 
 from django.contrib.auth.models import User
 from django.db import connection
 from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from auctions import palette_actions
 from auctions.mcp import admin, protocol, tools
-from auctions.models import AgentProposal, AssistantSkillRequest, UserAPIKey
+from auctions.models import AgentProposal, AssistantSkillRequest, Club, UserAPIKey
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -404,6 +406,110 @@ class ProposalTests(AdminEndpointCase):
         self.assertContains(response, "set_request_status")
 
 
+class AdminJobProposalTests(AdminEndpointCase):
+    """Adding a club, approving one for the map, and trusting an account: proposed, then approved."""
+
+    PLACE = {"latitude": 42.36, "longitude": -71.06, "coordinates": "42.36,-71.06", "address": "Boston, MA, USA"}
+
+    def propose(self, tool, arguments, summary="An admin job"):
+        return self.call("propose_change", {"summary": summary, "steps": [{"tool": tool, "arguments": arguments}]})
+
+    def approve(self):
+        proposal = AgentProposal.objects.get(status=AgentProposal.STATUS_PENDING)
+        self.client.force_login(self.owner)
+        self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
+        return proposal
+
+    def test_a_pasted_club_is_created_listed_and_on_the_map_once_approved(self):
+        result = self.propose(
+            "add_club",
+            {
+                "name": "Harbor Aquarium Society",
+                "abbreviation": "HAS",
+                "homepage": "harboraquarium.example.org",
+                "location": "Boston, MA",
+                "contact_email": "membership@harboraquarium.example.org",
+            },
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(Club.objects.filter(name="Harbor Aquarium Society").exists())
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        club = Club.objects.get(name="Harbor Aquarium Society")
+        self.assertEqual(club.outreach_stage, Club.LISTED)
+        self.assertEqual(club.homepage, "https://harboraquarium.example.org")
+        self.assertEqual(club.contact_method, Club.EMAIL)
+        self.assertAlmostEqual(club.latitude, 42.36)
+        self.assertIn("Boston, MA, USA", proposal.results[0]["said"])
+
+    def test_a_club_already_on_the_site_is_refused_when_proposed(self):
+        Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org/")
+        for arguments in (
+            {"name": "Harbour Aquarium Society"},
+            {"name": "Something else entirely", "homepage": "http://harboraquarium.example.org/join"},
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.propose("add_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn("already on the site", result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_bad_details_are_refused_when_proposed(self):
+        for arguments, expected in (
+            ({"name": ""}, "needs its name"),
+            ({"name": "Harbor Aquarium Society", "homepage": "https://facebook.com/groups/harbor"}, "facebook_page"),
+            ({"name": "Harbor Aquarium Society", "contact_email": "not an address"}, "isn't an email"),
+            ({"name": "Harbor Aquarium Society", "contact_method": "pigeon"}, "contact_method"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("add_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_a_club_added_meanwhile_stops_the_approval(self):
+        self.propose("add_club", {"name": "Harbor Aquarium Society", "location": "Boston, MA"})
+        Club.objects.create(name="Harbor Aquarium Society")
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
+        self.assertEqual(Club.objects.filter(name="Harbor Aquarium Society").count(), 1)
+
+    def test_a_prospect_stays_off_the_map_and_an_unfound_address_says_so(self):
+        self.propose("add_club", {"name": "Harbor Aquarium Society", "location": "nowhere", "listed": False})
+        with mock.patch("auctions.geocoding.geocode", return_value=None):
+            proposal = self.approve()
+        club = Club.objects.get(name="Harbor Aquarium Society")
+        self.assertEqual(club.outreach_stage, Club.PROSPECT)
+        self.assertIsNone(club.latitude)
+        self.assertIn("Not on the map", proposal.results[0]["said"])
+
+    def test_a_prospect_is_approved_for_the_map(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", outreach_stage=Club.PROSPECT)
+        self.propose("set_club_stage", {"club": club.pk})
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        club.refresh_from_db()
+        self.assertEqual(club.outreach_stage, Club.LISTED)
+
+    def test_an_account_is_trusted(self):
+        self.user.userdata.is_trusted = False
+        self.user.userdata.save(update_fields=["is_trusted"])
+        self.propose("trust_user", {"user": self.user.username.upper()})
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(self.user.userdata.is_trusted)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.user.userdata.refresh_from_db()
+        self.assertTrue(self.user.userdata.is_trusted)
+
+    def test_none_of_them_is_a_tool_anywhere(self):
+        for url in (self.url, "/mcp/"):
+            for name in ("add_club", "set_club_stage", "trust_user"):
+                response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url=url)
+                self.assertIn("error", json.loads(response.content))
+
+
 class FeatureRequestTests(AdminEndpointCase):
     def setUp(self):
         super().setUp()
@@ -435,6 +541,16 @@ class FeatureRequestTests(AdminEndpointCase):
         self.assertEqual((row.user, row.status), (self.owner, AssistantSkillRequest.STATUS_NEW))
         self.assertIn("12 sessions", row.reason)
 
+    def test_a_suggestion_says_which_repository_and_the_list_shows_it(self):
+        self.call("suggest_feature", {"feature": "offline lot list", "reason": "no signal", "target": "app"})
+        self.assertEqual(AssistantSkillRequest.objects.get(skill="offline lot list").target, "app")
+        result = self.call("list_feature_requests", {"status": "new"})
+        rows = {row["request"]: row for row in result["structuredContent"]["requests"]}
+        self.assertEqual(rows[AssistantSkillRequest.objects.get(skill="offline lot list").pk]["target"], "app")
+        result = self.call("suggest_feature", {"feature": "something", "reason": "r", "target": "toaster"})
+        self.assertIn("site, app, both", result["content"][0]["text"])
+        self.assertFalse(AssistantSkillRequest.objects.filter(skill="something").exists())
+
     def test_a_planned_request_cannot_be_rewritten_by_the_person_who_asked(self):
         # Otherwise "planned" would approve one text and the build would read another.
         request = RequestFactory().get("/")
@@ -460,9 +576,20 @@ class FeatureRequestTests(AdminEndpointCase):
 
 class ReadAdminPageTests(AdminEndpointCase):
     def test_a_dashboard_comes_back_as_text(self):
-        result = self.call("read_admin_page", {"page": "assistant_skill_requests"})
+        result = self.call("read_admin_page", {"page": "species_gaps"})
         self.assertFalse(result["isError"], result)
-        self.assertIn("Feature requests", result["structuredContent"]["text"])
+        self.assertIn("scientific name", result["structuredContent"]["text"])
+
+    def test_a_report_with_no_url_still_reads(self):
+        """The owner retired these from the site; the scout reads them here."""
+        for page in admin.MCP_ONLY_PAGES:
+            with self.subTest(page=page):
+                self.assertIn(page, admin.readable_pages())
+                with self.assertRaises(NoReverseMatch):
+                    reverse(page)
+        result = self.call("read_admin_page", {"page": "admin_usability", "query": "days=7"})
+        self.assertFalse(result["isError"], result)
+        self.assertNotIn("url", result["structuredContent"])
 
     def test_pages_that_fire_errors_or_dump_every_address_are_not_readable(self):
         for page in admin.UNREADABLE_PAGES:
@@ -558,6 +685,19 @@ class SiteHealthTests(AdminEndpointCase):
         for key in ("branch", "commit", "queues", "beat", "errors_last_24h"):
             self.assertIn(key, facts)
         self.assertNotIn("redacted", facts["commit"])
+
+    def test_it_reports_the_servers_disk_memory_and_load(self):
+        facts = self.call("site_health")["structuredContent"]
+        self.assertGreater(facts["disk"]["total_gb"], 0)
+        self.assertIn("used_percent", facts["memory"])
+        self.assertIn("cpus", facts["load"])
+
+    def test_a_full_disk_is_in_the_summary(self):
+        usage = namedtuple("usage", "total used free")(100 * 1024**3, 92 * 1024**3, 8 * 1024**3)
+        with mock.patch("auctions.mcp.admin.shutil.disk_usage", return_value=usage):
+            result = self.call("site_health")
+        self.assertEqual(result["structuredContent"]["disk"]["free_gb"], 8.0)
+        self.assertIn("disk over 85% used", result["content"][0]["text"])
 
 
 #: Writes a read may make: its caller's own "last auction used" pointer.

@@ -25,6 +25,7 @@ from auctions.models import (
     PageView,
     PickupLocation,
 )
+from auctions.test_support import mcp_only_page
 from auctions.tests import StandardTestCase
 from auctions.usability_report import (
     UNROUTED,
@@ -287,22 +288,19 @@ class DashboardTests(StandardTestCase):
         """Adoption is a pointer to the rules guide now; the numbers are there, beside each setting."""
         self.admin_user.is_superuser = True
         self.admin_user.save()
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(reverse("admin_usability"))
+        response = mcp_only_page(self.admin_user, "admin_usability")
         self.assertEqual(response.status_code, 200)
         page = response.content.decode()
         for heading in ("Failure", "Adoption", "Reach", "Buyers"):
             self.assertIn(heading, page)
 
     def test_an_ordinary_user_cannot_open_it(self):
-        self.client.login(username="my_lot", password="testpassword")
-        response = self.client.get(reverse("admin_usability"))
+        response = mcp_only_page(User.objects.get(username="my_lot"), "admin_usability")
         self.assertNotEqual(response.status_code, 200)
 
     def test_a_nonsense_days_parameter_does_not_500(self):
         self.admin_user.is_superuser = True
         self.admin_user.save()
-        self.client.login(username="admin_user", password="testpassword")
         for value in ("abc", "-5", "999999", ""):
-            response = self.client.get(reverse("admin_usability"), {"days": value})
+            response = mcp_only_page(self.admin_user, "admin_usability", {"days": value})
             self.assertEqual(response.status_code, 200, value)

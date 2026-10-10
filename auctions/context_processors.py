@@ -293,3 +293,33 @@ def account_nav(request):
     if request.method == "GET":
         nav.remember(request, active)
     return {"account_nav_active": active, "account_nav_groups": nav.groups_for(request.user, active)}
+
+
+ANDROID_TESTERS_DISMISSED_COOKIE = "hide_android_testers"
+
+
+@once_per_request
+def android_testers(request):
+    """Whether to ask this visitor to join the Google Play closed test.
+
+    Signed-in people in an Android phone's browser, while the closed test is on
+    (``PLAY_TESTERS_GROUP_URL`` set, ``PLAY_STORE_URL`` not yet), who haven't signed in to the Android
+    app and haven't closed the banner.
+    """
+    show = False
+    user = getattr(request, "user", None)
+    if (
+        settings.PLAY_TESTERS_GROUP_URL
+        and not settings.PLAY_STORE_URL
+        and user is not None
+        and user.is_authenticated
+        and not getattr(request, "is_mobile_app", False)
+        and not request.COOKIES.get(ANDROID_TESTERS_DISMISSED_COOKIE)
+        and "android" in request.headers.get("User-Agent", "").lower()
+        and _is_page_load(request)
+        and getattr(getattr(request, "resolver_match", None), "url_name", "") != "android_testers"
+    ):
+        from auctions.models import MobileDevice
+
+        show = not MobileDevice.objects.filter(user=user, platform=MobileDevice.PLATFORM_ANDROID).exists()
+    return {"show_android_testers": show}

@@ -13,6 +13,8 @@ follow, and both fail tests for reasons unrelated to the code under test:
 
 :func:`isolated_cache` gives a test class a local-memory cache instead, living inside the one
 process running the test.
+
+:func:`mcp_only_page` renders one of the reports that have no URL, the way ``read_admin_page`` does.
 """
 
 from django.test import override_settings
@@ -38,3 +40,18 @@ def isolated_cache(name):
             }
         }
     )
+
+
+def mcp_only_page(user, key, params=None):
+    """Render ``mcp.admin.MCP_ONLY_PAGES[key]`` as ``user``: a rendered ``TemplateResponse``, or a redirect."""
+    from urllib.parse import urlencode
+
+    from django.test import RequestFactory
+
+    from auctions import views
+    from auctions.mcp import admin
+
+    outer = RequestFactory().get("/")
+    outer.user = user
+    path = f"/mcp/admin/{key}/" + ("?" + urlencode(params) if params else "")
+    return admin._render(outer, path, getattr(views, admin.MCP_ONLY_PAGES[key][1]).as_view())

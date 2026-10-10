@@ -550,6 +550,39 @@ class PaymentAuthorizationEndpointTests(StandardTestCase):
         self.assertNotIn("access_token", body)
         self.assertNotIn("location_id", body)
 
+    def test_unapproved_admin_is_told_to_request_access(self):
+        self.user.userdata.square_enabled = False
+        self.user.userdata.save()
+        body = self.client.get(self.url, **_bearer(self.user)).json()
+        self.assertTrue(body["can_accept_terms"])
+        self.assertEqual(body["setup_step"], "request_access")
+        self.assertEqual(body["setup_path"], reverse("square_seller"))
+        self.assertTrue(body["setup_label"])
+        self.assertTrue(body["message"])
+
+    def test_approved_admin_without_a_seller_is_told_to_connect(self):
+        self.user.userdata.square_enabled = True
+        self.user.userdata.save()
+        body = self.client.get(self.url, **_bearer(self.user)).json()
+        self.assertEqual(body["setup_step"], "connect_square")
+        self.assertEqual(body["setup_path"], reverse("square_seller"))
+
+    def test_legacy_seller_is_told_to_reconnect(self):
+        self._seller_for(self.user, scopes="")
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        body = self.client.get(self.url, **_bearer(self.user)).json()
+        self.assertEqual(body["setup_step"], "reconnect_square")
+
+    def test_a_usable_seller_has_no_setup_step(self):
+        self._seller_for(self.user)
+        self.user.userdata.last_auction_used = self.in_person_auction
+        self.user.userdata.save()
+        with patch.object(SquareSeller, "get_location_id", return_value="LOC1"):
+            body = self.client.get(self.url, **_bearer(self.user)).json()
+        self.assertNotIn("setup_step", body)
+        self.assertNotIn("message", body)
+
     def test_legacy_seller_without_the_in_person_scope_gets_no_credentials(self):
         self._seller_for(self.user, scopes="")
         self.user.userdata.last_auction_used = self.in_person_auction

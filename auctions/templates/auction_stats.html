@@ -453,7 +453,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
             {% endif %}
             {% if not auction.total_lots %}
             <div class="alert alert-secondary" role="alert">
-                <i class="bi bi-bar-chart"></i> There's no data to chart yet. Stats and graphs will fill in here once lots are added and people start viewing and bidding.
+                <i class="bi bi-bar-chart"></i> No data yet.
             </div>
             {% endif %}
             <div class="mb-3">
@@ -592,8 +592,6 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
   var compareData = {% if compare_auction and compare_stats_activity_json %}{{ compare_stats_activity_json|safe }}{% else %}null{% endif %};
   createLineChart('activity', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', null);
 </script>
-This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
-<p></p>
 
             {% if auction.is_online %}
             <!-- Commented out funnel chart - can be restored if users request it
@@ -606,11 +604,7 @@ This graph shows overall engagement of people with your auction.  You can gauge 
             -->
             {% endif %}
 <br><h4>Promotions and join reminder emails</h4>
-When users with an account view your auction but don't join it, they'll be sent a reminder email 24 hours later.  Users can turn off <b>send reminder emails about joining auctions</b> under preferences.<br><br>
-Nearby users who asked to hear about auctions are told about a promoted auction once, by email or in the app: a week before an in-person auction starts, or a day after bidding opens on an online one.  The email goes only to people who haven't been on the site in the last 6 days.
-{% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}
-<br><br> Join reminder emails are not sent for auctions without an in-person pickup location.
-{% endif %}
+<p class="text-muted small">{% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}No join reminders: this auction has no in-person pickup location.{% else %}People who view without joining get a reminder a day later.{% endif %}</p>
 <div class="table-responsive">
 <table class="table table-striped">
     <thead>
@@ -821,7 +815,7 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
       {% endif %}
       {% if auction.abandoned_bids %}
       <tr>
-        <td>Bids started and not placed<br><small class="text-muted">Typed an amount and left, couldn't bid, or cancelled the confirmation. Came back: bid on that lot later.</small></td>
+        <td>Bids started and not placed</td>
         <td>{{ auction.abandoned_bids.total }} ({{ auction.abandoned_bids.typed }} typed, {{ auction.abandoned_bids.blocked }} couldn't bid, {{ auction.abandoned_bids.confirm }} cancelled; {{ auction.abandoned_bids.came_back }} came back)</td>
         {% if compare_auction %}
         <td>{% if compare_auction.abandoned_bids %}{{ compare_auction.abandoned_bids.total }} ({{ compare_auction.abandoned_bids.came_back }} came back){% else %}N/A{% endif %}</td>
@@ -842,7 +836,6 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
               createBarChart('lot_prices', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
             </script>
             <br>
-            How many lots sold at different price points.  Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
               <br><br>
             {% if auction.is_online %}
             <!-- Commented out competition for lots and category popularity - can be restored if users request them
@@ -886,8 +879,8 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
   var compareData = {% if compare_auction and compare_stats_auctioneer_speed_json %}{{ compare_stats_auctioneer_speed_json|safe }}{% else %}null{% endif %};
   createScatterChart('auctioneer', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', false);
 </script>
-<div>This graph shows the time since the last lot sold, graphed against the minutes into the auction.  Faster auctioneers will tend to be lower down on the Y axis.  If more than 3 minutes elapsed since the last lot, that data point is skipped.  If you changed auctioneers mid-way though the auction, see if you can spot that location on this chart.  Faster isn't always better, but the speed of your auctioneer makes a huge difference on attrition, especially in larger auctions.  And of course, this is based on the lot sell time, so if you're recording bids on paper and tallying them up later, you may not get a perfect representation of your auctioneer's speed.
-</div>{% endif %}
+<p class="text-muted small">Time since the previous lot sold; gaps over 3 minutes are skipped.</p>
+{% endif %}
 <p></p>
 <h4>How far users travel to get to your auction</h4>
 <canvas id="distances_traveled" width="500" height="400"></canvas>
@@ -896,7 +889,7 @@ Nearby users who asked to hear about auctions are told about a promoted auction 
   var compareData = {% if compare_auction and compare_stats_travel_distance_json %}{{ compare_stats_travel_distance_json|safe }}{% else %}null{% endif %};
   createBarChart('distances_traveled', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
-Use this information to add additional pickup locations to future auctions.  Note that only people who join though this website have their location recorded: if you manually add people to your auction, they won't show up here.  IP address is used for people who choose not to share their exact location; be aware that IP geolocation is quite imprecise.
+<p class="text-muted small">Only people who joined on this site; some locations are rough guesses from IP address.</p>
 <p></p>
 <h4>How many auctions have your users participated in previously?</h4>
 <canvas id="auction_stats_previous_auctions" width="500" height="400"></canvas>
@@ -905,7 +898,7 @@ Use this information to add additional pickup locations to future auctions.  Not
   var compareData = {% if compare_auction and compare_stats_previous_auctions_json %}{{ compare_stats_previous_auctions_json|safe }}{% else %}null{% endif %};
   createBarChart('auction_stats_previous_auctions', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
-You want a good mix of newbies and veterans.  This takes into account ALL auctions on the site, not just ones you've created.  Email address is used to identify people, so if you left that blank, that person won't appear here at all.
+<p class="text-muted small">Across every auction on the site; people with no email are left out.</p>
 
 <p></p>
 <h4>How many lots do your users submit?</h4>
@@ -925,7 +918,6 @@ Most people will add very few lots to an auction, but it's worth considering tho
   var compareData = {% if compare_auction and compare_stats_location_volume_json %}{{ compare_stats_location_volume_json|safe }}{% else %}null{% endif %};
   createBarChart('auction_stats_location_volume', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
-Use this to spot low-volume locations to skip or advertise more at next time.
 {% endif %}
 <p></p>
 <h4>Website feature utilization</h4>
@@ -952,7 +944,6 @@ How many of your users are taking advantage of features on this webiste?
   var compareData = {% if compare_auction and compare_stats_referrers_json %}{{ compare_stats_referrers_json|safe }}{% else %}null{% endif %};
   createBarChart('auction_stats_referrers', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
-What websites are sending you traffic?
 
 <div><a href="{% url 'auction_main' slug=auction.slug %}" class="btn btn-primary active">Back to rules</a></div>
 {% endblock %}

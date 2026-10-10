@@ -9,36 +9,26 @@
   <div class="card mb-4">
     <div class="card-header">Connect Brevo</div>
     <div class="card-body">
-      <p class="text-muted">
-        Connect your club's Brevo account to automatically keep a contact list in sync with your
-        members. Member details, renewal links, barcodes, and lifecycle tags are pushed one way
-        (this site &rarr; Brevo) so you can build automations and segmented campaigns.
-      </p>
+      <p class="text-muted">Keeps a Brevo contact list in sync with your members.</p>
       <form method="post" action="{% url 'brevo_connect' club.slug %}">
         {% csrf_token %}
         <ol class="text-muted small mb-3">
           <li>Open your Brevo
             <a href="https://app.brevo.com/settings/keys/api" target="_blank" rel="noopener">API Keys page</a>
-            (in Brevo: <strong>Settings &rarr; SMTP &amp; API &rarr; API Keys</strong>). You'll need to be logged
-            in to the Brevo account you want to sync into.</li>
-          <li>Click <strong>Generate a new API key</strong> (v3), give it a name like &ldquo;{{ club.name }} sync&rdquo;,
-            and copy the key &mdash; it starts with <span class="text-warning">xkeysib-</span>.</li>
+            (<strong>Settings &rarr; SMTP &amp; API &rarr; API Keys</strong>).</li>
+          <li>Click <strong>Generate a new API key</strong> and copy it.</li>
           <li>Paste it below and click <strong>Connect Brevo</strong>.</li>
         </ol>
         <div class="mb-3">
           <label for="brevo-api-key" class="form-label">Brevo API key (v3)</label>
           <input type="password" class="form-control" id="brevo-api-key" name="api_key"
                  placeholder="xkeysib-&hellip;" autocomplete="new-password" required>
-          <div class="form-text">Your key is stored encrypted and only used to sync your members.</div>
         </div>
         <button type="submit" class="btn btn-primary"><i class="bi bi-send"></i> Connect Brevo</button>
       </form>
       <div class="alert alert-light border small mt-3 mb-0">
         <i class="bi bi-shield-lock"></i>
-        If your Brevo account restricts API access by IP
-        (<a href="https://help.brevo.com/hc/en-us/articles/5740111683858" target="_blank" rel="noopener">Authorized IPs</a>),
-        also add this server's outbound IP{% if server_ip %} &mdash; <strong>{{ server_ip }}</strong>{% endif %}
-        to the allow-list. If a key is rejected for that reason, we'll show the exact IP Brevo blocked.
+        If Brevo restricts <a href="https://help.brevo.com/hc/en-us/articles/5740111683858" target="_blank" rel="noopener">Authorized IPs</a>, add this server's{% if server_ip %}: <strong>{{ server_ip }}</strong>{% endif %}.
       </div>
     </div>
   </div>
@@ -49,8 +39,7 @@
     <div class="card-header">Choose a list</div>
     <div class="card-body">
       <p class="text-muted">
-        Pick the Brevo list your {{ in_scope_count }} member(s) should sync into, or create a
-        new one named &ldquo;{{ club.name }} Members&rdquo;.
+        Pick a list for {{ in_scope_count }} member(s).
       </p>
       <form method="post" action="{% url 'brevo_select_list' club.slug %}">
         {% csrf_token %}
@@ -102,10 +91,6 @@
         <dt class="col-sm-4">Last sync</dt>
         <dd class="col-sm-8">{{ club.brevo_last_sync|default:"—" }}</dd>
       </dl>
-      <p class="text-muted small mt-3 mb-0">
-        <i class="bi bi-info-circle"></i>
-        Members are synced automatically whenever their record is saved, and again each night.
-      </p>
       {% if club.brevo_last_error %}
         <div class="alert alert-danger mt-3 mb-0 small">
           <i class="bi bi-exclamation-triangle"></i> Last error: {{ club.brevo_last_error }}
@@ -147,10 +132,7 @@
     <div class="card-header">Tags &amp; attributes</div>
     <div class="card-body">
       <p class="text-muted small mb-2">
-        Each member is tagged automatically based on their membership status, activity, and location.
-        Because Brevo has no native tags, the active tags are written to the
-        <span class="text-warning">MEMBER_TAGS</span> attribute &mdash; build a segment with
-        &ldquo;MEMBER_TAGS contains <em>tag</em>&rdquo; to target each group.
+        Segment on &ldquo;<span class="text-warning">MEMBER_TAGS</span> contains <em>tag</em>&rdquo;.
       </p>
       <div class="table-responsive">
       <table class="table table-sm mb-3">

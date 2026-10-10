@@ -260,43 +260,6 @@ class QueueTests(StandardTestCase):
         self.assertFalse(health.is_reachable)
 
 
-class ClubHealthDashboardTests(StandardTestCase):
-    def setUp(self):
-        super().setUp()
-        self.admin_user.is_superuser = True
-        self.admin_user.save()
-
-    def test_the_queue_page_renders(self):
-        club = Club.objects.create(name="Queued club")
-        compute_club_health(club)
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(reverse("admin_club_health"))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Queued club")
-
-    def test_an_ordinary_user_cannot_open_it(self):
-        self.client.login(username="my_lot", password="testpassword")
-        self.assertNotEqual(self.client.get(reverse("admin_club_health")).status_code, 200)
-
-    def test_marking_a_club_contacted_takes_it_off_the_queue(self):
-        """Marking a club contacted takes it off the queue -- the trigger the rollup exists to feed."""
-        club = Club.objects.create(name="About to be contacted")
-        self.assertTrue(compute_club_health(club).due_for_checkin)
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}))
-        self.assertEqual(response.status_code, 302)
-        club.refresh_from_db()
-        self.assertIsNotNone(club.date_contacted)
-        self.assertFalse(ClubHealth.objects.get(club=club).due_for_checkin)
-
-    def test_an_ordinary_user_cannot_mark_a_club_contacted(self):
-        club = Club.objects.create(name="Not yours")
-        self.client.login(username="my_lot", password="testpassword")
-        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}))
-        club.refresh_from_db()
-        self.assertIsNone(club.date_contacted)
-
-
 class LadderTests(StandardTestCase):
     """The two halves of a club's stage, on one order, with the furthest-along winning."""
 
@@ -453,46 +416,6 @@ class MapGateTests(StandardTestCase):
         found = [item["title"] for group in response.json()["groups"] for item in group["items"]]
         self.assertIn("Listed Aquarium Society", found)
         self.assertNotIn("Prospect Aquarium Society", found)
-
-
-class StallReasonTests(StandardTestCase):
-    def setUp(self):
-        super().setUp()
-        self.admin_user.is_superuser = True
-        self.admin_user.save()
-        self.client.login(username="admin_user", password="testpassword")
-
-    def test_the_queue_records_why_a_club_stopped(self):
-        club = Club.objects.create(name="Answered the email")
-        compute_club_health(club)
-        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": "paper"})
-        club.refresh_from_db()
-        self.assertEqual(club.stall_reason, "paper")
-
-    def test_a_post_that_says_nothing_about_the_reason_leaves_it_alone(self):
-        """ "" is a legal value in this vocabulary ("Not known"), so an absent field must not read as one."""
-        club = Club.objects.create(name="Already answered", stall_reason="cost")
-        compute_club_health(club)
-        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}))
-        club.refresh_from_db()
-        self.assertEqual(club.stall_reason, "cost")
-        self.assertIsNotNone(club.date_contacted)
-
-    def test_the_reason_can_be_cleared_on_purpose(self):
-        club = Club.objects.create(name="Answered then unanswered", stall_reason="cost")
-        compute_club_health(club)
-        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": ""})
-        club.refresh_from_db()
-        self.assertEqual(club.stall_reason, "")
-
-    def test_a_reason_outside_the_vocabulary_is_ignored(self):
-        """A reason outside the vocabulary is ignored: free text here would be Club.notes again."""
-        club = Club.objects.create(name="Said something else")
-        compute_club_health(club)
-        self.client.post(reverse("club_mark_contacted", kwargs={"pk": club.pk}), {"stall_reason": "they hate blue"})
-        club.refresh_from_db()
-        self.assertEqual(club.stall_reason, "")
-        self.assertIsNotNone(club.date_contacted)
 
 
 class RefreshAllTests(StandardTestCase):

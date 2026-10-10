@@ -296,6 +296,7 @@ TEMPLATES = [
                 "auctions.context_processors.user_clubs",
                 "auctions.context_processors.label_print_method",
                 "auctions.context_processors.account_nav",
+                "auctions.context_processors.android_testers",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },
@@ -729,6 +730,10 @@ ALLOW_SEARCH_INDEXING = parse_bool_env(os.environ.get("ALLOW_SEARCH_INDEXING") o
 # The phone app's store pages. The help's app guide says the app isn't out yet until one is set.
 APP_STORE_URL = os.environ.get("APP_STORE_URL", "")
 PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "")
+# Google Play's closed test, until PLAY_STORE_URL is set. Testers join this Google Group (the closed
+# track's tester list) and then opt in at PLAY_TESTING_URL. Blank hides /android-testers/ and its banner.
+PLAY_TESTERS_GROUP_URL = os.environ.get("PLAY_TESTERS_GROUP_URL", "")
+PLAY_TESTING_URL = os.environ.get("PLAY_TESTING_URL", "https://play.google.com/apps/testing/com.fishauctions.app")
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 
 # --- DMCA designated agent ---------------------------------------------------------------------
@@ -1110,6 +1115,8 @@ REST_FRAMEWORK = {
         "mobile_ar": "240/min",
         # The app pings at mount, on resume and every 10 minutes.
         "mobile_checkin": "30/hour",
+        # A batch of crashes a launch; a crash loop sends one batch per launch, not one a crash.
+        "mobile_crash": "30/hour",
     },
     # JSON only: the browsable API rendered view docstrings and writable-field forms to anyone with a
     # browser. Re-enabled below under DEBUG.

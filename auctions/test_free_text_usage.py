@@ -1,8 +1,7 @@
-from django.urls import reverse
-
 from auctions import free_text_usage
 from auctions.free_text_usage import Row, group_by_term
 from auctions.models import Auction, InvoiceAdjustment
+from auctions.test_support import mcp_only_page
 from auctions.tests import StandardTestCase
 
 
@@ -38,11 +37,10 @@ class FreeTextUsageTests(StandardTestCase):
         checkbox = next(s for s in free_text_usage.custom_fields() if s["title"] == "Custom checkbox")
         self.assertIn(("cares", 1), checkbox["terms"])
 
-    def test_the_page_is_for_site_admins(self):
-        self.client.force_login(self.admin_user)
-        self.assertNotEqual(self.client.get(reverse("admin_free_text")).status_code, 200)
+    def test_the_report_is_for_site_admins(self):
+        self.assertNotEqual(mcp_only_page(self.admin_user, "admin_free_text").status_code, 200)
         self.admin_user.is_superuser = True
         self.admin_user.save()
-        response = self.client.get(reverse("admin_free_text"))
+        response = mcp_only_page(self.admin_user, "admin_free_text")
         self.assertContains(response, "Invoice adjustment notes")
         self.assertContains(response, "Custom dropdown")

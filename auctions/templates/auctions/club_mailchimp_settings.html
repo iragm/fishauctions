@@ -7,18 +7,14 @@
 {% if not mailchimp_configured %}
   <div class="alert alert-warning">
     <i class="bi bi-exclamation-triangle"></i>
-    Mailchimp is not configured on this site. Contact your site administrator.
+    Mailchimp isn't set up on this site.
   </div>
 {% elif not club.mailchimp_access_token %}
   {# Not connected yet #}
   <div class="card mb-4">
     <div class="card-header">Connect Mailchimp</div>
     <div class="card-body">
-      <p class="text-muted">
-        Connect your club's Mailchimp account to automatically keep an audience in sync with your
-        members. Member details, renewal links, barcodes, and lifecycle tags are pushed one way
-        (this site &rarr; Mailchimp) so you can build automations and targeted campaigns.
-      </p>
+      <p class="text-muted">Keeps a Mailchimp audience in sync with your members.</p>
       <a href="{% url 'mailchimp_connect' club.slug %}" class="btn btn-primary">
         <i class="bi bi-envelope-paper"></i> Connect Mailchimp
       </a>
@@ -31,8 +27,7 @@
     <div class="card-header">Choose an audience</div>
     <div class="card-body">
       <p class="text-muted">
-        Pick the Mailchimp audience your {{ in_scope_count }} member(s) should sync into, or create a
-        new one named &ldquo;{{ club.name }} Members&rdquo;.
+        Pick an audience for {{ in_scope_count }} member(s).
       </p>
       <form method="post" action="{% url 'mailchimp_select_audience' club.slug %}">
         {% csrf_token %}
@@ -84,10 +79,6 @@
         <dt class="col-sm-4">Last sync</dt>
         <dd class="col-sm-8">{{ club.mailchimp_last_sync|default:"—" }}</dd>
       </dl>
-      <p class="text-muted small mt-3 mb-0">
-        <i class="bi bi-info-circle"></i>
-        Members are synced automatically whenever their record is saved, and again each night.
-      </p>
       {% if club.mailchimp_last_error %}
         <div class="alert alert-danger mt-3 mb-0 small">
           <i class="bi bi-exclamation-triangle"></i> Last error: {{ club.mailchimp_last_error }}
@@ -127,9 +118,6 @@
   <div class="card mb-4">
     <div class="card-header">Tags &amp; merge fields</div>
     <div class="card-body">
-      <p class="text-muted small mb-2">
-        Each member is tagged automatically based on their membership status, activity, and location.
-      </p>
       <div class="table-responsive">
       <table class="table table-sm mb-3">
         <tbody>

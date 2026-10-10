@@ -15,7 +15,7 @@ This file is loaded on **every** request, so it holds only what is true everywhe
 | `auctions/mcp/CLAUDE.md` | The MCP endpoint, the palette, and the one registry behind both. |
 | `auctions/documents/__init__.py` | The library (`/library/`): upload, read, stitch, search; its worker and `./privatefiles/`. |
 | `auctions/templates/CLAUDE.md` | Templates, styles, navigation surfaces. |
-| `.claude/skills/` | Species list, club API, announcements, Celery, voice, mobile app; the `scout` and `build-requests` routines. |
+| `.claude/skills/` | Species list, club API, announcements, Celery, voice, mobile app; the `scout`, `build-requests`, `github-issues`, `dependency-update` and `staging-flow` routines. |
 | `style_reference.md` | Read before **any** visual change. |
 
 Slash commands: `/test`, `/ci`, `/map`, `/migrate`, `/fishbase`, `/mcp`.

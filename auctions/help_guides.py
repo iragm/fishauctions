@@ -288,6 +288,11 @@ class HelpContext:
         return [{"name": name, "url": url, "icon": icon} for name, url, icon in stores if url]
 
     @property
+    def android_testers(self) -> bool:
+        """Whether the Android app's closed test takes testers (``PLAY_TESTERS_GROUP_URL``, before ``PLAY_STORE_URL``)."""
+        return bool(settings.PLAY_TESTERS_GROUP_URL and not settings.PLAY_STORE_URL)
+
+    @property
     def now(self):
         """For a guide comparing one of the auction's dates with now."""
         return timezone.now()
@@ -825,6 +830,7 @@ NOT_IN_HELP: dict[str, str] = {
     "dmca": "Legal text for rightsholders, linked from the footer.",
     "dmca_notice": "A form for rightsholders, reached from the DMCA page.",
     "support": "The contact page is where help ends, not a topic.",
+    "feature_requests": "A form and your own list; the support page links it.",
     "faq": "Being replaced by these guides.",
     "auction_help": "Redirects into these guides.",
     "auction_pages": "A list of the auction's other pages, which the guides cover one by one.",
@@ -833,28 +839,20 @@ NOT_IN_HELP: dict[str, str] = {
     "blog_post": "Posts are announcements, read on their own.",
     "admin_dashboard": "Site operator only.",
     "admin_setup_checklist": "Site operator only.",
-    "command_palette_analytics": "Site operator only.",
-    "assistant_skill_requests": "Site operator only.",
     "agent_proposals": "Site operator only.",
     "species_gaps": "Site operator only.",
     "species_create": "Site operator only.",
     "species_name_create": "Site operator only.",
     "admin_traffic": "Site operator only.",
     "admin_referrers": "Site operator only.",
-    "admin_usability": "Site operator only.",
-    "admin_club_health": "Site operator only.",
     "admin_unlinked_auctions": "Site operator only.",
-    "admin_lifecycle": "Site operator only.",
-    "admin_early_adds": "Site operator only.",
-    "admin_free_text": "Site operator only.",
-    "admin_session_replay": "Site operator only.",
     "admin_user_map": "Site operator only.",
     "admin_user_signups": "Site operator only.",
     "admin_error": "Site operator only.",
     "all_my_users": "Site operator only.",
     "help": "This is the help.",
     "leaderboard": "No link on the site leads to it any more.",
-    "auction_disable_bidding": "Unfinished: its button was taken off the users page (see the view's TODO).",
+    "auction_disable_bidding": "A button on the Users tab that only posts; the check-in section names it.",
     "bulk_add_lots": "The older add-lots form; only the command palette opens it. The guides describe the grid every button opens.",
     "bulk_add_lots_for_myself": "The older add-lots form; only the command palette opens it. The guides describe the grid every button opens.",
     "user_api_keys": "Redirects into the AI agents guide, and takes that guide's forms.",

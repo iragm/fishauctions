@@ -41,8 +41,8 @@ class SupportUrlWorksSignedOutTests(TestCase):
 
 class SupportPageIsTheHelpPageTests(TestCase):
     """/support/ is where somebody goes when stuck, and the message form is the last resort on it: an agent
-    answers a question about their own auction in seconds, the help guides answer the common ones, and the
-    videos cover running an auction. All four are on one page, so a reader with no session gets them.
+    answers a question about their own auction in seconds, the help guides answer the common ones, and a
+    bug or idea goes to the feature requests. All of it is on one page, so a reader with no session gets it.
     """
 
     def setUp(self):
@@ -55,20 +55,10 @@ class SupportPageIsTheHelpPageTests(TestCase):
     def test_it_links_the_help(self):
         self.assertIn(reverse("help"), self.html)
 
-    def test_both_tutorial_videos_are_on_it(self):
-        self.assertIn(settings.ONLINE_TUTORIAL_YOUTUBE_ID, self.html)
-        self.assertIn(settings.IN_PERSON_TUTORIAL_YOUTUBE_ID, self.html)
-
-    def test_the_videos_start_collapsed(self):
-        # Half an hour of video above the form somebody came to use, behind a button that says
-        # what is behind it.
-        self.assertIn('id="tutorial-videos"', self.html)
-        self.assertIn("Watch the tutorial videos", self.html)
-        self.assertNotIn('class="collapse show" id="tutorial-videos"', self.html)
-
-    def test_the_chapter_list_comes_with_them(self):
-        self.assertIn("Jump to content in this video", self.html)
-        self.assertIn(settings.ONLINE_TUTORIAL_CHAPTERS[1][1], self.html)
+    def test_it_links_feature_requests_instead_of_the_videos(self):
+        self.assertIn(reverse("feature_requests"), self.html)
+        self.assertNotIn(settings.ONLINE_TUTORIAL_YOUTUBE_ID, self.html)
+        self.assertNotIn(settings.IN_PERSON_TUTORIAL_YOUTUBE_ID, self.html)
 
     def test_the_message_form_is_still_there(self):
         self.assertIn("Reach out, always happy to chat", self.html)

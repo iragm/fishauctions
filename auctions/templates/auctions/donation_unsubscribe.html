@@ -26,9 +26,7 @@
       {{ club.name }} has been sending donation requests to <strong>{{ vendor.email }}</strong>.
     </p>
     <p>
-      Unsubscribing stops donation requests to this address from <strong>every club</strong> on
-      this site, not just {{ club.name }}. This can't be undone from your side or theirs &mdash;
-      if you change your mind later you'll need to contact the club directly.
+      Unsubscribing stops requests from <strong>every club</strong> on this site, permanently.
     </p>
     <form method="post">
       {% csrf_token %}

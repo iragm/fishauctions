@@ -40,8 +40,9 @@ auctions/mcp/admin.py      /mcp/admin/: superusers, read-only, and propose_chang
 
 `/mcp/admin/` is the same view (`AdminMCPEndpointView`) for superusers only, advertised nowhere. It
 lists every registry read plus `admin.ADMIN_TOOLS` (any superuser dashboard as text, feature
-requests, logs, `site_health`), and **nothing on it writes**: the server makes it read-only, not a
-client prompt, because a scheduled routine runs connectors' tools with nobody there to approve.
+requests, logs, the app's crash reports, `site_health`), and **nothing on it writes**: the server makes
+it read-only, not a client prompt, because a scheduled routine runs connectors' tools with nobody
+there to approve.
 
 - **Who gets in, checked on every request** (`admin.refusal`): a superuser, over OAuth (never an
   `ak_` key), through a client in `MCP_ADMIN_CLIENT_IDS` (claude.ai's CIMD document by default:
@@ -59,9 +60,10 @@ client prompt, because a scheduled routine runs connectors' tools with nobody th
   (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
-  `admin.APPROVAL_ONLY` (feature request status, never `planned`) can be proposed, checked again at
-  approval. `planned` starts a build, so only the owner's click on the requests page sets it, and a
-  request can't be edited once decided.
+  `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, a club's outreach
+  stage, trusting a user) can be proposed, checked again at
+  approval. `planned` starts a build, so only the owner sets it (the project chat's decision cards,
+  or Django admin), and a request can't be edited once decided.
 - `read_logs` and dashboard text go through `admin.redact` on the way out. No database tool, by
   decision.
 - `test_mcp_admin.ReadOnlyToolsDontWriteTests` runs every registry read as a superuser and fails on
@@ -180,7 +182,8 @@ back search results rather than a refusal.
 
 ## Watching it work
 
-`/admin-dashboard/palette-analytics/`. `LLMUsage.request_id` is one id per thing somebody typed, so
+The `command_palette_analytics` report, which has no URL: only `read_admin_page` on `/mcp/admin/`
+renders it (`admin.MCP_ONLY_PAGES`). `LLMUsage.request_id` is one id per thing somebody typed, so
 a lookup and the answer it fed are one story — rounds-per-request was counted over the *text* of the
 query before, which made two people asking the same thing one query. `variant` fingerprints the
 prompt, the skill list and the model together, so a deploy that changes any of them starts a new row
@@ -195,9 +198,9 @@ guess made on somebody's behalf; **`tools_offered`** names the tier (`all`/`read
 so a turn that quietly lost its write tools isn't just another navigation. The page also shows
 whether the breaker is open right now, which was previously visible only as slow answers.
 
-`palette_assist.shortcut_proposals` offers phrases the assistant has answered the same way every
-single time, one button each. The mining was always there and nothing ever ran it. An accepted
-phrase stops reaching the model at all: no call, no wait, and no way for it to come back wrong.
+`manage.py mine_palette_shortcuts` turns phrases the assistant has answered the same way every
+single time into shortcuts. An accepted phrase stops reaching the model at all: no call, no wait, and
+no way for it to come back wrong.
 
 ## Transport and auth
 
@@ -331,9 +334,10 @@ the whole registry as three people who shouldn't reach a tenant's objects.
   client, which only works if it has one: checking for a mail connector is its first step, because
   this server cannot see what else the client is connected to.
 - **Resources** (`auctions/mcp/resources.py`): `auction://`, `lot://`, `club://` templates,
-  `me://context`, `me://activity`, `help://faq` — each names a registered **read-only** action, so
-  there's no second permission path. **Nothing that names somebody is ever listed**: `resources/list`
-  returns only the widget documents, the two `me://` reads and `help://faq` — the rule is *no slugs*,
+  `document://`, `me://context`, `me://activity`, `help://faq` — each names a registered
+  **read-only** action, so there's no second permission path. `document://{n}` is offered only to
+  people with the library, and a library search cites each document as a `resource_link` to it.
+  **Nothing that names somebody is ever listed**: `resources/list` returns only the widget documents, the two `me://` reads and `help://faq` — the rule is *no slugs*,
   not *nothing concrete*.
 
 ## Confirmation tier
@@ -357,8 +361,8 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   `auctions.donation_views`; the latter was added when the donation skills arrived, having held five
   user-facing writes in none of the three tables. `app_links`, `apple_notifications` and
   `passkit_views` are still outside it.
-- `request_a_skill` records a feature somebody asked for; `/admin-dashboard/assistant-requests/` is the
-  queue, ordered by distinct askers, and `planned` is the go-ahead to build. `my_requests` shows the
+- `request_a_skill` records a feature somebody asked for; `list_feature_requests` on `/mcp/admin/` reads
+  the queue, and `planned` is the go-ahead to build. `my_requests` shows the
   asker its status, never the owner's note. Row content is model-written: displayed, escaped, never
   executed.
 - `docs/mcp_next.md` is the standing list of unused spec features, including what's already rejected.

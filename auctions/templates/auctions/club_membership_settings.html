@@ -11,10 +11,6 @@
 <hr>
 
 <h2 class="h4 mt-4">Payments</h2>
-<p class="text-muted small">
-  Connect a PayPal or Square account so members can pay dues directly on this site,
-  and so auctions tied to this club can accept payments.
-</p>
 
 {# ---- PayPal ---- #}
 <div class="mb-4">
@@ -25,7 +21,7 @@
       <div class="alert alert-success py-2" role="alert">PayPal credentials are saved and active.</div>
     {% else %}
       <div class="alert alert-warning py-2 text-dark" role="alert">
-        Enter your PayPal REST API client ID and secret below to start accepting payments.
+        Enter your PayPal REST API client ID and secret.
       </div>
     {% endif %}
     <form action="{% url 'club_paypal_credentials' slug=club.slug %}" method="post">
@@ -35,9 +31,7 @@
   {% else %}
   {% if uses_site_paypal %}
     <div class="alert alert-info" role="alert">
-      This club is configured to use the <strong>site's PayPal merchant account</strong>
-      (set by a site administrator). Any linked PayPal Seller below is ignored while this
-      is in effect.
+      This club uses the <strong>site's PayPal account</strong>; any linked one below is ignored.
     </div>
   {% endif %}
   {% if paypal_seller %}
@@ -57,7 +51,7 @@
     </form>
     <p class="small text-muted mt-1">
       Your account <em>{{ user_paypal_seller.payer_email|default:user_paypal_seller.user.username }}</em>
-      will be used for this club's payments. Auctions you've created personally will continue to use the same account.
+      will take this club's payments too.
     </p>
   {% elif request.user.userdata.paypal_enabled %}
     <a class="btn btn-primary btn-sm" href="{% url 'paypal_connect' %}?club={{ club.slug }}">
@@ -110,9 +104,7 @@
       auction ribbon; the gate itself stays, and SquareConnectView is what enforces it.
     {% endcomment %}
     <p class="small text-muted mb-2">
-      Card payments are reviewed before they're switched on &mdash; taking cards means collecting
-      money from other people, so we look at each account by hand first. Ask and we'll usually have
-      you set up the same day.
+      Card payments are reviewed before they're switched on, usually the same day.
     </p>
     <a class="btn btn-primary btn-sm" href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}">
       <i class="bi bi-credit-card"></i> Contact us and request access

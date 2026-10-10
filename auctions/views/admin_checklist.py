@@ -835,7 +835,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "<strong>This is the only setting here that costs money per use.</strong> Each request is one "
                     "or more calls to the model you configure, billed by that provider. The palette throttles to "
                     f"{llm_window_max} calls per {llm_window_minutes} minutes per user, and "
-                    "<a href='" + reverse("command_palette_analytics") + "'>command palette analytics</a> shows "
+                    "the admin MCP endpoint's <code>command_palette_analytics</code> report shows "
                     "the running token total, what it's being used for, and the queries it couldn't answer.<br><br>"
                     "Leave <code>OPENAI_API_KEY</code> empty and the palette behaves exactly as it did before this "
                     "feature existed: ordinary search, no microphone button, no model calls."
@@ -851,7 +851,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "Create an API key with your provider and paste it into <code>OPENAI_API_KEY</code>.",
                     "Restart the site, then press <kbd>Ctrl</kbd>/<kbd>&#8984;</kbd>+<kbd>K</kbd> and type "
                     "something like &ldquo;take me to my invoice&rdquo; to check it responds.",
-                    "Watch the analytics page for the first few days &mdash; the token total tells you what this "
+                    "Watch that report for the first few days &mdash; the token total tells you what this "
                     "is actually costing, and the &ldquo;couldn't answer&rdquo; list tells you what people expected "
                     "it to do.",
                 ],
@@ -867,7 +867,6 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 ],
                 "links": [
                     {"label": "OpenAI API keys", "url": "https://platform.openai.com/api-keys"},
-                    {"label": "Command palette analytics", "url": reverse("command_palette_analytics")},
                 ],
             },
             # -- Mailchimp --------------------------------------------------------

@@ -37,8 +37,7 @@
   <div class="card-header">Step 2 &mdash; Post the join button</div>
   <div class="card-body">
     <p class="text-muted small">
-      Once you've added the bot to your server and given it a role above the ones it manages,
-      type <code>/connect</code> and press enter, then, when prompted for a club_uuid, paste this connection code:
+      In your server, type <code>/connect</code> and paste this code:
     </p>
     <div class="input-group mb-2">
       <input type="text" class="form-control font-monospace" id="joinCommand" value="{{ club_uuid }}" readonly>
@@ -110,7 +109,7 @@
   <div class="card-header">Step 4 (optional) &mdash; Auction notifications</div>
   <div class="card-body">
     <p class="text-muted small">
-      To have announcements about upcoming auctions in a channel, you can use the slash command <code>/auctions_here</code>. This only works <strong>after</strong> you have connected your Discord server to a club.
+      Run <code>/auctions_here</code> in a channel to post upcoming auctions there.
     </p>
     {% if club.auction_channel_id %}
       <p class="text-success mb-3">
@@ -131,11 +130,7 @@
           Automatically create a Discord scheduled event for each promoted auction
         </label>
       </div>
-      <div class="text-muted small mt-1">
-        Events are created once an auction is at least 24 hours old. In-person auctions span the start time
-        to two hours later; online auctions span bidding open to bidding close. The event location links to
-        the auction rules page.
-      </div>
+      <div class="text-muted small mt-1">Created once an auction is a day old.</div>
     </form>
   </div>
 </div>

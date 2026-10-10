@@ -1224,7 +1224,6 @@ class DonationContactOnEmailSettingsTests(DonationTestMixin, TestCase):
         self.client.force_login(self.admin)
         page = self.client.get(reverse("club_email_settings", kwargs={"slug": self.club.slug}))
         self.assertContains(page, "Leave the donation contact blank")
-        self.assertContains(page, "never reaches")
 
     @override_settings(**ROUTING_SETTINGS)
     def test_a_club_that_does_not_track_donations_is_not_warned_about_it(self):

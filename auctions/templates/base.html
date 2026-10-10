@@ -353,16 +353,9 @@ window.onload = function() {
                     <a class="dropdown-item" href="{% url 'admin_user_map' %}?view=recent&filter=24">User map</a>
                     <a class="dropdown-item" href="{% url 'admin_traffic' %}?days=30">Traffic</a>
                     <a class="dropdown-item" href="{% url 'admin_referrers' %}?days=30">Referrers</a>
-                    <a class="dropdown-item" href="{% url 'admin_usability' %}?days=30">Usability</a>
-                    <a class="dropdown-item" href="{% url 'admin_club_health' %}">Club health</a>
-                    <a class="dropdown-item" href="{% url 'admin_lifecycle' %}">Lifecycle</a>
-                    <a class="dropdown-item" href="{% url 'admin_early_adds' %}">Early lots and gross</a>
-                    <a class="dropdown-item" href="{% url 'admin_free_text' %}">Adjustments and custom fields</a>
-                    <a class="dropdown-item" href="{% url 'admin_session_replay' %}">Session replay</a>
                     <a class="dropdown-item" href="{% url 'admin_user_signups' %}?days=90">User signups</a>
-                    <a class="dropdown-item" href="{% url 'command_palette_analytics' %}">Command palette searches</a>
                     <a class="dropdown-item" href="{% url 'species_gaps' %}">Lots with no scientific name</a>
-                    <a class="dropdown-item" href="{% url 'assistant_skill_requests' %}">Feature requests</a>
+                    <a class="dropdown-item" href="{% url 'admin_unlinked_auctions' %}">Auctions with no club</a>
                     <a class="dropdown-item" href="{% url 'agent_proposals' %}">Changes agents proposed</a>
                     <a class="dropdown-item" href="/admin/auth/user/?o=-6">Admin site</a>
                     <a class="dropdown-item" href="{% url 'admin_error' %}">Test error messages</a>
@@ -459,6 +452,11 @@ window.onload = function() {
         {% if not has_user_location and location_message and not request.is_mobile_app %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endif %}
+        {% if show_android_testers %}
+        <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="{% url 'android_testers' %}">Help test the Android app</a>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close" onclick="document.cookie = 'hide_android_testers=true; max-age=31536000; SameSite=Strict; path=/'"></button>
         </div>
         {% endif %}
         {# A pending deletion is the one thing that changes what this account is, so it says so on every page #}

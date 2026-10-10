@@ -14,7 +14,7 @@
         {% include "auctions/partials/invoice_membership_renewal.html" with is_admin=True %}
         {% if tos.is_club_member and tos.auction.uses_alternate_split %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}
         {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
-        {% if tos.possible_duplicate %}Note: This user may be a duplicate, confirm that this is their only bidder number<br>{% endif %}
+        {% if tos.possible_duplicate %}Possible duplicate: check for another bidder number<br>{% endif %}
         {% if request.is_mobile_app and invoice.show_square_button and not invoice.reason_for_payment_not_available %}
           {% comment %}
             Inside the native app: deep-link to the on-device Tap to Pay screen (host must be "pay",

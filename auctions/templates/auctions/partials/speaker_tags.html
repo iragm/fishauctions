@@ -11,7 +11,7 @@ partial must stand alone — it's both part of the panel and the htmx response t
   {% endfor %}
 </div>
 {% else %}
-<p class="text-muted small mb-2">No tags yet. If your club has hosted this speaker, you're the best person to add the first one.</p>
+<p class="text-muted small mb-2">No tags yet.</p>
 {% endif %}
 
 <div class="accordion accordion-flush mb-3" id="speaker-tag-accordion">
@@ -38,7 +38,6 @@ partial must stand alone — it's both part of the panel and the htmx response t
           {% endfor %}
         </div>
         {% endfor %}
-        <small class="text-muted">Click a tag to add it, click again to take it back off. Only your own tags change.</small>
       </div>
     </div>
   </div>

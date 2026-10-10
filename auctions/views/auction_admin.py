@@ -780,8 +780,10 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
 
 
 class AuctionDisableBidding(LoginRequiredMixin, AuctionViewMixin, View):
-    # TODO: incomplete and broken -- the UI button was removed from auction_users.html. Re-enabling
-    # bidding per user after this action isn't wired up. Don't re-expose without finishing it.
+    """Turn bidding off for everyone in a check-in auction. Checking a person in again (the users table's
+    Allow bidding button, a card scan, or the palette) turns it back on for them.
+    """
+
     allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
@@ -799,7 +801,7 @@ class AuctionDisableBidding(LoginRequiredMixin, AuctionViewMixin, View):
             user=request.user,
         )
         messages.success(request, f"Turned bidding off for {updated} user{'s' if updated != 1 else ''}.")
-        return HttpResponse("<script>location.reload();</script>", status=200)
+        return redirect("auction_tos_list", slug=self.auction.slug)
 
 
 class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
@@ -819,6 +821,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
         bidder_number = escape(tos.bidder_number if tos.bidder_number and tos.bidder_number != "ERROR" else "")
         name = escape(tos.name or "")
         check_in_url = reverse("auction_check_in", kwargs={"pk": tos.pk})
+        title = f"Allow {name} to bid" if tos.checked_in else f"Check in {name}"
         html = f"""
 <div data-htmx-modal-root>
 <div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
@@ -826,7 +829,7 @@ class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="checkInModalLabel">Check in {name}</h5>
+        <h5 class="modal-title" id="checkInModalLabel">{title}</h5>
         <button type="button" class="btn-close btn-close-white" data-modal-close-action="none" aria-label="Close"></button>
       </div>
       <form hx-post="{check_in_url}" hx-target="#modals-here" hx-swap="innerHTML">
@@ -866,8 +869,9 @@ window.mountHtmxModal(document.currentScript.previousElementSibling);
 
     def post(self, request, *args, **kwargs):
         tos = self.auctiontos
+        was_checked_in = bool(tos.checked_in)
         check_in_auctiontos(tos, acting_user=request.user, bidder_number=request.POST.get("bidder_number", ""))
-        messages.success(request, f"Checked in {tos.name}.")
+        messages.success(request, f"{tos.name} can bid again." if was_checked_in else f"Checked in {tos.name}.")
         return close_modal_response("reload-page")
 
 

@@ -1767,7 +1767,7 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         self.client.login(username=self.watcher.username, password="testpassword")
         response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "notification in the app on your phone")
+        self.assertContains(response, "app notification")
         self.assertNotContains(response, "webpush-subscribe-button")
 
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)

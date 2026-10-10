@@ -10,7 +10,7 @@
   table.
 {% endcomment %}
 <p class="text-muted">
-  {% if request.user.is_superuser %}You are naming a species everyone can already see. A name added here is matched on every club's lots straight away.{% elif club %}You are naming a species everyone can already see. The name will only be matched for you and the rest of {{ club }} until a site admin approves it.{% else %}You are naming a species everyone can already see. The name will only be matched for you until a site admin approves it.{% endif %}
+  {% if not request.user.is_superuser %}Only {% if club %}{{ club }}{% else %}you{% endif %} will see this name until a site admin approves it.{% endif %}
 </p>
 {% if lot_name %}
 <div class="alert alert-info py-2">

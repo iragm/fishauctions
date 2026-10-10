@@ -30,7 +30,7 @@
   <small class="text-muted">Membership status: {{ invoice.membership_status_for_invoice }}</small>
   {% endif %}
   {% if invoice.renewal_processed %}
-  <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required if this needs to be undone.</small></div>
+  <div><small class="text-danger">Renewed when this invoice was paid; undo it with an adjustment or refund.</small></div>
   {% endif %}
 </div>
 {% if is_admin and not invoice.renewal_processed and not invoice.member_has_paypal_subscription and not invoice.member_membership_carried_by %}

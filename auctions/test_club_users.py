@@ -960,9 +960,40 @@ class ManageUsersThroughClubTests(TestCase):
             checked_in=timezone.now(),
         )
         self.client.force_login(self.creator)
+        users_page = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+        self.assertContains(self.client.get(users_page), "Stop bidding")
         response = self.client.post(reverse("auction_disable_bidding", kwargs={"slug": self.auction.slug}))
-        self.assertEqual(response.status_code, 200)
+        self.assertRedirects(response, users_page)
         self.assertFalse(AuctionTOS.objects.filter(auction=self.auction, bidding_allowed=True).exists())
+
+    def test_checking_in_again_turns_bidding_back_on(self):
+        self._enable_checkin_mode()
+        cm = ClubMember.objects.create(club=self.club, user=self.joiner, name="Joiner", bidder_number="123")
+        tos = AuctionTOS.objects.get(auction=self.auction, clubmember=cm)
+        self.client.force_login(self.creator)
+        self.client.post(reverse("auction_check_in", kwargs={"pk": tos.pk}))
+        tos.refresh_from_db()
+        first_check_in = tos.checked_in
+        self.client.post(reverse("auction_disable_bidding", kwargs={"slug": self.auction.slug}))
+        tos.refresh_from_db()
+        self.assertFalse(tos.can_bid_in_auction)
+
+        users_page = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+        self.assertContains(self.client.get(users_page), "Allow bidding")
+        self.assertContains(self.client.get(reverse("auction_check_in", kwargs={"pk": tos.pk})), "Allow Joiner to bid")
+        self.client.post(reverse("auction_check_in", kwargs={"pk": tos.pk}))
+        tos.refresh_from_db()
+        self.assertTrue(tos.can_bid_in_auction)
+        self.assertEqual(tos.checked_in, first_check_in)
+        self.assertNotContains(self.client.get(users_page), "Allow bidding")
+
+    def test_stop_bidding_is_only_for_checkin_auctions(self):
+        self.client.force_login(self.creator)
+        self.assertNotContains(
+            self.client.get(reverse("auction_tos_list", kwargs={"slug": self.auction.slug})), "Stop bidding"
+        )
+        response = self.client.post(reverse("auction_disable_bidding", kwargs={"slug": self.auction.slug}))
+        self.assertEqual(response.status_code, 404)
 
     def test_door_prize_picker_only_uses_checked_in_users(self):
         self._enable_checkin_mode()

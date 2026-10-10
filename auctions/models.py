@@ -657,7 +657,7 @@ class Club(CloudflareImageMixin, models.Model):
     )
     send_membership_expiration_reminders = models.BooleanField(
         default=False,
-        help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.  Reminders are only sent if the user has paid for their membership at least once.  This option is probably not a great idea as users will get an email from this site asking them to pay for their membership, which may cause confusion.",
+        help_text="Emails members who have paid before a link to renew here; members may not expect it from this site.",
     )
     send_membership_expiration_reminders_30_days = models.BooleanField(default=False)
     send_membership_renewal_confirmation = models.BooleanField(
@@ -806,12 +806,7 @@ class Club(CloudflareImageMixin, models.Model):
     days_between_same_species_lots = models.IntegerField(
         default=0,
         verbose_name="Days between same species lots",
-        help_text=(
-            "Minimum days between awarding BAP points for lots with the same scientific name. Leave at 0 to "
-            "allow points every time. Stricter than the rule above, because it sees through what the lot was "
-            "called: “Yellow labs” and “Labidochromis caeruleus” are the same fish. A named strain counts as "
-            "its own species, so blue and red cherry shrimp both earn points."
-        ),
+        help_text="Like the rule above, but by scientific name; 0 allows points every time.",
     )
     points_per_lot = models.IntegerField(
         null=True,
@@ -1055,10 +1050,7 @@ class Club(CloudflareImageMixin, models.Model):
         choices=DONATION_EMAIL_MODE_CHOICES,
         default=DONATION_EMAIL_MODE_ROUTED,
         verbose_name="How to send donation emails",
-        help_text=(
-            "From this site, the email comes from an address that files the vendor's reply against them. "
-            "With copy/paste, you send it from your own email and record replies yourself, by hand or with an AI assistant."
-        ),
+        help_text="From this site, replies are recorded for you; with copy/paste, you record them yourself.",
     )
     donation_email_member = models.ForeignKey(
         "ClubMember",
@@ -1073,11 +1065,7 @@ class Club(CloudflareImageMixin, models.Model):
         blank=True,
         default="",
         verbose_name="Club information for donation emails",
-        help_text=(
-            "Passed to the language model with every donation email it writes, so it doesn't have "
-            "to be retyped for each vendor. For example: “We're a non-profit club of 120 members. "
-            "Our spring auction raises money for our speaker program.”"
-        ),
+        help_text="Used in every donation email we write, e.g. “120 members; the spring auction pays for speakers.”",
     )
     mailing_address = models.TextField(
         blank=True,
@@ -3445,11 +3433,7 @@ class UserAPIKey(HashedAPIKey):
     is_active = models.BooleanField(default=True)
     allow_writes = models.BooleanField(
         default=False,
-        help_text=(
-            "Let this key add and change things — lots, check-ins, invoices, members. Off by "
-            "default: a key that can only read is a much smaller thing to lose. Either way it can "
-            "never do anything you couldn't do yourself."
-        ),
+        help_text="Lets this key add and change lots, check-ins, invoices and members.",
     )
     expires_at = models.DateTimeField(
         null=True,
@@ -5072,9 +5056,10 @@ class Auction(CachedPropertiesMixin, models.Model):
         total_net = invoices.filter(calculated_total__isnull=False).aggregate(total=Sum("calculated_total"))[
             "total"
         ] or Decimal("0.00")
-        for invoice in invoices.filter(calculated_total__isnull=True).select_related(
+        unstamped = invoices.filter(calculated_total__isnull=True).select_related(
             "auction__club", "club", "auctiontos_user"
-        ):
+        )
+        for invoice in Invoice.prime_totals(unstamped):
             total_net += Decimal(invoice.rounded_net)
         # calculated_total is negative when the buyer owes; negate, never abs().
         profit = -Decimal(total_net)
@@ -10094,6 +10079,21 @@ class ClubBapGenusOverride(models.Model):
         return f"{self.club} — {self.genus}: {self.points} pts"
 
 
+def _sold_lot_sums():
+    """The sums over an invoice's sold lots, for ``Invoice._sold_totals`` and ``prime_totals``.
+
+    Over an ``add_price_info`` queryset. Banned lots are never charged, so they add to neither the gross
+    nor the donations (``your_cut`` and ``club_cut`` are already zero for them). The keys must not be
+    the names of those annotations: an aggregate named ``club_cut`` replaces the column it sums.
+    """
+    return {
+        "seller_total": Sum("your_cut"),
+        "gross_total": Sum("winning_price", filter=Q(banned=False)),
+        "club_total": Sum("club_cut"),
+        "donation_total": Sum("winning_price", filter=Q(donation=True, banned=False)),
+    }
+
+
 class Invoice(CachedPropertiesMixin, models.Model):
     """The amount you get paid or owe the club for an auction."""
 
@@ -10507,17 +10507,7 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def tax(self):
-        totals = self.bought_lots_queryset.aggregate(
-            total_final=Coalesce(
-                Sum(
-                    "final_price",
-                    output_field=DecimalField(max_digits=12, decimal_places=2),
-                ),
-                Value(Decimal(0.00)),
-                output_field=DecimalField(max_digits=12, decimal_places=2),
-            )
-        )
-        total_final = totals["total_final"] or Decimal(0.00)
+        total_final = self._bought_total or Decimal(0.00)
         rate = Decimal(self.auction.tax or 0 if self.auction else 0) / Decimal(100)
         tax_amount = total_final * rate
         return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -10612,29 +10602,16 @@ class Invoice(CachedPropertiesMixin, models.Model):
             .order_by("pk")
         )
 
-    @cached_property
-    def bought_lots_queryset(self):
-        """Simple qs containing all lots BOUGHT by this user in this auction"""
-        base = (
-            Lot.objects.filter(
+    @staticmethod
+    def _charged_lots(qs):
+        """The lots of ``qs`` a buyer pays for, with ``final_price`` (partial refund taken off) and ``tax``."""
+        return (
+            qs.filter(
                 winning_price__isnull=False,
-                auctiontos_winner=self.auctiontos_user,
                 is_deleted=False,
                 # Banned lots are never charged.
                 banned=False,
             )
-            .select_related(
-                "auction",
-                "species_category",
-                "auctiontos_seller__pickup_location",
-                "auctiontos_winner__pickup_location",
-            )
-            .order_by("pk")
-            if self.auctiontos_user
-            else Lot.objects.none()
-        )
-        return (
-            base
             # Use Decimal math to avoid float rounding
             .annotate(
                 final_price=ExpressionWrapper(
@@ -10648,7 +10625,8 @@ class Invoice(CachedPropertiesMixin, models.Model):
                     ),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )
-            ).annotate(
+            )
+            .annotate(
                 tax=ExpressionWrapper(
                     Cast(F("final_price"), DecimalField(max_digits=12, decimal_places=2))
                     * Coalesce(
@@ -10661,6 +10639,78 @@ class Invoice(CachedPropertiesMixin, models.Model):
                 )
             )
         )
+
+    @cached_property
+    def bought_lots_queryset(self):
+        """Simple qs containing all lots BOUGHT by this user in this auction"""
+        if not self.auctiontos_user:
+            return self._charged_lots(Lot.objects.none())
+        return self._charged_lots(
+            Lot.objects.filter(auctiontos_winner=self.auctiontos_user)
+            .select_related(
+                "auction",
+                "species_category",
+                "auctiontos_seller__pickup_location",
+                "auctiontos_winner__pickup_location",
+            )
+            .order_by("pk")
+        )
+
+    @cached_property
+    def _bought_total(self):
+        """Sum of ``final_price`` over the lots bought, or None; ``total_bought`` and ``tax`` share it."""
+        return self.bought_lots_queryset.aggregate(total=Sum("final_price"))["total"]
+
+    @cached_property
+    def _sold_totals(self):
+        """Every sum over the lots sold, in one query, keyed as ``_sold_lot_sums`` names them."""
+        return self.sold_lots_queryset.aggregate(**_sold_lot_sums())
+
+    @classmethod
+    def prime_totals(cls, invoices):
+        """Fill in the sums ``net`` is built from for many invoices at once, and return them.
+
+        Three GROUP BYs for the lot -- lots sold, lots bought, adjustments -- instead of each invoice
+        asking for its own. The arithmetic on top stays in the properties, so a primed invoice answers
+        exactly what an unprimed one would; ``test_query_counts`` checks both ways on the same rows.
+        """
+        invoices = [invoice for invoice in invoices if invoice is not None]
+        tos_ids = {invoice.auctiontos_user_id for invoice in invoices if invoice.auctiontos_user_id}
+        sold, bought = {}, {}
+        if tos_ids:
+            sold_rows = (
+                add_price_info(Lot.objects.filter(auctiontos_seller_id__in=tos_ids, is_deleted=False))
+                .values("auctiontos_seller_id", "auction_id")
+                .order_by()
+                .annotate(**_sold_lot_sums())
+            )
+            for row in sold_rows:
+                sold[row.pop("auctiontos_seller_id"), row.pop("auction_id")] = row
+            bought_rows = (
+                cls._charged_lots(Lot.objects.filter(auctiontos_winner_id__in=tos_ids))
+                .values("auctiontos_winner_id")
+                .order_by()
+                .annotate(total=Sum("final_price"))
+            )
+            bought = {row["auctiontos_winner_id"]: row["total"] for row in bought_rows}
+        saved = [invoice.pk for invoice in invoices if invoice.pk]
+        adjustments = {pk: {} for pk in saved}
+        adjustment_rows = (
+            InvoiceAdjustment.objects.filter(invoice_id__in=saved)
+            .values("invoice_id", "adjustment_type")
+            .order_by()
+            .annotate(total=Sum("amount"))
+        )
+        for row in adjustment_rows if saved else ():
+            adjustments[row["invoice_id"]][row["adjustment_type"]] = row["total"]
+        nothing_sold = dict.fromkeys(_sold_lot_sums())
+        for invoice in invoices:
+            tos_id = invoice.auctiontos_user_id
+            invoice.__dict__["_sold_totals"] = dict(sold.get((tos_id, invoice.auction_id), nothing_sold))
+            invoice.__dict__["_bought_total"] = bought.get(tos_id)
+            if invoice.pk:
+                invoice.__dict__["adjustment_totals"] = adjustments[invoice.pk]
+        return invoices
 
     @cached_property
     def sold_lots_queryset_sorted(self):
@@ -10711,17 +10761,17 @@ class Invoice(CachedPropertiesMixin, models.Model):
     def total_sold_gross(self):
         """Total winning price of all lots sold"""
         # Banned lots are never charged, as in Auction.gross.
-        return self.sold_lots_queryset.exclude(banned=True).aggregate(total=Sum("winning_price"))["total"] or 0
+        return self._sold_totals["gross_total"] or 0
 
     @cached_property
     def total_sold(self):
         """Seller's cut of all lots sold"""
-        return self.sold_lots_queryset.aggregate(total_sold=Sum("your_cut"))["total_sold"] or 0
+        return self._sold_totals["seller_total"] or 0
 
     @cached_property
     def total_sold_club_cut(self):
         """Club's cut of all lots sold"""
-        return self.sold_lots_queryset.aggregate(total=Sum("club_cut"))["total"] or 0
+        return self._sold_totals["club_total"] or 0
 
     @cached_property
     def lots_bought(self):
@@ -10730,17 +10780,12 @@ class Invoice(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def total_bought(self):
-        return self.bought_lots_queryset.aggregate(total_bought=Sum("final_price"))["total_bought"] or 0
+        return self._bought_total or 0
 
     @cached_property
     def total_donations(self):
         """Total value of all donated lots"""
-        return (
-            self.sold_lots_queryset.filter(winning_price__isnull=False, donation=True)
-            .exclude(banned=True)
-            .aggregate(total=Sum("winning_price"))["total"]
-            or 0
-        )
+        return self._sold_totals["donation_total"] or 0
 
     @cached_property
     def location(self):
@@ -14397,9 +14442,10 @@ class SpeakerComment(models.Model):
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """A feature somebody asked for through an assistant: a tool it lacked, or something the site can't do.
 
-    Written by ``request_a_skill``, read on ``/admin-dashboard/assistant-requests/``; the asker follows it
-    with ``my_requests``. ``planned`` is the site owner's go-ahead to build it. Duplicates are evidence
-    and are counted. Content is model-written: displayed escaped, never executed or matched.
+    Written by ``request_a_skill``, read through the admin MCP's ``list_feature_requests``; the asker follows it
+    with ``my_requests``. ``planned`` is the site owner's go-ahead to build it, in the repository
+    ``target`` names. Duplicates are evidence and are counted. Content is model-written: displayed
+    escaped, never executed or matched.
     """
 
     STATUS_NEW = "new"
@@ -14413,6 +14459,15 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
         (STATUS_DECLINED, "Not doing"),
     )
 
+    TARGET_SITE = "site"
+    TARGET_APP = "app"
+    TARGET_BOTH = "both"
+    TARGET_CHOICES = (
+        (TARGET_SITE, "Site"),
+        (TARGET_APP, "App"),
+        (TARGET_BOTH, "Site and app"),
+    )
+
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     skill = models.CharField(max_length=100, db_index=True)
     skill.help_text = "What the tool would be called, in the caller's words."
@@ -14423,6 +14478,8 @@ class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     surface = models.CharField(max_length=100, blank=True, default="")
     surface.help_text = "Which assistant asked: the OAuth application's name, the API key's, or the command palette."
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, db_index=True)
+    target = models.CharField(max_length=10, choices=TARGET_CHOICES, default=TARGET_SITE)
+    target.help_text = "Which repository the build changes: this site, the mobile app, or both."
     notes = models.TextField(blank=True, default="")
     notes.help_text = "Site admin's note. Not shown to the person who asked."
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -14490,6 +14547,48 @@ class AgentProposal(models.Model):
 
     def __str__(self):
         return f"{self.summary} ({self.get_status_display()})"
+
+
+class AppCrash(models.Model):
+    """One crash the mobile app reported about itself, from ``POST /api/mobile/crashes/``.
+
+    The stores' own crash reports aren't readable by an agent (Apple has no API for them at all), so the
+    app sends its own: Dart errors as they happen, and the operating system's account of a native crash
+    or an ANR on the next launch. Rows sharing a ``fingerprint`` are one bug; the admin endpoint's
+    ``list_app_crashes`` groups them, and the hourly check fixes new ones. See :mod:`auctions.app_crashes`.
+    """
+
+    KIND_DART = "dart"
+    KIND_NATIVE = "native"
+    KIND_ANR = "anr"
+    KIND_CHOICES = (
+        (KIND_DART, "Dart error"),
+        (KIND_NATIVE, "Native crash"),
+        (KIND_ANR, "Not responding"),
+    )
+    PLATFORM_CHOICES = (("android", "Android"), ("ios", "iOS"))
+
+    fingerprint = models.CharField(max_length=40, db_index=True)
+    fingerprint.help_text = "Same bug, same fingerprint: the kind, the error's type and its top frames."
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES)
+    fatal = models.BooleanField(default=True)
+    fatal.help_text = "False for an error the app survived, such as one inside a button handler."
+    app_version = models.CharField(max_length=40, blank=True, default="")
+    os_version = models.CharField(max_length=100, blank=True, default="")
+    device = models.CharField(max_length=100, blank=True, default="")
+    message = models.TextField(blank=True, default="")
+    stack = models.TextField(blank=True, default="")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    occurred_at = models.DateTimeField(null=True, blank=True)
+    occurred_at.help_text = "When the phone says it happened; a native crash arrives on the next launch."
+    createdon = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.get_platform_display()} {self.get_kind_display()} {self.fingerprint[:8]}"
 
 
 class SignInStitch(models.Model):
