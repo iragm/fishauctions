@@ -17,8 +17,8 @@ from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from auctions import palette_actions
-from auctions.mcp import admin, protocol, tools
-from auctions.models import AgentProposal, AssistantSkillRequest, Club, UserAPIKey
+from auctions.mcp import admin, admin_species, protocol, tools
+from auctions.models import AgentProposal, AssistantSkillRequest, Club, Lot, Species, UserAPIKey
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -547,6 +547,193 @@ class AdminJobProposalTests(AdminEndpointCase):
             for name in admin.APPROVAL_ONLY:
                 response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url=url)
                 self.assertIn("error", json.loads(response.content))
+
+
+class SpeciesUpkeepTests(AdminEndpointCase):
+    """The species gaps page and the backfill command on ``/mcp/admin/``: read freely, changed only by an
+    approved proposal (:mod:`auctions.mcp.admin_species`)."""
+
+    def setUp(self):
+        super().setUp()
+        from auctions.test_species import make_species
+
+        self.tropheus = make_species("Tropheus", "duboisi", "White spotted cichlid")
+        self.chindongo = make_species("Chindongo", "saulosi", "Saulosi cichlid")
+        self.aulonocara = make_species("Aulonocara", "saulosi", "Sunshine peacock")
+        self.lot.lot_name = "Tropheus duboisi maswa"
+        self.lot.species = None
+        self.lot.save()
+        self.saulosi = Lot.objects.create(
+            lot_name="6 saulosi",
+            auction=self.online_auction,
+            user=self.user,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            reserve_price=5,
+            date_end=self.lot.date_end,
+        )
+        Lot.objects.filter(pk=self.saulosi.pk).update(species=None)
+
+    def data(self, result):
+        self.assertFalse(result["isError"], result)
+        return result["structuredContent"]
+
+    def propose(self, tool, arguments):
+        return self.call(
+            "propose_change", {"summary": "Species upkeep", "steps": [{"tool": tool, "arguments": arguments}]}
+        )
+
+    def approve(self):
+        proposal = AgentProposal.objects.get(status=AgentProposal.STATUS_PENDING)
+        self.client.force_login(self.owner)
+        self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        return proposal
+
+    def writes_during(self, name, arguments):
+        with CaptureQueriesContext(connection) as captured:
+            result = self.call(name, arguments)
+        writes = [
+            query["sql"]
+            for query in captured.captured_queries
+            if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+            and "oauth2_provider" not in query["sql"]
+            and "django_session" not in query["sql"]
+        ]
+        return self.data(result), writes
+
+    def test_the_reads_are_only_on_the_admin_endpoint(self):
+        listed = self.listed()
+        self.assertIn("species_dashboard", listed)
+        self.assertIn("species_backfill", listed)
+        for name in ("species_dashboard", "species_backfill"):
+            response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url="/mcp/")
+            self.assertIn("error", json.loads(response.content))
+
+    def test_the_changes_are_not_tools_anywhere(self):
+        for url in (self.url, "/mcp/"):
+            for action in admin_species.APPROVAL_ONLY:
+                response = self.rpc("tools/call", {"name": action.name, "arguments": {}}, key=self.owner_key, url=url)
+                self.assertIn("error", json.loads(response.content), action.name)
+
+    def test_every_section_reads_without_writing(self):
+        for section in admin_species.SECTIONS:
+            with self.subTest(section=section):
+                data, writes = self.writes_during("species_dashboard", {"section": section})
+                self.assertEqual(writes, [])
+                self.assertEqual(data.get("section", "summary"), section)
+        data = self.data(self.call("species_dashboard", {}))
+        self.assertGreaterEqual(data["lots_without_species"], 2)
+
+    def test_a_species_added_on_the_site_is_approved_by_proposal(self):
+        pending = Species.objects.create(genus="Betta", species="mahachaiensis", source="admin", approved=False)
+        rows = self.data(self.call("species_dashboard", {"section": "pending"}))["rows"]
+        self.assertEqual([row["species_id"] for row in rows], [pending.pk])
+        self.assertFalse(self.propose("approve_species", {"species": pending.pk})["isError"])
+        pending.refresh_from_db()
+        self.assertFalse(pending.approved)
+        self.approve()
+        pending.refresh_from_db()
+        self.assertTrue(pending.approved)
+
+    def test_a_number_that_names_nothing_is_refused_when_proposed(self):
+        for tool, arguments in (
+            ("approve_species", {"species": 999999}),
+            ("merge_species", {"keep": self.tropheus.pk, "duplicate": 999999}),
+            ("forget_species_answer", {"answer": 999999}),
+            ("allow_species_pairing_again", {"pairing": 999999}),
+            ("backfill_species", {"lot_names": []}),
+            ("set_species_on_lot_names", {"species": self.tropheus.pk, "lot_names": [f"name {n}" for n in range(21)]}),
+            ("backfill_species", {"lot_names": ["x"], "auction": "no-such-auction"}),
+        ):
+            with self.subTest(tool=tool):
+                self.assertTrue(self.propose(tool, arguments)["isError"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_duplicates_are_merged_or_dismissed(self):
+        copy = Species.objects.create(genus="Tropheus", species="duboisi", source="admin")
+        Species.objects.filter(pk=copy.pk).update(possible_duplicate=self.tropheus)
+        Species.objects.filter(pk=self.tropheus.pk).update(possible_duplicate=copy)
+        rows = self.data(self.call("species_dashboard", {"section": "duplicates"}))["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["same_scientific_name"])
+        Lot.objects.filter(pk=self.lot.pk).update(species=copy)
+        self.propose("merge_species", {"keep": self.tropheus.pk, "duplicate": copy.pk})
+        self.assertIn("1 lot(s)", self.approve().results[0]["said"])
+        self.assertFalse(Species.objects.filter(pk=copy.pk).exists())
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+
+        Species.objects.filter(pk=self.chindongo.pk).update(possible_duplicate=self.aulonocara)
+        Species.objects.filter(pk=self.aulonocara.pk).update(possible_duplicate=self.chindongo)
+        self.propose("dismiss_species_duplicate", {"species": self.aulonocara.pk})
+        self.approve()
+        self.assertFalse(Species.objects.filter(possible_duplicate__isnull=False).exists())
+
+    def test_a_remembered_answer_is_forgotten_and_a_retired_pairing_allowed_again(self):
+        from auctions.models import SpeciesNameRejection, SpeciesSearchCache
+
+        answer = SpeciesSearchCache.objects.create(search_text="sponge filter", species=None, source="llm")
+        retired = SpeciesNameRejection.objects.create(search_text="saulosi", species=self.chindongo)
+        rows = self.data(self.call("species_dashboard", {"section": "not_a_species"}))["rows"]
+        self.assertEqual(rows[0]["answer"], answer.pk)
+        self.assertEqual(rows[0]["lot_name"], "«sponge filter»")
+        rows = self.data(self.call("species_dashboard", {"section": "retired"}))["rows"]
+        self.assertEqual(rows[0]["pairing"], retired.pk)
+        self.call(
+            "propose_change",
+            {
+                "summary": "Tidy",
+                "steps": [
+                    {"tool": "forget_species_answer", "arguments": {"answer": answer.pk}},
+                    {"tool": "allow_species_pairing_again", "arguments": {"pairing": retired.pk}},
+                ],
+            },
+        )
+        self.assertTrue(SpeciesSearchCache.objects.filter(pk=answer.pk).exists())
+        self.approve()
+        self.assertFalse(SpeciesSearchCache.objects.filter(pk=answer.pk).exists())
+        self.assertFalse(SpeciesNameRejection.objects.exists())
+
+    def test_the_automatic_pass_is_previewed_without_writing_and_applied_on_approval(self):
+        data, writes = self.writes_during("species_backfill", {"pass": "automatic"})
+        self.assertEqual(writes, [])
+        self.assertEqual(data["total"], 1)
+        match = data["matches"][0]
+        self.assertEqual(match["species"]["species_id"], self.tropheus.pk)
+        # Copied straight from the read, fence and all.
+        self.assertFalse(self.propose("backfill_species", {"lot_names": [match["lot_name"], "6 saulosi"]})["isError"])
+        self.lot.refresh_from_db()
+        self.assertIsNone(self.lot.species)
+        said = self.approve().results[0]["said"]
+        self.assertIn("1 name(s) no longer match", said)
+        self.lot.refresh_from_db()
+        self.saulosi.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+        self.assertIsNone(self.saulosi.species)
+
+    def test_the_review_pass_asks_and_a_proposal_answers(self):
+        from auctions.models import SpeciesSearchCache
+        from auctions.species_matching import normalize
+
+        data, writes = self.writes_during("species_backfill", {"pass": "review", "min_lots": 1})
+        self.assertEqual(writes, [])
+        question = data["questions"][0]
+        self.assertEqual(
+            {candidate["species_id"] for candidate in question["candidates"]},
+            {self.chindongo.pk, self.aulonocara.pk},
+        )
+        self.propose("set_species_on_lot_names", {"species": self.chindongo.pk, "lot_names": question["lot_names"]})
+        self.approve()
+        self.saulosi.refresh_from_db()
+        self.assertEqual(self.saulosi.species, self.chindongo)
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text=normalize("6 saulosi")).species, self.chindongo)
+
+        AgentProposal.objects.all().delete()
+        self.propose("remember_not_a_species", {"lot_names": ["Sponge filter"]})
+        self.approve()
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
 
 
 class FeatureRequestTests(AdminEndpointCase):

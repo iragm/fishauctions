@@ -51,14 +51,15 @@ from auctions import palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
-from . import tools
+from . import admin_species, tools
 
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, list_feature_requests, read_logs, list_app_crashes, site_health, "
+    "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
+    "list_feature_requests, read_logs, list_app_crashes, site_health, "
     "palette_shortcut_candidates and square_reconnects. Nothing here "
     "changes the site. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
@@ -1190,6 +1191,8 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Add a command palette shortcut",
             resolver=add_palette_shortcut,
         ),
+        # The species gaps page's buttons and the backfill command's answers.
+        *admin_species.APPROVAL_ONLY,
     ]
 }
 
@@ -1201,12 +1204,13 @@ PROPOSAL_CHECKS = {
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
     "add_palette_shortcut": _shortcut_problem,
+    **admin_species.PROPOSAL_CHECKS,
 }
 
 
 #: Registry writes a proposal may name. Short on purpose: an approved step runs with a superuser's
 #: reach, and the agent that wrote it read text strangers typed. The owner's own one-off chores are
-#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs; a refund, an announcement or
+#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs (the species list's upkeep among them); a refund, an announcement or
 #: an email to a club is done by hand.
 PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species"})
 
@@ -1482,6 +1486,7 @@ ADMIN_TOOLS: dict[str, Action] = {
             danger=DANGER_SAFE,
             resolver=list_app_crashes,
         ),
+        *admin_species.READS,
         Action(
             name="palette_shortcut_candidates",
             description=(
@@ -1560,9 +1565,9 @@ def descriptors() -> list[dict[str, Any]]:
 
 
 WRITE_REFUSED = (
-    "“{name}” changes data, and nothing on this endpoint does. Species fixes, feature request "
-    "statuses, new clubs, a club's stage, trusting a user, filing an auction under a club, merging "
-    "two accounts and palette shortcuts can be proposed with propose_change; "
+    "“{name}” changes data, and nothing on this endpoint does. Species fixes and the species list's "
+    "upkeep, feature request statuses, new clubs, a club's stage, trusting a user, filing an auction "
+    "under a club, merging two accounts and palette shortcuts can be proposed with propose_change; "
     "anything else the owner does by hand."
 )
 

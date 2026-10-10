@@ -18,71 +18,30 @@ lots with no award. ``--dry-run`` writes nothing.
 """
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Count, Q
+from django.db.models import Q
 
-from auctions.models import Auction, BapAward, Category, Lot, Species, SpeciesCommonName
+from auctions.models import Species, SpeciesCommonName
+from auctions.species_admin import (
+    MAX_CHOICES,
+    NameGroup,  # noqa: F401 -- re-exported: tests and older notes import these from here
+    apply_species,
+    automatic_answer,
+    eligible_lots,
+    group_key,  # noqa: F401
+    name_counts,
+    remember_not_a_species,
+    review_groups,
+)
+from auctions.species_admin import status as list_status
 from auctions.species_categories import CategoryResolver, hint_for
 from auctions.species_matching import (
-    base_words,
     normalize,
-    remember,
-    singularize,
     species_already_named,
     species_carrying_common_name,
     split_scientific_name,
     suggest_species,
     visible_species,
 )
-
-#: Picklist size before "search instead" is the honest answer.
-MAX_CHOICES = 12
-
-#: Spellings taught to the matcher per decision; keeps the shared cache from bloating on one-offs.
-MAX_REMEMBERED = 20
-
-
-def group_key(lot_name):
-    """Words in a lot name that could name a species, singular, in order.
-
-    Groups "6 male guppies", "Guppies (pair)" and "young guppy" under ``guppy``. Checked before and
-    after singularizing, since the stop-word list only covers one form.
-    """
-    words = []
-    for word in base_words(lot_name):
-        singular = singularize(word)
-        if base_words(singular):
-            words.append(singular)
-    return " ".join(words)
-
-
-class NameGroup:
-    """One review question: every spelling of a name that means the same thing, and its candidates.
-
-    Grouped by :func:`group_key` and by candidate species, since the key strips colours ("blue dream"
-    and "green dream shrimp" share a key but name different cultivars).
-    """
-
-    def __init__(self, key, candidates, source):
-        self.key = key
-        self.candidates = candidates
-        self.source = source
-        self.spellings = []
-        self.lots = 0
-        self.bred = 0
-
-    def add(self, lot_name, lots, bred):
-        self.spellings.append((lot_name, lots))
-        self.lots += lots
-        self.bred += bred
-
-    @property
-    def display(self):
-        """The spelling to show, which is the one most lots actually use."""
-        return self.spellings[0][0] if self.spellings else self.key
-
-    @property
-    def names(self):
-        return [name for name, _ in self.spellings]
 
 
 class Command(BaseCommand):
@@ -146,8 +105,10 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.dry_run = options["dry_run"]
         self.set_category = options["set_category"]
-        self.uncategorized = Category.objects.filter(name="Uncategorized").values_list("pk", flat=True).first()
-        self.lots = self._base_queryset(options["auction"])
+        try:
+            self.lots = eligible_lots(options["auction"])
+        except LookupError as error:
+            raise CommandError(str(error)) from error
 
         if options["status"]:
             self._status()
@@ -159,73 +120,24 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------ shared
 
-    def _base_queryset(self, slug):
-        """Lots eligible to touch: only auctions with scientific names enabled have a real gap."""
-        lots = Lot.objects.filter(
-            species__isnull=True,
-            is_deleted=False,
-            banned=False,
-            auction__use_scientific_name=True,
-        ).exclude(lot_name="")
-        if slug:
-            if not Auction.objects.filter(slug=slug).exists():
-                msg = f"No auction with slug {slug!r}."
-                raise CommandError(msg)
-            lots = lots.filter(auction__slug=slug)
-        return lots
-
     def _names(self, limit=None):
-        """``[{lot_name, count, bred}, ...]``, commonest first, so ``--limit`` spends on the big names."""
-        rows = list(
-            self.lots.values("lot_name")
-            .annotate(count=Count("pk"), bred=Count("pk", filter=Q(i_bred_this_fish=True)))
-            .order_by("-count", "lot_name")
-        )
-        return rows[:limit] if limit else rows
+        return name_counts(self.lots, limit)
 
     def _apply(self, species, names, *, teach=False):
-        """Set *species* on every lot named any of *names*; returns ``(lots, refiled)``.
-
-        Uses ``update()`` (see the module docstring). *teach* writes the decision to the shared cache, which
-        only the review pass does.
-        """
-        pks = list(self.lots.filter(lot_name__in=names).values_list("pk", flat=True))
-        if not pks:
-            return 0, 0
-        movable = []
-        if self.set_category and species.category_id and species.category_id != self.uncategorized:
-            movable = list(
-                Lot.objects.filter(pk__in=pks)
-                .filter(Q(species_category__isnull=True) | Q(species_category__name="Uncategorized"))
-                .exclude(pk__in=BapAward.objects.filter(lot__isnull=False).values("lot_id"))
-                .values_list("pk", flat=True)
-            )
-        if self.dry_run:
-            return len(pks), len(movable)
-        Lot.objects.filter(pk__in=pks).update(species=species)
-        if movable:
-            Lot.objects.filter(pk__in=movable).update(
-                species_category_id=species.category_id,
-                category_automatically_added=True,
-                category_checked=True,
-            )
-        if teach:
-            for name in names[:MAX_REMEMBERED]:
-                remember(name, species, source="user")
-        return len(pks), len(movable)
+        """:func:`~auctions.species_admin.apply_species` with this run's flags; ``(lots, refiled)``."""
+        return apply_species(
+            self.lots, species, names, set_category=self.set_category, teach=teach, dry_run=self.dry_run
+        )
 
     # ------------------------------------------------------------------ status
 
     def _status(self):
         """Is there a list worth matching against, and how much is left to do."""
-        by_source = {
-            row["source"]: row["n"] for row in Species.objects.values("source").annotate(n=Count("pk")).order_by()
-        }
+        numbers = list_status(self.lots)
         self.stdout.write("Species list")
-        for source, count in sorted(by_source.items()):
+        for source, count in sorted(numbers["species_by_source"].items()):
             self.stdout.write(f"  {source:<14}{count}")
-        curated = Species.objects.filter(source="aquarium")
-        if not curated.exists():
+        if not numbers["curated_by_category"]:
             self.stdout.write(
                 self.style.WARNING(
                     "  The curated list is not loaded, so no plant, shrimp, snail or live-food lot can "
@@ -233,26 +145,22 @@ class Command(BaseCommand):
                 )
             )
         else:
-            # Grouped by category rather than the CSV's "kind" column, to match the site's list.
-            rows = curated.values("category__name").annotate(n=Count("pk")).order_by("-n")
             self.stdout.write(
                 "  curated by category: "
-                + ", ".join(f"{row['category__name'] or 'no category'} {row['n']}" for row in rows)
+                + ", ".join(f"{name} {count}" for name, count in numbers["curated_by_category"])
             )
-        varieties = Species.objects.filter(parent__isnull=False).count()
-        hybrids = Species.objects.filter(is_hybrid=True).count()
         self.stdout.write(
-            f"  {varieties} of those are named strains (Blue Dream, Halfmoon...) "
-            f"and {hybrids} are crosses (Tibee, Flowerhorn)"
+            f"  {numbers['strains']} of those are named strains (Blue Dream, Halfmoon...) "
+            f"and {numbers['crosses']} are crosses (Tibee, Flowerhorn)"
         )
 
-        done = Lot.objects.filter(species__isnull=False, is_deleted=False, auction__use_scientific_name=True).count()
-        missing = self.lots.count()
-        names = self.lots.values("lot_name").distinct().count()
-        total = done + missing
-        share = f"{done * 100 // total}%" if total else "0%"
+        done = numbers["lots_with_species"]
+        missing = numbers["lots_without_species"]
         self.stdout.write("")
-        self.stdout.write(f"Lots: {done} of {total} have a species ({share}); {missing} to go, {names} distinct names.")
+        self.stdout.write(
+            f"Lots: {done} of {done + missing} have a species ({numbers['percent_done']}%); {missing} to go, "
+            f"{numbers['distinct_names_without_species']} distinct names."
+        )
 
     # ------------------------------------------------------------------ pass one
 
@@ -272,9 +180,7 @@ class Command(BaseCommand):
             if not key:
                 continue
             if key not in answers:
-                found, source = suggest_species(name, use_llm=False)
-                # Only an unambiguous match; a shortlist means only a person can decide.
-                answers[key] = (found[0], source) if len(found) == 1 else (None, source)
+                answers[key] = automatic_answer(name)
             species, source = answers[key]
             if species is None:
                 continue
@@ -308,33 +214,15 @@ class Command(BaseCommand):
 
     def _groups(self, options):
         """The questions left after the automatic pass, biggest first."""
-        include_unmatched = options["include_unmatched"]
-        min_lots = options["min_lots"]
-        groups = {}
-        scanned = 0
-        rows = self._names(options["scan"] or None)
-        self.stdout.write(f"Working through {len(rows)} lot name(s)...")
-        for row in rows:
-            scanned += 1
-            if scanned % 1000 == 0:
-                self.stdout.write(f"  {scanned}/{len(rows)}")
-            name = row["lot_name"]
-            key = group_key(name)
-            if not key:
-                continue  # nothing but counts and adjectives: "3 bags", "assorted"
-            found, source = suggest_species(name, use_llm=False)
-            if len(found) == 1:
-                continue  # the automatic pass already owns this one
-            if not found and not include_unmatched:
-                continue
-            fingerprint = (key, tuple(sorted(species.pk for species in found)))
-            group = groups.get(fingerprint)
-            if group is None:
-                group = groups[fingerprint] = NameGroup(key, found, source)
-            group.add(name, row["count"], row["bred"])
-        ranked = sorted(groups.values(), key=lambda group: (-group.lots, group.key))
-        ranked = [group for group in ranked if group.lots >= min_lots]
-        return ranked[: options["limit"]] if options["limit"] else ranked
+        self.stdout.write(f"Working through {len(self._names(options['scan'] or None))} lot name(s)...")
+        return review_groups(
+            self.lots,
+            include_unmatched=options["include_unmatched"],
+            min_lots=options["min_lots"],
+            scan=options["scan"],
+            limit=options["limit"],
+            progress=lambda done, total: self.stdout.write(f"  {done}/{total}"),
+        )
 
     def _review(self, options):
         groups = self._groups(options)
@@ -440,8 +328,7 @@ class Command(BaseCommand):
 
     def _not_a_species(self, group):
         """Remember "not a species" so nothing asks about this name again."""
-        for name in group.names[:MAX_REMEMBERED]:
-            remember(name, None, source="user")
+        remember_not_a_species(group.names)
         self.stdout.write(f"    remembered {group.key!r} as not a species")
         return 0
 
