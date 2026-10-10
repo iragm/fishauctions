@@ -279,7 +279,7 @@ this only quotes its opening sentence.
 - **`test_account_linking.py`** (125 lines)
   Participant rows link to their person's account when written, so "mine" is ``user`` alone.
   `AccountLinkingTests`
-- **`test_account_merge.py`** (252 lines)
+- **`test_account_merge.py`** (245 lines)
   Merging two accounts: the two-sided request, what moves, and what a stranger can't do with it.
   `AccountMergeCoverageTests`, `MergeTestCase`, `MergeRequestTests`, `MergeConfirmationTests`, `MergeTests`
 - **`test_account_nav.py`** (304 lines)
@@ -330,10 +330,10 @@ this only quotes its opening sentence.
 - **`test_auctiontos.py`** (672 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
-- **`test_bap_lots.py`** (1403 lines)
+- **`test_bap_lots.py`** (1378 lines)
   The breeder award program: which lots are eligible, and the pages that award points.
-- **`test_bid_recorder_accuracy.py`** (123 lines)
-  `SalesRecordedTests`, `LotAdminPriceEditTests`, `BackfillSalesRecordedTests`
+- **`test_bid_recorder_accuracy.py`** (35 lines)
+  `SalesRecordedTests`, `LotAdminPriceEditTests`
 - **`test_bidding.py`** (1157 lines)
   Tests for bid values, bidding permissions, and the bid dialog.
   `LotPricesTests`, `DecimalBidValidationTests`, `BiddingPermissionsHardeningTests`, `AuctionEditFormMinimumBidTests`, `IntegerMoneyColumnRepairTests`, `CreateLotFormWholeDollarValidationTests`, `LotRefundDialogTests`, `BidDialogTests`, `WholeDollarBidBoxTests`
@@ -490,7 +490,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1022 lines)
+- **`test_mcp_admin.py`** (1061 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -549,7 +549,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (873 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5224 lines)
+- **`test_palette_assist.py`** (5259 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1283 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -599,7 +599,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
 - **`test_species.py`** (5046 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_square.py`** (947 lines)
+- **`test_square.py`** (943 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
   `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`
 - **`test_static_files.py`** (147 lines)
@@ -647,10 +647,10 @@ this only quotes its opening sentence.
 - **`test_usability_report.py`** (306 lines)
   Tests for the usability dashboard's three panels, and for the URL classifier behind the first.
   `RouteNameTests`, `ReachTests`, `FrictionReportTests`, `BuyerFunnelTests`, `DashboardTests`
-- **`test_user_features.py`** (531 lines)
+- **`test_user_features.py`** (507 lines)
   Tests for preferences that change what a user sees: distance units, exports, and trust.
   `DistanceUnitTests`, `PayPalInfoViewTests`, `UserExportTests`, `UserTrustSystemTests`, `WatchOrUnwatchViewTests`, `AdFetchTests`
-- **`test_userdata.py`** (312 lines)
+- **`test_userdata.py`** (290 lines)
   ``UserData`` and ``AuctionTOS`` properties, and merging one user into another.
   `AuctionTOSPropertyTests`, `UserDataPropertyTests`, `UserDataMergeIntoTests`
 - **`test_voice.py`** (907 lines)
@@ -709,8 +709,6 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 ## `auctions/management/commands/`
 
-- **`assign_auction_to_club.py`** (99 lines)
-  `Command`
 - **`auction_emails.py`** (358 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
@@ -719,16 +717,9 @@ The library: documents people upload, read into text, and searched from ``/libra
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
 - **`auctiontos_notifications.py`** (233 lines)
   `send_tos_notification`, `Command`
-- **`backfill_bap_reasons.py`** (120 lines)
-  `Command`
-- **`backfill_club_members_into_auctions.py`** (95 lines)
-  `Command`
 - **`backfill_lot_species.py`** (384 lines)
   Attach a species to lots that predate the species list.
   `Command`
-- **`backfill_sales_recorded.py`** (109 lines)
-  Count ``Lot.sales_recorded`` for in-person lots sold before it was counted, from their history.
-  `price_only_edit`, `count_sales`, `Command`
 - **`change_assistant.py`** (29 lines)
   `Command`
 - **`change_library.py`** (25 lines)
@@ -758,11 +749,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`deploy_window.py`** (19 lines)
   Print whether now is a quiet time to deploy production. Advice only; see auctions/deploy_window.py.
   `Command`
-- **`email_invoice.py`** (44 lines)
-  `Command`
 - **`email_unseen_chats.py`** (53 lines)
-  `Command`
-- **`empty_account_and_move_data.py`** (39 lines)
   `Command`
 - **`endauctions.py`** (149 lines)
   `declare_winners_on_lots`, `deactivate_pretty_much_over_lots`, `Command`
@@ -770,8 +757,6 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`ensure_speaker_topics.py`** (20 lines)
   Create the speaker directory's fixed topic vocabulary.
-  `Command`
-- **`find_square_reconnects.py`** (46 lines)
   `Command`
 - **`geocode_speakers.py`** (195 lines)
   Backfill speaker locations that the NEC WordPress export didn't carry.
@@ -793,9 +778,6 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`migrate_to_cloudflare_images.py`** (122 lines)
   Move locally stored images to Cloudflare Images.
-  `Command`
-- **`mine_palette_shortcuts.py`** (109 lines)
-  Turn recurring assistant answers into zero-token shortcuts.
   `Command`
 - **`purge_bot_users.py`** (24 lines)
   `Command`
@@ -835,7 +817,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (1350 lines)
+- **`admin.py`** (1601 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
