@@ -1112,6 +1112,81 @@ class EventsEmbedUsageTrackingTests(TestCase):
         self.assertFalse(self.club.embeds_events_on_website)
 
 
+class AuctionEventWordingOverMCPTests(TestCase):
+    """A club admin, not a site admin, rewords an auction's event over MCP, and the embeds show it."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Wording Club")
+        self.admin = User.objects.create_user(username="wd_admin", password="pw", email="wd@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
+        self.auction = Auction.objects.create(
+            title="Fall Auction",
+            date_start=timezone.now() + datetime.timedelta(days=10),
+            date_end=timezone.now() + datetime.timedelta(days=12),
+            club=self.club,
+            is_online=True,
+            promote_this_auction=True,
+            created_by=self.admin,
+        )
+        # Its pickup event is called "Fall Auction pickup — Hall", so the name alone matches two.
+        PickupLocation.objects.create(
+            name="Hall",
+            auction=self.auction,
+            address="1 Fish Lane",
+            pickup_time=timezone.now() + datetime.timedelta(days=13),
+        )
+        club_events.sync_pickup_events(self.auction)
+        self.assertEqual(ClubEvent.objects.filter(source=ClubEvent.SOURCE_PICKUP).count(), 1)
+
+    def _run(self, params, user=None):
+        from django.test import RequestFactory
+
+        from auctions import palette_actions
+
+        request = RequestFactory().post("/")
+        request.user = user or self.admin
+        request.palette_page = {}
+        return palette_actions.run_action(request, "update_club_event", {"club": self.club.name, **params})
+
+    def test_a_club_admin_has_the_tool(self):
+        from auctions.mcp import tools as mcp_tools
+
+        self.assertFalse(self.admin.is_superuser)
+        names = {tool["name"] for tool in mcp_tools.tool_descriptors(self.admin)}
+        self.assertIn("update_club_event", names)
+
+    def test_the_auction_name_finds_its_event_even_once_renamed(self):
+        result = self._run({"event": "Fall Auction", "new_title": "Fall Auction and Talk"})
+        self.assertTrue(result.get("ok"), result)
+        result = self._run({"event": "Fall Auction", "description": "Speaker: a guest from the aquarium"})
+        self.assertTrue(result.get("ok"), result)
+        event = ClubEvent.objects.get(auction=self.auction)
+        self.assertEqual(event.title, "Fall Auction and Talk")
+        self.assertEqual(event.description, "Speaker: a guest from the aquarium")
+        self.assertTrue(event.title_is_custom and event.description_is_custom)
+
+    def test_a_member_cannot(self):
+        member = User.objects.create_user(username="wd_member", password="pw", email="wm@example.com")
+        ClubMember.objects.create(club=self.club, user=member)
+        self.assertIn("error", self._run({"event": "Fall Auction", "new_title": "Nope"}, user=member))
+
+    def test_both_embeds_show_the_new_wording(self):
+        self._run({"event": "Fall Auction", "new_title": "Fall Auction and Talk", "description": "Speaker: a guest"})
+        client = Client()
+        events = client.get(reverse("club_events_embed", kwargs={"slug": self.club.url_key})).json()["events"]
+        row = next(row for row in events if row["title"] == "Fall Auction and Talk")
+        self.assertEqual(row["details"], "Speaker: a guest")
+        auction = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key})).json()["auction"]
+        self.assertEqual((auction["title"], auction["details"]), ("Fall Auction and Talk", "Speaker: a guest"))
+        html = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key}), {"format": "js"})
+        self.assertContains(html, "Speaker: a guest")
+
+    def test_the_generated_blurb_stays_off_the_embeds(self):
+        client = Client()
+        auction = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key})).json()["auction"]
+        self.assertEqual((auction["title"], auction["details"]), ("Fall Auction", ""))
+
+
 class CustomizeEventPromptTests(TestCase):
     def setUp(self):
         self.client = Client()
