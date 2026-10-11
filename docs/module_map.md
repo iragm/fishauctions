@@ -147,7 +147,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1916 lines)
+- **`filters.py`** (1928 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -321,9 +321,9 @@ this only quotes its opening sentence.
 - **`test_auction_promos.py`** (493 lines)
   ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.
   `AuctionPromosTestCase`, `WindowTests`, `SendHourTests`, `AudienceTests`, `PushTests`, `SentLogTests`
-- **`test_auction_props.py`** (1262 lines)
+- **`test_auction_props.py`** (1299 lines)
   Tests for ``Auction`` computed properties.
-  `AuctionPropertyTests`, `LotPropertyTests`, `LotInvoicePropertyTests`, `SellerInvoiceRemovedLotTests`, `BuyNowSellerCreditTests`
+  `AuctionPropertyTests`, `LotPropertyTests`, `LotInvoicePropertyTests`, `SellerInvoiceRemovedLotTests`, `BuyNowSellerCreditTests`, `AuctionListClubFilterTests`
 - **`test_auction_survey.py`** (341 lines)
   The post-auction survey: answering by link, the free-text box, the admin page, the emails.
   `render`, `SurveyPageTests`, `SurveyResultsTests`, `SurveyEmailTests`, `SendSurveyEmailsTests`, `SurveyInThePaletteTests`, `SurveyOnTheInvoicePageTests`
@@ -1038,7 +1038,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (687 lines)
+- **`site_pages.py`** (688 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.

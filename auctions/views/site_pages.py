@@ -456,10 +456,11 @@ class AllAuctions(LocationMixin, HTMxTableView):
         nearby_filter_auto_removed = None
         if getattr(self, "nearby_filter_active", False) and not self.object_list.exists():
             query = self.request.GET.get("query", "")
-            if query:
+            club = self.request.GET.get("club", "")
+            if query or club:
                 base_qs = getattr(self, "_base_qs", None)
                 if base_qs is not None:
-                    fallback_qs = AuctionFilter({"query": query}, queryset=base_qs).qs
+                    fallback_qs = AuctionFilter({"query": query, "club": club}, queryset=base_qs).qs
                     if fallback_qs.exists():
                         self.object_list = fallback_qs
                         self.nearby_filter_active = False
