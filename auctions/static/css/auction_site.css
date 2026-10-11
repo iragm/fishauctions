@@ -1014,3 +1014,7 @@ body.has-unsaved-changes-bar {
 .htmx-busy-show { display: none; }
 .htmx-request .htmx-busy-show { display: inline-block; }
 .htmx-request .htmx-busy-hide { display: none; }
+
+/* The contact form's honeypot (ContactForm.website): off screen rather than display:none, which some
+   bots check for. A person never sees it, so only a bot fills it in. */
+#div_id_website { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }

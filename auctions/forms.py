@@ -3480,6 +3480,13 @@ class ContactForm(forms.Form):
         help_text="So we can write back. We won't add you to anything.",
     )
     message = forms.CharField(widget=forms.Textarea(attrs={"rows": 6}), max_length=5000, label="Message")
+    #: A honeypot: moved off screen by auction_site.css, so only a bot fills it in. SupportView then
+    #: says the message was sent and sends nothing.
+    website = forms.CharField(
+        required=False,
+        label="Leave this empty",
+        widget=forms.TextInput(attrs={"tabindex": "-1", "autocomplete": "off"}),
+    )
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 
     def __init__(self, *args, **kwargs):

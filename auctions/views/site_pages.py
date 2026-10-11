@@ -133,6 +133,13 @@ class SupportView(FormView):
     def form_valid(self, form):
         from post_office import mail
 
+        if form.cleaned_data.get("website"):
+            # The honeypot: a bot gets the same answer as a person, so it has nothing to learn.
+            messages.success(
+                self.request,
+                f"Thanks - your message is on its way. We'll reply to {form.sender_email}.",
+            )
+            return super().form_valid(form)
         if self._over_the_limit(self.request):
             # Say so rather than pretending it was sent.
             messages.error(

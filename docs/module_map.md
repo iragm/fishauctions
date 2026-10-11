@@ -155,7 +155,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6501 lines)
+- **`forms.py`** (6508 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -622,7 +622,7 @@ this only quotes its opening sentence.
 - **`test_support.py`** (57 lines)
   Support code shared by the test modules. Holds no tests of its own.
   `isolated_cache`, `mcp_only_page`
-- **`test_support_page.py`** (262 lines)
+- **`test_support_page.py`** (278 lines)
   /support/, and a way to reach a human that works with no account.
   `SupportUrlWorksSignedOutTests`, `SupportPageIsTheHelpPageTests`, `OldContactUrlStillWorksTests`, `VideoEmbedFitsItsContainerTests`, `SupportFormDeliveryTests`, `SupportFormSignedInTests`
 - **`test_sweep_decisions.py`** (310 lines)
@@ -1038,7 +1038,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (488 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (680 lines)
+- **`site_pages.py`** (687 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
