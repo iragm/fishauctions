@@ -675,7 +675,7 @@ this only quotes its opening sentence.
 - **`tests.py`** (329 lines)
   Shared test fixture and helpers every other test module builds on: StandardTestCase, WritableMediaRoot, patch_views.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
-- **`tests_selenium.py`** (1602 lines)
+- **`tests_selenium.py`** (1604 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
 - **`urls.py`** (1345 lines)
   Every URL on the site, and the one place a new one has to be declared.
