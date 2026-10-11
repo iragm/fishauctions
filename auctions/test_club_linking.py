@@ -421,6 +421,28 @@ class UnlinkedAuctionsPageTests(StandardTestCase):
         self.unlinked.refresh_from_db()
         self.assertIsNone(self.unlinked.club)
 
+    def test_a_link_and_its_admin_grant_are_listed_for_undoing(self):
+        self.client.login(username="admin_user", password="testpassword")
+        self.client.post(
+            reverse("link_auctions_to_club"),
+            {"club": self.club.pk, "auction": [self.unlinked.pk], "grant_admin": "on"},
+        )
+        response = self.client.get(reverse("admin_unlinked_auctions"))
+        links = response.context["recent_links"]
+        self.assertEqual(len(links), 2)
+        self.assertTrue(links[0]["what"].startswith("Granted admin") or links[1]["what"].startswith("Granted admin"))
+        self.assertContains(response, "Assigned to club &#x27;Receiving Society&#x27;")
+        self.assertContains(response, reverse("club_history", kwargs={"slug": self.club.slug}))
+
+    def test_a_guess_shows_each_rows_own_reason(self):
+        """A guess group's header names only its first row's reason."""
+        Club.objects.create(name="Belongs Aquarium Society", abbreviation="BAQS")
+        self.unlinked.title = "BAQS spring swap"
+        self.unlinked.save()
+        self.client.login(username="admin_user", password="testpassword")
+        content = self.client.get(reverse("admin_unlinked_auctions")).content.decode()
+        self.assertEqual(content.count("BAQS is in the auction name"), 2)
+
     def test_linking_recomputes_that_clubs_rollup(self):
         self.client.login(username="admin_user", password="testpassword")
         self.client.post(
