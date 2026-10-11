@@ -141,7 +141,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1916 lines)
+- **`filters.py`** (1930 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -432,7 +432,7 @@ this only quotes its opening sentence.
 - **`test_feature_requests_page.py`** (68 lines)
   /requests/: the web form for bug reports and feature requests, writing the same queue as request_a_skill.
   `FeatureRequestsPageTests`
-- **`test_form_filter_fixes.py`** (398 lines)
+- **`test_form_filter_fixes.py`** (413 lines)
   Regression tests for a batch of form and filter fixes: edit locks and limits on lot forms, the posted
   `BulkAddFormsetEditLockTests`, `CreateLotFormAuctionMoveTests`, `ManageUsersThroughClubPermissionTests`, `EditLotUsesItsOwnAuctionTests`, `PickupLocationFormAuctionTests`, `NumericLimitTests`, `LotFilterTests`, `NumericLookingSearchTests`, `AuctionTOSKeywordBoundaryTests`, `GetClubsTests`
 - **`test_form_friction.py`** (537 lines)
