@@ -935,6 +935,12 @@ def on_document_deleted(sender, instance, **kwargs):
     transaction.on_commit(delete_file)
 
 
+@receiver(post_delete, sender="auctions.DocumentPicture")
+def on_document_picture_deleted(sender, instance, **kwargs):
+    """Delete a document picture's file once the delete commits, as its document's own goes."""
+    on_document_deleted(sender, instance, **kwargs)
+
+
 @receiver(post_delete, sender="auctions.BatchPage")
 def on_batch_page_deleted(sender, instance, **kwargs):
     """Delete a scanned page's files once the delete commits. A PDF's pages share its file, so that goes

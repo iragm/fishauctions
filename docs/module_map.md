@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14669 lines)
+- **`models.py`** (14670 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -213,11 +213,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16426 lines)
+- **`palette_actions.py`** (16458 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1956 lines)
+- **`palette_routes.py`** (1961 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -245,7 +245,7 @@ this only quotes its opening sentence.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
   `SessionStore`
-- **`signals.py`** (1064 lines)
+- **`signals.py`** (1070 lines)
   Signal handlers for the auctions app.
 - **`site_setup.py`** (146 lines)
   `single_club_mode_enabled`, `single_club_name`, `site_paypal_configured`, `get_server_public_ip`, `get_single_club`, `ensure_single_club_membership_for_user`
@@ -425,7 +425,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1102 lines)
+- **`test_documents.py`** (1225 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -677,7 +677,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1602 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1343 lines)
+- **`urls.py`** (1345 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -696,14 +696,16 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`extract.py`** (378 lines)
   A file, as Markdown: ``markitdown`` for the formats, the site's vision model for the pictures.
   `parser_version`, `document_model`, `ExtractionError`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
-- **`forms.py`** (387 lines)
+- **`forms.py`** (402 lines)
   The library's forms: upload, adding pages to a batch, edit, and a reader's report. ``update_document``
-  `natural_key`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
+  `natural_key`, `space_used`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
 - **`index.py`** (578 lines)
   Read a document, cut it into passages, embed them and tag it -- each stage only when it is stale.
-- **`models.py`** (292 lines)
-  The library's tables: documents, their chunks, image transcriptions and readers' reports.
-  `DocumentStorage`, `document_storage`, `document_upload_to`, `Visibility`, `DocumentBatch`, `BatchPage`, `Document`, `DocumentChunk`, `DocumentImageText`, `DocumentFeedback`
+- **`models.py`** (315 lines)
+  The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
+- **`pictures.py`** (114 lines)
+  Pictures on a document: the photographs and drawings an article printed, cropped out and kept.
+  `upload_link`, `signer_of`, `add_pictures`
 - **`search.py`** (252 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
 - **`stitch.py`** (416 lines)
@@ -842,7 +844,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`oidc.py`** (118 lines)
   OpenID Connect on top of the OAuth 2.1 server, for the one thing OAuth alone can't say: who.
   `Validator`, `sign_with_rs256`
-- **`prompts.py`** (466 lines)
+- **`prompts.py`** (470 lines)
   Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
   `Argument`, `Prompt`, `descriptors`, `prompt_list`, `render`, `complete`, `completes`
 - **`protocol.py`** (273 lines)
@@ -1005,8 +1007,8 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (969 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (393 lines)
-  The library at ``/library/``: upload, search with a written answer, read, correct, report, delete, and
+- **`documents.py`** (482 lines)
+  The library at ``/library/``: upload, search with a written answer, read, correct, report, delete,
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (970 lines)

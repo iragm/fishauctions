@@ -1217,6 +1217,11 @@ EXCLUDED: dict[str, str] = {
     "library_answer": "The written answer the library page loads into itself; not a page on its own.",
     "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
     "batch_page": "One scanned page as a picture, opened from the article it is part of.",
+    "document_pictures": (
+        "A signed link for one document's pictures; add_document and read_document hand it out, and its "
+        "Pictures button opens it."
+    ),
+    "document_picture": "One picture from a document, shown on that document's page.",
     "promo": "Marketing for people who don't use the site yet; anyone who does is better served by the help.",
     "help_guide": (
         "One help guide. search_help answers with a link to the section that holds the answer, which "

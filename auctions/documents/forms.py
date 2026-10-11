@@ -13,7 +13,15 @@ from django.db.models import Q, Sum
 from django.utils import timezone
 
 from auctions.documents.extract import PICTURE_EXTENSIONS
-from auctions.documents.models import TOPICS, BatchPage, Document, DocumentBatch, DocumentFeedback, Visibility
+from auctions.documents.models import (
+    TOPICS,
+    BatchPage,
+    Document,
+    DocumentBatch,
+    DocumentFeedback,
+    DocumentPicture,
+    Visibility,
+)
 from auctions.documents.search import clubs_to_file_under, visible_documents
 from auctions.models import Club
 
@@ -43,6 +51,13 @@ def _clean_year(year):
 def natural_key(name: str) -> list:
     """Sort key putting scan9.jpg before scan10.jpg, the order a scanner or camera numbered them."""
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name.lower())]
+
+
+def space_used(user) -> int:
+    """Bytes of library space ``user`` has taken: their documents and the pictures on them."""
+    documents = Document.objects.filter(owner=user).aggregate(total=Sum("size"))["total"] or 0
+    pictures = DocumentPicture.objects.filter(document__owner=user).aggregate(total=Sum("size"))["total"] or 0
+    return documents + pictures
 
 
 def _sha256(upload) -> str:
@@ -123,7 +138,7 @@ class _Uploads:
         today += BatchPage.objects.filter(
             batch__owner=self.user, batch__createdon__gte=timezone.now() - datetime.timedelta(days=1)
         ).count()
-        used = (mine.aggregate(total=Sum("size"))["total"] or 0) + sum(upload.size for upload in uploads)
+        used = space_used(self.user) + sum(upload.size for upload in uploads)
         if len(uploads) > MAX_FILES_PER_UPLOAD:
             return f"Upload up to {MAX_FILES_PER_UPLOAD} files at a time."
         if today + len(uploads) > MAX_UPLOADS_PER_DAY:

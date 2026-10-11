@@ -15247,6 +15247,13 @@ LIBRARY_MAX_RESULTS = 10
 #: Characters ``read_document`` returns by default, and at most.
 READ_DOCUMENT_CHARS = 8000
 READ_DOCUMENT_MAX_CHARS = 12000
+#: How an assistant sends a document's pictures: the bytes never pass through a tool call.
+PICTURES_HOW = (
+    "Crop each photograph or drawing out of the page and POST it as multipart/form-data to "
+    "pictures_upload_url, a field named file per picture, each followed by a caption field, e.g. "
+    "curl -F file=@fig1.jpg -F caption='Male in breeding colour' <pictures_upload_url>. If you can't run "
+    "commands that reach this site, give the person the link instead. It works for a week."
+)
 
 
 def _document_or_problem(request, params: dict[str, Any]):
@@ -15286,6 +15293,23 @@ def _document_facts(document) -> dict[str, Any]:
         "who_can_read_it": document.get_visibility_display(),
         "document_url": document.get_absolute_url(),
     }
+
+
+def _pictures_facts(request, document) -> dict[str, Any]:
+    """A document's pictures, and for someone who may change it, the link that adds more."""
+    from .documents.pictures import upload_link
+    from .documents.search import can_manage
+
+    facts: dict[str, Any] = {
+        "pictures": [
+            {"caption": untrusted_short(picture.caption), "picture_url": reverse("document_picture", args=[picture.pk])}
+            for picture in document.pictures.all()
+        ]
+    }
+    if can_manage(request.user, document):
+        facts["pictures_upload_url"] = upload_link(document, request.user)
+        facts["how_to_add_pictures"] = PICTURES_HOW
+    return facts
 
 
 def _topic_slug(said: str) -> str:
@@ -15392,6 +15416,7 @@ def read_document(request, params: dict[str, Any]) -> dict[str, Any]:
         "end": end,
         "length": total,
         "text": untrusted(document.text[start:end]),
+        **_pictures_facts(request, document),
         **_about(club=document.club, documents=[document]),
     }
     if not document.text:
@@ -15543,6 +15568,7 @@ def add_document(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(
         f"Added “{title}” to {where}. It's searchable once indexed, usually within a minute. {via(request)}",
         **_document_facts(document),
+        **_pictures_facts(request, document),
         **_about(club=club),
     )
 
@@ -15668,6 +15694,7 @@ register(
             "transcribing scans or photos of old club newsletters and breeder reports. The site files it, "
             "tags the species it names by scientific name, and makes it searchable. One article per "
             "document. Filing it under a club needs permission to edit that club's settings. "
+            "Its photographs and drawings go up afterwards, to the pictures_upload_url it answers with. "
             "The digitize_documents prompt is the whole procedure."
         ),
         params={
@@ -16060,6 +16087,11 @@ NOT_A_SKILL: dict[str, str] = {
         "it. The pages are files on the person's device, and whether the articles came out right is "
         "judged against the scans on that page. An agent that reads the scans itself makes the articles "
         "directly with add_document."
+    ),
+    "DocumentPicturesView": (
+        "Takes the picture files themselves, which an assistant can't put into a tool call: add_document "
+        "and read_document hand back this signed link, and the assistant's own script posts the crops to "
+        "it, or the person picks them on their phone."
     ),
     "DocumentReindexView": (
         "Reads a scanned document again with the site's vision model, replacing any corrections people "
