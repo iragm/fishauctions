@@ -860,6 +860,9 @@ class LotFilter(django_filters.FilterSet):
                     Value(0),
                 )
             )
+        if self.order in ("popularity", "-popularity") and not self.popularity_is_bounded:
+            # Counting every lot's views since the site began took MariaDB an hour per request.
+            self.order = "-lot_number"
         if self.order == "popularity" or self.order == "-popularity":
             # One subquery per count: joining pageview and lothistory into a single aggregate
             # multiplied the rows (views x chats x bids per lot), and PageView is kept forever.
@@ -965,6 +968,17 @@ class LotFilter(django_filters.FilterSet):
         # putting them all together:
         primary_queryset = primary_queryset.filter(Q(local_qs) | Q(shipping_qs) | Q(auction_qs))
         return primary_queryset.order_by(self.order)
+
+    @property
+    def popularity_is_bounded(self):
+        """Whether sorting by popularity is cheap: one auction, one person's lots, or lots still open.
+
+        The sort counts each lot's page views in a subquery, and ``PageView`` is kept forever, so over
+        every lot ever posted it is a full pass of the biggest table, twice (the page and its count).
+        A scanner asking for ``?status=all&order=popularity`` held the database for hours on
+        2026-10-11. Anything wider than these sorts newest first instead.
+        """
+        return bool(self.regardingAuction or self.regardingUser or self.status in ("open", "unsold"))
 
     def filter_by_order(self, queryset, name, value):
         if value == "oldest":
