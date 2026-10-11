@@ -80,9 +80,19 @@ class AuctionFilter(django_filters.FilterSet):
         ),
     )
 
+    #: ?club= takes the auction's club by id, slug, short name or name.
+    club = django_filters.CharFilter(method="auction_club", widget=HiddenInput())
+
     class Meta:
         model = Auction
         fields = []  # nothing here so no buttons show up
+
+    def auction_club(self, queryset, name, value):
+        value = value.strip()
+        q = Q(club__slug=value) | Q(club__abbreviation__iexact=value) | Q(club__name__iexact=value)
+        if value.isdecimal():
+            q |= Q(club_id=int(value))
+        return queryset.filter(q)
 
     def auction_search(self, queryset, name, value):
         if value == "joined":
@@ -93,6 +103,8 @@ class AuctionFilter(django_filters.FilterSet):
         else:
             return queryset.filter(
                 Q(title__icontains=value)
+                | Q(club__name__icontains=value)
+                | Q(club__abbreviation__iexact=value)
                 | Q(created_by__userdata__club__name__icontains=value)
                 | Q(created_by__userdata__club__abbreviation=value)
             )
