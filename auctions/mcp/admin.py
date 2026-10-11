@@ -632,6 +632,93 @@ def _recent_errors() -> dict[str, Any]:
     return {"total": total, "most_common": [{"error": kind, "times": times} for kind, times in ranked]}
 
 
+#: Running queries ``site_health`` shows, longest first, and the characters of each it keeps.
+SLOW_QUERIES_SHOWN = 5
+QUERY_SHAPE_CHARS = 400
+_SQL_STRING = re.compile(r"'(?:[^'\\]|\\.)*'")
+_SQL_NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
+_SQL_LIST = re.compile(r"\((?:\s*\?\s*,)+\s*\?\s*\)")
+
+
+def query_shape(sql: str) -> str:
+    """``sql`` with every literal replaced by ``?``: which query, never whose data."""
+    shape = _SQL_STRING.sub("?", sql or "")
+    shape = _SQL_NUMBER.sub("?", shape)
+    shape = _SQL_LIST.sub("(?, ...)", shape)
+    return " ".join(shape.split())[:QUERY_SHAPE_CHARS]
+
+
+def _database() -> dict[str, Any]:
+    """What the database is doing right now: connections, queries running, and the longest of them.
+
+    Only the site's own connections are visible (no PROCESS grant), which is every one that matters.
+    A fixed read of the process list, not a query tool: the literals are gone before anything leaves.
+    """
+    from django.db import connection
+
+    if connection.vendor != "mysql":
+        return {"error": f"not reported for {connection.vendor}"}
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected', 'Threads_running')")
+            status = {name.lower(): int(value) for name, value in cursor.fetchall()}
+            cursor.execute(
+                "SELECT TIME, STATE, INFO FROM information_schema.PROCESSLIST "
+                "WHERE COMMAND NOT IN ('Sleep', 'Daemon') AND ID <> CONNECTION_ID() AND INFO IS NOT NULL "
+                "ORDER BY TIME DESC"
+            )
+            running = cursor.fetchall()
+    except Exception as exc:  # the database refusing is the answer, not a failure of this tool
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {
+        **status,
+        "queries_running": len(running),
+        "longest_seconds": int(running[0][0]) if running else 0,
+        "longest": [
+            {"seconds": int(seconds), "state": state or "", "query": redact(query_shape(info))}
+            for seconds, state, info in running[:SLOW_QUERIES_SHOWN]
+        ],
+    }
+
+
+#: A query running this long puts the database in ``site_health``'s summary.
+SLOW_QUERY_WARN_SECONDS = 10
+
+#: How far back ``site_health`` reads slow-request lines, and how many paths it names.
+SLOW_REQUEST_WINDOW = timedelta(hours=1)
+SLOW_PATHS_SHOWN = 5
+#: A segment with a digit in it, and the slug that follows it: ``/lots/123/neon-tetras/`` is ``/lots/<id>/``.
+_PATH_ID = re.compile(r"/[^/]*\d[^/]*(?:/[^/]+)?(?=/|$)")
+_SLOW_REQUEST = re.compile(r"slow request (\d+(?:\.\d+)?)s (\d{3}) (\S+) ([^?\s]*)")
+
+
+def _slow_requests() -> dict[str, Any]:
+    """``SlowRequestMiddleware``'s lines in the last hour, grouped by method and path, busiest first."""
+    zone = timezone.get_default_timezone()
+    since = timezone.localtime() - SLOW_REQUEST_WINDOW
+    paths: dict[str, dict[str, Any]] = {}
+    total = 0
+    for _level, stamp, text in _records(_log_files("root", older=False)):
+        found = _SLOW_REQUEST.search(text)
+        if not found:
+            continue
+        try:
+            when = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=zone)
+        except ValueError:
+            continue
+        if when < since:
+            continue
+        total += 1
+        seconds, status, method, path = float(found.group(1)), found.group(2), found.group(3), found.group(4)
+        key = f"{method} {_PATH_ID.sub('/<id>', path)[:120]}"
+        row = paths.setdefault(key, {"request": key, "times": 0, "slowest_seconds": 0.0, "statuses": {}})
+        row["times"] += 1
+        row["slowest_seconds"] = max(row["slowest_seconds"], seconds)
+        row["statuses"][status] = row["statuses"].get(status, 0) + 1
+    ranked = sorted(paths.values(), key=lambda row: -row["times"])[:SLOW_PATHS_SHOWN]
+    return {"total": total, "threshold_seconds": getattr(settings, "SLOW_REQUEST_SECONDS", 0), "busiest": ranked}
+
+
 def _deploy_window() -> dict[str, Any]:
     """:mod:`auctions.deploy_window`, with the auction titles fenced like any other field from outside."""
     from auctions import deploy_window
@@ -652,6 +739,8 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     errors = _recent_errors()
     crashes = app_crashes.recent_count()
     host = _host()
+    database = _database()
+    slow = _slow_requests()
     window = _deploy_window()
     facts = {
         **deployed,
@@ -663,6 +752,8 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "errors_last_24h": errors,
         "app_crashes_last_24h": crashes,
         **host,
+        "database": database,
+        "slow_requests_last_hour": slow,
         "debug": settings.DEBUG,
         "deploy_window": window,
         "checked_at": timezone.now().isoformat(),
@@ -676,6 +767,17 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f"; the app reported {crashes['crashes']} crash{'es' if crashes['crashes'] != 1 else ''}"
     full = [name for name in ("disk", "memory") if host[name].get("used_percent", 0) >= HOST_WARN_PERCENT]
     summary += f"; {' and '.join(full)} over {HOST_WARN_PERCENT}% used." if full else "."
+    if database.get("longest_seconds", 0) >= SLOW_QUERY_WARN_SECONDS:
+        summary += (
+            f" {database['queries_running']} database quer{'ies' if database['queries_running'] != 1 else 'y'} "
+            f"running, the longest for {database['longest_seconds']} seconds."
+        )
+    if slow["busiest"]:
+        busiest = slow["busiest"][0]
+        summary += (
+            f" {slow['total']} slow request{'s' if slow['total'] != 1 else ''} in the last hour, "
+            f"most often {busiest['request']} ({busiest['times']})."
+        )
     if window["verdict"] != "quiet":
         summary += " " + window["advice"]
     return _ok(summary, **facts)
@@ -1797,8 +1899,9 @@ ADMIN_TOOLS: dict[str, Action] = {
             description=(
                 "What is deployed and whether it is well: branch and commit, migrations not yet "
                 "applied, Celery queue depths, when beat last ran, the last 24 hours of logged "
-                "errors grouped by kind, the app crashes reported in that time, and the server's disk, "
-                "memory and load."
+                "errors grouped by kind, the app crashes reported in that time, the server's disk, "
+                "memory and load, the database's running queries (longest first, literals removed), "
+                "and the last hour's slow requests grouped by path."
             ),
             params={},
             danger=DANGER_SAFE,

@@ -1068,6 +1068,66 @@ class SiteHealthTests(AdminEndpointCase):
             text = self.call("site_health")["content"][0]["text"]
         self.assertIn("Probably not a good time to deploy: lots of traffic.", text)
 
+    def test_it_says_what_the_database_is_running(self):
+        database = self.call("site_health")["structuredContent"]["database"]
+        self.assertNotIn("error", database)
+        self.assertGreaterEqual(database["threads_connected"], 1)
+        self.assertIn("queries_running", database)
+        self.assertIn("longest", database)
+
+    def test_a_long_query_is_in_the_summary_without_its_literals(self):
+        stuck = {
+            "threads_connected": 40,
+            "threads_running": 30,
+            "queries_running": 3,
+            "longest_seconds": 95,
+            "longest": [],
+        }
+        with mock.patch("auctions.mcp.admin._database", return_value=stuck):
+            text = self.call("site_health")["content"][0]["text"]
+        self.assertIn("3 database queries running, the longest for 95 seconds.", text)
+
+    def test_slow_requests_are_grouped_by_path(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        now = timezone.localtime(timezone.now(), timezone.get_default_timezone())
+        recent = now.strftime("%Y-%m-%d %H:%M:%S")
+        old = (now - datetime.timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+        line = "WARNING {} middleware.__call__:1 slow request {}s {} GET {}?q=x ua=scanner\n"
+        Path(directory.name, "root.log").write_text(
+            line.format(old, "50.0", 200, "/lots/all/")
+            + line.format(recent, "61.2", 200, "/lots/all/")
+            + line.format(recent, "99.0", 504, "/lots/all/")
+            + line.format(recent, "7.5", 200, "/lots/12345/some-fish/")
+            + f"WARNING {recent} views.z:3 unrelated\n"
+        )
+        with override_settings(LOG_DIR=Path(directory.name)):
+            result = self.call("site_health")
+        slow = result["structuredContent"]["slow_requests_last_hour"]
+        self.assertEqual(slow["total"], 3)
+        self.assertEqual(
+            slow["busiest"][0],
+            {"request": "GET /lots/all/", "times": 2, "slowest_seconds": 99.0, "statuses": {"200": 1, "504": 1}},
+        )
+        self.assertEqual(slow["busiest"][1]["request"], "GET /lots/<id>/")
+        self.assertIn("3 slow requests in the last hour, most often GET /lots/all/ (2).", result["content"][0]["text"])
+
+
+class QueryShapeTests(SimpleTestCase):
+    def test_literals_never_leave(self):
+        sql = (
+            "SELECT `auctions_lot`.`id` FROM `auctions_lot` WHERE (`auctions_lot`.`lot_name` LIKE '%o\\'brien%' "
+            "AND `auctions_lot`.`auction_id` IN (12, 13, 14) AND `t1`.`price` > 4.5)"
+        )
+        shape = admin.query_shape(sql)
+        self.assertNotIn("brien", shape)
+        self.assertNotIn("12", shape)
+        self.assertIn("IN (?, ...)", shape)
+        self.assertIn("`t1`.`price` > ?", shape)
+
+    def test_it_is_cut_short(self):
+        self.assertEqual(len(admin.query_shape("SELECT " + "x, " * 500)), admin.QUERY_SHAPE_CHARS)
+
 
 #: Writes a read may make: its caller's own "last auction used" pointer.
 _ALLOWED_WRITES = ("UPDATE `auctions_userdata` SET `last_auction_used_id`",)
@@ -1194,3 +1254,30 @@ def _token_holding(resource):
     from types import SimpleNamespace
 
     return SimpleNamespace(resource=resource)
+
+
+class SlowRequestMiddlewareTests(SimpleTestCase):
+    """What ``site_health``'s slow-request rows are read from."""
+
+    def run_request(self, seconds):
+        from django.http import HttpResponse
+
+        from auctions.middleware import SlowRequestMiddleware
+
+        middleware = SlowRequestMiddleware(lambda request: HttpResponse(status=200))
+        request = RequestFactory().get("/lots/all/?q=sleep(5)", HTTP_USER_AGENT="scanner/1.0")
+        with mock.patch("auctions.middleware.time.monotonic", side_effect=[100.0, 100.0 + seconds]):
+            middleware(request)
+
+    @override_settings(SLOW_REQUEST_SECONDS=5)
+    def test_a_slow_request_is_logged_in_the_shape_site_health_reads(self):
+        with self.assertLogs("auctions.slow_requests", level="WARNING") as logs:
+            self.run_request(12.34)
+        message = logs.records[0].getMessage()
+        self.assertEqual(message, "slow request 12.3s 200 GET /lots/all/?q=sleep(5) ua=scanner/1.0")
+        self.assertRegex(message, admin._SLOW_REQUEST)
+
+    @override_settings(SLOW_REQUEST_SECONDS=5)
+    def test_a_quick_one_is_not(self):
+        with self.assertNoLogs("auctions.slow_requests", level="WARNING"):
+            self.run_request(0.2)

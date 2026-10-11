@@ -253,8 +253,11 @@ INSTALLED_APPS = [
     "oauth2_provider",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
+#: A request this slow is logged at WARNING; site_health groups them by path. 0 turns it off.
+SLOW_REQUEST_SECONDS = float(os.getenv("SLOW_REQUEST_SECONDS") or 5)
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware",
+    "auctions.middleware.SlowRequestMiddleware",  # First, so it times everything below it
     "django.middleware.security.SecurityMiddleware",
     "auctions.middleware.ContentSecurityPolicyMiddleware",  # Sets Content-Security-Policy
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
