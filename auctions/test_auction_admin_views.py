@@ -336,6 +336,12 @@ class PickupLocationsCreateTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(PickupLocation.objects.filter(auction=self.online_auction, name="Hall").exists())
 
+    def test_the_notes_box_stops_at_the_column_limit(self):
+        self.client.force_login(self.admin_user)
+        field = self.client.get(self._url()).context["form"]["description"]
+        self.assertIn('maxlength="300"', str(field))
+        self.assertIn('rows="3"', str(field))
+
 
 class AuctionTOSDeleteTests(StandardTestCase):
     def setUp(self):

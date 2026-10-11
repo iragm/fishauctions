@@ -788,12 +788,14 @@ class HelpKnowsYourClubTests(StandardTestCase):
 
 
 class HelpKnowsYourAiAgentsTests(StandardTestCase):
-    def connect(self, name, count=1):
+    def connect(self, name, count=1, resource=None, expires_in=datetime.timedelta(hours=1), family=None):
         import secrets
 
         from oauth2_provider.models import get_access_token_model, get_application_model, get_refresh_token_model
 
-        application = get_application_model().objects.create(
+        application = get_application_model().objects.filter(
+            name=name
+        ).first() or get_application_model().objects.create(
             name=name,
             client_type="public",
             authorization_grant_type="authorization-code",
@@ -804,12 +806,19 @@ class HelpKnowsYourAiAgentsTests(StandardTestCase):
                 user=self.user,
                 application=application,
                 token=secrets.token_hex(20),
-                expires=timezone.now() + datetime.timedelta(hours=1),
+                expires=timezone.now() + expires_in,
                 scope="read write",
+                resource=resource or [],
             )
             get_refresh_token_model().objects.create(
-                user=self.user, application=application, access_token=access, token=secrets.token_hex(20)
+                user=self.user,
+                application=application,
+                access_token=access,
+                token=secrets.token_hex(20),
+                resource=resource or [],
+                token_family=family,
             )
+        return application
 
     def test_two_connections_from_one_client_are_called_out(self):
         self.connect("Claude", count=2)
@@ -827,6 +836,41 @@ class HelpKnowsYourAiAgentsTests(StandardTestCase):
 
     def test_signed_out_there_is_nothing_to_call_out(self):
         self.assertEqual(help_guides.HelpContext().ai_duplicates, [])
+
+    def test_the_admin_connector_beside_the_ordinary_one_is_not_a_duplicate(self):
+        from auctions.mcp.auth import connected_apps
+
+        self.connect("Claude")
+        self.connect("Claude", resource=["https://auction.fish/mcp/admin"])
+        self.assertEqual(help_guides.HelpContext(user=self.user).ai_duplicates, [])
+        rows = {app["admin"]: app for app in connected_apps(self.user)}
+        self.assertTrue(rows[False]["writes"])
+        self.assertFalse(rows[True]["writes"])
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(help_guides.GUIDES["ai-agents"].url), "Claude (admin)")
+
+    def test_one_connection_refreshed_many_times_is_one_connection(self):
+        family = uuid.uuid4()
+        self.connect("Claude", count=3, family=family)
+        self.assertEqual(help_guides.HelpContext(user=self.user).ai_duplicates, [])
+
+    def test_an_expired_access_token_is_not_signed_out(self):
+        from auctions.mcp.auth import connected_apps
+
+        self.connect("ChatGPT", expires_in=-datetime.timedelta(days=13))
+        (row,) = connected_apps(self.user)
+        self.assertTrue(row["live"])
+        self.assertTrue(row["writes"])
+
+    def test_disconnecting_the_ordinary_connector_keeps_the_admin_one(self):
+        from oauth2_provider.models import get_refresh_token_model
+
+        application = self.connect("Claude")
+        self.connect("Claude", resource=["https://auction.fish/mcp/admin"])
+        self.client.force_login(self.user)
+        self.client.post("/ai/", {"disconnect": application.pk})
+        (left,) = get_refresh_token_model().objects.filter(user=self.user)
+        self.assertEqual(left.resource, ["https://auction.fish/mcp/admin"])
 
     def test_the_curl_example_is_inside_the_keys_panel(self):
         self.client.force_login(self.user)

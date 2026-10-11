@@ -1438,7 +1438,7 @@
         "destructiveHint": true
       },
       "justifications": {
-        "read_only_justification": "Changes data on this site: Move, rename or call off something on a club's calendar.",
+        "read_only_justification": "Changes data on this site: Move, rename or call off something on a club's calendar, or say who is speaking.",
         "open_world_justification": "Reaches outside this site: the club's Discord server and the Google Calendar it is connected to.",
         "destructive_justification": "It overwrites an event's date, title or description, or calls it off, and pushes the change to the club's calendar and Discord."
       }

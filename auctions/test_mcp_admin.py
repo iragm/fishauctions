@@ -17,8 +17,8 @@ from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from auctions import palette_actions
-from auctions.mcp import admin, protocol, tools
-from auctions.models import AgentProposal, AssistantSkillRequest, Club, UserAPIKey
+from auctions.mcp import admin, admin_species, protocol, tools
+from auctions.models import AgentProposal, AssistantSkillRequest, Club, Lot, Species, UserAPIKey
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -503,11 +503,372 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.user.userdata.refresh_from_db()
         self.assertTrue(self.user.userdata.is_trusted)
 
+    def test_an_auction_with_no_club_is_filed_under_one(self):
+        from auctions.models import Auction, ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        self.assertIsNone(self.online_auction.club)
+        result = self.propose("link_auction_to_club", {"auction": self.online_auction.slug, "club": club.name})
+        self.assertFalse(result["isError"], result)
+        self.assertIsNone(Auction.objects.get(pk=self.online_auction.pk).club)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertEqual(Auction.objects.get(pk=self.online_auction.pk).club, club)
+        self.assertTrue(
+            ClubMember.objects.filter(club=club, user=self.online_auction.created_by, permission_admin=True).exists()
+        )
+        result = self.propose("link_auction_to_club", {"auction": self.online_auction.pk, "club": club.pk}, "Again")
+        self.assertTrue(result["isError"])
+        self.assertIn("already belongs to", result["content"][0]["text"])
+
+    def test_an_account_is_made_a_club_admin_and_unmade(self):
+        from auctions.models import ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        result = self.propose("make_club_admin", {"club": club.pk, "user": self.userB.username})
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.userB).exists())
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertTrue(ClubMember.objects.get(club=club, user=self.userB).permission_admin)
+        self.propose("make_club_admin", {"club": club.name, "user": self.userB.pk, "admin": False}, "Undo")
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertFalse(ClubMember.objects.get(club=club, user=self.userB).permission_admin)
+        result = self.propose("make_club_admin", {"club": "No such club", "user": self.userB.pk}, "Bad")
+        self.assertTrue(result["isError"])
+
+    def test_a_club_is_corrected_and_moved(self):
+        from auctions.models import ClubHistory, GeneralInterest
+
+        GeneralInterest.objects.create(name="Orchids")
+        club = Club.objects.create(
+            name="Harbor Aquarium Society",
+            homepage="https://old.example.org",
+            location="Old place",
+            latitude=1.0,
+            notes="Old note",
+        )
+        result = self.propose(
+            "update_club",
+            {
+                "club": club.pk,
+                "homepage": "harboraquarium.example.org",
+                "facebook_page": "facebook.com/groups/harbor",
+                "notes": "",
+                "location": "Boston, MA",
+                "interests": "Orchids",
+            },
+        )
+        self.assertFalse(result["isError"], result)
+        with mock.patch("auctions.geocoding.geocode", return_value=self.PLACE):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        club.refresh_from_db()
+        self.assertEqual(club.name, "Harbor Aquarium Society")
+        self.assertEqual(club.homepage, "https://harboraquarium.example.org")
+        self.assertEqual(club.facebook_page, "https://facebook.com/groups/harbor")
+        self.assertIsNone(club.notes)
+        self.assertAlmostEqual(club.latitude, 42.36)
+        self.assertEqual([interest.name for interest in club.interests.all()], ["Orchids"])
+        self.assertTrue(ClubHistory.objects.filter(club=club, action__contains="homepage").exists())
+
+    def test_a_meeting_place_google_cannot_find_takes_the_old_pin_off(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", location="Old place", latitude=1.0, longitude=2.0)
+        self.propose("update_club", {"club": club.pk, "location": "nowhere at all"})
+        with mock.patch("auctions.geocoding.geocode", return_value=None):
+            proposal = self.approve()
+        club.refresh_from_db()
+        self.assertIsNone(club.latitude)
+        self.assertIn("Not on the map", proposal.results[0]["said"])
+
+    def test_bad_club_corrections_are_refused_when_proposed(self):
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        Club.objects.create(name="Bay Killifish Association")
+        for arguments, expected in (
+            ({"club": club.pk}, "at least one"),
+            ({"club": club.pk, "name": ""}, "blank name"),
+            ({"club": club.pk, "name": "Bay Killifish Association"}, "already on the site"),
+            ({"club": club.pk, "homepage": "https://facebook.com/groups/harbor"}, "facebook_page"),
+            ({"club": club.pk, "contact_email": "not an address"}, "isn't an email"),
+            ({"club": club.pk, "interests": "Underwater basket weaving"}, "no interest called"),
+            ({"club": "No such club", "notes": "x"}, "no one club"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("update_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_an_accounts_features_are_switched(self):
+        userdata = self.userB.userdata
+        userdata.paypal_enabled = userdata.library_enabled = False
+        userdata.square_enabled = True
+        userdata.save()
+        result = self.propose(
+            "set_user_features", {"user": self.userB.username, "paypal": True, "library": "on", "square": False}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        userdata.refresh_from_db()
+        self.assertTrue(userdata.paypal_enabled)
+        self.assertTrue(userdata.library_enabled)
+        self.assertFalse(userdata.square_enabled)
+        for arguments, expected in (
+            ({"user": self.userB.username}, "at least one"),
+            ({"user": "nobody_at_all", "paypal": True}, "no active account"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("set_user_features", arguments, expected)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+
+    def test_new_auctions_by_untrusted_creators_are_listed_with_their_facts(self):
+        from auctions.models import Auction
+
+        creator = self.online_auction.created_by
+        creator.userdata.is_trusted = False
+        creator.userdata.save(update_fields=["is_trusted"])
+        Auction.objects.filter(pk=self.online_auction.pk).update(date_posted=timezone.now())
+        result = self.call("untrusted_auction_creators", {"days": 3})
+        self.assertFalse(result["isError"], result)
+        people = result["structuredContent"]["people"]
+        row = next(person for person in people if person["user"] == creator.pk)
+        self.assertIn(self.online_auction.slug, [auction["auction"] for auction in row["new_auctions"]])
+        self.assertIn("account_age_days", row)
+        creator.userdata.is_trusted = True
+        creator.userdata.save(update_fields=["is_trusted"])
+        people = self.call("untrusted_auction_creators", {})["structuredContent"]["people"]
+        self.assertNotIn(creator.pk, [person["user"] for person in people])
+
+    def test_an_interest_is_added_and_a_club_takes_it(self):
+        from auctions.models import Category, GeneralInterest
+
+        Category.objects.create(name="Snakes test")
+        result = self.propose(
+            "set_interest", {"name": "Reptiles test", "aquatic": False, "noun": "Reptile", "categories": "Snakes test"}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        interest = GeneralInterest.objects.get(name="Reptiles test")
+        self.assertFalse(interest.aquatic)
+        self.assertEqual(interest.noun, "reptile")
+        self.assertEqual([category.name for category in interest.categories.all()], ["Snakes test"])
+        result = self.propose("set_interest", {"name": "Reptiles test", "categories": "No such category"}, "Bad")
+        self.assertTrue(result["isError"])
+        self.assertIn("no category called", result["content"][0]["text"])
+
+    def test_two_accounts_are_merged_once_approved(self):
+        closed, kept = self.user_who_does_not_join, self.userB
+        result = self.propose("merge_accounts", {"close": closed.username, "keep": kept.pk})
+        self.assertFalse(result["isError"], result)
+        closed.refresh_from_db()
+        self.assertTrue(closed.is_active)
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        closed.refresh_from_db()
+        self.assertFalse(closed.is_active)
+
+    def test_a_merge_is_refused_for_staff_the_same_account_or_nobody(self):
+        for arguments, expected in (
+            ({"close": self.owner.username, "keep": self.userB.username}, "Staff"),
+            ({"close": self.userB.username, "keep": self.userB.pk}, "same account"),
+            ({"close": "nobody_at_all", "keep": self.userB.username}, "no active account"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("merge_accounts", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
     def test_none_of_them_is_a_tool_anywhere(self):
         for url in (self.url, "/mcp/"):
-            for name in ("add_club", "set_club_stage", "trust_user"):
+            for name in admin.APPROVAL_ONLY:
                 response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url=url)
                 self.assertIn("error", json.loads(response.content))
+
+
+class SpeciesUpkeepTests(AdminEndpointCase):
+    """The species gaps page and the backfill command on ``/mcp/admin/``: read freely, changed only by an
+    approved proposal (:mod:`auctions.mcp.admin_species`)."""
+
+    def setUp(self):
+        super().setUp()
+        from auctions.test_species import make_species
+
+        self.tropheus = make_species("Tropheus", "duboisi", "White spotted cichlid")
+        self.chindongo = make_species("Chindongo", "saulosi", "Saulosi cichlid")
+        self.aulonocara = make_species("Aulonocara", "saulosi", "Sunshine peacock")
+        self.lot.lot_name = "Tropheus duboisi maswa"
+        self.lot.species = None
+        self.lot.save()
+        self.saulosi = Lot.objects.create(
+            lot_name="6 saulosi",
+            auction=self.online_auction,
+            user=self.user,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            reserve_price=5,
+            date_end=self.lot.date_end,
+        )
+        Lot.objects.filter(pk=self.saulosi.pk).update(species=None)
+
+    def data(self, result):
+        self.assertFalse(result["isError"], result)
+        return result["structuredContent"]
+
+    def propose(self, tool, arguments):
+        return self.call(
+            "propose_change", {"summary": "Species upkeep", "steps": [{"tool": tool, "arguments": arguments}]}
+        )
+
+    def approve(self):
+        proposal = AgentProposal.objects.get(status=AgentProposal.STATUS_PENDING)
+        self.client.force_login(self.owner)
+        self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        return proposal
+
+    def writes_during(self, name, arguments):
+        with CaptureQueriesContext(connection) as captured:
+            result = self.call(name, arguments)
+        writes = [
+            query["sql"]
+            for query in captured.captured_queries
+            if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+            and "oauth2_provider" not in query["sql"]
+            and "django_session" not in query["sql"]
+        ]
+        return self.data(result), writes
+
+    def test_the_reads_are_only_on_the_admin_endpoint(self):
+        listed = self.listed()
+        self.assertIn("species_dashboard", listed)
+        self.assertIn("species_backfill", listed)
+        for name in ("species_dashboard", "species_backfill"):
+            response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url="/mcp/")
+            self.assertIn("error", json.loads(response.content))
+
+    def test_the_changes_are_not_tools_anywhere(self):
+        for url in (self.url, "/mcp/"):
+            for action in admin_species.APPROVAL_ONLY:
+                response = self.rpc("tools/call", {"name": action.name, "arguments": {}}, key=self.owner_key, url=url)
+                self.assertIn("error", json.loads(response.content), action.name)
+
+    def test_every_section_reads_without_writing(self):
+        for section in admin_species.SECTIONS:
+            with self.subTest(section=section):
+                data, writes = self.writes_during("species_dashboard", {"section": section})
+                self.assertEqual(writes, [])
+                self.assertEqual(data.get("section", "summary"), section)
+        data = self.data(self.call("species_dashboard", {}))
+        self.assertGreaterEqual(data["lots_without_species"], 2)
+
+    def test_a_species_added_on_the_site_is_approved_by_proposal(self):
+        pending = Species.objects.create(genus="Betta", species="mahachaiensis", source="admin", approved=False)
+        rows = self.data(self.call("species_dashboard", {"section": "pending"}))["rows"]
+        self.assertEqual([row["species_id"] for row in rows], [pending.pk])
+        self.assertFalse(self.propose("approve_species", {"species": pending.pk})["isError"])
+        pending.refresh_from_db()
+        self.assertFalse(pending.approved)
+        self.approve()
+        pending.refresh_from_db()
+        self.assertTrue(pending.approved)
+
+    def test_a_number_that_names_nothing_is_refused_when_proposed(self):
+        for tool, arguments in (
+            ("approve_species", {"species": 999999}),
+            ("merge_species", {"keep": self.tropheus.pk, "duplicate": 999999}),
+            ("forget_species_answer", {"answer": 999999}),
+            ("allow_species_pairing_again", {"pairing": 999999}),
+            ("backfill_species", {"lot_names": []}),
+            ("set_species_on_lot_names", {"species": self.tropheus.pk, "lot_names": [f"name {n}" for n in range(21)]}),
+            ("backfill_species", {"lot_names": ["x"], "auction": "no-such-auction"}),
+        ):
+            with self.subTest(tool=tool):
+                self.assertTrue(self.propose(tool, arguments)["isError"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_duplicates_are_merged_or_dismissed(self):
+        copy = Species.objects.create(genus="Tropheus", species="duboisi", source="admin")
+        Species.objects.filter(pk=copy.pk).update(possible_duplicate=self.tropheus)
+        Species.objects.filter(pk=self.tropheus.pk).update(possible_duplicate=copy)
+        rows = self.data(self.call("species_dashboard", {"section": "duplicates"}))["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["same_scientific_name"])
+        Lot.objects.filter(pk=self.lot.pk).update(species=copy)
+        self.propose("merge_species", {"keep": self.tropheus.pk, "duplicate": copy.pk})
+        self.assertIn("1 lot(s)", self.approve().results[0]["said"])
+        self.assertFalse(Species.objects.filter(pk=copy.pk).exists())
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+
+        Species.objects.filter(pk=self.chindongo.pk).update(possible_duplicate=self.aulonocara)
+        Species.objects.filter(pk=self.aulonocara.pk).update(possible_duplicate=self.chindongo)
+        self.propose("dismiss_species_duplicate", {"species": self.aulonocara.pk})
+        self.approve()
+        self.assertFalse(Species.objects.filter(possible_duplicate__isnull=False).exists())
+
+    def test_a_remembered_answer_is_forgotten_and_a_retired_pairing_allowed_again(self):
+        from auctions.models import SpeciesNameRejection, SpeciesSearchCache
+
+        answer = SpeciesSearchCache.objects.create(search_text="sponge filter", species=None, source="llm")
+        retired = SpeciesNameRejection.objects.create(search_text="saulosi", species=self.chindongo)
+        rows = self.data(self.call("species_dashboard", {"section": "not_a_species"}))["rows"]
+        self.assertEqual(rows[0]["answer"], answer.pk)
+        self.assertEqual(rows[0]["lot_name"], "«sponge filter»")
+        rows = self.data(self.call("species_dashboard", {"section": "retired"}))["rows"]
+        self.assertEqual(rows[0]["pairing"], retired.pk)
+        self.call(
+            "propose_change",
+            {
+                "summary": "Tidy",
+                "steps": [
+                    {"tool": "forget_species_answer", "arguments": {"answer": answer.pk}},
+                    {"tool": "allow_species_pairing_again", "arguments": {"pairing": retired.pk}},
+                ],
+            },
+        )
+        self.assertTrue(SpeciesSearchCache.objects.filter(pk=answer.pk).exists())
+        self.approve()
+        self.assertFalse(SpeciesSearchCache.objects.filter(pk=answer.pk).exists())
+        self.assertFalse(SpeciesNameRejection.objects.exists())
+
+    def test_the_automatic_pass_is_previewed_without_writing_and_applied_on_approval(self):
+        data, writes = self.writes_during("species_backfill", {"pass": "automatic"})
+        self.assertEqual(writes, [])
+        self.assertEqual(data["total"], 1)
+        match = data["matches"][0]
+        self.assertEqual(match["species"]["species_id"], self.tropheus.pk)
+        # Copied straight from the read, fence and all.
+        self.assertFalse(self.propose("backfill_species", {"lot_names": [match["lot_name"], "6 saulosi"]})["isError"])
+        self.lot.refresh_from_db()
+        self.assertIsNone(self.lot.species)
+        said = self.approve().results[0]["said"]
+        self.assertIn("1 name(s) no longer match", said)
+        self.lot.refresh_from_db()
+        self.saulosi.refresh_from_db()
+        self.assertEqual(self.lot.species, self.tropheus)
+        self.assertIsNone(self.saulosi.species)
+
+    def test_the_review_pass_asks_and_a_proposal_answers(self):
+        from auctions.models import SpeciesSearchCache
+        from auctions.species_matching import normalize
+
+        data, writes = self.writes_during("species_backfill", {"pass": "review", "min_lots": 1})
+        self.assertEqual(writes, [])
+        question = data["questions"][0]
+        self.assertEqual(
+            {candidate["species_id"] for candidate in question["candidates"]},
+            {self.chindongo.pk, self.aulonocara.pk},
+        )
+        self.propose("set_species_on_lot_names", {"species": self.chindongo.pk, "lot_names": question["lot_names"]})
+        self.approve()
+        self.saulosi.refresh_from_db()
+        self.assertEqual(self.saulosi.species, self.chindongo)
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text=normalize("6 saulosi")).species, self.chindongo)
+
+        AgentProposal.objects.all().delete()
+        self.propose("remember_not_a_species", {"lot_names": ["Sponge filter"]})
+        self.approve()
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
 
 
 class FeatureRequestTests(AdminEndpointCase):
@@ -699,6 +1060,74 @@ class SiteHealthTests(AdminEndpointCase):
         self.assertEqual(result["structuredContent"]["disk"]["free_gb"], 8.0)
         self.assertIn("disk over 85% used", result["content"][0]["text"])
 
+    def test_it_says_when_a_deploy_would_hurt(self):
+        quiet = self.call("site_health")
+        self.assertIn("verdict", quiet["structuredContent"]["deploy_window"])
+        busy = {"verdict": "busy", "reasons": ["lots of traffic"], "usually_quietest_at": "04:00 EDT"}
+        with mock.patch("auctions.deploy_window.deploy_window", return_value={**busy, "auctions_in_play": []}):
+            text = self.call("site_health")["content"][0]["text"]
+        self.assertIn("Probably not a good time to deploy: lots of traffic.", text)
+
+    def test_it_says_what_the_database_is_running(self):
+        database = self.call("site_health")["structuredContent"]["database"]
+        self.assertNotIn("error", database)
+        self.assertGreaterEqual(database["threads_connected"], 1)
+        self.assertIn("queries_running", database)
+        self.assertIn("longest", database)
+
+    def test_a_long_query_is_in_the_summary_without_its_literals(self):
+        stuck = {
+            "threads_connected": 40,
+            "threads_running": 30,
+            "queries_running": 3,
+            "longest_seconds": 95,
+            "longest": [],
+        }
+        with mock.patch("auctions.mcp.admin._database", return_value=stuck):
+            text = self.call("site_health")["content"][0]["text"]
+        self.assertIn("3 database queries running, the longest for 95 seconds.", text)
+
+    def test_slow_requests_are_grouped_by_path(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        now = timezone.localtime(timezone.now(), timezone.get_default_timezone())
+        recent = now.strftime("%Y-%m-%d %H:%M:%S")
+        old = (now - datetime.timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+        line = "WARNING {} middleware.__call__:1 slow request {}s {} GET {}?q=x ua=scanner\n"
+        Path(directory.name, "root.log").write_text(
+            line.format(old, "50.0", 200, "/lots/all/")
+            + line.format(recent, "61.2", 200, "/lots/all/")
+            + line.format(recent, "99.0", 504, "/lots/all/")
+            + line.format(recent, "7.5", 200, "/lots/12345/some-fish/")
+            + f"WARNING {recent} views.z:3 unrelated\n"
+        )
+        with override_settings(LOG_DIR=Path(directory.name)):
+            result = self.call("site_health")
+        slow = result["structuredContent"]["slow_requests_last_hour"]
+        self.assertEqual(slow["total"], 3)
+        self.assertEqual(
+            slow["busiest"][0],
+            {"request": "GET /lots/all/", "times": 2, "slowest_seconds": 99.0, "statuses": {"200": 1, "504": 1}},
+        )
+        self.assertEqual(slow["busiest"][1]["request"], "GET /lots/<id>/")
+        self.assertIn("3 slow requests in the last hour, most often GET /lots/all/ (2).", result["content"][0]["text"])
+
+
+class QueryShapeTests(SimpleTestCase):
+    def test_literals_never_leave(self):
+        sql = (
+            "SELECT `auctions_lot`.`id` FROM `auctions_lot` WHERE (`auctions_lot`.`lot_name` LIKE '%o\\'brien%' "
+            "AND `auctions_lot`.`auction_id` IN (12, 13, 14) AND `t1`.`price` > 4.5)"
+        )
+        shape = admin.query_shape(sql)
+        self.assertNotIn("brien", shape)
+        self.assertNotIn("12", shape)
+        self.assertIn("IN (?, ...)", shape)
+        self.assertIn("`t1`.`price` > ?", shape)
+
+    def test_it_is_cut_short(self):
+        self.assertEqual(len(admin.query_shape("SELECT " + "x, " * 500)), admin.QUERY_SHAPE_CHARS)
+
 
 #: Writes a read may make: its caller's own "last auction used" pointer.
 _ALLOWED_WRITES = ("UPDATE `auctions_userdata` SET `last_auction_used_id`",)
@@ -825,3 +1254,30 @@ def _token_holding(resource):
     from types import SimpleNamespace
 
     return SimpleNamespace(resource=resource)
+
+
+class SlowRequestMiddlewareTests(SimpleTestCase):
+    """What ``site_health``'s slow-request rows are read from."""
+
+    def run_request(self, seconds):
+        from django.http import HttpResponse
+
+        from auctions.middleware import SlowRequestMiddleware
+
+        middleware = SlowRequestMiddleware(lambda request: HttpResponse(status=200))
+        request = RequestFactory().get("/lots/all/?q=sleep(5)", HTTP_USER_AGENT="scanner/1.0")
+        with mock.patch("auctions.middleware.time.monotonic", side_effect=[100.0, 100.0 + seconds]):
+            middleware(request)
+
+    @override_settings(SLOW_REQUEST_SECONDS=5)
+    def test_a_slow_request_is_logged_in_the_shape_site_health_reads(self):
+        with self.assertLogs("auctions.slow_requests", level="WARNING") as logs:
+            self.run_request(12.34)
+        message = logs.records[0].getMessage()
+        self.assertEqual(message, "slow request 12.3s 200 GET /lots/all/?q=sleep(5) ua=scanner/1.0")
+        self.assertRegex(message, admin._SLOW_REQUEST)
+
+    @override_settings(SLOW_REQUEST_SECONDS=5)
+    def test_a_quick_one_is_not(self):
+        with self.assertNoLogs("auctions.slow_requests", level="WARNING"):
+            self.run_request(0.2)

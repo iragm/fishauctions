@@ -25,6 +25,10 @@ model and will outgrow ours.
 by one, then put back together into one document per article, across page breaks, with adverts and
 membership lists left out. ``DocumentBatch`` / ``BatchPage``.
 
+**Pictures** (:mod:`.pictures`): the photographs and drawings an article printed, cropped out by
+whoever transcribed it and posted to a signed link, because an assistant can't put a file into a tool
+call. ``DocumentPicture``.
+
 **Running it**: reading happens on the ``celery_documents`` compose service (queue ``documents``),
 which ``update.sh`` starts with everything else. Uploads live in ``./privatefiles/``
 (``DOCUMENT_ROOT``), not ``mediafiles/``, because nginx serves all of ``/media/``: it is gitignored,

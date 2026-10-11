@@ -76,3 +76,6 @@ exclude = ["*.md"]
 # This file measures what touching a cached property costs, so reading one and discarding the
 # result is the test, not a mistake.
 "auctions/test_query_counts.py" = ["B018"]
+# A script run by systemd on the production server, outside Django: print is its log (the journal),
+# and each Rejected message is the status it posts, short enough to read inline.
+"deploy/poller.py" = ["T201", "EM101"]

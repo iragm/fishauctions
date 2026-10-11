@@ -5,14 +5,11 @@ unapproved and scoped to them and their club. The gaps page approves, merges or 
 """
 
 import logging
-from collections import defaultdict
 
 from dal import autocomplete
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import (
-    Count,
-    Max,
     Q,
 )
 from django.db.models.base import Model as Model
@@ -26,6 +23,7 @@ from django.views.generic.edit import (
     FormView,
 )
 
+from auctions import species_admin
 from auctions.forms import (
     SpeciesAdminForm,
     SpeciesCommonNameForm,
@@ -34,7 +32,6 @@ from auctions.models import (
     Lot,
     Species,
     SpeciesNameRejection,
-    SpeciesNameVote,
     SpeciesSearchCache,
     normalize_species_name,
 )
@@ -46,39 +43,6 @@ from auctions.species_matching import (
 from .base import AdminOnlyViewMixin, AuctionAdminAnywhereViewMixin
 
 logger = logging.getLogger(__name__)
-
-
-def _attach_votes(rows):
-    """Put the evidence on each row with a ``search_text`` and a ``species``: ``kept`` and ``taken_off``
-    (lots, from :class:`SpeciesNameVote`), ``people`` (who took it off) and ``instead`` (what those lots
-    got, commonest first). Two queries, however many rows.
-    """
-    texts = {row.search_text for row in rows}
-    if not texts:
-        return
-    votes = SpeciesNameVote.objects.filter(search_text__in=texts, species__isnull=False).order_by()
-    tallies = {
-        (entry["search_text"], entry["species"]): entry
-        for entry in votes.values("search_text", "species").annotate(
-            kept=Count("pk", filter=Q(agrees=True)),
-            taken_off=Count("pk", filter=Q(agrees=False)),
-            people=Count("user", filter=Q(agrees=False), distinct=True),
-        )
-    }
-    picks = list(votes.filter(agrees=False).values("search_text", "species", "chosen").annotate(lots=Count("pk")))
-    labels = {
-        species.pk: species.label for species in Species.objects.filter(pk__in={pick["chosen"] for pick in picks})
-    }
-    instead = defaultdict(list)
-    for pick in sorted(picks, key=lambda pick: -pick["lots"]):
-        label = labels.get(pick["chosen"], "no species")
-        instead[(pick["search_text"], pick["species"])].append((label, pick["lots"]))
-    for row in rows:
-        tally = tallies.get((row.search_text, row.species_id), {})
-        row.kept = tally.get("kept", 0)
-        row.taken_off = tally.get("taken_off", 0)
-        row.people = tally.get("people", 0)
-        row.instead = instead.get((row.search_text, row.species_id), [])
 
 
 class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
@@ -109,80 +73,17 @@ class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
 
 
 class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
-    """Lot names that should have a species and don't, grouped by name, as a work queue.
-
-    It doesn't guess which are hardware; each column is evidence (breeder claims, categories, the
-    matcher's last verdict) and the reader judges. Only names of stopwords and numbers are dropped.
+    """Lot names that should have a species and don't, grouped by name, as a work queue. Every button on
+    it is a function in :mod:`auctions.species_admin`, which ``/mcp/admin/`` proposes too.
     """
 
     template_name = "species_gaps.html"
 
-    #: Enough for a sitting; the tail is one-off names.
-    LIMIT = 100
-
     def get_context_data(self, **kwargs):
-        from auctions.species_matching import base_words, normalize
-
         context = super().get_context_data(**kwargs)
-        # Only auctions with the field on; elsewhere nobody was offered the choice.
-        missing = Lot.objects.filter(
-            species__isnull=True, is_deleted=False, banned=False, auction__use_scientific_name=True
-        )
-        rows = (
-            missing.exclude(lot_name="")
-            .values("lot_name")
-            .annotate(
-                # Lot's primary key is lot_number, not id.
-                lots=Count("pk"),
-                bred=Count("pk", filter=Q(i_bred_this_fish=True)),
-                newest=Max("date_posted"),
-            )
-            .order_by("-lots", "-newest")[: self.LIMIT * 3]
-        )
-        # Merged in Python: the normalisation is Python.
-        merged = {}
-        for row in rows:
-            if not base_words(row["lot_name"]):
-                continue
-            key = normalize(row["lot_name"])
-            if not key:
-                continue
-            entry = merged.setdefault(
-                key, {"lot_name": row["lot_name"], "lots": 0, "bred": 0, "newest": row["newest"], "key": key}
-            )
-            entry["lots"] += row["lots"]
-            entry["bred"] += row["bred"]
-            entry["newest"] = max(entry["newest"], row["newest"]) if row["newest"] else entry["newest"]
-
-        verdicts = {
-            cache_row.search_text: cache_row
-            for cache_row in SpeciesSearchCache.objects.filter(search_text__in=list(merged)).select_related("species")
-        }
-        for key, entry in merged.items():
-            verdict = verdicts.get(key)
-            if verdict is None:
-                entry["verdict"] = "never looked up"
-                entry["verdict_detail"] = ""
-            elif verdict.species_id:
-                # Resolves now; these lots predate it or the seller declined.
-                entry["verdict"] = "matches a species"
-                entry["verdict_detail"] = verdict.species.label
-            elif verdict.is_a_gap:
-                # Identified but not on the list: a row for the curated CSV, and the cache row heals on import.
-                entry["verdict"] = "missing from the list"
-                entry["verdict_detail"] = verdict.scientific_name
-            elif verdict.source == "llm":
-                entry["verdict"] = "not a species"
-                entry["verdict_detail"] = "decided by the language model"
-            else:
-                entry["verdict"] = "not a species"
-                entry["verdict_detail"] = "chosen by a person"
-
-        context["gaps"] = sorted(merged.values(), key=lambda entry: (-entry["bred"], -entry["lots"]))[: self.LIMIT]
-        context["total_missing"] = missing.count()
-        context["total_with_species"] = Lot.objects.filter(
-            species__isnull=False, is_deleted=False, auction__use_scientific_name=True
-        ).count()
+        context["gaps"] = species_admin.gap_rows()
+        context["total_missing"] = species_admin.missing_lots().count()
+        context["total_with_species"] = species_admin.lots_with_species().count()
         context["rejected"] = list(
             SpeciesSearchCache.objects.filter(species__isnull=True).order_by("-hits", "-createdon")[:25]
         )
@@ -193,49 +94,11 @@ class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):
             .order_by("-hits", "-createdon")[:50]
         )
         # Species admins added, visible only to them until approved here.
-        context["pending"] = list(
-            Species.objects.filter(approved=False)
-            .select_related("added_by", "category", "parent", "club")
-            .annotate(lots=Count("lot"))
-            .order_by("-id")[:50]
-        )
+        context["pending"] = list(species_admin.pending_species()[:50])
         # Retired pairings, undoable only here (species_matching.record_choice), with the lots that retired them.
         context["rejections"] = list(SpeciesNameRejection.objects.select_related("species").order_by("-createdon")[:50])
-        _attach_votes(context["mappings"] + context["rejections"])
-        # Both halves of a pair carry the flag; show one line per pair, stably ordered by pk.
-        flagged = list(
-            Species.objects.filter(possible_duplicate__isnull=False)
-            .select_related("possible_duplicate", "category", "added_by", "club")
-            .annotate(lots=Count("lot"))
-            .order_by("pk")[:100]
-        )
-        # One query for the other halves' lot counts.
-        other_lots = dict(
-            Lot.objects.filter(species__in=[species.possible_duplicate_id for species in flagged])
-            .values_list("species")
-            .annotate(count=Count("pk"))
-        )
-        duplicates = []
-        seen_pairs = set()
-        for species in flagged:
-            other = species.possible_duplicate
-            pair = tuple(sorted((species.pk, other.pk)))
-            if pair in seen_pairs:
-                continue
-            seen_pairs.add(pair)
-            duplicates.append(
-                {
-                    "species": species,
-                    "other": other,
-                    "other_lots": other_lots.get(other.pk, 0),
-                    "same_scientific_name": bool(
-                        species.scientific_name
-                        and species.scientific_name.lower() == other.scientific_name.lower()
-                        and species.variety.lower() == other.variety.lower()
-                    ),
-                }
-            )
-        context["duplicates"] = duplicates
+        species_admin.attach_votes(context["mappings"] + context["rejections"])
+        context["duplicates"] = species_admin.duplicate_pairs()
         context["species_total"] = Species.objects.count()
         context["species_added_here"] = Species.objects.filter(source="admin").count()
         return context
@@ -247,9 +110,7 @@ class SpeciesSearchCacheForgetView(AdminOnlyViewMixin, View):
     """
 
     def post(self, request, pk):
-        row = get_object_or_404(SpeciesSearchCache, pk=pk)
-        name = row.search_text
-        row.delete()
+        name = species_admin.forget(get_object_or_404(SpeciesSearchCache, pk=pk))
         messages.success(request, f"Forgot the remembered answer for “{name}”.  It will be looked up again.")
         return redirect("species_gaps")
 
@@ -263,10 +124,7 @@ class SpeciesNameRejectionDeleteView(AdminOnlyViewMixin, View):
     """
 
     def post(self, request, pk):
-        row = get_object_or_404(SpeciesNameRejection, pk=pk)
-        name, species = row.search_text, row.species
-        SpeciesNameVote.objects.filter(search_text=name, species=species, agrees=False).delete()
-        row.delete()
+        name, species = species_admin.allow_again(get_object_or_404(SpeciesNameRejection, pk=pk))
         messages.success(request, f"“{name}” may be matched to {species.label} again.")
         return redirect("species_gaps")
 
@@ -278,10 +136,7 @@ class SpeciesDuplicateDismissView(AdminOnlyViewMixin, View):
 
     def post(self, request, pk):
         species = get_object_or_404(Species, pk=pk)
-        other = species.possible_duplicate
-        Species.objects.filter(pk=species.pk).update(possible_duplicate=None)
-        if other:
-            Species.objects.filter(pk=other.pk).update(possible_duplicate=None)
+        species_admin.dismiss_duplicate(species)
         messages.success(request, f"{species.label} is not a duplicate.")
         return redirect("species_gaps")
 
@@ -294,22 +149,12 @@ class SpeciesMergeView(AdminOnlyViewMixin, View):
     def post(self, request, pk):
         duplicate = get_object_or_404(Species, pk=pk)
         keep = get_object_or_404(Species, pk=request.POST.get("keep") or 0)
-        if keep.pk == duplicate.pk:
-            messages.error(request, "A species cannot be merged into itself.")
-            return redirect("species_gaps")
-        # A strain and its parent aren't duplicates; merging would lose the strain.
-        if keep.parent_id == duplicate.pk or duplicate.parent_id == keep.pk:
-            messages.error(request, "That is a strain and its parent species, not a duplicate.  Nothing was merged.")
-            return redirect("species_gaps")
         losing_label = duplicate.label
-        moved = keep.merge_duplicate(duplicate)
-        messages.success(
-            request,
-            f"Merged {losing_label} into {keep.label}: "
-            f"{moved.get('lots', 0)} lot(s), {moved.get('common_names', 0)} common name(s), "
-            f"{moved.get('varieties', 0)} strain(s) and {moved.get('remembered_names', 0)} "
-            "remembered name(s) moved.",
-        )
+        moved, problem = species_admin.merge(keep, duplicate)
+        if problem:
+            messages.error(request, problem)
+        else:
+            messages.success(request, species_admin.merged_sentence(losing_label, keep, moved))
         return redirect("species_gaps")
 
 
@@ -320,21 +165,7 @@ class SpeciesApproveView(AdminOnlyViewMixin, View):
 
     def post(self, request, pk):
         species = get_object_or_404(Species, pk=pk)
-        if not species.approved:
-            species.approved = True
-            species.save()
-            # Its names become everybody's at the same time.
-            species.common_names.filter(approved=False).update(approved=True)
-            # This row was invisible to the last genus-tier pass.
-            Species.recompute_trade_ranks(genus=species.genus)
-            for lot_name in (
-                Lot.objects.filter(species=species)
-                .exclude(lot_name="")
-                .order_by()
-                .values_list("lot_name", flat=True)
-                .distinct()
-            )[:20]:
-                remember_species(lot_name, species, source="user", user=species.added_by)
+        species_admin.approve(species)
         messages.success(request, f"{species.label} is now suggested for everyone.")
         return redirect("species_gaps")
 
@@ -438,8 +269,6 @@ class SpeciesCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesMixin, Crea
         name = self._lot_name()
         attached = 0
         if name and form.cleaned_data.get("attach_to_lots"):
-            from auctions.species_matching import remember as remember_species
-
             # save(), not update(): it derives the category. Tens of rows.
             for lot in self._matching_lots()[:500]:
                 lot.species = species

@@ -277,6 +277,20 @@ class SpeciesSelect(forms.Select):
         )
 
 
+def narrow_categories(field, auction, keep=None):
+    """Offer only ``auction``'s categories (:meth:`Auction.lot_categories`) in a category picker.
+
+    ``keep`` is the category a lot already has, so editing a lot filed before its club narrowed its
+    list doesn't make it pick a new one.
+    """
+    allowed = auction.lot_categories() if auction else None
+    if allowed is None:
+        return
+    if keep is not None:
+        allowed = Category.objects.filter(Q(pk__in=allowed.values("pk")) | Q(pk=keep.pk)).order_by("name")
+    field.queryset = allowed
+
+
 def configure_species_field(
     fields,
     auction,
@@ -1219,6 +1233,7 @@ class EditLot(forms.ModelForm):
         if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
+        narrow_categories(self.fields["species_category"], self.auction, keep=self.lot.species_category)
         # A dal picker, no guessing (see configure_species_field). LotAdmin is auction-admin only.
         configure_species_field(self.fields, self.auction, dal_for=self.user)
         self.fields["species"].initial = self.lot.species
@@ -1999,7 +2014,7 @@ class PickupLocationForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
         self.auction = auction
-        self.fields["description"].widget.attrs = {"rows": 3}
+        self.fields["description"].widget.attrs["rows"] = 3
         show_name_contact_fields = True
         if self.auction.all_location_count < 2:
             show_name_contact_fields = False
@@ -3111,6 +3126,13 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].help_text = ""
         # Always rendered, shown and hidden by JS with the chosen auction.
         configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
+        narrow_categories(
+            self.fields["species_category"],
+            selected_auction,
+            keep=self.instance.species_category if self.instance.pk else None,
+        )
+        if selected_auction:
+            self.fields["i_bred_this_fish"].label = selected_auction.i_bred_this_label
         if self.instance.pk:
             # The name its species was worked out from, so focusing the name box doesn't redo it.
             self.fields["species"].widget.attrs["data-last-query"] = self.instance.lot_name
@@ -3458,6 +3480,13 @@ class ContactForm(forms.Form):
         help_text="So we can write back. We won't add you to anything.",
     )
     message = forms.CharField(widget=forms.Textarea(attrs={"rows": 6}), max_length=5000, label="Message")
+    #: A honeypot: moved off screen by auction_site.css, so only a bot fills it in. SupportView then
+    #: says the message was sent and sends nothing.
+    website = forms.CharField(
+        required=False,
+        label="Leave this empty",
+        widget=forms.TextInput(attrs={"tabindex": "-1", "autocomplete": "off"}),
+    )
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 
     def __init__(self, *args, **kwargs):
@@ -4502,6 +4531,26 @@ class ClubAnnouncementForm(forms.ModelForm):
         return cleaned_data
 
 
+class ClubAddForm(forms.Form):
+    """A member adding a club they run; :func:`auctions.club_onboarding.add_my_club` does the rest."""
+
+    name = forms.CharField(max_length=255, label="Club name")
+    abbreviation = forms.CharField(max_length=255, required=False)
+    homepage = forms.CharField(max_length=255, required=False, label="Website")
+    facebook_page = forms.CharField(max_length=255, required=False, label="Facebook page or group")
+    location = forms.CharField(max_length=500, required=False, label="Where you meet")
+    contact_email = forms.EmailField(max_length=255, required=False, label="Membership email address")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["homepage"].widget.attrs["placeholder"] = "https://www.yourclub.org"
+        self.fields["facebook_page"].widget.attrs["placeholder"] = "https://www.facebook.com/groups/yourclub"
+        self.fields["location"].widget.attrs["placeholder"] = "An address or city"
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Add club", css_class="btn-primary"))
+
+
 class ClubEditForm(forms.ModelForm):
     """Form for club admins to edit their club settings."""
 
@@ -4589,6 +4638,7 @@ class LotCategoryForm(forms.ModelForm):
             raise ValueError(msg)
         super().__init__(*args, **kwargs)
         self.fields["species_category"].queryset = Category.objects.all().order_by("name")
+        narrow_categories(self.fields["species_category"], self.instance.auction, keep=self.instance.species_category)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.attrs = {"hx-post": post_url, "hx-target": "#modals-here", "hx-swap": "innerHTML"}

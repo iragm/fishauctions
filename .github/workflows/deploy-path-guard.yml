@@ -1,0 +1,34 @@
+# Red on any pull request into master that changes how production is deployed, so the change gets a
+# human read before it can run with the Hostinger token. pull_request_target runs master's copy of
+# this file, so a pull request can't edit the guard away; it checks out nothing and runs no code from
+# the pull request, only reads its list of files.
+#
+# Stays red until merged: that is the design, not a failure for an agent to fix.
+name: Deploy path changed (needs Ira's review)
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List deploy files this pull request changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          changed="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename' \
+            | grep -E '^(deploy/|update\.sh$|\.github/workflows/deploy-)' || true)"
+          if [ -n "$changed" ]; then
+            echo "::error::This pull request changes the production deploy path. Read these before merging:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "No deploy files changed."

@@ -8,6 +8,8 @@ Hiding the address from anonymous visitors is a real measure against scrapers, s
 halves: the address stays hidden, and there is still a way to reach somebody.
 """
 
+from pathlib import Path
+
 from django.conf import settings
 from django.core import mail as django_mail
 from django.test import TestCase, override_settings
@@ -200,6 +202,20 @@ class SupportFormDeliveryTests(TestCase):
         for _ in range(SupportView.MESSAGES_PER_HOUR + 3):
             self.client.post(self.url, self.body)
         self.assertEqual(Email.objects.filter(to=[settings.ADMINS[0][1]]).count(), SupportView.MESSAGES_PER_HOUR)
+
+    def test_a_filled_honeypot_looks_sent_but_sends_nothing(self):
+        from post_office.models import Email
+
+        response = self.client.post(self.url, {**self.body, "website": "http://spam.example"}, follow=True)
+        self.assertContains(response, "your message is on its way")
+        self.assertFalse(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
+
+    def test_the_honeypot_is_on_the_page_and_off_the_screen(self):
+        html = self.client.get(self.url).content.decode()
+        self.assertIn('id="div_id_website"', html)
+        self.assertIn('tabindex="-1"', html)
+        css = (Path(settings.BASE_DIR) / "auctions/static/css/auction_site.css").read_text()
+        self.assertIn("#div_id_website { position: absolute; left: -10000px;", css)
 
     def test_being_over_the_limit_says_so(self):
         # Not a silent drop: somebody who has written five messages needs to know the sixth isn't

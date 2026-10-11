@@ -689,6 +689,11 @@ class ClubIntegrationTests(AccountTestCase):
         self.assertRegex(events["script_tag"], r'^<script src="https?://[^"]+/events-embed/\?format=js"></script>$')
         self.assertTrue(events["unstyled_url"].endswith("?format=unstyledhtml"))
 
+    def test_the_calendar_links_are_links(self):
+        result = self._run("club_website_snippets", {"club": self.club.name})
+        self.assertRegex(result["calendar_subscribe_url"], r"^webcal://[^/]+/.+\.ics$")
+        self.assertRegex(result["calendar_feed_url"], r"^https://[^/]+/.+\.ics$")
+
     def test_somebody_with_no_part_in_the_club_gets_no_snippets(self):
         result = self._run("club_website_snippets", {"club": self.club.name}, user=self.userB)
         self.assertNotIn("found", result)

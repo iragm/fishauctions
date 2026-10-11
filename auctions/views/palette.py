@@ -57,32 +57,15 @@ class UserAPIKeyView(View):
 
         return redirect(help_guides.GUIDES["ai-agents"].url + "#connect")
 
-    def disconnect_app(self, request, application_pk):
-        """End every session this person has with one application: access tokens, refresh tokens and
-        grants. Returns True if there was one.
-        """
-        from auctions.mcp import auth as mcp_auth
-
-        if not mcp_auth.oauth_enabled():
-            return False
-        from oauth2_provider.models import get_access_token_model, get_grant_model, get_refresh_token_model
-
-        try:
-            application_pk = int(application_pk)
-        except (TypeError, ValueError):
-            return False
-        removed = 0
-        for model in (get_refresh_token_model(), get_access_token_model(), get_grant_model()):
-            deleted, _ = model.objects.filter(user=request.user, application_id=application_pk).delete()
-            removed += deleted
-        return bool(removed)
-
     def post(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return redirect_to_login(request.get_full_path())
         disconnect = request.POST.get("disconnect")
         if disconnect:
-            if self.disconnect_app(request, disconnect):
+            from auctions.mcp import auth as mcp_auth
+
+            pk = int(disconnect) if disconnect.isdigit() else 0
+            if mcp_auth.disconnect_app(request.user, pk, admin=request.POST.get("endpoint") == "admin"):
                 messages.info(request, "Disconnected. It will ask you to sign in again if you reconnect it.")
             else:
                 messages.info(request, "That was already disconnected.")
@@ -366,7 +349,7 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
 class CommandPaletteAnalyticsView(AdminOnlyViewMixin, TemplateView):
     """Palette searches and the assistant's exchanges, read by agents through ``read_admin_page``.
 
-    No URL: ``mcp.admin.MCP_ONLY_PAGES`` renders it. ``manage.py mine_palette_shortcuts`` adds shortcuts.
+    No URL: ``mcp.admin.MCP_ONLY_PAGES`` renders it. ``add_palette_shortcut`` proposals add shortcuts.
     """
 
     template_name = "command_palette_analytics.html"

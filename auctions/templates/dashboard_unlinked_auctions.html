@@ -33,7 +33,7 @@
         {% for row in group.rows %}
         <tr>
           <td><input type="checkbox" class="form-check-input" name="auction" value="{{ row.auction.pk }}"{% if group.confidence != "low" %} checked{% endif %} aria-label="Link {{ row.auction.title }}"></td>
-          <td><a href="{{ row.auction.get_absolute_url }}">{{ row.auction.title }}</a></td>
+          <td><a href="{{ row.auction.get_absolute_url }}">{{ row.auction.title }}</a>{% if group.confidence == "low" %}<div class="small text-muted">{{ row.reason }}</div>{% endif %}</td>
           <td>{% if row.auction.created_by %}{{ row.auction.created_by }}{% else %}<span class="text-muted">nobody</span>{% endif %}</td>
           <td class="small text-muted">{{ row.auction.date_start|date:"M j, Y" }}</td>
         </tr>
@@ -92,6 +92,27 @@
     <button type="submit" class="btn btn-sm btn-primary">Link checked</button>
   </div>
 </form>
+{% endif %}
+
+{% if recent_links %}
+<h5 class="mt-5">Linked in the last {{ recent_days }} days</h5>
+<div class="table-responsive">
+  <table class="table table-sm">
+    <thead>
+      <tr><th>When</th><th>Where</th><th>What</th><th>By</th></tr>
+    </thead>
+    <tbody>
+      {% for link in recent_links %}
+      <tr>
+        <td class="small text-muted text-nowrap">{{ link.when|date:"M j, g:i a" }}</td>
+        <td>{% if link.auction %}<a href="{{ link.auction.get_absolute_url }}">{{ link.auction.title }}</a>{% else %}<a href="{% url 'club_history' slug=link.club.slug %}">{{ link.club.name }}</a>{% endif %}</td>
+        <td class="small">{{ link.what }}</td>
+        <td class="small">{{ link.by|default:"" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
 
 {% if not groups and not unmatched %}

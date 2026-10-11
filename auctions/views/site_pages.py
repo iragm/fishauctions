@@ -133,6 +133,13 @@ class SupportView(FormView):
     def form_valid(self, form):
         from post_office import mail
 
+        if form.cleaned_data.get("website"):
+            # The honeypot: a bot gets the same answer as a person, so it has nothing to learn.
+            messages.success(
+                self.request,
+                f"Thanks - your message is on its way. We'll reply to {form.sender_email}.",
+            )
+            return super().form_valid(form)
         if self._over_the_limit(self.request):
             # Say so rather than pretending it was sent.
             messages.error(
@@ -449,10 +456,11 @@ class AllAuctions(LocationMixin, HTMxTableView):
         nearby_filter_auto_removed = None
         if getattr(self, "nearby_filter_active", False) and not self.object_list.exists():
             query = self.request.GET.get("query", "")
-            if query:
+            club = self.request.GET.get("club", "")
+            if query or club:
                 base_qs = getattr(self, "_base_qs", None)
                 if base_qs is not None:
-                    fallback_qs = AuctionFilter({"query": query}, queryset=base_qs).qs
+                    fallback_qs = AuctionFilter({"query": query, "club": club}, queryset=base_qs).qs
                     if fallback_qs.exists():
                         self.object_list = fallback_qs
                         self.nearby_filter_active = False

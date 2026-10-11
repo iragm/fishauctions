@@ -5,20 +5,23 @@ admin MCP endpoint's ``read_admin_page`` renders them (``mcp.admin.MCP_ONLY_PAGE
 that read them, and nobody else.
 
 :class:`UnlinkedAuctions` proposes club links for auctions with none (:mod:`auctions.club_matching`),
-since only about a fifth of auctions have a club.
+since only about a fifth of auctions have a club, and lists the links and admin grants made lately
+(:func:`recent_club_links`) so a misclick can be found and undone.
 """
 
+import datetime
 import logging
 
 from django.contrib import messages
 from django.contrib.auth.models import User
 from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils import timezone
 from django.views import View
 from django.views.generic import TemplateView
 
 from auctions import club_health, club_matching, free_text_usage, lifecycle, usability_report
-from auctions.models import Auction, Club
+from auctions.models import Auction, AuctionHistory, Club, ClubHistory
 from auctions.services import link_auction_to_club
 
 from .base import AdminOnlyViewMixin
@@ -50,6 +53,33 @@ class AdminUsability(AdminOnlyViewMixin, TemplateView):
 
 #: Unlinked auctions per page, bounded by rendering cost.
 UNLINKED_PAGE_SIZE = 100
+
+#: How far back the page lists links and admin grants, so a misclick can be found and undone.
+RECENT_LINKS_DAYS = 7
+
+#: The most recent links and grants shown; enough for a busy session on this page.
+RECENT_LINKS_LIMIT = 50
+
+
+def recent_club_links(days=RECENT_LINKS_DAYS, limit=RECENT_LINKS_LIMIT):
+    """Every "Assigned to club" and "Granted admin" record across the site in the last ``days``, newest
+    first. :func:`auctions.services.link_auction_to_club` and ``ensure_club_admin`` write them into each
+    auction's and each club's own history, so nowhere else lists them together.
+    """
+    since = timezone.now() - datetime.timedelta(days=days)
+    links = [
+        {"when": row.timestamp, "what": row.action, "by": row.user, "auction": row.auction, "club": None}
+        for row in AuctionHistory.objects.filter(timestamp__gte=since, action__startswith="Assigned to club")
+        .select_related("auction", "user")
+        .order_by("-timestamp")[:limit]
+    ]
+    links += [
+        {"when": row.timestamp, "what": row.action, "by": row.user, "auction": None, "club": row.club}
+        for row in ClubHistory.objects.filter(timestamp__gte=since, action__startswith="Granted admin")
+        .select_related("club", "user")
+        .order_by("-timestamp")[:limit]
+    ]
+    return sorted(links, key=lambda link: link["when"], reverse=True)[:limit]
 
 
 class UnlinkedAuctions(AdminOnlyViewMixin, TemplateView):
@@ -83,6 +113,8 @@ class UnlinkedAuctions(AdminOnlyViewMixin, TemplateView):
         context["clubs"] = clubs
         context["page_size"] = UNLINKED_PAGE_SIZE
         context["shown"] = len(page)
+        context["recent_links"] = recent_club_links()
+        context["recent_days"] = RECENT_LINKS_DAYS
         return context
 
 

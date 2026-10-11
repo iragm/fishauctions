@@ -2,7 +2,8 @@
 {% for event in events %}  <li class="club-event{% if event.cancelled %} club-event-cancelled{% endif %}">
     <a class="club-event-title" href="{{ event.url }}">{{ event.title }}</a>{% if event.cancelled %} <span class="club-event-badge">Cancelled</span>{% endif %}{% if event.repeats %} <span class="club-event-repeats">{{ event.repeats }}</span>{% endif %}
     <span class="club-event-when">{{ event.when }}</span>{% if event.location %}
-    <span class="club-event-where">{{ event.location }}</span>{% endif %}
+    <span class="club-event-where">{{ event.location }}</span>{% endif %}{% if event.details %}
+    <span class="club-event-details">{{ event.details }}</span>{% endif %}
   </li>
 {% empty %}  <li class="club-events-empty">{{ empty_message|default:"Nothing coming up right now." }}</li>
 {% endfor %}</ul>

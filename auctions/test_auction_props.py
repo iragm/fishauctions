@@ -1260,3 +1260,40 @@ class BuyNowSellerCreditTests(StandardTestCase):
         priced = add_price_info(Lot.objects.filter(pk=lot.pk)).first()
         assert priced.your_cut == Decimal(0)
         assert priced.club_cut == Decimal(0)
+
+
+class AuctionListClubFilterTests(StandardTestCase):
+    """The main auction list filters on the auction's own club: ?club= and the search box."""
+
+    def setUp(self):
+        super().setUp()
+        from auctions.models import Club
+
+        self.club = Club.objects.create(name="Example Aquarium Society", abbreviation="EAS")
+        self.online_auction.club = self.club
+        self.online_auction.save()
+
+    def _titles(self, data):
+        from auctions.filters import AuctionFilter
+
+        return set(AuctionFilter(data, queryset=Auction.objects.all()).qs.values_list("title", flat=True))
+
+    def test_club_param_matches_id_slug_short_name_and_name(self):
+        self.club.refresh_from_db()
+        for value in [str(self.club.pk), self.club.slug, "eas", "Example Aquarium Society"]:
+            assert self._titles({"club": value}) == {self.online_auction.title}, value
+
+    def test_club_param_with_no_match_is_empty(self):
+        assert self._titles({"club": "nope"}) == set()
+
+    def test_search_box_matches_the_auctions_club(self):
+        assert self.online_auction.title in self._titles({"query": "EAS"})
+        assert self.in_person_auction.title not in self._titles({"query": "EAS"})
+        assert self.online_auction.title in self._titles({"query": "aquarium society"})
+
+    def test_list_page_honours_club_param(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get("/auctions/", {"club": "EAS", "nearby": "false"})
+        assert response.status_code == 200
+        titles = {auction.title for auction in response.context["table"].data}
+        assert titles == {self.online_auction.title}

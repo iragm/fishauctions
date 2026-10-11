@@ -725,6 +725,8 @@ class PushNotificationSentAdmin(admin.ModelAdmin):
 
 class GeneralInterestAdmin(admin.ModelAdmin):
     model = GeneralInterest
+    list_display = ("name", "aquatic", "noun")
+    filter_horizontal = ("categories",)
 
 
 class UserInline(FlatInline, admin.TabularInline):

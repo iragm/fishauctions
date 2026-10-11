@@ -76,6 +76,7 @@ from .documents.models import (  # noqa: F401
     DocumentChunk,
     DocumentFeedback,
     DocumentImageText,
+    DocumentPicture,
 )
 from .email_routing import (
     admin_routing_email,
@@ -300,8 +301,8 @@ def distance_to(
     return distance_raw_sql
 
 
-def guess_category(text):
-    """Guess a lot's category from the categories used by similarly-named lots."""
+def guess_category(text, allowed=None):
+    """Guess a lot's category from the categories used by similarly-named lots, from ``allowed`` if given."""
     keywords = []
     words = re.findall("[A-Z|a-z]{3,}", text.lower())
     for word in words:
@@ -320,6 +321,8 @@ def guess_category(text):
         .exclude(species_category__name="Uncategorized")
         .exclude(auction__promote_this_auction=False)
     )
+    if allowed is not None:
+        lot_qs = lot_qs.filter(species_category__in=allowed)
     q_objects = Q()
     for keyword in keywords:
         q_objects |= Q(lot_name__iregex=rf"\b{re.escape(keyword)}\b")
@@ -486,9 +489,21 @@ class Location(models.Model):
 
 
 class GeneralInterest(models.Model):
-    """Clubs and products belong to a general interest"""
+    """What a club keeps. Clubs carry interests; the finder filters by them, and a club whose interests
+    are all non-aquatic gets lots worded for what it keeps, its own categories, and no species
+    suggestions by default (:meth:`Club.keeps_aquatic`).
+    """
 
     name = models.CharField(max_length=255)
+    aquatic = models.BooleanField(default=True)
+    aquatic.help_text = (
+        "Fish, aquatic plants, inverts or corals: what the species list covers. Off, its clubs' new "
+        "auctions start with species suggestions off."
+    )
+    noun = models.CharField(max_length=50, blank=True, default="")
+    noun.help_text = 'What its members keep, singular ("reptile"), where the site would otherwise say fish.'
+    categories = models.ManyToManyField("Category", blank=True, related_name="interests")
+    categories.help_text = "The lot categories its clubs' auctions offer. None picked offers them all."
 
     def __str__(self):
         return str(self.name)
@@ -1148,6 +1163,32 @@ class Club(CloudflareImageMixin, models.Model):
 
     def __str__(self):
         return str(self.name)
+
+    @property
+    def keeps_aquatic(self):
+        """Whether the species list and the site's fish wording fit this club: it has no interests, or an
+        aquatic one. False only when every interest it has is something else, such as reptiles.
+        """
+        interests = list(self.interests.all())
+        return not interests or any(interest.aquatic for interest in interests)
+
+    @property
+    def kept_noun(self):
+        """What its members keep, singular, where the site would say "fish"."""
+        if self.keeps_aquatic:
+            return "fish"
+        return next((interest.noun for interest in self.interests.all() if interest.noun), "animal")
+
+    def lot_categories(self):
+        """The categories this club's auctions offer, or ``None`` for all of them.
+
+        The union of the categories its interests name, plus Uncategorized, which every lot can fall
+        back to; ``None`` when none of its interests names any.
+        """
+        picked = Category.objects.filter(interests__club=self).distinct()
+        if not picked.exists():
+            return None
+        return Category.objects.filter(Q(pk__in=picked.values("pk")) | Q(name="Uncategorized")).order_by("name")
 
     @property
     def is_listed(self):
@@ -4458,6 +4499,17 @@ class Auction(CachedPropertiesMixin, models.Model):
         else:
             values.update(online_bidding="disable", buy_now="disable", reserve_price="disable")
         return values
+
+    def lot_categories(self):
+        """The categories this auction's lots may take, or ``None`` for all: its club's (:meth:`Club.lot_categories`)."""
+        return self.club.lot_categories() if self.club_id else None
+
+    @property
+    def i_bred_this_label(self):
+        """The breeder checkbox's label: the site's, or "I bred this reptile" for a club that keeps reptiles."""
+        if self.club_id and not self.club.keeps_aquatic:
+            return f"I bred this {self.club.kept_noun}"
+        return settings.I_BRED_THIS_FISH_LABEL
 
     def __str__(self):
         result = self.title
@@ -7910,7 +7962,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     # deactivated at wind-down, and costs its seller nothing. Cleared by _do_save on a sale or reopen.
     ended_unsold = models.BooleanField(default=False)
     # Counted by add_winner_message; above 1 means the sale was corrected. Lots sold before this was
-    # counted were backfilled from their history by ``manage.py backfill_sales_recorded``.
+    # counted were backfilled from their history once, in September 2026.
     sales_recorded = models.PositiveSmallIntegerField(default=0)
     sales_recorded.help_text = "How many times a winner or sell price was recorded for this lot"
     refunded = models.BooleanField(default=False)
@@ -8127,6 +8179,9 @@ class Lot(CachedPropertiesMixin, models.Model):
         # counts as no choice.
         uncategorised = not self.species_category or self.species_category.name == "Uncategorized"
         from_species = self.category_from_species
+        allowed = self.auction.lot_categories() if self.auction else None
+        if from_species and allowed is not None and not allowed.filter(pk=from_species.pk).exists():
+            from_species = None
         if from_species and (fix_category or uncategorised or self.category_automatically_added):
             self.category_checked = True
             if self.auction and not self.auction.use_categories:
@@ -8140,7 +8195,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 if not self.auction.use_categories:
                     self.species_category = Category.objects.filter(name="Uncategorized").first()
                 else:
-                    result = guess_category(self.lot_name)
+                    result = guess_category(self.lot_name, allowed=allowed)
                     if result:
                         self.species_category = result
                         self.category_automatically_added = True
@@ -13439,7 +13494,7 @@ class LLMUsage(models.Model):
         db_index=True,
         help_text=(
             "For a navigation, the palette_routes key it landed on. This is what "
-            "`manage.py mine_palette_shortcuts` reads: a query that resolves to the same "
+            "palette_shortcut_candidates on /mcp/admin/ reads: a query that resolves to the same "
             "destination every time never needs to be asked about again."
         ),
     )

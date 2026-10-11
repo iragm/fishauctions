@@ -13,7 +13,9 @@ differences, all enforced here or in the transport rather than by any client's a
   with nobody there to approve anything, so the server is the only place a "read only" can live.
 * **Its own reads**, :data:`ADMIN_TOOLS`: any superuser dashboard as text (and the reports in
   :data:`MCP_ONLY_PAGES`, which have no URL), the feature requests, the
-  mobile app's crash reports, the logs (redacted on the way out) and the deploy's health.
+  mobile app's crash reports, the logs (redacted on the way out), the deploy's health, and two that
+  were management commands: palette shortcut candidates and Square sellers who must reconnect, and
+  the auctions' untrusted creators for the scout's daily trust check.
 
 Two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
 requests (``planned`` is what starts work, and only a person sets it), and a change to the site's data
@@ -46,18 +48,20 @@ from django.core.exceptions import PermissionDenied
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 
-from auctions import palette_actions, palette_routes
+from auctions import club_onboarding, palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
-from . import tools
+from . import admin_species, tools
 
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, list_feature_requests, read_logs, list_app_crashes and site_health. Nothing here "
+    "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
+    "list_feature_requests, read_logs, list_app_crashes, site_health, "
+    "palette_shortcut_candidates, square_reconnects and untrusted_auction_creators. Nothing here "
     "changes the site. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -628,8 +632,106 @@ def _recent_errors() -> dict[str, Any]:
     return {"total": total, "most_common": [{"error": kind, "times": times} for kind, times in ranked]}
 
 
+#: Running queries ``site_health`` shows, longest first, and the characters of each it keeps.
+SLOW_QUERIES_SHOWN = 5
+QUERY_SHAPE_CHARS = 400
+_SQL_STRING = re.compile(r"'(?:[^'\\]|\\.)*'")
+_SQL_NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
+_SQL_LIST = re.compile(r"\((?:\s*\?\s*,)+\s*\?\s*\)")
+
+
+def query_shape(sql: str) -> str:
+    """``sql`` with every literal replaced by ``?``: which query, never whose data."""
+    shape = _SQL_STRING.sub("?", sql or "")
+    shape = _SQL_NUMBER.sub("?", shape)
+    shape = _SQL_LIST.sub("(?, ...)", shape)
+    return " ".join(shape.split())[:QUERY_SHAPE_CHARS]
+
+
+def _database() -> dict[str, Any]:
+    """What the database is doing right now: connections, queries running, and the longest of them.
+
+    Only the site's own connections are visible (no PROCESS grant), which is every one that matters.
+    A fixed read of the process list, not a query tool: the literals are gone before anything leaves.
+    """
+    from django.db import connection
+
+    if connection.vendor != "mysql":
+        return {"error": f"not reported for {connection.vendor}"}
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected', 'Threads_running')")
+            status = {name.lower(): int(value) for name, value in cursor.fetchall()}
+            cursor.execute(
+                "SELECT TIME, STATE, INFO FROM information_schema.PROCESSLIST "
+                "WHERE COMMAND NOT IN ('Sleep', 'Daemon') AND ID <> CONNECTION_ID() AND INFO IS NOT NULL "
+                "ORDER BY TIME DESC"
+            )
+            running = cursor.fetchall()
+    except Exception as exc:  # the database refusing is the answer, not a failure of this tool
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {
+        **status,
+        "queries_running": len(running),
+        "longest_seconds": int(running[0][0]) if running else 0,
+        "longest": [
+            {"seconds": int(seconds), "state": state or "", "query": redact(query_shape(info))}
+            for seconds, state, info in running[:SLOW_QUERIES_SHOWN]
+        ],
+    }
+
+
+#: A query running this long puts the database in ``site_health``'s summary.
+SLOW_QUERY_WARN_SECONDS = 10
+
+#: How far back ``site_health`` reads slow-request lines, and how many paths it names.
+SLOW_REQUEST_WINDOW = timedelta(hours=1)
+SLOW_PATHS_SHOWN = 5
+#: A segment with a digit in it, and the slug that follows it: ``/lots/123/neon-tetras/`` is ``/lots/<id>/``.
+_PATH_ID = re.compile(r"/[^/]*\d[^/]*(?:/[^/]+)?(?=/|$)")
+_SLOW_REQUEST = re.compile(r"slow request (\d+(?:\.\d+)?)s (\d{3}) (\S+) ([^?\s]*)")
+
+
+def _slow_requests() -> dict[str, Any]:
+    """``SlowRequestMiddleware``'s lines in the last hour, grouped by method and path, busiest first."""
+    zone = timezone.get_default_timezone()
+    since = timezone.localtime() - SLOW_REQUEST_WINDOW
+    paths: dict[str, dict[str, Any]] = {}
+    total = 0
+    for _level, stamp, text in _records(_log_files("root", older=False)):
+        found = _SLOW_REQUEST.search(text)
+        if not found:
+            continue
+        try:
+            when = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=zone)
+        except ValueError:
+            continue
+        if when < since:
+            continue
+        total += 1
+        seconds, status, method, path = float(found.group(1)), found.group(2), found.group(3), found.group(4)
+        key = f"{method} {_PATH_ID.sub('/<id>', path)[:120]}"
+        row = paths.setdefault(key, {"request": key, "times": 0, "slowest_seconds": 0.0, "statuses": {}})
+        row["times"] += 1
+        row["slowest_seconds"] = max(row["slowest_seconds"], seconds)
+        row["statuses"][status] = row["statuses"].get(status, 0) + 1
+    ranked = sorted(paths.values(), key=lambda row: -row["times"])[:SLOW_PATHS_SHOWN]
+    return {"total": total, "threshold_seconds": getattr(settings, "SLOW_REQUEST_SECONDS", 0), "busiest": ranked}
+
+
+def _deploy_window() -> dict[str, Any]:
+    """:mod:`auctions.deploy_window`, with the auction titles fenced like any other field from outside."""
+    from auctions import deploy_window
+
+    window = deploy_window.deploy_window()
+    for auction in window["auctions_in_play"]:
+        auction["title"] = palette_actions.untrusted_short(auction["title"])
+    return {**window, "advice": deploy_window.summary(window)}
+
+
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
-    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host."""
+    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host,
+    and whether now is a quiet time to deploy."""
     from auctions import app_crashes
 
     deployed = _deployed_commit()
@@ -637,6 +739,9 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     errors = _recent_errors()
     crashes = app_crashes.recent_count()
     host = _host()
+    database = _database()
+    slow = _slow_requests()
+    window = _deploy_window()
     facts = {
         **deployed,
         # Short: a full 40-character hash is exactly what redact() takes for a credential.
@@ -647,7 +752,10 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "errors_last_24h": errors,
         "app_crashes_last_24h": crashes,
         **host,
+        "database": database,
+        "slow_requests_last_hour": slow,
         "debug": settings.DEBUG,
+        "deploy_window": window,
         "checked_at": timezone.now().isoformat(),
     }
     summary = (
@@ -659,6 +767,19 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f"; the app reported {crashes['crashes']} crash{'es' if crashes['crashes'] != 1 else ''}"
     full = [name for name in ("disk", "memory") if host[name].get("used_percent", 0) >= HOST_WARN_PERCENT]
     summary += f"; {' and '.join(full)} over {HOST_WARN_PERCENT}% used." if full else "."
+    if database.get("longest_seconds", 0) >= SLOW_QUERY_WARN_SECONDS:
+        summary += (
+            f" {database['queries_running']} database quer{'ies' if database['queries_running'] != 1 else 'y'} "
+            f"running, the longest for {database['longest_seconds']} seconds."
+        )
+    if slow["busiest"]:
+        busiest = slow["busiest"][0]
+        summary += (
+            f" {slow['total']} slow request{'s' if slow['total'] != 1 else ''} in the last hour, "
+            f"most often {busiest['request']} ({busiest['times']})."
+        )
+    if window["verdict"] != "quiet":
+        summary += " " + window["advice"]
     return _ok(summary, **facts)
 
 
@@ -708,6 +829,128 @@ def list_app_crashes(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(summary, bugs=found)
 
 
+# --- reads that were management commands -------------------------------------------------------------
+
+#: Phrases ``palette_shortcut_candidates`` lists at most, most asked first.
+SHORTCUT_CANDIDATES_SHOWN = 50
+
+
+def palette_shortcut_candidates(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Phrases the assistant has always answered with the same page, which ``add_palette_shortcut`` can
+    answer with no model call; and how many it answered two ways, which stay with the model."""
+    from auctions import palette_assist
+
+    min_count = max(_int(params, "min_count", palette_assist.MINE_MIN_COUNT) or 0, palette_assist.MINE_MIN_COUNT)
+    candidates, disputed = palette_assist.mine_shortcuts(min_count)
+    existing = palette_assist.phrases_with_a_shortcut()
+    found = []
+    for phrase, (route_key, count) in sorted(candidates.items(), key=lambda item: -item[1][1]):
+        if phrase in existing:
+            continue
+        route = palette_routes.get_route(route_key)
+        # Members typed these phrases.
+        found.append(
+            {
+                "phrase": palette_actions.untrusted_short(phrase),
+                "goes_to": route.label if route else route_key,
+                "times": count,
+            }
+        )
+    lookups = palette_assist.mine_preloaded_lookups(min_count)
+    summary = f"{len(found)} phrase{'s' if len(found) != 1 else ''} the assistant always sends to the same page"
+    summary += f", {len(disputed)} it answers more than one way, {len(lookups)} answered from one lookup."
+    return _ok(summary, candidates=found[:SHORTCUT_CANDIDATES_SHOWN], answered_two_ways=len(disputed))
+
+
+def square_reconnects(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Square sellers whose connection predates the Tap to Pay scope, from the scopes we recorded."""
+    from auctions.models import SquareSeller
+
+    sellers = SquareSeller.objects.select_related("user", "club").order_by("user__username")
+    stale = [
+        {"user": seller.user.username, "club": seller.club.name if seller.club_id else ""}
+        for seller in sellers
+        if not seller.supports_tap_to_pay
+    ]
+    if not stale:
+        return _ok("Every Square seller has the Tap to Pay scope.", sellers=[])
+    return _ok(
+        f"{len(stale)} Square seller{'s' if len(stale) != 1 else ''} must reconnect for Tap to Pay.", sellers=stale
+    )
+
+
+def untrusted_auction_creators(request, params: dict[str, Any]) -> dict[str, Any]:
+    """People who created an auction lately and aren't trusted yet, with what says whether they look real.
+
+    The scout reads this daily and proposes ``trust_user`` for the ones that do. Facts only, no verdict:
+    the account's age and sign-in, its history here, and each new auction's size and club.
+    """
+    from allauth.account.models import EmailAddress
+    from allauth.socialaccount.models import SocialAccount
+    from django.db.models import Q
+
+    from auctions.models import Auction, AuctionTOS, ClubMember, Lot
+
+    days = max(1, min(_int(params, "days") or 7, 60))
+    since = timezone.now() - timedelta(days=days)
+    auctions = (
+        Auction.objects.filter(is_deleted=False, date_posted__gte=since, created_by__isnull=False)
+        .filter(created_by__is_active=True, created_by__userdata__is_trusted=False)
+        .select_related("created_by", "club")
+        .order_by("created_by_id", "date_posted")
+    )
+    people: dict[int, dict[str, Any]] = {}
+    for auction in auctions[:200]:
+        user = auction.created_by
+        if user.pk not in people:
+            people[user.pk] = {
+                "user": user.pk,
+                "username": palette_actions.untrusted_short(user.username),
+                "account_age_days": (timezone.now() - user.date_joined).days,
+                "email_verified": EmailAddress.objects.filter(user=user, verified=True).exists(),
+                "signed_in_with": sorted(
+                    set(SocialAccount.objects.filter(user=user).values_list("provider", flat=True))
+                ),
+                "auctions_created_before": Auction.objects.filter(
+                    created_by=user, is_deleted=False, date_posted__lt=since
+                ).count(),
+                "lots_sold_before": Lot.objects.filter(
+                    Q(user=user) | Q(auctiontos_seller__user=user), is_deleted=False, date_posted__lt=since
+                ).count(),
+                "lots_won_before": Lot.objects.filter(
+                    Q(winner=user) | Q(auctiontos_winner__user=user), date_posted__lt=since
+                ).count(),
+                "club_admin_of": sorted(
+                    ClubMember.objects.filter(user=user, is_deleted=False, permission_admin=True).values_list(
+                        "club__name", flat=True
+                    )
+                ),
+                "new_auctions": [],
+            }
+        people[user.pk]["new_auctions"].append(
+            {
+                "auction": auction.slug,
+                "title": palette_actions.untrusted_short(auction.title),
+                "posted": auction.date_posted.date().isoformat(),
+                "starts": auction.date_start.date().isoformat() if auction.date_start else "",
+                "online": auction.is_online,
+                "promoted": auction.promote_this_auction,
+                "club": auction.club.name if auction.club_id else "",
+                "club_listed": bool(auction.club_id and auction.club.is_listed),
+                "lots": Lot.objects.filter(auction=auction, is_deleted=False).count(),
+                "participants": AuctionTOS.objects.filter(auction=auction).count(),
+            }
+        )
+    rows = list(people.values())
+    if not rows:
+        return _ok(f"Nobody untrusted created an auction in the last {days} days.", people=[])
+    return _ok(
+        f"{len(rows)} untrusted {'person' if len(rows) == 1 else 'people'} created an auction in the last "
+        f"{days} days. Propose trust_user for the ones who look like a real club or seller.",
+        people=rows,
+    )
+
+
 # --- changes that only a proposal makes --------------------------------------------------------------
 
 
@@ -745,66 +988,6 @@ def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Feature request {row.pk}, “{row.skill}”, is now {row.get_status_display().lower()}.")
 
 
-def _web_address(value: str) -> str:
-    """A typed web address with its scheme, or ``""``. "example.org" is what people paste."""
-    value = value.strip()
-    if value and not value.startswith(("http://", "https://")):
-        value = f"https://{value}"
-    return value[:255]
-
-
-def _club_fields(params: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    """``add_club``'s arguments as ``Club`` fields, or ``({}, why not)``.
-
-    Run twice: when the proposal is made, so the agent hears about a duplicate while the owner is
-    still in the conversation, and again on approval, since another club may have been added since.
-    """
-    from django.core.exceptions import ValidationError
-    from django.core.validators import validate_email
-
-    from auctions import club_import
-    from auctions.models import Club
-
-    name = _str(params, "name")[:255]
-    if not name:
-        return {}, "Which club? add_club needs its name."
-    homepage = _web_address(_str(params, "homepage"))
-    facebook_page = _web_address(_str(params, "facebook_page"))
-    if homepage and not club_import.is_a_club_host(homepage):
-        return {}, (
-            f"{homepage} isn't the club's own website. A Facebook page goes in facebook_page; "
-            "leave homepage blank if it has no site of its own."
-        )
-    contact_email = _str(params, "contact_email")[:255]
-    if contact_email:
-        try:
-            validate_email(contact_email)
-        except ValidationError:
-            return {}, f"{contact_email} isn't an email address."
-    methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
-    contact_method = _str(params, "contact_method").lower()
-    if contact_method not in methods:
-        return {}, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
-    if not contact_method:
-        contact_method = Club.EMAIL if contact_email else Club.FACEBOOK if facebook_page and not homepage else ""
-    found = club_import.ImportedClub(name=name, homepage=homepage)
-    existing = club_import.find_existing(found, Club.objects.all())
-    if existing is not None:
-        return {}, f"That looks like {existing.name} (club {existing.pk}), already on the site."
-    listed = palette_actions._flag(params, "listed")
-    return {
-        "name": name,
-        "abbreviation": _str(params, "abbreviation")[:255] or None,
-        "homepage": homepage or None,
-        "facebook_page": facebook_page or None,
-        "location": _str(params, "location")[:500] or None,
-        "contact_email": contact_email or None,
-        "contact_method": contact_method,
-        "outreach_stage": Club.PROSPECT if listed is False else Club.LISTED,
-        "notes": _str(params, "notes")[:300] or None,
-    }, ""
-
-
 def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
     """Create one club from what an agent cleaned up out of something the owner pasted.
 
@@ -817,7 +1000,7 @@ def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
 
     if not request.user.is_superuser:
         raise PermissionDenied
-    fields, problem = _club_fields(params)
+    fields, problem = club_onboarding.club_fields(params)
     if problem:
         return _error(problem)
     found = geocoding.geocode(fields["location"] or "")
@@ -888,6 +1071,374 @@ def trust_user(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{user.username} is now trusted.")
 
 
+def _account(params: dict[str, Any], key: str):
+    """The active account a step names, by number or username, or ``None``."""
+    from django.contrib.auth.models import User
+
+    accounts = User.objects.filter(is_active=True)
+    number = _int(params, key)
+    if number is not None:
+        return accounts.filter(pk=number).first()
+    username = _str(params, key)
+    return accounts.filter(username=username).first() or accounts.filter(username__iexact=username).first()
+
+
+def _merge_pair(params: dict[str, Any]):
+    """``merge_accounts``' two accounts as ``(closed, kept, "")``, or ``(None, None, why not)``.
+
+    Staff accounts are refused, as the merge page refuses them: a merge can't be undone, and the
+    agent that proposed it read text strangers typed.
+    """
+    closed, kept = _account(params, "close"), _account(params, "keep")
+    if closed is None or kept is None:
+        return (
+            None,
+            None,
+            f"There is no active account by that number or username for {'close' if closed is None else 'keep'}.",
+        )
+    if closed == kept:
+        return None, None, "Those are the same account."
+    if any(user.is_staff or user.is_superuser for user in (closed, kept)):
+        return None, None, "Staff accounts aren't merged through a proposal."
+    return closed, kept, ""
+
+
+def merge_accounts(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Move everything one account has to another and close the first: the merge page's work, approved."""
+    from auctions.account_merge import merge_accounts as merge
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    closed, kept, problem = _merge_pair(params)
+    if problem:
+        return _error(problem)
+    name = closed.username
+    merge(closed, kept)
+    return _ok(f"Moved everything from {name} to {kept.username} and closed {name}.")
+
+
+def _auction_and_club(params: dict[str, Any]):
+    """``link_auction_to_club``'s auction and club as ``(auction, club, "")``, or ``(None, None, why not)``."""
+    from auctions.models import Auction
+
+    number = _int(params, "auction")
+    auctions = Auction.objects.filter(is_deleted=False)
+    auction = (
+        auctions.filter(pk=number).first()
+        if number is not None
+        else auctions.filter(slug=_str(params, "auction")).first()
+    )
+    if auction is None:
+        return None, None, "There is no auction by that number or slug."
+    if auction.club_id:
+        return None, None, f"{auction.title} already belongs to {auction.club.name}."
+    club = _club(params)
+    if club is None:
+        return None, None, "There is no one club by that number or name."
+    return auction, club, ""
+
+
+def link_auction_to_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """File an auction with no club under one, as the unlinked auctions page does, one auction a step."""
+    from auctions import club_health, services
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    auction, club, problem = _auction_and_club(params)
+    if problem:
+        return _error(problem)
+    grant_admin = palette_actions._flag(params, "make_creator_admin") is not False
+    granted = services.link_auction_to_club(
+        auction, club, note="through an approved proposal", actor=request.user, grant_admin=grant_admin
+    )
+    club_health.compute_club_health(club)
+    admin_note = f" {auction.created_by.username} is now a club admin." if granted else ""
+    return _ok(f"{auction.title} now belongs to {club.name}.{admin_note}")
+
+
+def _shortcut_problem(params: dict[str, Any]) -> str:
+    """Why ``phrase`` can't become a shortcut, or ``""``.
+
+    The phrase has to be one the assistant has answered the same way every time, at least
+    ``MINE_MIN_COUNT`` times, so the agent picks which ones and the model's own answers say where
+    each goes: nothing an agent writes becomes a destination.
+    """
+    from auctions import palette_assist
+
+    phrase = palette_assist.normalize_query(_str(params, "phrase"))
+    if not phrase:
+        return "Which phrase? palette_shortcut_candidates lists them."
+    if phrase in palette_assist.phrases_with_a_shortcut():
+        return f"“{phrase}” already has a shortcut."
+    if phrase not in palette_assist.mine_shortcuts()[0]:
+        return f"“{phrase}” isn't one the assistant has always answered the same way. palette_shortcut_candidates lists those."
+    return ""
+
+
+def add_palette_shortcut(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Answer one phrase from the route catalogue from now on, with no model call."""
+    from auctions import command_palette, palette_assist
+    from auctions.models import CommandPalettePage
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _shortcut_problem(params)
+    if problem:
+        return _error(problem)
+    phrase = palette_assist.normalize_query(_str(params, "phrase"))
+    route_key = palette_assist.mine_shortcuts()[0][phrase][0]
+    route = palette_routes.get_route(route_key)
+    label = route.label if route else route_key
+    CommandPalettePage.objects.create(
+        search_term=phrase[:200],
+        target=f"{command_palette.ROUTE_TARGET_PREFIX}{route_key}"[:100],
+        title=label[:200],
+        description="Added through an approved proposal from repeated assistant answers.",
+    )
+    return _ok(f"“{phrase}” now goes straight to {label}.")
+
+
+def _club_and_account(params: dict[str, Any]):
+    """``make_club_admin``'s club and account as ``(club, user, "")``, or ``(None, None, why not)``."""
+    club = _club(params)
+    if club is None:
+        return None, None, "There is no one club by that number or name."
+    user = _account(params, "user")
+    if user is None:
+        return None, None, "There is no active account by that number or username."
+    return club, user, ""
+
+
+def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Give one account full admin rights on one club, or take them away when ``admin`` is false."""
+    from auctions import services
+    from auctions.models import ClubHistory, ClubMember
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club, user, problem = _club_and_account(params)
+    if problem:
+        return _error(problem)
+    if palette_actions._flag(params, "admin") is False:
+        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False, permission_admin=True).first()
+        if member is None:
+            return _ok(f"{user.username} wasn't an admin of {club.name}.")
+        member.permission_admin = False
+        member.save()
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"Removed admin permissions from {member.name} through an approved proposal.",
+            applies_to="MEMBERS",
+        )
+        return _ok(f"{user.username} is no longer an admin of {club.name}.")
+    if not services.ensure_club_admin(club, user, note="through an approved proposal", actor=request.user):
+        return _ok(f"{user.username} was already an admin of {club.name}.")
+    return _ok(f"{user.username} is now an admin of {club.name}.")
+
+
+#: What ``update_club`` may change, with each field's length. The facts a club's settings page and
+#: ``add_club`` already hold; money, email and integrations stay with the club's own admins.
+UPDATABLE_CLUB_FIELDS = {
+    "name": 255,
+    "abbreviation": 255,
+    "homepage": 255,
+    "facebook_page": 255,
+    "discord_invite_link": 255,
+    "location": 500,
+    "contact_email": 255,
+    "contact_method": 20,
+    "notes": 300,
+}
+
+
+def _club_changes(params: dict[str, Any]):
+    """``update_club``'s club and its changes as ``(club, changes, interests, "")``, or a reason in the last place.
+
+    Only the fields the step names change; an empty value clears one (never the name). ``interests`` is
+    ``None`` when the step doesn't name them.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    from auctions import club_import
+    from auctions.models import Club, GeneralInterest
+
+    club = _club(params)
+    if club is None:
+        return None, {}, None, "There is no one club by that number or name."
+    changes = {}
+    for field, length in UPDATABLE_CLUB_FIELDS.items():
+        if field in params:
+            value = _str(params, field)
+            if field in ("homepage", "facebook_page", "discord_invite_link"):
+                value = club_onboarding.web_address(value)
+            changes[field] = value[:length]
+    if "name" in changes:
+        if not changes["name"]:
+            return club, {}, None, "A club can't have a blank name."
+        others = Club.objects.exclude(pk=club.pk)
+        existing = club_import.find_existing(club_import.ImportedClub(name=changes["name"], homepage=""), others)
+        if existing is not None:
+            return club, {}, None, f"That name looks like {existing.name} (club {existing.pk}), already on the site."
+    if changes.get("homepage") and not club_import.is_a_club_host(changes["homepage"]):
+        problem = f"{changes['homepage']} isn't the club's own website. A Facebook page goes in facebook_page."
+        return club, {}, None, problem
+    if changes.get("contact_email"):
+        try:
+            validate_email(changes["contact_email"])
+        except ValidationError:
+            return club, {}, None, f"{changes['contact_email']} isn't an email address."
+    if "contact_method" in changes:
+        changes["contact_method"] = changes["contact_method"].lower()
+        methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
+        if changes["contact_method"] not in methods:
+            return club, {}, None, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
+    interests = None
+    if "interests" in params:
+        names = [name.strip() for name in _str(params, "interests").split(",") if name.strip()]
+        interests = list(GeneralInterest.objects.filter(name__in=names))
+        unknown = sorted(set(names) - {interest.name for interest in interests})
+        if unknown:
+            known = ", ".join(GeneralInterest.objects.order_by("name").values_list("name", flat=True))
+            return club, {}, None, f"There is no interest called {unknown[0]}. The interests are: {known}."
+    if not changes and interests is None:
+        return club, {}, None, "Name at least one thing to change."
+    return club, changes, interests, ""
+
+
+def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Correct a club's public details: its name, website, Facebook, meeting place, contact and interests.
+
+    A new meeting place is geocoded as ``add_club`` geocodes one; when Google can't find it the old pin
+    comes off rather than staying somewhere the club no longer meets.
+    """
+    from auctions import geocoding
+    from auctions.models import ClubHistory
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club, changes, interests, problem = _club_changes(params)
+    if problem:
+        return _error(problem)
+    where = ""
+    if "location" in changes:
+        found = geocoding.geocode(changes["location"])
+        # The pre_save signal splits the coordinates into latitude and longitude.
+        club.location_coordinates = found["coordinates"] if found else None
+        if not found:
+            club.latitude = club.longitude = None
+        where = (
+            f" Placed on the map at {found['address']}."
+            if found
+            else " Not on the map: drag its pin on the club's settings page."
+            if changes["location"]
+            else ""
+        )
+    for field, value in changes.items():
+        setattr(club, field, value or (None if field != "contact_method" else ""))
+    club.save()
+    if interests is not None:
+        club.interests.set(interests)
+    changed = sorted([*changes, *(["interests"] if interests is not None else [])])
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action="Changed " + ", ".join(changed) + " through an approved proposal.",
+        applies_to="SETTINGS",
+    )
+    return _ok(f"Updated {club.name}: {', '.join(changed)}.{where}", club=club.pk)
+
+
+#: What ``set_user_features`` may switch for one account: its parameter -> the ``UserData`` field and
+#: what to call it. Each is off for new accounts unless its ``*_ENABLED_FOR_USERS`` setting says so;
+#: the site-wide ``change_*`` commands stay with the owner, paired with ``.env``.
+USER_FEATURES = {
+    "paypal": ("paypal_enabled", "PayPal"),
+    "square": ("square_enabled", "Square"),
+    "library": ("library_enabled", "the library"),
+    "voice_cloud": ("voice_cloud_enabled", "listening through OpenAI"),
+    "club_auctions": ("can_create_club_auctions", "creating auctions"),
+}
+
+
+def _features_problem(params: dict[str, Any]) -> str:
+    """Why ``set_user_features`` can't run as asked, or ``""``."""
+    if _account(params, "user") is None:
+        return "There is no active account by that number or username."
+    if all(palette_actions._flag(params, name) is None for name in USER_FEATURES):
+        return "Turn at least one on or off: " + ", ".join(USER_FEATURES) + "."
+    return ""
+
+
+def set_user_features(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Turn PayPal, Square, the library, cloud listening or auction creation on or off for one account."""
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _features_problem(params)
+    if problem:
+        return _error(problem)
+    user = _account(params, "user")
+    userdata = user.userdata
+    said, fields = [], []
+    for name, (field, label) in USER_FEATURES.items():
+        wanted = palette_actions._flag(params, name)
+        if wanted is None:
+            continue
+        setattr(userdata, field, wanted)
+        fields.append(field)
+        said.append(f"{label} {'on' if wanted else 'off'}")
+    userdata.save(update_fields=fields)
+    return _ok(f"{user.username}: " + ", ".join(said) + ".")
+
+
+def _interest_problem(params: dict[str, Any]) -> str:
+    """Why ``set_interest`` can't run as asked, or ``""``."""
+    from auctions.models import Category
+
+    if not _str(params, "name"):
+        return "Which interest? set_interest needs its name."
+    if "aquatic" in params and palette_actions._flag(params, "aquatic") is None:
+        return "aquatic is true or false."
+    names = [name.strip() for name in _str(params, "categories").split(",") if name.strip()]
+    unknown = sorted(set(names) - set(Category.objects.filter(name__in=names).values_list("name", flat=True)))
+    if unknown:
+        return f"There is no category called {unknown[0]}. Category names are exactly as the lot filter lists them."
+    return ""
+
+
+def set_interest(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add an interest clubs can carry, or change one: whether it's aquatic, its noun, its categories.
+
+    A club whose interests are all non-aquatic gets species suggestions off in new auctions, its own
+    categories and its own noun where the site says fish (:attr:`auctions.models.Club.keeps_aquatic`).
+    """
+    from auctions.models import Category, GeneralInterest
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _interest_problem(params)
+    if problem:
+        return _error(problem)
+    name = _str(params, "name")[:255]
+    interest = GeneralInterest.objects.filter(name__iexact=name).first()
+    created = interest is None
+    if created:
+        interest = GeneralInterest(name=name)
+    if "aquatic" in params:
+        interest.aquatic = palette_actions._flag(params, "aquatic")
+    if "noun" in params:
+        interest.noun = _str(params, "noun")[:50].lower()
+    interest.save()
+    if "categories" in params:
+        names = [part.strip() for part in _str(params, "categories").split(",") if part.strip()]
+        interest.categories.set(Category.objects.filter(name__in=names))
+    kind = "aquatic" if interest.aquatic else f"not aquatic, members keep {interest.noun or 'animals'}"
+    count = interest.categories.count()
+    offers = f"{count} categor{'y' if count == 1 else 'ies'}" if count else "every category"
+    return _ok(f"{'Added' if created else 'Updated'} the interest {interest.name}: {kind}, offering {offers}.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -953,18 +1504,150 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Trust a user",
             resolver=trust_user,
         ),
+        Action(
+            name="set_user_features",
+            description=(
+                "Turn features on or off for one account: PayPal, Square, the library, listening through "
+                "OpenAI on Set lot winners, and creating auctions. Name only the ones to change."
+            ),
+            params={
+                "user": "string, required. The account's username, or its number.",
+                "paypal": "boolean, optional. Let them connect PayPal and take payments through it.",
+                "square": "boolean, optional. Let them connect Square and take payments through it.",
+                "library": "boolean, optional. Show them /library/ and its tools.",
+                "voice_cloud": "boolean, optional. Let them listen through OpenAI on Set lot winners.",
+                "club_auctions": "boolean, optional. Let them create auctions.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Change an account's features",
+            resolver=set_user_features,
+        ),
+        Action(
+            name="set_interest",
+            description=(
+                "Add an interest clubs can carry (update_club sets a club's), or change one. A club whose "
+                "interests are all non-aquatic gets species suggestions off in new auctions, only its "
+                "interests' categories, and its noun where the site says fish."
+            ),
+            params={
+                "name": "string, required. The interest's name, e.g. 'Reptiles'. An existing one is changed.",
+                "aquatic": "boolean, optional, default true for a new one. false for anything the species list doesn't cover.",
+                "noun": "string, optional. What its members keep, singular, e.g. 'reptile'.",
+                "categories": "string, optional. Comma-separated category names its clubs' auctions offer; empty offers all.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Set a club interest",
+            resolver=set_interest,
+        ),
+        Action(
+            name="make_club_admin",
+            description=(
+                "Make an account a club admin, with every permission on that club, or take admin away "
+                "with admin false. describe_club and find_person find the numbers."
+            ),
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "user": "string, required. The account's username, or its number.",
+                "admin": "boolean, optional, default true. false removes their admin rights.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Change a club's admins",
+            resolver=make_club_admin,
+        ),
+        Action(
+            name="update_club",
+            description=(
+                "Correct a club's details. Only the fields you name change; an empty value clears one. "
+                "A new location is placed on the map."
+            ),
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "name": "string, optional. Its full name; this changes the club page's address.",
+                "abbreviation": "string, optional. What members call it, e.g. 'GCAS'.",
+                "homepage": "string, optional. The club's own website. Never a Facebook or Meetup page.",
+                "facebook_page": "string, optional. Its Facebook page or group.",
+                "discord_invite_link": "string, optional. An invite to its Discord server.",
+                "location": "string, optional. Where it meets, as an address Google Maps would find.",
+                "contact_email": "string, optional. Where membership questions should go.",
+                "contact_method": "string, optional. email, webform or facebook: how to reach it.",
+                "notes": "string, optional. For the owner only, at most 300 characters.",
+                "interests": "string, optional. Comma-separated interest names, replacing the club's.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Update a club",
+            resolver=update_club,
+        ),
+        Action(
+            name="link_auction_to_club",
+            description=(
+                "File one auction that has no club under a club, and make its creator a club admin. "
+                "read_admin_page admin_unlinked_auctions lists them, with the club each probably belongs to."
+            ),
+            params={
+                "auction": "string, required. The auction's number or slug.",
+                "club": "string, required. The club's number, or its exact name.",
+                "make_creator_admin": "boolean, optional, default true. false files it without the admin grant.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="File an auction under a club",
+            resolver=link_auction_to_club,
+        ),
+        Action(
+            name="merge_accounts",
+            description=(
+                "Move everything one account has (lots, bids, invoices, memberships, sign-ins) to another "
+                "and close the first. Can't be undone. Not for staff accounts."
+            ),
+            params={
+                "close": "string, required. The account to empty and close: its username, or its number.",
+                "keep": "string, required. The account everything moves to: its username, or its number.",
+            },
+            danger=DANGER_CONFIRM,
+            destructive=True,
+            confirm_template="Merge two accounts",
+            resolver=merge_accounts,
+        ),
+        Action(
+            name="add_palette_shortcut",
+            description=(
+                "Answer one phrase from the command palette straight from the page catalogue, with no "
+                "model call. Only a phrase palette_shortcut_candidates lists; where it goes comes from "
+                "the assistant's own past answers."
+            ),
+            params={"phrase": "string, required. The phrase, as palette_shortcut_candidates gives it."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Add a command palette shortcut",
+            resolver=add_palette_shortcut,
+        ),
+        # The species gaps page's buttons and the backfill command's answers.
+        *admin_species.APPROVAL_ONLY,
     ]
 }
 
 #: Checks an :data:`APPROVAL_ONLY` step's arguments when it is proposed, so a refusal reaches the agent
 #: while somebody is still there to answer it rather than on the approval page. Each runs again,
 #: inside the change itself, on approval.
-PROPOSAL_CHECKS = {"add_club": lambda arguments: _club_fields(arguments)[1]}
+PROPOSAL_CHECKS = {
+    "add_club": lambda arguments: club_onboarding.club_fields(arguments)[1],
+    "make_club_admin": lambda arguments: _club_and_account(arguments)[2],
+    "set_user_features": _features_problem,
+    "set_interest": _interest_problem,
+    "update_club": lambda arguments: _club_changes(arguments)[3],
+    "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
+    "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
+    "add_palette_shortcut": _shortcut_problem,
+    **admin_species.PROPOSAL_CHECKS,
+}
 
 
 #: Registry writes a proposal may name. Short on purpose: an approved step runs with a superuser's
 #: reach, and the agent that wrote it read text strangers typed. The owner's own one-off chores are
-#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs; a refund, an announcement or
+#: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs (the species list's upkeep among them); a refund, an announcement or
 #: an email to a club is done by hand.
 PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species"})
 
@@ -1216,8 +1899,9 @@ ADMIN_TOOLS: dict[str, Action] = {
             description=(
                 "What is deployed and whether it is well: branch and commit, migrations not yet "
                 "applied, Celery queue depths, when beat last ran, the last 24 hours of logged "
-                "errors grouped by kind, the app crashes reported in that time, and the server's disk, "
-                "memory and load."
+                "errors grouped by kind, the app crashes reported in that time, the server's disk, "
+                "memory and load, the database's running queries (longest first, literals removed), "
+                "and the last hour's slow requests grouped by path."
             ),
             params={},
             danger=DANGER_SAFE,
@@ -1239,6 +1923,41 @@ ADMIN_TOOLS: dict[str, Action] = {
             },
             danger=DANGER_SAFE,
             resolver=list_app_crashes,
+        ),
+        *admin_species.READS,
+        Action(
+            name="palette_shortcut_candidates",
+            description=(
+                "Phrases people type into the command palette that the assistant has sent to the same "
+                "page every time, and have no shortcut yet. Each can be proposed as add_palette_shortcut."
+            ),
+            params={
+                "min_count": "integer, optional, default 5, at least 5. How many times a phrase must have been asked.",
+            },
+            danger=DANGER_SAFE,
+            resolver=palette_shortcut_candidates,
+        ),
+        Action(
+            name="untrusted_auction_creators",
+            description=(
+                "People who created an auction lately and aren't trusted, with the facts that say whether "
+                "they look real: account age, verified email, social sign-in, earlier auctions and lots, "
+                "clubs they run, and each new auction's club, lots and participants. trust_user them by "
+                "proposal."
+            ),
+            params={"days": "integer, optional, default 7. How far back to look, at most 60."},
+            danger=DANGER_SAFE,
+            resolver=untrusted_auction_creators,
+        ),
+        Action(
+            name="square_reconnects",
+            description=(
+                "Square sellers whose connection is missing the Tap to Pay scope and who must reconnect "
+                "before Tap to Pay works. Reads what we recorded; never calls Square."
+            ),
+            params={},
+            danger=DANGER_SAFE,
+            resolver=square_reconnects,
         ),
         Action(
             name="suggest_feature",
@@ -1296,8 +2015,9 @@ def descriptors() -> list[dict[str, Any]]:
 
 
 WRITE_REFUSED = (
-    "“{name}” changes data, and nothing on this endpoint does. Species fixes, feature request "
-    "statuses, new clubs, a club's stage and trusting a user can be proposed with propose_change; "
+    "“{name}” changes data, and nothing on this endpoint does. Species fixes and the species list's "
+    "upkeep, feature request statuses, new clubs, a club's stage, trusting a user, filing an auction "
+    "under a club, merging two accounts and palette shortcuts can be proposed with propose_change; "
     "anything else the owner does by hand."
 )
 

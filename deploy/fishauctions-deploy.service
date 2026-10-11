@@ -1,0 +1,17 @@
+# Runs deploy/poller.py once; the timer starts it every minute. See that file's docstring.
+# Edit User=, WorkingDirectory= and the paths to match the server, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fishauctions-deploy.timer
+[Unit]
+Description=Pick up an approved production deploy request
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=CHANGE_ME
+WorkingDirectory=/home/CHANGE_ME/fishauctions
+EnvironmentFile=/home/CHANGE_ME/.config/fishauctions-deploy/env
+ExecStart=/usr/bin/python3 -I deploy/poller.py
+# update.sh has its own timeout; this one is for a poll that hangs on the network.
+TimeoutStartSec=3600
+NoNewPrivileges=true

@@ -1,0 +1,123 @@
+# Deploy master to production: snapshot the server through Hostinger's API, then ask the server to run
+# update.sh. The server's half, and what it checks, is deploy/poller.py.
+#
+# Safety rests on GitHub settings, not on this file, because an agent can push a different copy of
+# this file to any branch:
+# - Settings > Environments > production: required reviewer Ira, deployment branches "master" only.
+# - HOSTINGER_API_TOKEN and DEPLOY_SIGNING_KEY are secrets of that environment, never repository
+#   secrets (every workflow on every branch can read a repository secret). HOSTINGER_VM_ID is an
+#   environment variable.
+# This job uses no third-party actions: nothing else ever runs next to the Hostinger token.
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Snapshot even if the site is down or the last deploy failed. This overwrites the only snapshot, which may be the good one."
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 120
+    permissions:
+      deployments: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SITE_URL: https://auction.fish/
+      TASK: deploy:server
+    steps:
+      - name: Check the site is up and the last deploy didn't fail
+        # Hostinger keeps one snapshot. Taking one of a broken server after a failed deploy would
+        # replace the snapshot taken before it, the only way back.
+        if: ${{ !inputs.force }}
+        run: |
+          set -euo pipefail
+          code="$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$SITE_URL")" || code=000
+          case "$code" in
+            2*|3*) echo "Site answered $code." ;;
+            *) echo "::error::$SITE_URL answered $code. Not snapshotting a server that may be broken; re-run with force if you're sure."; exit 1 ;;
+          esac
+          # Requests the server refused ("error") or hasn't answered ran nothing; skip past them, so
+          # junk deployments can't block a real one.
+          ids="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=production&task=$TASK&per_page=30" --jq '.[].id')"
+          for id in $ids; do
+            state="$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=1" --jq '.[0].state // "none"')"
+            case "$state" in error|none) continue ;; esac
+            echo "Last deploy: $state"
+            # "inactive" is GitHub retiring an older successful deployment.
+            if [ "$state" != "success" ] && [ "$state" != "inactive" ]; then
+              echo "::error::The last deploy ended '$state'. The snapshot may be the only good copy; re-run with force if you're sure."
+              exit 1
+            fi
+            break
+          done
+
+      - name: Snapshot the server
+        env:
+          HOSTINGER_API_TOKEN: ${{ secrets.HOSTINGER_API_TOKEN }}
+          VM: ${{ vars.HOSTINGER_VM_ID }}
+        run: |
+          set -euo pipefail
+          api=https://developers.hostinger.com/api/vps/v1/virtual-machines/$VM
+          call() { curl -sS --fail-with-body -m 60 -H "Authorization: Bearer $HOSTINGER_API_TOKEN" -H "Accept: application/json" "$@"; }
+          started="$(date -u +%s)"
+          action="$(call -X POST "$api/snapshot" | jq -r '.id')"
+          echo "Snapshot action $action"
+          for _ in $(seq 120); do
+            state="$(call "$api/actions/$action" | jq -r '.state')"
+            echo "  $state"
+            case "$state" in
+              success) break ;;
+              error) echo "::error::Hostinger reported the snapshot failed."; exit 1 ;;
+            esac
+            sleep 30
+          done
+          [ "$state" = success ] || { echo "::error::Snapshot not finished after an hour."; exit 1; }
+          # Belt and braces: the snapshot Hostinger now holds is the one just taken.
+          created="$(call "$api/snapshot" | jq -r '.created_at')"
+          [ "$(date -u -d "$created" +%s)" -ge "$((started - 120))" ] || { echo "::error::Snapshot is dated $created, older than this run."; exit 1; }
+          echo "Snapshot taken $created."
+
+      - name: Ask the server to deploy
+        env:
+          DEPLOY_SIGNING_KEY: ${{ secrets.DEPLOY_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          # The signer at exactly this commit, from the public repository: no checkout action needed.
+          curl -sS --fail -m 30 -o "$RUNNER_TEMP/poller.py" \
+            "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/deploy/poller.py"
+          payload="$(python3 -I "$RUNNER_TEMP/poller.py" sign "$GITHUB_SHA" "$GITHUB_RUN_ID")"
+          jq -n --arg sha "$GITHUB_SHA" --arg task "$TASK" --argjson payload "$payload" \
+            '{ref: $sha, task: $task, environment: "production", payload: $payload,
+              auto_merge: false, required_contexts: [], production_environment: true,
+              description: "server deploy request"}' \
+            | gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id' > "$RUNNER_TEMP/deployment"
+          echo "Deploy request $(cat "$RUNNER_TEMP/deployment") created for $GITHUB_SHA."
+
+      - name: Wait for the server
+        run: |
+          set -euo pipefail
+          id="$(cat "$RUNNER_TEMP/deployment")"
+          for _ in $(seq 140); do
+            read -r state description < <(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=1" \
+              --jq '.[0] | "\(.state // "waiting") \(.description // "")"' || echo "waiting")
+            echo "  ${state:-waiting} ${description:-}"
+            case "$state" in
+              success) echo "Deployed."; exit 0 ;;
+              failure|error) echo "::error::$description"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::The server didn't finish within 70 minutes. Is fishauctions-deploy.timer running?"
+          exit 1

@@ -17,13 +17,13 @@ from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from django.test import RequestFactory, TestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
 
 from auctions import llm, palette_actions, palette_routes
 from auctions.documents import extract as extract_module
-from auctions.documents import index
+from auctions.documents import index, pictures
 from auctions.documents.extract import ExtractionError, Reader, extract
 from auctions.documents.index import chunk
 from auctions.documents.models import Visibility
@@ -1100,3 +1100,127 @@ class AccessTests(LibraryTestCase):
         self.assertFalse(UserData.objects.filter(library_enabled=False).exists())
         call_command("change_library", "off", stdout=io.StringIO())
         self.assertFalse(UserData.objects.filter(library_enabled=True).exists())
+
+
+def _picture_bytes(kind="JPEG", size=(300, 200), exif=None) -> bytes:
+    out = io.BytesIO()
+    extra = {"exif": exif} if exif is not None else {}
+    Image.new("RGB", size, (20, 120, 200)).save(out, kind, **extra)
+    return out.getvalue()
+
+
+class PictureTests(LibraryTestCase):
+    """Pictures on a document: posted to a signed link by an assistant's script or a person's phone."""
+
+    def run_as(self, user, name, **params):
+        request = RequestFactory().post("/mcp/")
+        request.user = user
+        request.palette_page = {}
+        return palette_actions.run_action(request, name, params)
+
+    def link(self, document, user=None):
+        return pictures.upload_link(document, user or self.owner)
+
+    def setUp(self):
+        super().setUp()
+        # What curl is: no session and no CSRF token. The link is the credential.
+        self.client = Client(enforce_csrf_checks=True)
+
+    def post(self, url, *files, captions=(), **extra):
+        data = {"file": [SimpleUploadedFile(name, data) for name, data in files], "caption": list(captions), **extra}
+        return self.client.post(url, data)
+
+    def test_add_document_hands_back_a_link_a_script_can_post_to(self):
+        result = self.run_as(self.owner, "add_document", title="Killifish eggs", text="Stored in peat.")
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("curl", result["how_to_add_pictures"])
+        response = self.post(
+            result["pictures_upload_url"],
+            ("male.jpg", _picture_bytes()),
+            ("eggs.png", _picture_bytes("PNG")),
+            captions=["Male in colour", "Eggs in peat"],
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual([each["caption"] for each in body["added"]], ["Male in colour", "Eggs in peat"])
+        document = Document.objects.get()
+        self.assertEqual([p.file.name[-4:] for p in document.pictures.all()], [".jpg", ".png"])
+
+    def test_the_cameras_metadata_is_gone(self):
+        exif = Image.Exif()
+        exif[0x010F] = "PhoneMaker"  # Make; a GPS block goes the same way
+        document = self.document(index_it=False)
+        self.post(self.link(document), ("p.jpg", _picture_bytes(exif=exif.tobytes())))
+        with document.pictures.get().file.open("rb") as handle, Image.open(handle) as stored:
+            self.assertEqual(dict(stored.getexif()), {})
+
+    def test_a_link_is_for_one_document_and_one_keeper(self):
+        document = self.document(index_it=False)
+        other = self.document(text="other words", name="other.md", index_it=False)
+        borrowed = self.link(document).replace(f"/library/{document.pk}/", f"/library/{other.pk}/")
+        self.assertEqual(self.post(borrowed, ("p.jpg", _picture_bytes())).status_code, 404)
+        self.assertEqual(
+            self.post(f"/library/{document.pk}/pictures/forged/", ("p.jpg", _picture_bytes())).status_code, 404
+        )
+        # Signed by a club admin who has since stopped being one.
+        admin = User.objects.create_user("admin2", "admin2@example.com", "x")
+        admin.userdata.library_enabled = True
+        admin.userdata.save(update_fields=["library_enabled"])
+        membership = ClubMember.objects.create(club=self.club, user=admin, name="A", permission_edit_club=True)
+        url = self.link(document, admin)
+        self.assertEqual(self.client.get(url).status_code, 200)
+        membership.permission_edit_club = False
+        membership.save()
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertFalse(document.pictures.exists())
+
+    def test_what_isnt_a_picture_is_refused_and_repeats_are_skipped(self):
+        document = self.document(index_it=False)
+        response = self.post(self.link(document), ("notes.txt", b"not a picture"))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("isn't a picture", response.json()["problems"][0])
+        self.assertEqual(self.client.post(self.link(document)).status_code, 400, "no file at all")
+        picture = _picture_bytes()
+        self.post(self.link(document), ("a.jpg", picture))
+        again = self.post(self.link(document), ("a.jpg", picture)).json()
+        self.assertIn("already on this document", again["problems"][0])
+        with mock.patch.object(pictures, "MAX_PICTURES_PER_DOCUMENT", 1):
+            full = self.post(self.link(document), ("b.png", _picture_bytes("PNG"))).json()
+        self.assertIn("up to 1 pictures", full["problems"][0])
+        self.assertEqual(document.pictures.count(), 1)
+
+    def test_readers_see_pictures_and_only_keepers_get_the_link(self):
+        document = self.document(index_it=False)
+        self.post(self.link(document), ("a.jpg", _picture_bytes()), captions=["Pair"])
+        picture = document.pictures.get()
+        theirs = self.run_as(self.member, "read_document", document=str(document.pk))
+        self.assertEqual(theirs["pictures"][0]["picture_url"], reverse("document_picture", args=[picture.pk]))
+        self.assertNotIn("pictures_upload_url", theirs)
+        self.assertIn("pictures_upload_url", self.run_as(self.owner, "read_document", document=str(document.pk)))
+
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(reverse("document_picture", args=[picture.pk])).status_code, 200)
+        page = self.client.get(document.get_absolute_url()).content.decode()
+        self.assertIn(reverse("document_picture", args=[picture.pk]), page)
+        self.assertNotIn("/pictures/", page, "a reader gets no link to add pictures")
+        self.client.force_login(self.outsider)
+        self.assertEqual(self.client.get(reverse("document_picture", args=[picture.pk])).status_code, 404)
+
+    def test_removing_a_picture_and_deleting_the_document_delete_their_files(self):
+        document = self.document(index_it=False)
+        self.post(self.link(document), ("a.jpg", _picture_bytes()), ("b.png", _picture_bytes("PNG")))
+        first, second = document.pictures.all()
+        with self.captureOnCommitCallbacks(execute=True):
+            link = self.link(document)  # signed with a timestamp: a second call can differ
+            response = self.client.post(link, {"remove": first.pk, "from_page": "1"})
+        self.assertRedirects(response, link, fetch_redirect_response=False)
+        self.assertFalse(first.file.storage.exists(first.file.name))
+        with self.captureOnCommitCallbacks(execute=True):
+            document.delete()
+        self.assertFalse(second.file.storage.exists(second.file.name))
+
+    def test_pictures_count_against_library_space(self):
+        document = self.document(index_it=False)
+        with mock.patch("auctions.documents.forms.MAX_BYTES_PER_PERSON", document.size + 10):
+            body = self.post(self.link(document), ("a.jpg", _picture_bytes())).json()
+        self.assertIn("library space", body["problems"][0])

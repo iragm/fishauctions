@@ -330,6 +330,21 @@ class LotFilterTests(StandardTestCase):
     def test_unloved_sort_runs(self):
         self.assertIn(self.in_person_lot, list(self._qs(order="unloved")))
 
+    def test_popularity_over_every_lot_ever_sorts_newest_instead(self):
+        older = Lot.objects.create(lot_name="Old ended lot", quantity=1, active=False)
+        newer = Lot.objects.create(lot_name="New ended lot", quantity=1, active=False)
+        # Lots posted in the last 20 minutes are hidden from everyone but their seller.
+        Lot.objects.filter(pk__in=[older.pk, newer.pk]).update(date_posted=timezone.now() - datetime.timedelta(hours=1))
+        lots = LotFilter(data={"status": "all", "order": "popularity"}, user=self.viewer).qs
+        self.assertNotIn("popularity", lots.query.annotations)
+        self.assertLess(list(lots).index(newer), list(lots).index(older))
+
+    def test_popularity_still_sorts_open_lots_and_one_auction(self):
+        open_lots = LotFilter(data={"order": "popularity"}, user=self.viewer).qs
+        self.assertIn("popularity", open_lots.query.annotations)
+        one_auction = self._qs(status="all", order="unloved")
+        self.assertIn("popularity", one_auction.query.annotations)
+
     def test_closed_status_shows_only_ended_lots(self):
         ended = Lot.objects.create(lot_name="Ended lot", auction=self.in_person_auction, quantity=1, active=False)
         lots = list(self._qs(status="closed"))

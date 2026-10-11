@@ -1,5 +1,6 @@
-"""The library at ``/library/``: upload, search with a written answer, read, correct, report, delete, and
-batches of pages being put back together into articles (``/library/batch/<pk>/``).
+"""The library at ``/library/``: upload, search with a written answer, read, correct, report, delete,
+batches of pages being put back together into articles (``/library/batch/<pk>/``), and the pictures
+on a document, added through a signed link (``/library/<pk>/pictures/<token>/``).
 
 Everything goes through :func:`auctions.documents.search.visible_documents`; a document someone can't
 see is a 404, never a 403, so its existence isn't confirmed. Who may change one is
@@ -11,13 +12,15 @@ from pathlib import Path
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.paginator import Paginator
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.decorators import method_decorator
 from django.views import View
+from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView
 
-from auctions.documents import index, stitch
+from auctions.documents import index, pictures, stitch
 from auctions.documents.forms import (
     MAX_REQUEST_BYTES,
     BatchPagesForm,
@@ -26,7 +29,7 @@ from auctions.documents.forms import (
     DocumentUploadForm,
     add_pages,
 )
-from auctions.documents.models import TOPICS, Document, DocumentBatch
+from auctions.documents.models import TOPICS, Document, DocumentBatch, DocumentPicture
 from auctions.documents.search import (
     answer,
     can_manage,
@@ -62,6 +65,8 @@ __all__ = [
     "DocumentEditView",
     "DocumentFeedbackView",
     "DocumentFileView",
+    "DocumentPictureView",
+    "DocumentPicturesView",
     "DocumentReindexView",
     "LibraryView",
 ]
@@ -180,6 +185,8 @@ class DocumentDetailView(LibraryMixin, TemplateView):
             topics=[(slug, label) for slug, label in TOPICS if slug in (document.topics or [])],
             passages=_passages(document),
             scans=document.pages.order_by("position"),
+            pictures=document.pictures.all(),
+            pictures_link=pictures.upload_link(document, self.request.user) if manager else "",
             species=document.species.all().order_by("scientific_name"),
             reports=document.feedback.filter(resolved=False).select_related("user") if manager else [],
             feedback_form=DocumentFeedbackForm(),
@@ -391,3 +398,85 @@ class BatchPageView(LibraryMixin, View):
         response = FileResponse(handle, content_type=INLINE_TYPES.get(extension, "application/octet-stream"))
         response["X-Content-Type-Options"] = "nosniff"
         return response
+
+
+class DocumentPictureView(LibraryMixin, View):
+    """One picture from a document, to whoever can read the document."""
+
+    def get(self, request, pk):
+        picture = get_object_or_404(DocumentPicture.objects.filter(document__in=visible_documents(request.user)), pk=pk)
+        try:
+            handle = picture.file.open("rb")
+        except FileNotFoundError as error:
+            raise Http404 from error
+        extension = Path(picture.file.name).suffix.lower()
+        response = FileResponse(handle, content_type=INLINE_TYPES.get(extension, "application/octet-stream"))
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DocumentPicturesView(View):
+    """Add pictures to a document, or take them off, through the signed link in
+    :mod:`auctions.documents.pictures`. The link is the credential, so no session and no CSRF token:
+    an assistant's script posts ``file`` fields (with a ``caption`` each) and gets JSON back; the page
+    this shows posts the same form and gets the page again.
+    """
+
+    template_name = "documents/pictures.html"
+
+    def _document(self, pk, token):
+        user = pictures.signer_of(pk, token)
+        if user is None or not can_use_library(user):
+            raise Http404
+        document = Document.objects.filter(pk=pk, removed=False).select_related("owner", "club").first()
+        if document is None or not can_manage(user, document):
+            raise Http404
+        return document
+
+    def get(self, request, pk, token):
+        document = self._document(pk, token)
+        context = {
+            "document": document,
+            "pictures": document.pictures.all(),
+            "limit": pictures.MAX_PICTURES_PER_DOCUMENT,
+        }
+        return render(request, self.template_name, context)
+
+    def post(self, request, pk, token):
+        document = self._document(pk, token)
+        from_page = request.POST.get("from_page") == "1"
+        remove = request.POST.get("remove", "")
+        if remove.isdigit():
+            for picture in document.pictures.filter(pk=int(remove)):
+                picture.delete()
+            if from_page:
+                return redirect("document_pictures", pk=document.pk, token=token)
+            return JsonResponse({"removed": int(remove), "pictures_left": document.pictures.count()})
+        uploads = request.FILES.getlist("file")
+        if not uploads:
+            problems = ["Send each picture as a field named file, with a caption field after each if it has one."]
+            added = []
+        else:
+            added, problems = pictures.add_pictures(document, uploads, request.POST.getlist("caption"))
+        if from_page:
+            if added:
+                messages.success(request, f"Added {len(added)} picture{'s' if len(added) != 1 else ''}.")
+            for problem in problems:
+                messages.error(request, problem)
+            return redirect("document_pictures", pk=document.pk, token=token)
+        return JsonResponse(
+            {
+                "added": [
+                    {
+                        "picture": picture.pk,
+                        "caption": picture.caption,
+                        "url": request.build_absolute_uri(reverse("document_picture", args=[picture.pk])),
+                    }
+                    for picture in added
+                ],
+                "problems": problems,
+                "document_url": request.build_absolute_uri(document.get_absolute_url()),
+            },
+            status=200 if added or not problems else 400,
+        )

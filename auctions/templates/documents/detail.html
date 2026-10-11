@@ -30,6 +30,7 @@
     <a class="btn btn-sm btn-primary" href="{% url 'document_file' document.pk %}" target="_blank" rel="noopener"><i class="bi bi-file-earmark"></i> Original</a>
     {% if can_manage %}
       <a class="btn btn-sm btn-secondary" href="{% url 'document_edit' document.pk %}"><i class="bi bi-pencil"></i> Edit</a>
+      <a class="btn btn-sm btn-secondary" href="{{ pictures_link }}"><i class="bi bi-image"></i> Pictures</a>
       <form method="post" action="{% url 'document_reindex' document.pk %}"{% if document.text_edited %} onsubmit="return confirm('Reading it again replaces your corrections to the text.');"{% endif %}>
         {% csrf_token %}<button type="submit" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-repeat"></i> Read it again</button>
       </form>
@@ -60,6 +61,17 @@
         {% endfor %}
         <a class="small" href="{% url 'document_edit' document.pk %}">Fix it</a>
       </div>
+    </div>
+  {% endif %}
+
+  {% if pictures %}
+    <div class="row g-3 mb-3">
+      {% for picture in pictures %}
+        <figure class="col-6 col-md-3 mb-0">
+          <a href="{% url 'document_picture' picture.pk %}" target="_blank" rel="noopener"><img class="img-fluid rounded" src="{% url 'document_picture' picture.pk %}" alt="{{ picture.caption|default:'Picture' }}" loading="lazy"></a>
+          {% if picture.caption %}<figcaption class="small text-muted">{{ picture.caption }}</figcaption>{% endif %}
+        </figure>
+      {% endfor %}
     </div>
   {% endif %}
 

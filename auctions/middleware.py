@@ -2,9 +2,14 @@
 Custom middleware for the auctions application.
 """
 
+import logging
+import time
+
 from django.conf import settings
 
 from auctions.crawlers import is_crawler
+
+slow_logger = logging.getLogger("auctions.slow_requests")
 
 
 class ContentSecurityPolicyMiddleware:
@@ -142,3 +147,38 @@ class MobileAppMiddleware:
         if "android" in token:
             return "android"
         return ""
+
+
+class SlowRequestMiddleware:
+    """Log a WARNING for any request that takes ``SLOW_REQUEST_SECONDS`` or longer.
+
+    The logs keep WARNING and up, so nothing else says which page is eating the server: on 2026-10-11
+    a scanner's crafted ``/lots/all/`` query strings held MariaDB near 400% CPU for hours and no log
+    line named them. ``site_health`` groups these lines by path. Outermost, so it times the whole stack.
+    """
+
+    #: Characters of query string and User-Agent kept; enough to tell a filter or a client apart.
+    QUERY_CHARS = 200
+    AGENT_CHARS = 120
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        started = time.monotonic()
+        response = self.get_response(request)
+        seconds = time.monotonic() - started
+        threshold = getattr(settings, "SLOW_REQUEST_SECONDS", 0)
+        if threshold and seconds >= threshold:
+            query = request.META.get("QUERY_STRING", "")[: self.QUERY_CHARS]
+            agent = request.META.get("HTTP_USER_AGENT", "")[: self.AGENT_CHARS]
+            slow_logger.warning(
+                "slow request %.1fs %s %s %s?%s ua=%s",
+                seconds,
+                response.status_code,
+                request.method,
+                request.path,
+                query,
+                agent,
+            )
+        return response
