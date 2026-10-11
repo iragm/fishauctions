@@ -2014,7 +2014,7 @@ class PickupLocationForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
         self.auction = auction
-        self.fields["description"].widget.attrs = {"rows": 3}
+        self.fields["description"].widget.attrs["rows"] = 3
         show_name_contact_fields = True
         if self.auction.all_location_count < 2:
             show_name_contact_fields = False

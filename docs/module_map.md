@@ -309,7 +309,7 @@ this only quotes its opening sentence.
   Tests for AR lot scanning and location mapping.
 - **`test_assistant_context.py`** (624 lines)
   What the assistant does when nobody is looking at a page.
-- **`test_auction_admin_views.py`** (834 lines)
+- **`test_auction_admin_views.py`** (840 lines)
   Regression tests for auction-admin and lot-management views with thin coverage: the add-to-calendar
 - **`test_auction_links.py`** (637 lines)
   Auction join links, the lot list's behaviour, and the Cloudflare image pipeline.
