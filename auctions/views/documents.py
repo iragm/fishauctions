@@ -451,7 +451,7 @@ class DocumentPicturesView(View):
             for picture in document.pictures.filter(pk=int(remove)):
                 picture.delete()
             if from_page:
-                return redirect(request.path)
+                return redirect("document_pictures", pk=document.pk, token=token)
             return JsonResponse({"removed": int(remove), "pictures_left": document.pictures.count()})
         uploads = request.FILES.getlist("file")
         if not uploads:
@@ -464,7 +464,7 @@ class DocumentPicturesView(View):
                 messages.success(request, f"Added {len(added)} picture{'s' if len(added) != 1 else ''}.")
             for problem in problems:
                 messages.error(request, problem)
-            return redirect(request.path)
+            return redirect("document_pictures", pk=document.pk, token=token)
         return JsonResponse(
             {
                 "added": [

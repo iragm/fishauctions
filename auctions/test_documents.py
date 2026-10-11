@@ -1212,7 +1212,7 @@ class PictureTests(LibraryTestCase):
         first, second = document.pictures.all()
         with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(self.link(document), {"remove": first.pk, "from_page": "1"})
-        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, self.link(document), fetch_redirect_response=False)
         self.assertFalse(first.file.storage.exists(first.file.name))
         with self.captureOnCommitCallbacks(execute=True):
             document.delete()
