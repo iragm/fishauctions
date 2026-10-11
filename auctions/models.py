@@ -76,6 +76,7 @@ from .documents.models import (  # noqa: F401
     DocumentChunk,
     DocumentFeedback,
     DocumentImageText,
+    DocumentPicture,
 )
 from .email_routing import (
     admin_routing_email,

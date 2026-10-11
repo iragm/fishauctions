@@ -1,4 +1,4 @@
-"""The library's tables: documents, their chunks, image transcriptions and readers' reports.
+"""The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
 
 Here rather than in ``models.py`` for the same reason as :mod:`auctions.moderation_models`; the rest of
 the app is named only as ``"auctions.Club"`` strings.
@@ -266,6 +266,29 @@ class DocumentImageText(models.Model):
 
     def __str__(self):
         return f"{self.sha256[:12]} by {self.model}"
+
+
+class DocumentPicture(models.Model):
+    """A photograph or drawing from a document, cropped out by whoever transcribed it.
+
+    Uploaded through the signed link :mod:`.pictures` hands out, so an agent can send the bytes with a
+    script rather than through its own tool call. Stored re-encoded, with the camera's metadata gone.
+    """
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="pictures")
+    file = models.FileField(storage=document_storage, upload_to=document_upload_to, max_length=255)
+    caption = models.CharField(max_length=300, blank=True)
+    position = models.PositiveSmallIntegerField(default=0)
+    size = models.PositiveBigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("position", "pk")
+        constraints = [models.UniqueConstraint(fields=["document", "sha256"], name="one_copy_of_each_picture")]
+
+    def __str__(self):
+        return self.caption or f"Picture {self.position} of {self.document_id}"
 
 
 class DocumentFeedback(models.Model):
