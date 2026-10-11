@@ -1149,7 +1149,9 @@ class ModalReopenTests(LiveBiddingTestCase):
             link = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "tbody a[hx-get*='/api/auctiontos/']"))
             )
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+            # Instant: Bootstrap sets `scroll-behavior: smooth` on :root, so a plain scrollIntoView
+            # animates, and a click aimed at the link mid-scroll lands on the table cell beside it.
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});", link)
             link.click()
             try:
                 WebDriverWait(driver, 10).until(
