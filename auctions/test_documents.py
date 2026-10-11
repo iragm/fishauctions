@@ -1211,8 +1211,9 @@ class PictureTests(LibraryTestCase):
         self.post(self.link(document), ("a.jpg", _picture_bytes()), ("b.png", _picture_bytes("PNG")))
         first, second = document.pictures.all()
         with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.post(self.link(document), {"remove": first.pk, "from_page": "1"})
-        self.assertRedirects(response, self.link(document), fetch_redirect_response=False)
+            link = self.link(document)  # signed with a timestamp: a second call can differ
+            response = self.client.post(link, {"remove": first.pk, "from_page": "1"})
+        self.assertRedirects(response, link, fetch_redirect_response=False)
         self.assertFalse(first.file.storage.exists(first.file.name))
         with self.captureOnCommitCallbacks(execute=True):
             document.delete()
