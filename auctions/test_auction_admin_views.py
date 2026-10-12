@@ -192,7 +192,7 @@ class AuctionBulkPrintingPDFTests(StandardTestCase):
             self._url(selected_tos=f"[{self.admin_in_person_tos.pk}]", print_only_unprinted="False")
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("attachment;filename=", response["Content-Disposition"])
+        self.assertIn("attachment; filename=", response["Content-Disposition"])
 
     def test_malformed_selection_redirects_back_to_the_form(self):
         self.client.force_login(self.admin_user)

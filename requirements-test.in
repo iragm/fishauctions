@@ -1,5 +1,7 @@
 pre-commit
-ruff
+# Held below 0.17: it turns on ICN001 (import datetime as dt) and UP017 (datetime.UTC), 206
+# findings across the codebase, mostly unsafe fixes. Lift it with a commit that applies them.
+ruff<0.17
 selenium
 # daphne is only needed by ChannelsLiveServerTestCase (the live-bidding websocket
 # Selenium suite in auctions/tests_selenium.py). Production serves ASGI via
