@@ -52,7 +52,7 @@ def _admin_auction_candidates(user):
     if user.is_superuser:
         return qs
     admin_tos_auction_ids = AuctionTOS.objects.filter(is_admin=True, user=user).values_list("auction_id", flat=True)
-    # Club paths only count for club-managed auctions, which permission_check enforces.
+    # Club officers run every auction attached to their club, as permission_check allows.
     from auctions.models import ClubMember
 
     club_ids = (

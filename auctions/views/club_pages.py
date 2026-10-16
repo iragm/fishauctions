@@ -286,7 +286,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         if existing:
             messages.info(request, "You are already a member of this club.")
         else:
-            ClubMember.objects.create(
+            member = ClubMember.objects.create(
                 club=self.club,
                 user=request.user,
                 name=f"{request.user.first_name} {request.user.last_name}".strip(),
@@ -301,6 +301,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
                 user=request.user,
                 action=f"{request.user.get_full_name()} joined the club",
                 applies_to="MEMBERS",
+                member=member,
             )
             messages.success(request, f"You have joined {self.club.name}!")
         return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -544,6 +545,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
+        kwargs["can_view_history"] = self.user_has_club_permission("permission_view")
         kwargs["club_has_fee"] = self.club.charges_dues
         kwargs["can_manage_discord"] = bool(
             self.club.discord_server_id

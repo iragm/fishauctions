@@ -733,12 +733,10 @@ def _ical_escape(value):
 
 def _log_esp_member_events(club, members, action_for_member):
     """Log mailing-list provider events about members to ClubHistory, with no acting user."""
-    ClubHistory.objects.bulk_create(
-        [
-            ClubHistory(club=club, user=None, action=action_for_member(member), applies_to="MEMBERS")
-            for member in members
-        ]
-    )
+    for member in members:
+        ClubHistory.objects.create(
+            club=club, user=None, action=action_for_member(member), applies_to="MEMBERS", member=member
+        )
 
 
 class MailchimpWebhookView(View):
@@ -878,6 +876,7 @@ class ClubMemberSelfServiceView(View):
             user=None,
             action=history_action,
             applies_to="MEMBERS",
+            member=member,
         )
         transaction.on_commit(lambda: sync_club_member_to_mailchimp.delay(member.pk))
         transaction.on_commit(lambda: sync_club_member_to_brevo.delay(member.pk))

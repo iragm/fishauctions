@@ -58,6 +58,7 @@ class MergeCoverageTests(TestCase):
     MEMBER_MOVED = {
         "auctions.AuctionTOS.clubmember",
         "auctions.BapAward.club_member",
+        "auctions.ClubHistory.members",
         "auctions.Club.auction_email_member",
         "auctions.Club.contact_email_member",
         "auctions.Club.donation_email_member",

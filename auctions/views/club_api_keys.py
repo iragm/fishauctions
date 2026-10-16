@@ -394,6 +394,7 @@ class SelfServeContactLinkView(ClubViewMixin, View):
             user=None,
             action=f"{member} set their email preferences to {label} (self-service)",
             applies_to="MEMBERS",
+            member=member,
         )
         return render(
             request,

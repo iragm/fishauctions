@@ -454,6 +454,7 @@ class BapAwardAdminView(APIView):
                 user=request.user,
                 action=f"{'Updated' if award else 'Added'} BAP award: {award_obj}",
                 applies_to="BAP",
+                member=award_obj.club_member,
             )
             return close_modal_response(
                 "trigger-event",
@@ -474,7 +475,8 @@ class BapAwardDeleteView(APIView):
         club = award.club_member.club
         if not check_club_permission(request.user, club, "permission_manage_bap"):
             raise PermissionDenied()
-        member_name = str(award.club_member)
+        member = award.club_member
+        member_name = str(member)
         lot = award.lot
         award.delete()
         if lot:
@@ -487,6 +489,7 @@ class BapAwardDeleteView(APIView):
             user=request.user,
             action=f"Deleted BAP award for {member_name}",
             applies_to="BAP",
+            member=member,
         )
         return close_modal_response(
             "trigger-event",
@@ -586,6 +589,9 @@ class BapAwardCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewM
         if not member:
             return "skipped"
         award_date = date_type.fromisoformat(fields["date"]) if fields.get("date") else timezone.localdate()
+        if not hasattr(self, "_awarded_members"):
+            self._awarded_members = []
+        self._awarded_members.append(member)
         BapAward.objects.create(
             club_member=member,
             date=award_date,
@@ -611,7 +617,13 @@ class BapAwardCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewM
         action = f"BAP CSV import: {results['created']} award(s) added"
         if filename:
             action += f" from {filename}"
-        ClubHistory.objects.create(club=self.club, user=self.request.user, action=action, applies_to="BAP")
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action=action,
+            applies_to="BAP",
+            members=getattr(self, "_awarded_members", []),
+        )
 
     def process_csv_data(self, csv_reader, filename=None):
         """Parse the upload into planned actions and show the review page; nothing is written yet."""

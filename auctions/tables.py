@@ -809,9 +809,22 @@ class ClubMemberHTMxTable(tables.Table):
         return self._SOURCE_LABELS.get(value, value)
 
     def render_actions(self, value, record):
-        if not self.can_add_edit and not self.can_manage_permissions and not self.can_manage_discord:
+        if (
+            not self.can_add_edit
+            and not self.can_manage_permissions
+            and not self.can_manage_discord
+            and not self.can_view_history
+        ):
             return ""
         name = record.display_name
+
+        history_item = static_html("")
+        if self.can_view_history:
+            history_url = reverse("club_history", kwargs={"slug": record.club.slug}) + f"?member={record.pk}"
+            history_item = format_html(
+                '<li><a class="dropdown-item" href="{}"><i class="bi bi-clock-history me-1"></i>History</a></li>',
+                history_url,
+            )
 
         permissions_item = static_html("")
         if self.can_manage_permissions and not record.is_deleted:
@@ -954,13 +967,14 @@ class ClubMemberHTMxTable(tables.Table):
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-primary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            "<ul class='dropdown-menu'>{}{}{}{}{}{}</ul>"
+            "<ul class='dropdown-menu'>{}{}{}{}{}{}{}</ul>"
             "</div>",
             name,
             permissions_item,
             discord_item,
             mailchimp_item,
             brevo_item,
+            history_item,
             edit_items,
             django_admin_item,
         )
@@ -985,6 +999,7 @@ class ClubMemberHTMxTable(tables.Table):
         self.can_add_edit = kwargs.pop("can_add_edit", False)
         self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
         self.can_manage_discord = kwargs.pop("can_manage_discord", False)
+        self.can_view_history = kwargs.pop("can_view_history", False)
         can_manage_bap = kwargs.pop("can_manage_bap", False)
         can_manage_membership = kwargs.pop("can_manage_membership", False)
         can_manage_auctions = kwargs.pop("can_manage_auctions", False)

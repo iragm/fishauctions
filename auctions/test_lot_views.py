@@ -49,7 +49,7 @@ class LotLabelViewTestCase(StandardTestCase):
         # messages = list(response.wsgi_request._messages)
         assert response.status_code == 200
         # weasyprint currently requires pydyf==0.8.0.
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
     def test_small_labels(self):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
@@ -58,7 +58,7 @@ class LotLabelViewTestCase(StandardTestCase):
         self.client.login(username=self.user, password="testpassword")
         response = self.client.get(self.url)
         assert response.status_code == 200
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
     def test_thermal_labels(self):
         """Test that a regular user can print their own labels."""
@@ -68,7 +68,7 @@ class LotLabelViewTestCase(StandardTestCase):
         self.client.login(username=self.user, password="testpassword")
         response = self.client.get(self.url)
         assert response.status_code == 200
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
     def test_thermal_labels_capped_at_100(self):
         """Test that thermal labels are capped at 100 per PDF."""
@@ -92,7 +92,7 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
 
         assert response.status_code == 200
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
         # Check that a warning message was added about the 100 label cap
         self.assert_message_contains(response, "100 labels")
@@ -120,7 +120,7 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
 
         assert response.status_code == 200
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
         # Check that a warning message was added about the 100 label cap
         self.assert_message_contains(response, "100 labels")
@@ -148,7 +148,7 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
 
         assert response.status_code == 200
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
         # Check that NO warning message was added
         self.assert_message_contains(response, "100 labels", should_exist=False)
@@ -265,7 +265,7 @@ class LotLabelViewTestCase(StandardTestCase):
         url = reverse("auction_printing_pdf", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
-        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
     def test_bulk_print_form_uses_fetch(self):
         """The bulk print form uses fetch(), so downloading the PDF doesn't navigate."""

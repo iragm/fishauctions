@@ -1440,6 +1440,7 @@ class ClubHistoryAdmin(admin.ModelAdmin):
     list_filter = ("timestamp", "applies_to", "club")
     search_fields = ("user__first_name", "user__last_name", "action", "club__name")
     ordering = ("-timestamp",)
+    raw_id_fields = ("members",)
 
 
 class ClubEventAdmin(admin.ModelAdmin):

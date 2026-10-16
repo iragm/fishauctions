@@ -640,6 +640,7 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             user=acting_user,
             action=action,
             applies_to="MEMBERSHIP",
+            member=member,
         )
     except Exception:
         logger.exception("Failed to record ClubHistory for renewal of invoice %s", invoice.pk)

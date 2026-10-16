@@ -650,6 +650,7 @@ def propagate_user_email_change_to_members(sender, instance, created, **kwargs):
             user=instance,
             action=f"{member} changed their account email from {old_email} to {new_email}",
             applies_to="MEMBERS",
+            member=member,
         )
 
 
@@ -828,6 +829,7 @@ def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwa
             user=None,
             action=f"{member} marked do not contact after SES complaint",
             applies_to="MEMBERS",
+            member=member,
         )
 
 

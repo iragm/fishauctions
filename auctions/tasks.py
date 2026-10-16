@@ -327,6 +327,7 @@ def send_club_member_email(member, subject, message_text, email_type="welcome", 
             club=member.club,
             action=f"Didn't email {member} ({email_type.replace('_', ' ')}): the club has no mailing address",
             applies_to="MEMBERSHIP",
+            member=member,
         )
         return False
     current_site = Site.objects.get_current()
@@ -466,6 +467,7 @@ def maybe_send_membership_renewal_confirmation(member):
             club=member.club,
             action=f"Sent renewal confirmation to {member} ({member.email})",
             applies_to="MEMBERSHIP",
+            member=member,
         )
     return sent
 
@@ -1017,6 +1019,7 @@ def _send_one_welcome(member):
                 club=member.club,
                 action=f"Sent welcome letter to {member} ({member.email})",
                 applies_to="MEMBERS",
+                member=member,
             )
 
 
@@ -1090,6 +1093,7 @@ def _send_one_reminder(member, due_field, subject, message, label):
                 club=member.club,
                 action=f"Sent {label} to {member} ({member.email})",
                 applies_to="MEMBERSHIP",
+                member=member,
             )
     # Cleared whether or not it sent, so nothing is re-checked nightly forever.
     type(member).objects.filter(pk=member.pk).update(**{due_field: None})
