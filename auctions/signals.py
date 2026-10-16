@@ -383,11 +383,15 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     A new member gets shadow rows in club-managed auctions that auto-add ("all" or "checkin"), with the
     number checked against both club and auction.
     """
-    from .models import AuctionTOS, PickupLocation
+    from .models import AuctionTOS, ClubMember, PickupLocation
 
     if created:
         # Finished auctions too: the member is findable there, and attendance counts checked_in.
         for auction in club_managed_auctions_for(instance.club):
+            if not instance.is_deleted and ClubMember.objects.filter(pk=instance.pk, is_deleted=True).exists():
+                # A shadow row met an older one with the same email, and this member merged into its
+                # member. That member has rows of its own; more here would merge it again, once each.
+                break
             default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
             if not default_location:
                 continue
