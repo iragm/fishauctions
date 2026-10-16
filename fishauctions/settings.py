@@ -930,10 +930,9 @@ SUMMERNOTE_CONFIG = {
             # ['view', ['fullscreen', 'codeview', 'help']],
         ],
     },
-    "js": (
-        ("/static/summernote/bs5-hack.js"),
-        ("/static/summernote/clean-on-paste.js"),
-    ),
+    # Runs inside the editor's iframe, after summernote-bs5. Under js/, not summernote/: that one is
+    # collectstatic output, gitignored, so a file put there never ships.
+    "js": ("/static/js/summernote_bs5.js",),
 }
 
 X_FRAME_OPTIONS = "SAMEORIGIN"
