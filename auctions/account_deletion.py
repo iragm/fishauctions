@@ -299,7 +299,7 @@ def _anonymize_club_memberships(user):
                 is_deleted=True,
             )
             action = "A member who signed themselves up deleted their site account and their member record"
-        ClubHistory.objects.create(club=member.club, user=None, action=action, applies_to="MEMBERS")
+        ClubHistory.objects.create(club=member.club, user=None, action=action, applies_to="MEMBERS", member=member)
 
 
 def _anonymize_auction_records(user):

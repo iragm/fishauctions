@@ -458,6 +458,7 @@ class DiscordInteractionsView(View):
                     user=None,
                     action=f"Discord account linked for {existing_by_email} (@{discord_username or discord_id})",
                     applies_to="MEMBERS",
+                    member=existing_by_email,
                 )
                 return _discord_ephemeral("✅ You're in! Access unlocked.")
 
@@ -477,6 +478,7 @@ class DiscordInteractionsView(View):
             user=None,
             action=f"New member added via Discord: {new_member} (@{discord_username or discord_id})",
             applies_to="MEMBERS",
+            member=new_member,
         )
         return _discord_ephemeral("✅ You're in! Access unlocked.")
 

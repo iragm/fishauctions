@@ -311,6 +311,7 @@ def _find_or_create_subscription_member(club, subscription_id, email):
             club=club,
             action=f"Added member {member} from PayPal subscription {_mask_subscription_id(subscription_id)}",
             applies_to="MEMBERS",
+            member=member,
         )
         return member
     return None
@@ -396,6 +397,7 @@ def _apply_paypal_subscription_event(club, subscription):
                     f"{_mask_subscription_id(subscription_id)} {status.lower()}); paid-through date unchanged"
                 ),
                 applies_to="MEMBERSHIP",
+                member=member,
             )
             logger.info(
                 "PayPal subscription %s %s: cleared for member %s",
@@ -457,6 +459,7 @@ def _apply_paypal_subscription_event(club, subscription):
             f"expiration {old_exp_str} → {new_exp_str}"
         ),
         applies_to="MEMBERSHIP",
+        member=member,
     )
     maybe_send_membership_renewal_confirmation(member)
     logger.info(

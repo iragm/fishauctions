@@ -1389,7 +1389,7 @@ class ClubMemberFilter(django_filters.FilterSet):
 
 
 class ClubHistoryFilter(django_filters.FilterSet):
-    """Filter club history by user, action, or date"""
+    """Filter club history by user, action, or date, and to one member (the member list's History)."""
 
     query = django_filters.CharFilter(
         method="club_history_search",
@@ -1401,9 +1401,12 @@ class ClubHistoryFilter(django_filters.FilterSet):
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
                 "hx-swap": "outerHTML",
+                # Keeps ?member= while typing.
+                "hx-include": "closest form",
             }
         ),
     )
+    member = django_filters.NumberFilter(field_name="members", label="", widget=HiddenInput())
 
     class Meta:
         model = ClubHistory

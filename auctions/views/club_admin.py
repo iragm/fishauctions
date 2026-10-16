@@ -310,6 +310,7 @@ class ClubMemberDeleteView(APIView):
             user=request.user,
             action=f"Deactivated member {member}",
             applies_to="MEMBERS",
+            member=member,
         )
         return close_modal_response(None, extra_triggers={"clubMemberListChanged": None})
 
@@ -334,6 +335,7 @@ class ClubMemberReactivateView(APIView):
             user=request.user,
             action=f"Reactivated member {member}",
             applies_to="MEMBERS",
+            member=member,
         )
         # 200 with HX-Trigger so the event fires on the link (which stays in the DOM) and bubbles to
         # body, where the table container is listening.
@@ -482,6 +484,7 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
             user=request.user,
             action=f"Set membership expiration for {member}: {old_str} → {new_str}",
             applies_to="MEMBERSHIP",
+            member=member,
         )
         messages.success(request, f"Expiration date updated for {member}.")
         if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
