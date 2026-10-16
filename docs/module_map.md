@@ -613,7 +613,7 @@ this only quotes its opening sentence.
 - **`test_square.py`** (943 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
   `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`
-- **`test_static_files.py`** (147 lines)
+- **`test_static_files.py`** (155 lines)
   `/static/`: content-hashed names, and the nginx rule that caches them for a year.
   `TemplatesNameRealFilesTests`, `HashedNamesReachTheYearLongCacheTests`, `MissingManifestEntriesDoNotRaiseTests`, `DebugSkipsHashingTests`
 - **`test_static_html.py`** (85 lines)
@@ -1086,7 +1086,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1261 lines)
+- **`settings.py`** (1260 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
