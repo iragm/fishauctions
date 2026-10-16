@@ -402,7 +402,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
             .filter(email__isnull=False)
             .select_related("user")
         )
-        added_count = 0
+        added = []
         skipped_count = 0
         # Who is already a member, in two queries; emails matched case-insensitively.
         members_by_email = {}
@@ -419,7 +419,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
             if existing:
                 skipped_count += 1
                 continue
-            ClubMember.objects.create(
+            member = ClubMember.objects.create(
                 club=club,
                 user=tos.user,
                 name=tos.name or "",
@@ -436,7 +436,8 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 members_by_email[tos.email.lower()] = True
             if tos.user_id:
                 members_by_user[tos.user_id] = True
-            added_count += 1
+            added.append(member)
+        added_count = len(added)
 
         if added_count:
             messages.success(
@@ -454,6 +455,7 @@ class AddAuctionUsersToClub(LoginRequiredMixin, AuctionViewMixin, View):
                 user=request.user,
                 action=f"Added {added_count} participant{'s' if added_count != 1 else ''} from auction '{auction}' ({skipped_count} already members)",
                 applies_to="MEMBERS",
+                members=added,
             )
         else:
             messages.info(
@@ -489,7 +491,7 @@ class AddSingleAuctionTOSToClub(LoginRequiredMixin, View):
             existing = ClubMember.objects.filter(club=club, user=tos.user, is_deleted=False).first()
 
         if not existing:
-            ClubMember.objects.create(
+            member = ClubMember.objects.create(
                 club=club,
                 user=tos.user,
                 name=tos.name or "",
@@ -510,6 +512,7 @@ class AddSingleAuctionTOSToClub(LoginRequiredMixin, View):
                 user=request.user,
                 action=f"Added {tos.name} from auction '{auction}'",
                 applies_to="MEMBERS",
+                member=member,
             )
 
         if request.headers.get("HX-Request"):

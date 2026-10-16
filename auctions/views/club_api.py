@@ -238,6 +238,7 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
             user=None if self.is_api_key_request() else self.request.user,
             action=f"Added member {member} via {actor}",
             applies_to="MEMBERS",
+            member=member,
         )
 
 
@@ -285,6 +286,7 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             user=None if self.is_api_key_request() else self.request.user,
             action=f"Updated member {member} via {actor}",
             applies_to="MEMBERS",
+            member=member,
         )
 
     def perform_destroy(self, instance):
@@ -301,6 +303,7 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             user=self.request.user,
             action=f"Deleted member {instance}",
             applies_to="MEMBERS",
+            member=instance,
         )
 
 
@@ -351,6 +354,7 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
                         f"{serializer.errors} — POST data: {field_dump}"
                     ),
                     applies_to="MEMBERSHIP",
+                    member=member,
                 )
             except Exception:
                 pass  # Never let the history write mask the original error
@@ -370,6 +374,7 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
                 user=None if self.is_api_key_request() else request.user,
                 action=f"Added member {member} via {self._actor()} (membership renewal)",
                 applies_to="MEMBERS",
+                member=member,
             )
         member = renew_club_member(
             member,
@@ -411,6 +416,7 @@ class ClubMemberBapAwardAPIView(ClubAPIViewMixin, APIView):
             user=None if self.is_api_key_request() else request.user,
             action=f"Added {award} to {member} via {actor}",
             applies_to="BAP",
+            member=member,
         )
         return Response({"id": award.pk, "member_id": member.pk, "points": award.points}, status=201)
 

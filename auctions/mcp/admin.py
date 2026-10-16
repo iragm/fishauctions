@@ -1230,6 +1230,7 @@ def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
             user=request.user,
             action=f"Removed admin permissions from {member.name} through an approved proposal.",
             applies_to="MEMBERS",
+            member=member,
         )
         return _ok(f"{user.username} is no longer an admin of {club.name}.")
     if not services.ensure_club_admin(club, user, note="through an approved proposal", actor=request.user):

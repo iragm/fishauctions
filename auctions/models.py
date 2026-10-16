@@ -2440,6 +2440,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                     club=self.club,
                     action=f"{carried}'s membership is no longer carried with {self}'s, who was deactivated",
                     applies_to="MEMBERSHIP",
+                    members=[carried, self],
                 )
             if _discord_changed or (_is_new and self.discord_id):
                 self.maybe_assign_discord_role()
@@ -2610,11 +2611,14 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
                     row.save()
         if self.bap_awards.exists():
             BapAward.recalculate_member_points(self)
+        # One person, one history.
+        self.history.add(*duplicate.history.all())
         ClubHistory.objects.create(
             club=self.club,
             user=user,
             action=f"Merged member {duplicate} into {self}" + (f": {reason}" if reason else ""),
             applies_to="MEMBERS",
+            members=[self, duplicate],
         )
 
 
@@ -2637,10 +2641,22 @@ class AppleDeviceRegistration(models.Model):
         return f"{self.device_library_identifier} for {self.member}"
 
 
+class ClubHistoryManager(models.Manager):
+    def create(self, member=None, members=(), **kwargs):
+        """``member``/``members`` link the row to the people it is about, for a member's own history."""
+        row = super().create(**kwargs)
+        linked = [m for m in [member, *members] if m is not None and m.pk]
+        if linked:
+            row.members.add(*linked)
+        return row
+
+
 class ClubHistory(models.Model):
     """Changelog of changes made to a club"""
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="history")
+    # The members a row is about: one for an edit, every row of a CSV import for the import.
+    members = models.ManyToManyField("ClubMember", blank=True, related_name="history")
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=800, blank=True, null=True)
     # See AuctionHistory.changed_fields.
@@ -2660,6 +2676,8 @@ class ClubHistory(models.Model):
         blank=True,
         null=True,
     )
+
+    objects = ClubHistoryManager()
 
     def __str__(self):
         if self.user:
@@ -7596,6 +7614,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 user=user,
                 action=merge_action,
                 applies_to="MEMBERS",
+                member=self.clubmember,
             )
         else:
             # Standard auction — record in AuctionHistory
@@ -12453,6 +12472,7 @@ class UserData(CachedPropertiesMixin, models.Model):
                     user=None,
                     action=f"{member} marked do not contact after unsubscribing from all emails",
                     applies_to="MEMBERS",
+                    member=member,
                 )
 
     @cached_property

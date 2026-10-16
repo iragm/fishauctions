@@ -81,6 +81,9 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
+        member_pk = self.request.GET.get("member", "")
+        if member_pk.isdigit():
+            context["history_member"] = ClubMember.objects.filter(club=self.club, pk=member_pk).first()
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -688,8 +691,13 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
             return "skipped"
         fields = action.get("fields", {})
         target_pk = action.get("target_pk")
+        # Every member the import touched is linked to its history row, so it shows in their own history.
+        if not hasattr(self, "_imported_members"):
+            self._imported_members = []
+        imported = self._imported_members
         if kind == "create" or (kind == "duplicate" and decision == "create"):
             member = self._create_member(fields)
+            imported.append(member)
             if kind == "duplicate" and target_pk:
                 ClubMember.objects.filter(pk=member.pk).update(possible_duplicate=target_pk)
                 ClubMember.objects.filter(pk=target_pk, possible_duplicate__isnull=True).update(
@@ -700,9 +708,10 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
             ClubMember.objects.filter(pk=target_pk, club=self.club, is_deleted=False).first() if target_pk else None
         )
         if not member:
-            self._create_member(fields)
+            imported.append(self._create_member(fields))
             return "created"
         self._update_member(member, fields)
+        imported.append(member)
         return "updated" if kind == "update" else "merged"
 
     def record_import_history(self, results, filename=None):
@@ -719,6 +728,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
             user=self.request.user,
             action=f"CSV import: {', '.join(parts)}" + (f" from {filename}" if filename else ""),
             applies_to="MEMBERS",
+            members=getattr(self, "_imported_members", []),
         )
 
     def process_csv_data(self, csv_reader, filename=None):

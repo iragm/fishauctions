@@ -133,6 +133,7 @@ def create_club_member_from_api(validated_data: dict, club, api_key):
         user=None,
         action=f"{label} member via API [{api_key.prefix}] ({api_key.name}): {member}",
         applies_to="MEMBERS",
+        member=member,
     )
 
     api_key.last_used_at = timezone.now()
@@ -209,6 +210,7 @@ def ensure_club_member(
             user=member.user,
             applies_to="MEMBERS",
             action=f"{member.name} joined via auction '{auction.title}'",
+            member=member,
         )
     return member, created
 
@@ -1096,6 +1098,7 @@ def ensure_club_admin(club, user, *, note, actor=None):
         user=actor,
         action=f"Granted admin permissions to {member.name} {note}.",
         applies_to="MEMBERS",
+        member=member,
     )
     return True
 
@@ -1153,6 +1156,7 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
         if not existing and not lot.manually_approved:
             # Nothing decided: a quiet no-op, since review_points is idempotent and hosts retry.
             return None
+        undone_member = existing.club_member if existing else None
         if existing:
             existing.delete()
         lot.bap_points_awarded = 0
@@ -1164,11 +1168,13 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
             user=acting_user,
             action=f"Undid the points decision for {seller}: {lot.lot_name}",
             applies_to="BAP",
+            member=undone_member,
         )
         return None
 
     if decision == "deny":
         existing = BapAward.objects.filter(lot=lot).first()
+        rejected_member = existing.club_member if existing else None
         if existing:
             existing.delete()
         lot.bap_points_awarded = 0
@@ -1179,6 +1185,7 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
             user=acting_user,
             action=f"Rejected BAP points for {seller}: {lot.lot_name}",
             applies_to="BAP",
+            member=rejected_member,
         )
         return None
 
@@ -1208,6 +1215,7 @@ def review_lot_points(lot, club, *, acting_user, decision, bap=0, hap=0, cap=0):
         user=acting_user,
         action=f"Awarded {lot.bap_points_awarded} BAP point(s) to {seller} for {lot.lot_name}",
         applies_to="BAP",
+        member=member,
     )
     return award
 
@@ -1336,6 +1344,7 @@ def propagate_contact_info(user, userdata, *, acting_user=None):
                 user=acting_user,
                 action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
                 applies_to="MEMBERS",
+                member=club_member,
             )
             told.append(club_member.club.name)
 

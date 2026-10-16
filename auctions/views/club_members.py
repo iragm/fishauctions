@@ -478,6 +478,7 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                     user=request.user,
                     action=f"Updated member {saved} via auction {auctiontos.auction}",
                     applies_to="MEMBERS",
+                    member=saved,
                 )
             else:
                 ClubHistory.objects.create(
@@ -485,6 +486,7 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                     user=request.user,
                     action=f"Updated member {saved}",
                     applies_to="MEMBERS",
+                    member=saved,
                 )
             if "membership_carried_by" in form.changed_data:
                 carrier = saved.membership_carried_by
@@ -495,6 +497,7 @@ $("#id_name, #id_email, #id_bidder_number").on("blur", cmValidateField);
                     if carrier
                     else f"{saved}'s membership is no longer carried with another member's",
                     applies_to="MEMBERSHIP",
+                    members=[saved, carrier],
                 )
             messages.success(request, f"{saved} updated.")
             return self._redirect_to_club_admin(member.club)
@@ -535,6 +538,7 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
                 user=request.user,
                 action=f"Updated roles for {member}",
                 applies_to="MEMBERS",
+                member=member,
             )
             return ClubMemberAdminView._redirect_to_club_admin(member.club)
         return render(
@@ -615,6 +619,7 @@ class ClubMemberDiscordAdminView(LoginRequiredMixin, View):
                 user=request.user,
                 action=f"Updated Discord settings for {saved}",
                 applies_to="MEMBERS",
+                member=saved,
             )
             messages.success(request, f"Discord settings for {saved} updated.")
             return close_modal_response("reload-page")
@@ -778,6 +783,7 @@ class ClubMemberCreateView(APIView):
                 user=request.user,
                 action=f"Added member {member}",
                 applies_to="MEMBERS",
+                member=member,
             )
             # In check-in mode, also create a linked AuctionTOS for this auction
             if auction:
@@ -850,6 +856,7 @@ def renew_club_member(member, *, acting_user=None, actor="", money_description="
         user=acting_user,
         action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
         applies_to="MEMBERSHIP",
+        member=member,
     )
     if member.club.charges_dues:
         ClubMoney.objects.create(
@@ -939,6 +946,7 @@ class ClubMembershipNumberView(APIView):
             user=request.user,
             action=f"Reset membership number for {member}",
             applies_to="MEMBERS",
+            member=member,
         )
         return render(request, "auctions/club_membership_number.html", {"member": member})
 
@@ -995,6 +1003,7 @@ class ClubMemberResendCardView(APIView):
             user=request.user,
             action=f"Emailed membership card to {member} ({member.email})",
             applies_to="MEMBERS",
+            member=member,
         )
         return close_modal_response(toast=f"Membership card emailed to {member.email}.")
 
