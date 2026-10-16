@@ -3096,8 +3096,8 @@ def leave_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     """Undo the user's own join, the X next to Join. ``services.leave_auction_problem`` says when an
     organizer has to do it instead.
     """
+    from .services import LEAVE_REFUSALS, paid_club_for
     from .services import leave_auction as leave_auction_service
-    from .services import leave_auction_problem
 
     auction, problem = _auction_or_problem(request, params)
     if problem:
@@ -3105,16 +3105,13 @@ def leave_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     tos = _own_tos(request.user, auction)
     if not tos:
         return _error(f"You aren't in {auction.title}.")
-    why = leave_auction_problem(tos)
-    if why == "added":
-        return _error(f"An organizer added you to {auction.title}, so ask them to take you out.")
+    why = leave_auction_service(tos)
     if why:
-        return _error(f"You've already done things in {auction.title}, so ask an organizer to take you out.")
-    member = tos.clubmember if auction.is_club_managed else None
-    leave_auction_service(tos)
+        return _error(f"{auction.title}: {LEAVE_REFUSALS[why]}")
     summary = f"You've left {auction.title}."
-    if member and member.is_paid_member:
-        summary += f" Your paid {auction.club.name} membership isn't cancelled or refunded."
+    paid_club = paid_club_for(tos)
+    if paid_club:
+        summary += f" Your paid {paid_club.name} membership isn't cancelled or refunded."
     return _ok(summary, auction=auction.slug)
 
 

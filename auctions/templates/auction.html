@@ -404,7 +404,7 @@ function initMap() {
                             </div>
                             {% if leave_problem %}
                             <div class="modal-body">
-                                <p class="mb-0">{% if leave_problem == "added" %}An organizer added you, so ask them to take you out.{% else %}You've already done things in this auction, so ask an organizer to take you out.{% endif %}</p>
+                                <p class="mb-0">{{ leave_refusal }}</p>
                             </div>
                             <div class="modal-footer">
                                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
