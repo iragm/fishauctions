@@ -264,6 +264,20 @@ class ManageUsersThroughClubTests(TestCase):
         self.assertFalse(self.auction.permission_check(self.club_add_edit_user))
         self.assertFalse(self.auction.permission_check(self.outsider))
 
+    def test_permission_check_grants_club_officers_on_an_unmanaged_club_auction(self):
+        """An auction made first and attached to the club later is still the club's to run."""
+        self.auction.manage_users_through_club = ""
+        self.auction.save()
+        self.assertTrue(self.auction.permission_check(self.club_admin_user))
+        self.assertTrue(self.auction.permission_check(self.club_manage_auctions_user))
+        self.assertFalse(self.auction.permission_check(self.club_add_edit_user))
+        self.assertFalse(self.auction.permission_check(self.outsider))
+
+    def test_permission_check_ignores_club_officers_once_the_club_is_removed(self):
+        self.auction.club = None
+        self.auction.save()
+        self.assertFalse(self.auction.permission_check(self.club_admin_user))
+
     def test_join_creates_clubmember_and_shadow_auctiontos(self):
         self._enable_club_managed()
 

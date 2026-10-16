@@ -371,7 +371,7 @@ class MobilePaymentConfirmTests(StandardTestCase):
 
     def test_create_allows_club_manage_auctions_permission(self):
         # A club member with "manage auctions" can take payment even when the auction isn't
-        # manage_users_through_club, which Auction.permission_check alone wouldn't grant.
+        # manage_users_through_club.
         from auctions.mobile.services.payments import PaymentService
 
         club = Club.objects.create(name="Mgr Club")
@@ -380,7 +380,6 @@ class MobilePaymentConfirmTests(StandardTestCase):
         self.online_auction.save()
         manager = User.objects.create_user("club_mgr", "mgr@example.com", "pw")
         ClubMember.objects.create(club=club, user=manager, name="Mgr", permission_manage_auctions=True)
-        self.assertFalse(self.online_auction.permission_check(manager))  # not granted by the auction alone
         seller, _ = self._mock_seller()
         with patch.object(PaymentService, "_get_seller_for_invoice", return_value=seller):
             result = PaymentService.create_mobile_payment(invoice_pk=self.pay_invoice.pk, user=manager)
