@@ -394,6 +394,40 @@ function initMap() {
                         {% endif %}
                     </div>
                 </div>
+                {% if joined %}
+                <div class="modal fade" id="leave-auction-modal" tabindex="-1" aria-labelledby="leave-auction-title" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="leave-auction-title">Leave auction?</h5>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            {% if leave_problem %}
+                            <div class="modal-body">
+                                <p class="mb-0">{% if leave_problem == "added" %}An organizer added you, so ask them to take you out.{% else %}You've already done things in this auction, so ask an organizer to take you out.{% endif %}</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                {% if leave_contact_email %}
+                                <a href="mailto:{{ leave_contact_email }}?subject={{ auction.title|urlencode }}" class="btn btn-primary"><i class="bi bi-envelope"></i> Email the organizer</a>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            {% if leave_paid_club %}
+                            <div class="modal-body">
+                                <div class="alert alert-warning text-dark mb-0"><i class="bi bi-exclamation-triangle"></i> Leaving doesn't cancel or refund your paid {{ leave_paid_club.name }} membership.</div>
+                            </div>
+                            {% endif %}
+                            <form method="post" action="{% url 'auction_leave' slug=auction.slug %}" class="modal-footer">
+                                {% csrf_token %}
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">No</button>
+                                <button type="submit" class="btn btn-danger">Yes, leave</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
             {% endif %}
             <div id="join-message" style="position:fixed; bottom:0; right:30%; visibility: hidden; opacity: 0;" data-toggle="tooltip" data-placement="top" title="Keep scrolling to join this auction"></div>
 

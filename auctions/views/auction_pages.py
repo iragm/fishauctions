@@ -58,6 +58,8 @@ from auctions.services import (
     ensure_club_admin,
     finish_new_auction,
     join_auction,
+    leave_auction,
+    leave_auction_problem,
     link_auction_to_club,
     missing_contact_info,
     readable_list,
@@ -921,6 +923,10 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 existingTos = tos.pickup_location
                 i_agree = True
                 context["hasChosenLocation"] = existingTos.pk if existingTos else False
+                context["joined"] = True
+                context["leave_problem"] = leave_auction_problem(tos)
+                member = tos.clubmember if self.auction.is_club_managed else None
+                context["leave_paid_club"] = self.auction.club if member and member.is_paid_member else None
             else:
                 context["hasChosenLocation"] = False
                 if self.auction.multi_location:
@@ -981,6 +987,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             user=self.request.user,
             auction=self.auction,
             next_url=self.request.GET.get("next"),
+            joined=context.get("joined", False),
             initial={
                 "user": getattr(self.request.user, "id", None),
                 "auction": self.auction.pk,
@@ -998,6 +1005,10 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["auction_contact_email"] = self.auction.club.contact_email or None
         else:
             context["auction_contact_email"] = None
+        if context.get("joined"):
+            context["leave_contact_email"] = context["auction_contact_email"] or getattr(
+                self.auction.created_by, "email", None
+            )
         return context
 
     def post(self, request, *args, **kwargs):
@@ -1024,6 +1035,21 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         else:
             logger.debug(form.cleaned_data)
             return self.form_invalid(form)
+
+
+class AuctionLeave(LoginRequiredMixin, View):
+    """The X next to Join: undoes your own join, and nothing more (``services.leave_auction_problem``)."""
+
+    def post(self, request, slug):
+        auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+        tos = AuctionTOS.objects.filter(user=request.user, auction=auction).first()
+        if tos:
+            if leave_auction_problem(tos):
+                messages.error(request, "Ask the organizer to take you out of this auction.")
+            else:
+                leave_auction(tos)
+                messages.success(request, f"You've left {auction}.")
+        return redirect(auction.get_absolute_url())
 
 
 class AuctionSurvey(TemplateView):

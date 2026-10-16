@@ -3091,6 +3091,32 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def leave_auction(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Undo the user's own join, the X next to Join. ``services.leave_auction_problem`` says when an
+    organizer has to do it instead.
+    """
+    from .services import leave_auction as leave_auction_service
+    from .services import leave_auction_problem
+
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    tos = _own_tos(request.user, auction)
+    if not tos:
+        return _error(f"You aren't in {auction.title}.")
+    why = leave_auction_problem(tos)
+    if why == "added":
+        return _error(f"An organizer added you to {auction.title}, so ask them to take you out.")
+    if why:
+        return _error(f"You've already done things in {auction.title}, so ask an organizer to take you out.")
+    member = tos.clubmember if auction.is_club_managed else None
+    leave_auction_service(tos)
+    summary = f"You've left {auction.title}."
+    if member and member.is_paid_member:
+        summary += f" Your paid {auction.club.name} membership isn't cancelled or refunded."
+    return _ok(summary, auction=auction.slug)
+
+
 def _membership_card(member) -> dict[str, Any]:
     """One of the caller's own memberships, as the card widget and model read it.
 
@@ -12425,6 +12451,26 @@ register(
 
 register(
     Action(
+        name="leave_auction",
+        description=(
+            "Take the user out of an auction they joined themselves, undoing the join. Refuses, saying "
+            "to ask an organizer, when an organizer added them or they have bids, lots or invoice "
+            "entries there. It only ever removes the person asking."
+        ),
+        params={
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=leave_auction,
+        destructive=True,
+        aliases={"name"},
+        confirm_template="Leave",
+        examples=["take me out of the fall auction", "I joined the wrong auction"],
+    )
+)
+
+register(
+    Action(
         name="my_membership",
         description=(
             "Show the user their OWN club membership card: their membership number and its "
@@ -15822,6 +15868,10 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "set_invoice_renewal": _PRECISE_TARGET,
     "resend_member_card": _PRECISE_TARGET,
     "leave_feedback": _PRECISE_TARGET,
+    "leave_auction": (
+        "Said once per auction at most, and often refused with a reason to read; the X next to Join "
+        "is right there on the auction page."
+    ),
     "hide_chat_message": _PRECISE_TARGET,
     "record_club_money": _PRECISE_TARGET,
     "rotate_lot_image": _PRECISE_TARGET,
@@ -15956,6 +16006,7 @@ SKILLS: dict[str, str] = {
     "ImageCreateView": "add_lot_image",
     "ImageDelete": "remove_lot_image",
     "AuctionInfo": "join_auction",
+    "AuctionLeave": "leave_auction",
     "ClubAnnouncementsView": "send_club_announcement",
     "ClubAnnouncementRetractView": "retract_announcement",
     "ClubEditView": "update_club_setting",
