@@ -7,6 +7,7 @@ in only one of them. Permission checks are the caller's job.
 import logging
 import re
 
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import Auction, AuctionTOS, ClubHistory, ClubMember
@@ -301,6 +302,37 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
             user=user,
         )
     return obj, is_new_join, ""
+
+
+def leave_auction_problem(tos):
+    """Why *tos* can't take itself out of its auction, or ``""`` when it can.
+
+    Leaving undoes a join and nothing more: ``"added"`` when an organizer made the row, ``"activity"``
+    once anything else hangs off it (bids, lots, invoice entries, check-in, volunteering, admin
+    rights). Either way the organizer sorts out the records.
+    """
+    from .models import Bid, InvoiceAdjustment, InvoicePayment, Lot, VolunteerSignup
+
+    if tos.manually_added:
+        return "added"
+    if (
+        tos.is_admin
+        or tos.checked_in
+        or Lot.objects.exclude(is_deleted=True).filter(Q(auctiontos_seller=tos) | Q(auctiontos_winner=tos)).exists()
+        or (tos.user_id and Bid.objects.filter(user_id=tos.user_id, lot_number__auction=tos.auction_id).exists())
+        or InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists()
+        or InvoicePayment.objects.filter(invoice__auctiontos_user=tos).exists()
+        or VolunteerSignup.objects.filter(auctiontos=tos).exists()
+    ):
+        return "activity"
+    return ""
+
+
+def leave_auction(tos):
+    """Delete *tos*, which :func:`leave_auction_problem` has cleared. An empty invoice goes with it."""
+    auction = tos.auction
+    auction.create_history(applies_to="USERS", action=f"{tos.name} has left this auction", user=tos.user)
+    tos.delete()
 
 
 def existing_tos_for_club_member(auction, member):

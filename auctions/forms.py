@@ -1929,7 +1929,7 @@ class LotRefundForm(forms.ModelForm):
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required=True)
 
-    def __init__(self, user, auction, next_url=None, *args, **kwargs):
+    def __init__(self, user, auction, next_url=None, *args, joined=False, **kwargs):
         self.user = user
         self.auction = auction
         super().__init__(*args, **kwargs)
@@ -1950,6 +1950,15 @@ class AuctionJoin(forms.ModelForm):
             "pickup_location",
             Submit("submit", "Join auction", css_class="agree_tos btn-success text-dark"),
         )
+        if joined:
+            # The X opens auction.html's leave dialog.
+            self.helper.layout.append(
+                HTML(
+                    '<button type="button" class="btn btn-outline-danger ms-1" data-bs-toggle="modal" '
+                    'data-bs-target="#leave-auction-modal" title="Leave auction" aria-label="Leave auction">'
+                    '<i class="bi bi-x-lg"></i></button>'
+                )
+            )
         self.fields["pickup_location"].queryset = auction.location_qs
         self.fields["time_spent_reading_rules"].widget = HiddenInput()
         if self.auction.multi_location:
