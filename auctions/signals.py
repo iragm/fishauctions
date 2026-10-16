@@ -410,10 +410,10 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 manually_added=True,
                 **shared_member_values(member),
             )
-            if member is instance and not AuctionTOS.objects.filter(pk=row.pk).exists():
+            if not AuctionTOS.objects.filter(pk=row.pk).exists():
                 # Merged into an older row with the same email, which can merge this member into that row's.
-                instance.refresh_from_db()
-                if instance.is_deleted:
+                member.refresh_from_db()
+                if member.is_deleted:
                     # The rest of the rows are the kept member's: more of this one's would merge it again.
                     kept = (
                         AuctionTOS.objects.filter(auction=auction, email__iexact=row.email)
