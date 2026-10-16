@@ -208,7 +208,6 @@ urlpatterns = [
     path("clubs/add/", views.ClubAddView.as_view(), name="club_add"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
-    path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),
     path(
         "admin-dashboard/species-gaps/",
         views.SpeciesGapsView.as_view(),

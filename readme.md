@@ -38,7 +38,7 @@ You should now be able to access a development site at 127.0.0.1 (Note: unlike m
 
 Enter the username `admin` and the password `example`, and you should be good to go.
 
-**Setup checklist**: After signing in, open **Admin → Setup Checklist** and follow the steps listed there to enable anything you want
+**Setup checklist**: The setup checklist is not in the site's menus; it's read through the admin-only MCP endpoint (see [Deploy the website](#deploy-the-website)). On a local site, the comments in `.env.example` cover the same settings.
 
 **Demo data**: In development mode (DEBUG=True), demo data loads automatically when the database is empty (skipped when `SINGLE_CLUB_MODE` is on).
 
@@ -134,11 +134,11 @@ cd fishauctions
 ```
 `./update.sh` will initialize the environment for you, including generating secure secrets.
 
-After the site starts, sign in as a superuser (username=admin, password=example, make sure to change these!) and open **Admin → Setup Checklist**.  That page points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Google Calendar, Discord, digital membership cards, and the natural-language command palette assistant.
+After the site starts, sign in as a superuser (username=admin, password=example, make sure to change these!).  The setup checklist is only on the site's admin MCP endpoint, not in its menus: in Claude, add a custom connector with the URL `https://yourdomain/mcp/admin/`, sign in as that superuser, and ask it to read the setup checklist (`read_admin_page` with page `admin_setup_checklist`).  Only clients listed in `MCP_ADMIN_CLIENT_IDS` can connect; claude.ai is the default.  The checklist points you at the `.env` file, shows which settings and integrations are configured, and gives copy/paste `.env` examples and where-to-get-keys links for Gmail, SES, PayPal, Square, Google Maps, Google sign-in, reCAPTCHA, Mailchimp, Google Calendar, Discord, digital membership cards, and the natural-language command palette assistant.
 
-Everything on that page is free except the command palette assistant, which bills per use to whichever model provider you point it at. It's off unless you set `OPENAI_API_KEY`; **Admin → Command palette** shows what it's costing.
+Everything on the checklist is free except the command palette assistant, which bills per use to whichever model provider you point it at. It's off unless you set `OPENAI_API_KEY`; the admin MCP's `command_palette_analytics` report shows what it's costing.
 
-Work through that page, at a minimum you'll need Gmail for email, Google Maps and Recaptcha v2, everything else is optional (but recommended).
+Work through the checklist, at a minimum you'll need Gmail for email, Google Maps and Recaptcha v2, everything else is optional (but recommended).
 
 ### Post setup:
 Go to the Django admin site (it's in the admin dropdown menu) and update the categories and FAQ articles to suit your tastes.
@@ -155,7 +155,7 @@ Note: Do not remove the default "Uncategorized" category, it's referenced in sev
 
 This one isn't optional and no software can do it for you.  Your users upload photos of their fish, which makes you a service provider hosting somebody else's material.  US law (17 U.S.C. 512) shelters you from what they upload only if you **register a designated agent with the Copyright Office** at [dmca.copyright.gov/osp](https://dmca.copyright.gov/osp/) -- $6, and it lapses after three years -- **and** publish that agent's details on your own site.
 
-Once you've registered, set the `DMCA_*` variables in your `.env` (they're in `.env.example`, and Admin -> Setup Checklist has copy/paste examples).  The site then publishes them at `/dmca/` with a takedown form, a counter-notice policy and a three-strike repeat-infringer policy, and links to it from the footer and the About menu.  Leave them unset and that page stays off, which is the right default for a fork -- publishing somebody else's agent would be worse than publishing none.
+Once you've registered, set the `DMCA_*` variables in your `.env` (they're in `.env.example`, and the setup checklist on the admin MCP has copy/paste examples).  The site then publishes them at `/dmca/` with a takedown form, a counter-notice policy and a three-strike repeat-infringer policy, and links to it from the footer and the About menu.  Leave them unset and that page stays off, which is the right default for a fork -- publishing somebody else's agent would be worse than publishing none.
 
 Two things to do alongside it: say the same thing in your `tos.html` (users have to be told about the repeat-infringer policy for it to count), and set `CLOUDFLARE_ZONE_ID` and `CLOUDFLARE_CACHE_PURGE_API_TOKEN` if you run behind Cloudflare, so a removed photo actually leaves the CDN instead of being served from the edge for another month.
 
