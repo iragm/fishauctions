@@ -1259,6 +1259,7 @@ EXCLUDED: dict[str, str] = {
     "guess_category": _AUTOCOMPLETE,
     "get_auction_info": _API,
     "auction_page_action": "POST-only: the auction page's banner buttons. Nothing to look at.",
+    "auction_leave": "POST-only: the X next to Join on the auction page. Nothing to look at.",
     # JSON / HTMX fragments
     "get_ad": _API,
     "click_ad": _API,
