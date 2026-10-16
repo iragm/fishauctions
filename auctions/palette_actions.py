@@ -1694,6 +1694,7 @@ def _update_through_the_club(request, auction, member, changes: dict[str, Any]) 
         user=request.user,
         action=f"Edited member {member} {via(request)}",
         applies_to="MEMBERS",
+        member=member,
     )
     return None
 
@@ -3264,6 +3265,7 @@ def _send_card(request, member, *, for_self: bool) -> dict[str, Any]:
             user=request.user,
             action=f"Emailed membership card to {member} ({member.email}) {via(request)}",
             applies_to="MEMBERS",
+            member=member,
         )
     if not for_self:
         # **No card in the reply** when the card isn't the caller's: the number and barcode are the
@@ -6689,7 +6691,7 @@ def add_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     member.source = "manually_added"
     member.save()
     ClubHistory.objects.create(
-        club=club, user=user, action=f"Added member {member} {via(request)}", applies_to="MEMBERS"
+        club=club, user=user, action=f"Added member {member} {via(request)}", applies_to="MEMBERS", member=member
     )
     summary = f"Added {untrusted_short(member.name)} to {club.name}"
     summary += f" as member {member.bidder_number}." if member.bidder_number else "."
@@ -6740,7 +6742,7 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
         return _form_problem(form)
     member = form.save()
     ClubHistory.objects.create(
-        club=club, user=user, action=f"Edited member {member} {via(request)}", applies_to="MEMBERS"
+        club=club, user=user, action=f"Edited member {member} {via(request)}", applies_to="MEMBERS", member=member
     )
     told = ", ".join(sorted(changes))
     return _ok(
@@ -6830,7 +6832,11 @@ def award_points(request, params: dict[str, Any]) -> dict[str, Any]:
     award.awarded_by = user
     award.save()
     ClubHistory.objects.create(
-        club=club, user=user, action=f"Added BAP award: {award} {via(request)}", applies_to="BAP"
+        club=club,
+        user=user,
+        action=f"Added BAP award: {award} {via(request)}",
+        applies_to="BAP",
+        member=award.club_member,
     )
     # What was saved, not what was asked for; zeros aren't worth saying.
     earned = ", ".join(f"{value} {label.upper()}" for label, value in _award_points_paid(award).items()) or "0"
@@ -11128,7 +11134,8 @@ def remove_award(request, params: dict[str, Any]) -> dict[str, Any]:
     if award.club_member.club_id != club.pk:
         # Explicitly refuse another club's award.
         return _error(f"Those points weren't awarded by {club.name}.")
-    member_name = str(award.club_member)
+    member = award.club_member
+    member_name = str(member)
     points = award.points
     award.delete()
     lot.bap_points_awarded = 0
@@ -11140,6 +11147,7 @@ def remove_award(request, params: dict[str, Any]) -> dict[str, Any]:
         user=user,
         action=f"Deleted BAP award for {member_name} {via(request)}",
         applies_to="BAP",
+        member=member,
     )
     # Rebuild _about to include the club.
     echo = _lot_echo(lot)
@@ -11199,6 +11207,7 @@ def set_member_active(request, params: dict[str, Any]) -> dict[str, Any]:
         user=user,
         action=(f"Reactivated member {member}" if active else f"Deactivated member {member}") + f" {via(request)}",
         applies_to="MEMBERS",
+        member=member,
     )
     summary = (
         f"Brought {untrusted_short(member.name)} back as a member of {club.name}."
@@ -11503,6 +11512,7 @@ def resend_member_card(request, params: dict[str, Any]) -> dict[str, Any]:
         user=user,
         action=f"Sent membership card to {member} {via(request)}",
         applies_to="MEMBERS",
+        member=member,
     )
     return _ok(
         f"Emailed {untrusted_short(member.display_name)}'s membership card to {untrusted_short(member.email)}.",

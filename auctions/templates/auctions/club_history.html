@@ -4,4 +4,7 @@
 
 {% block htmx_table_ribbon %}
   {% include "club_ribbon.html" %}
+  {% if history_member %}
+    <span class="badge rounded-pill text-bg-secondary fs-6 fw-normal mt-2">{{ history_member.display_name }} <a href="{% url 'club_history' slug=club.slug %}" class="text-reset ms-1" aria-label="Show the whole club's history"><i class="bi bi-x-lg"></i></a></span>
+  {% endif %}
 {% endblock %}
