@@ -18,6 +18,8 @@ from auctions.models import (
     Invoice,
     InvoiceAdjustment,
     Lot,
+    PickupLocation,
+    UserData,
 )
 from auctions.services import join_auction
 
@@ -26,6 +28,7 @@ class LeaveAuctionTests(TestCase):
     def setUp(self):
         now = timezone.now()
         self.organizer = User.objects.create_user(username="organizer", password="x", email="org@example.com")
+        UserData.objects.filter(user=self.organizer).update(email_visible=True)
         self.leaver = User.objects.create_user(username="leaver", password="x", email="leaver@example.com")
         self.auction = Auction.objects.create(
             created_by=self.organizer,
@@ -69,7 +72,7 @@ class LeaveAuctionTests(TestCase):
         self.assertFalse(Invoice.objects.filter(auction=self.auction).exists())
 
     def test_added_by_an_organizer_points_at_the_organizer(self):
-        AuctionTOS.objects.filter(pk=self.tos.pk).update(manually_added=True)
+        AuctionTOS.objects.filter(pk=self.tos.pk).update(created_by_joining=False)
         page = self._page()
         self.assertIn("An organizer added you", page)
         self.assertIn("mailto:org@example.com", page)
@@ -138,7 +141,110 @@ class LeaveAuctionTests(TestCase):
         self.assertIn("paid Fish Club membership", self._page())
         self._leave()
         self.assertFalse(self._still_in())
-        self.assertTrue(ClubMember.objects.filter(pk=self.tos.clubmember_id).exists())
+        self.assertTrue(ClubMember.objects.filter(pk=self.tos.clubmember_id, is_deleted=False).exists())
+
+    def _club_managed(self):
+        club = Club.objects.create(name="Fish Club")
+        ClubMember.objects.create(club=club, user=self.organizer, permission_admin=True)
+        self.auction.club = club
+        self.auction.manage_users_through_club = "all"
+        self.auction.save()
+        other = Auction.objects.create(
+            created_by=self.organizer,
+            title="Spring Fish Auction",
+            is_online=False,
+            date_start=self.auction.date_start + datetime.timedelta(days=30),
+            date_end=self.auction.date_end + datetime.timedelta(days=30),
+            club=club,
+            manage_users_through_club="all",
+        )
+        other.save()
+        AuctionTOS.objects.filter(pk=self.tos.pk).delete()
+        self.tos, _created, _problem = join_auction(self.leaver, self.auction, self.location)
+        return club, other
+
+    def test_leaving_undoes_the_club_membership_the_join_made(self):
+        club, other = self._club_managed()
+        member = self.tos.clubmember
+        self.assertTrue(AuctionTOS.objects.filter(auction=other, clubmember=member).exists())
+        self._leave()
+        self.assertFalse(self._still_in())
+        member.refresh_from_db()
+        self.assertTrue(member.is_deleted)
+        self.assertFalse(AuctionTOS.objects.filter(clubmember=member).exists())
+
+    def test_renaming_the_auction_still_undoes_the_membership(self):
+        _club, _other = self._club_managed()
+        member = self.tos.clubmember
+        Auction.objects.filter(pk=self.auction.pk).update(title="Fall Fish Auction 2026")
+        self._leave()
+        member.refresh_from_db()
+        self.assertTrue(member.is_deleted)
+
+    def test_an_app_join_can_be_undone_too(self):
+        from auctions.mobile.services import checkin
+
+        _club, other = self._club_managed()
+        newcomer = User.objects.create_user(username="newcomer", password="x", email="new@example.com")
+        tos, _checked_in = checkin.join_auction(newcomer, self.auction)
+        tos.refresh_from_db()
+        self.assertTrue(tos.created_by_joining)
+        member = tos.clubmember
+        self.client.force_login(newcomer)
+        self._leave()
+        self.assertFalse(AuctionTOS.objects.filter(pk=tos.pk).exists())
+        member.refresh_from_db()
+        self.assertTrue(member.is_deleted)
+        self.assertFalse(AuctionTOS.objects.filter(auction=other, clubmember=member).exists())
+
+    def test_activity_elsewhere_keeps_the_club_membership(self):
+        club, other = self._club_managed()
+        member = self.tos.clubmember
+        shadow = AuctionTOS.objects.get(auction=other, clubmember=member)
+        Lot.objects.create(lot_name="Plants", auction=other, auctiontos_seller=shadow, quantity=1)
+        self._leave()
+        self.assertFalse(self._still_in())
+        member.refresh_from_db()
+        self.assertFalse(member.is_deleted)
+        self.assertTrue(AuctionTOS.objects.filter(pk=shadow.pk).exists())
+
+    def test_an_existing_member_who_clicks_join_still_asks_the_organizer(self):
+        club, _other = self._club_managed()
+        stranger = User.objects.create_user(username="member", password="x", email="member@example.com")
+        ClubMember.objects.create(club=club, user=stranger, name="Member", email="member@example.com")
+        shadow = AuctionTOS.objects.get(auction=self.auction, user=stranger)
+        tos, _created, _problem = join_auction(stranger, self.auction, self.location)
+        self.assertEqual(tos.pk, shadow.pk)
+        self.client.force_login(stranger)
+        self.assertIn("An organizer added you", self._page())
+        self.client.post(reverse("auction_leave", kwargs={"slug": self.auction.slug}))
+        self.assertTrue(AuctionTOS.objects.filter(pk=shadow.pk).exists())
+
+    def test_a_hidden_creator_email_stays_hidden(self):
+        UserData.objects.filter(user=self.organizer).update(email_visible=False)
+        AuctionTOS.objects.filter(pk=self.tos.pk).update(created_by_joining=False)
+        self.assertNotIn("org@example.com", self._page())
+
+    def test_a_door_prize_blocks(self):
+        AuctionTOS.objects.filter(pk=self.tos.pk).update(door_prize_called=timezone.now())
+        self.assertActivityBlocks()
+
+    def test_being_a_pickup_contact_blocks(self):
+        PickupLocation.objects.filter(pk=self.location.pk).update(contact_person=self.tos)
+        self.assertActivityBlocks()
+
+    def test_a_deleted_lot_that_sold_still_blocks(self):
+        buyer = AuctionTOS.objects.create(auction=self.auction, pickup_location=self.location, name="Buyer")
+        Lot.objects.create(
+            lot_name="Plants",
+            auction=self.auction,
+            auctiontos_seller=self.tos,
+            auctiontos_winner=buyer,
+            winning_price=3,
+            quantity=1,
+            is_deleted=True,
+        )
+        self.assertActivityBlocks()
 
     def _run(self, params):
         request = RequestFactory().post("/")
@@ -152,7 +258,7 @@ class LeaveAuctionTests(TestCase):
         self.assertFalse(self._still_in())
 
     def test_the_assistant_is_refused_the_same_way(self):
-        AuctionTOS.objects.filter(pk=self.tos.pk).update(manually_added=True)
+        AuctionTOS.objects.filter(pk=self.tos.pk).update(created_by_joining=False)
         result = self._run({"auction": self.auction.slug})
         self.assertIn("organizer", result.get("error", ""), result)
         self.assertTrue(self._still_in())

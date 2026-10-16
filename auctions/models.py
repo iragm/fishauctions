@@ -6748,6 +6748,15 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     address = models.CharField(max_length=500, blank=True, null=True)
     manually_added = models.BooleanField(default=False, blank=True, null=True)
+    created_by_joining = models.BooleanField(default=False)
+    created_by_joining.help_text = (
+        "The person's own Join made this row; only then can they leave (services.leave_auction_problem). "
+        "Unlike manually_added, joining an existing row never sets it."
+    )
+    joined_into_club = models.BooleanField(default=False)
+    joined_into_club.help_text = (
+        "That join also created the person's ClubMember, which leaving undoes (services.membership_made_by_joining)."
+    )
     time_spent_reading_rules = models.PositiveIntegerField(validators=[MinValueValidator(0)], blank=True, default=0)
     is_club_member = models.BooleanField(default=False, blank=True, verbose_name="Club member")
     memo = models.CharField(max_length=500, blank=True, null=True, default="")

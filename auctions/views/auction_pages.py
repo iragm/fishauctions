@@ -54,6 +54,7 @@ from auctions.services import (
     AUCTION_FIELDS_TO_CLONE,
     CONTACT_GATE_NEEDS_PHONE,
     DEFAULT_AUCTION_DESCRIPTION,
+    LEAVE_REFUSALS,
     clone_auction,
     ensure_club_admin,
     finish_new_auction,
@@ -62,6 +63,7 @@ from auctions.services import (
     leave_auction_problem,
     link_auction_to_club,
     missing_contact_info,
+    paid_club_for,
     readable_list,
 )
 
@@ -925,8 +927,8 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["hasChosenLocation"] = existingTos.pk if existingTos else False
                 context["joined"] = True
                 context["leave_problem"] = leave_auction_problem(tos)
-                member = tos.clubmember if self.auction.is_club_managed else None
-                context["leave_paid_club"] = self.auction.club if member and member.is_paid_member else None
+                context["leave_refusal"] = LEAVE_REFUSALS.get(context["leave_problem"], "")
+                context["leave_paid_club"] = None if context["leave_problem"] else paid_club_for(tos)
             else:
                 context["hasChosenLocation"] = False
                 if self.auction.multi_location:
@@ -1005,11 +1007,24 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["auction_contact_email"] = self.auction.club.contact_email or None
         else:
             context["auction_contact_email"] = None
-        if context.get("joined"):
-            context["leave_contact_email"] = context["auction_contact_email"] or getattr(
-                self.auction.created_by, "email", None
-            )
+        if context.get("joined") and context["leave_problem"]:
+            context["leave_contact_email"] = self._organizer_email(context["auction_contact_email"])
         return context
+
+    def _organizer_email(self, club_email):
+        """Who "Email the organizer" writes to: the club's address, else the auction's routed one, else the
+        creator's, only if they made it visible.
+        """
+        from auctions.email_routing import email_routing_enabled
+
+        if club_email:
+            return club_email
+        if email_routing_enabled():
+            return self.auction.sender_email
+        creator = self.auction.created_by
+        if creator and getattr(getattr(creator, "userdata", None), "email_visible", False):
+            return creator.email
+        return None
 
     def post(self, request, *args, **kwargs):
         """Join, via ``services.join_auction``."""
@@ -1044,10 +1059,10 @@ class AuctionLeave(LoginRequiredMixin, View):
         auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
         tos = AuctionTOS.objects.filter(user=request.user, auction=auction).first()
         if tos:
-            if leave_auction_problem(tos):
-                messages.error(request, "Ask the organizer to take you out of this auction.")
+            problem = leave_auction(tos)
+            if problem:
+                messages.error(request, LEAVE_REFUSALS[problem])
             else:
-                leave_auction(tos)
                 messages.success(request, f"You've left {auction}.")
         return redirect(auction.get_absolute_url())
 
