@@ -383,36 +383,48 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
     A new member gets shadow rows in club-managed auctions that auto-add ("all" or "checkin"), with the
     number checked against both club and auction.
     """
-    from .models import AuctionTOS, ClubMember, PickupLocation
+    from .models import AuctionTOS, PickupLocation
 
     if created:
+        member = instance
         # Finished auctions too: the member is findable there, and attendance counts checked_in.
         for auction in club_managed_auctions_for(instance.club):
-            if not instance.is_deleted and ClubMember.objects.filter(pk=instance.pk, is_deleted=True).exists():
-                # A shadow row met an older one with the same email, and this member merged into its
-                # member. That member has rows of its own; more here would merge it again, once each.
-                break
             default_location = PickupLocation.objects.filter(auction=auction).order_by("-is_default", "pk").first()
             if not default_location:
                 continue
-            already_exists = AuctionTOS.objects.filter(auction=auction, clubmember=instance).exists()
+            already_exists = AuctionTOS.objects.filter(auction=auction, clubmember=member).exists()
             if already_exists:
                 continue
-            if not instance.bidder_number:
-                instance.generate_bidder_number(save=True)
-            bidding = False if auction.manage_users_through_club == "checkin" else instance.bidding_allowed
-            clear_bidder_number_in(auction, instance.bidder_number)
-            AuctionTOS.objects.create(
-                user=instance.user,
+            if not member.bidder_number:
+                member.generate_bidder_number(save=True)
+            bidding = False if auction.manage_users_through_club == "checkin" else member.bidding_allowed
+            clear_bidder_number_in(auction, member.bidder_number)
+            row = AuctionTOS.objects.create(
+                user=member.user,
                 auction=auction,
                 pickup_location=default_location,
-                clubmember=instance,
-                bidder_number=instance.bidder_number,
+                clubmember=member,
+                bidder_number=member.bidder_number,
                 bidding_allowed=bidding,
-                selling_allowed=instance.selling_allowed,
+                selling_allowed=member.selling_allowed,
                 manually_added=True,
-                **shared_member_values(instance),
+                **shared_member_values(member),
             )
+            if member is instance and not AuctionTOS.objects.filter(pk=row.pk).exists():
+                # Merged into an older row with the same email, which can merge this member into that row's.
+                instance.refresh_from_db()
+                if instance.is_deleted:
+                    # The rest of the rows are the kept member's: more of this one's would merge it again.
+                    kept = (
+                        AuctionTOS.objects.filter(auction=auction, email__iexact=row.email)
+                        .exclude(clubmember=None)
+                        .order_by("createdon")
+                        .values_list("clubmember", flat=True)
+                        .first()
+                    )
+                    if kept is None:
+                        break
+                    member = sender.objects.get(pk=kept)
         return
 
     prev_bidder = getattr(instance, "_previous_bidder_number", None)

@@ -357,6 +357,8 @@ class MemberMergeTests(TestCase):
         )
         PickupLocation.objects.create(name="Hall", auction=second, pickup_time=now + datetime.timedelta(days=2))
         kept = ClubMember.objects.create(club=self.club, name="Twice Added", email="twice@example.com")
+        # Not in every auction yet, as a member deactivated before the auction was made.
+        AuctionTOS.objects.filter(auction=second, clubmember=kept).delete()
 
         again = ClubMember.objects.create(club=self.club, name="Twice Added", email="twice@example.com")
 
