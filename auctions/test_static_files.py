@@ -69,6 +69,14 @@ class TemplatesNameRealFilesTests(SimpleTestCase):
         missing = sorted(name for name in names if finders.find(name) is None)
         self.assertEqual(missing, [], f"templates name static files that do not exist: {missing}")
 
+    def test_summernote_editor_scripts_are_real_files(self):
+        """The editor iframe's extra scripts are hard-coded paths, so nothing else notices a 404: two
+        once pointed into the gitignored summernote/ output and the style dropdown went dead."""
+        names = [path.removeprefix(settings.STATIC_URL) for path in settings.SUMMERNOTE_CONFIG["js"]]
+        self.assertTrue(names)
+        missing = [name for name in names if finders.find(name) is None]
+        self.assertEqual(missing, [], f"SUMMERNOTE_CONFIG['js'] names files that do not exist: {missing}")
+
 
 class HashedNamesReachTheYearLongCacheTests(SimpleTestCase):
     """The nginx pattern has to match the names Django writes, and nothing else."""

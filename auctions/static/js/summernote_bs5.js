@@ -20,12 +20,16 @@ $(document).on("summernote.init", function (event) {
       this.setAttribute("title", this.getAttribute("aria-label") || "");
       this.removeAttribute("data-toggle");
       this.setAttribute("data-bs-toggle", "dropdown");
+      // Measured from the button: Popper places the menu after this event, so the menu's own top
+      // isn't final yet.
+      var toggle = this;
       $(this.parentNode).on("shown.bs.dropdown", function () {
-        var menu = $(this).children(".dropdown-menu");
-        menu.css({
-          maxHeight: window.innerHeight - menu[0].getBoundingClientRect().top - 8,
-          overflowY: "auto",
-        });
+        $(this)
+          .children(".dropdown-menu")
+          .css({
+            maxHeight: Math.max(window.innerHeight - toggle.getBoundingClientRect().bottom - 12, 120),
+            overflowY: "auto",
+          });
       });
     });
 });
