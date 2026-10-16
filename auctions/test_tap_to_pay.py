@@ -25,6 +25,7 @@ from auctions.models import (
     Lot,
     SquareSeller,
 )
+from auctions.test_support import mcp_only_page
 from auctions.tests import StandardTestCase
 from auctions.views.payments import SQUARE_OAUTH_STATE_SESSION_KEY
 
@@ -994,9 +995,9 @@ class SetupChecklistTests(TestCase):
         self.addCleanup(ip_patcher.stop)
 
     def _items(self):
-        response = self.client.get(reverse("admin_setup_checklist"))
+        response = mcp_only_page(self.superuser, "admin_setup_checklist")
         self.assertEqual(response.status_code, 200)
-        return response, {item["name"]: item for item in response.context["setup_items"]}
+        return response, {item["name"]: item for item in response.context_data["setup_items"]}
 
     def test_sections_are_present(self):
         response, _ = self._items()

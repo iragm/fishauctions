@@ -1,5 +1,6 @@
 """The admin setup checklist: the one page that says what a new site still needs.
 
+It has no URL: only ``read_admin_page`` on ``/mcp/admin/`` renders it (``mcp.admin.MCP_ONLY_PAGES``).
 ``AdminSetupChecklistView`` is the largest single view in the codebase, which is why it has a module
 to itself -- it walks every piece of site configuration and reports what is missing.
 """

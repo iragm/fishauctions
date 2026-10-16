@@ -1,7 +1,8 @@
 """The superuser's dashboard: traffic, signups, referrers, the user map.
 
-Charts and maps over the whole site rather than over one auction. The setup checklist that the
-admin landing page is built around is next door in :mod:`auctions.views.admin_checklist`.
+Charts and maps over the whole site rather than over one auction. ``AdminMobileApp`` and
+``AdminAuctionUsage`` have no URL: only ``read_admin_page`` on ``/mcp/admin/`` renders them
+(``mcp.admin.MCP_ONLY_PAGES``), as it does the setup checklist in :mod:`auctions.views.admin_checklist`.
 """
 
 import logging
@@ -351,11 +352,33 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             AuctionTOS.objects.filter(user__isnull=True, email__isnull=False).values("email").distinct().count()
         )
 
-        # Mobile app adoption
+        logged_in_5m = self.unique_page_views(5, "logged_in")
+        anon_5m = self.unique_page_views(5, "anon")
+        logged_in_30m = self.unique_page_views(30, "logged_in")
+        anon_30m = self.unique_page_views(30, "anon")
+        logged_in_1d = self.unique_page_views(24 * 60, "logged_in")
+        anon_1d = self.unique_page_views(24 * 60, "anon")
+        context["day_views_count"] = logged_in_1d + anon_1d
+        context["5m_views_count"] = logged_in_5m + anon_5m
+        context["30m_views_count"] = logged_in_30m + anon_30m
+        if logged_in_1d + anon_1d == 0:
+            anon_1d = 1  # so it's a hack to avoid /0, whatever
+        context["day_views_count_percent_with_account"] = int(logged_in_1d / (logged_in_1d + anon_1d) * 100)
+        return context
+
+
+class AdminMobileApp(AdminOnlyViewMixin, TemplateView):
+    """How many people have the mobile app, on which platform and version. Read on ``/mcp/admin/``."""
+
+    template_name = "dashboard_mobile_app.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        active = UserData.objects.filter(user__is_active=True).count()
         app_devices = MobileDevice.objects.filter(user__is_active=True)
         mobile_app_users = app_devices.values("user").distinct().count()
         context["mobile_app_users_count"] = mobile_app_users
-        context["mobile_app_users_percent"] = int(mobile_app_users / qs.count() * 100) if qs.count() else 0
+        context["mobile_app_users_percent"] = int(mobile_app_users / active * 100) if active else 0
         context["mobile_app_users_ios"] = (
             app_devices.filter(platform=MobileDevice.PLATFORM_IOS).values("user").distinct().count()
         )
@@ -374,21 +397,17 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             .annotate(count=Count("user", distinct=True))
             .order_by("-count")
         )
+        return context
 
-        logged_in_5m = self.unique_page_views(5, "logged_in")
-        anon_5m = self.unique_page_views(5, "anon")
-        logged_in_30m = self.unique_page_views(30, "logged_in")
-        anon_30m = self.unique_page_views(30, "anon")
-        logged_in_1d = self.unique_page_views(24 * 60, "logged_in")
-        anon_1d = self.unique_page_views(24 * 60, "anon")
-        context["day_views_count"] = logged_in_1d + anon_1d
-        context["5m_views_count"] = logged_in_5m + anon_5m
-        context["30m_views_count"] = logged_in_30m + anon_30m
-        if logged_in_1d + anon_1d == 0:
-            anon_1d = 1  # so it's a hack to avoid /0, whatever
-        context["day_views_count_percent_with_account"] = int(logged_in_1d / (logged_in_1d + anon_1d) * 100)
+
+class AdminAuctionUsage(AdminOnlyViewMixin, TemplateView):
+    """Lots selling right now, to check no auction is running before a server update. Read on ``/mcp/admin/``."""
+
+    template_name = "dashboard_auction_usage.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
         timeframe = timezone.now() - timezone.timedelta(minutes=30)
-        # Check no auctions are happening before applying server updates.
         context["in_person_lots_ended"] = Lot.objects.filter(
             is_deleted=False, auction__is_online=False, date_end__gte=timeframe, date_end__lte=timezone.now()
         ).count()

@@ -32,7 +32,7 @@ from auctions.apple_notifications import (
     process_notification,
 )
 from auctions.models import AuctionTOS, Club, ClubMember, UserData
-from auctions.test_support import isolated_cache
+from auctions.test_support import isolated_cache, mcp_only_page
 from auctions.tests import StandardTestCase
 
 BUNDLE_ID = "com.fishauctions.app"
@@ -633,7 +633,7 @@ class AppleNotificationChecklistTests(TestCase):
         APPLE_ALLOWED_AUDIENCES=[SERVICES_ID, BUNDLE_ID],
     )
     def test_checklist_shows_the_endpoint_url(self):
-        response = self.client.get(reverse("admin_setup_checklist"))
+        response = mcp_only_page(self.admin, "admin_setup_checklist")
         self.assertEqual(response.status_code, 200)
         text = response.content.decode()
         self.assertIn("Server to Server Notification Endpoint", text)

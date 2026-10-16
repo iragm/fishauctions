@@ -129,7 +129,6 @@ def _admin_section():
         "admin",
         [
             _row("User stats", reverse("admin_dashboard"), "bi-speedometer2"),
-            _row("Setup Checklist", reverse("admin_setup_checklist"), "bi-check2-square"),
             _row("User map", reverse("admin_user_map") + "?view=recent&filter=24", "bi-geo-alt"),
             _row("Traffic", reverse("admin_traffic") + "?days=30", "bi-graph-up"),
             _row("Referrers", reverse("admin_referrers") + "?days=30", "bi-signpost-split"),
