@@ -598,7 +598,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Only looks up and returns data (list a club's members by name, filtered by whether their dues are current).",
+        "read_only_justification": "Only looks up and returns data (list a club's members by name, filtered by whether their dues are current or by their breeder award points).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }

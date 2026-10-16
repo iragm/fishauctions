@@ -213,7 +213,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16516 lines)
+- **`palette_actions.py`** (16597 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -571,7 +571,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (165 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3141 lines)
+- **`test_palette_skills.py`** (3229 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
