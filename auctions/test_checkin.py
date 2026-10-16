@@ -602,7 +602,7 @@ class ClubManagedAdminBadgeTests(CheckinBase):
         self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))
 
     def test_club_permissions_do_not_leak_into_an_unmanaged_auction(self):
-        # With a club attached but not managing participants, only AuctionTOS.is_admin counts.
+        # With a club attached but not managing participants, rows carry no club member to badge.
         self.venue.manage_users_through_club = ""
         self.venue.save()
         self.assertNotIn(self.BADGE, self._name_cell(self._users_list(), "Ann Helper"))

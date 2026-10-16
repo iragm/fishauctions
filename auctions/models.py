@@ -4868,7 +4868,9 @@ class Auction(CachedPropertiesMixin, models.Model):
         tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.pk).first()
         if tos:
             return True
-        if self.is_club_managed:
+        # Any club auction, not only club-managed ones: an auction made first and attached to the club
+        # later is still the club's to run, and only someone with club permission can attach it.
+        if self.club_id:
             has_club_admin = (
                 ClubMember.objects.filter(club_id=self.club_id, user=user, is_deleted=False)
                 .filter(Q(permission_admin=True) | Q(permission_manage_auctions=True))
