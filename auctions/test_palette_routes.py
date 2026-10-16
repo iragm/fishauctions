@@ -93,13 +93,13 @@ class RouteMatchingTests(StandardTestCase):
 
     def test_catalog_hides_admin_pages_from_ordinary_users(self):
         catalog = palette_routes.catalog_for_prompt(self.user)
-        self.assertNotIn("admin_setup_checklist", catalog)
+        self.assertNotIn("admin_traffic", catalog)
 
     def test_catalog_shows_site_admin_pages_to_superusers(self):
         self.admin_user.is_superuser = True
         self.admin_user.save()
         catalog = palette_routes.catalog_for_prompt(self.admin_user)
-        self.assertIn("admin_setup_checklist", catalog)
+        self.assertIn("admin_traffic", catalog)
 
     def test_catalog_lists_pages_everyone_can_use(self):
         catalog = palette_routes.catalog_for_prompt(self.user)

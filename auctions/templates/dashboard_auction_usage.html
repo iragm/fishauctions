@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Current auction usage{% endblock %}
+{% block content %}
+<h3>Current auction usage</h3>
+<div class="table-responsive">
+<table class="table">
+    <tr>
+      <td>Lots from in person auctions ended in the last 30 minutes</td>
+      <td> {{ in_person_lots_ended }}
+      </td>
+    </tr>
+    <tr>
+      <td>Online auction lots scheduled to end in the next 2 hours</td>
+      <td> {{ online_auction_lots_ending }}
+      </td>
+    </tr>
+</table>
+</div>
+{% endblock %}

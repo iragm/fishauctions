@@ -37,49 +37,4 @@
     </tr>
 </table>
 </div>
-<h3>Mobile app adoption</h3>
-<div class="table-responsive">
-<table class="table">
-    <tr>
-      <td>Users with the mobile app installed:</td>
-      <td>{{ mobile_app_users_count }} ({{ mobile_app_users_percent }}% of active users)
-      </td>
-    </tr>
-    <tr>
-      <td>Active in the app in the last 30 days:</td>
-      <td> {{ mobile_app_users_active_30d }}
-      </td>
-    </tr>
-    <tr>
-      <td>Platform split (iOS / Android):</td>
-      <td> {{ mobile_app_users_ios }} / {{ mobile_app_users_android }}
-      </td>
-    </tr>
-    <tr>
-      <td>App versions:</td>
-      <td>
-        {% for version in mobile_app_versions %}
-          {{ version.app_version }}: {{ version.count }}{% if not forloop.last %}<br>{% endif %}
-        {% empty %}
-          &mdash;
-        {% endfor %}
-      </td>
-    </tr>
-</table>
-</div>
-<h3>Current auction usage</h3>
-<div class="table-responsive">
-<table class="table">
-    <tr>
-      <td>Lots from in person auctions ended in the last 30 minutes</td>
-      <td> {{ in_person_lots_ended }}
-      </td>
-    </tr>
-    <tr>
-      <td>Online auction lots scheduled to end in the next 2 hours</td>
-      <td> {{ online_auction_lots_ending }}
-      </td>
-    </tr>
-</table>
-</div>
 {% endblock %}

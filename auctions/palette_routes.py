@@ -1103,13 +1103,6 @@ ROUTE_LIST: list[Route] = [
         keywords=["dashboard", "site stats"],
     ),
     _r(
-        "admin_setup_checklist",
-        "Site setup checklist",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["setup", "env", "integrations", "configure the site"],
-    ),
-    _r(
         "agent_proposals",
         "Changes agents proposed",
         "Site admin",

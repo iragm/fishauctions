@@ -27,6 +27,7 @@ from auctions.models import (
     PickupLocation,
     UserIgnoreCategory,
 )
+from auctions.test_support import mcp_only_page
 from auctions.tests import StandardTestCase
 
 LINE_CHARTS = {
@@ -534,6 +535,20 @@ class SiteAdminDashboardTests(StandardTestCase):
     def test_auction_admin_is_not_a_site_admin(self):
         self.client.force_login(self.admin_user)
         self.assertEqual(self.client.get(reverse("admin_dashboard")).status_code, 302)
+
+    def test_app_adoption_and_auction_usage_are_only_on_the_admin_mcp(self):
+        self.client.force_login(self.superuser)
+        dashboard = self.client.get(reverse("admin_dashboard"))
+        self.assertNotContains(dashboard, "Mobile app adoption")
+        self.assertNotContains(dashboard, "Current auction usage")
+        for page, heading in (
+            ("admin_mobile_app", "Mobile app adoption"),
+            ("admin_auction_usage", "Current auction usage"),
+        ):
+            with self.subTest(page):
+                response = mcp_only_page(self.superuser, page)
+                self.assertContains(response, heading)
+                self.assertEqual(mcp_only_page(self.user, page).status_code, 302)
 
     def test_junk_days_fall_back_to_defaults(self):
         self.client.force_login(self.superuser)
