@@ -162,4 +162,6 @@ Two things to do alongside it: say the same thing in your `tos.html` (users have
 ### Updates:
 Updates can be run by typing `./update.sh` in your VM.
 
+To update without prompts (from cron, say), run `./update.sh -y` or set `DEPLOY_UNATTENDED=1`. That skips the snapshot question, so take snapshots some other way.
+
 Very rarely following an update I've needed to run `docker compose down && docker compose up -d` instead of just running update, so if the site isn't coming back after an update, give this a try before rolling back to your snapshot.

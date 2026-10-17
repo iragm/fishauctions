@@ -1,9 +1,13 @@
-"""Production deploys: the server's poller (``deploy/poller.py``) refusing what it should, and
-:mod:`auctions.deploy_window` saying when a deploy would hurt."""
+"""Production deploys: the server's poller (``deploy/poller.py``) refusing what it should,
+``update.sh`` asking before it erases anything, and :mod:`auctions.deploy_window` saying when a
+deploy would hurt."""
 
 import datetime
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -161,6 +165,66 @@ class PollerPollTests(SimpleTestCase):
         self.assertNotIn("GITHUB_TOKEN", environment)
         self.assertEqual(environment["DEPLOY_BRANCH"], "master")
         self.assertEqual(environment["DEPLOY_SNAPSHOT_TAKEN"], "1")
+
+
+class UpdateScriptPromptTests(SimpleTestCase):
+    """``update.sh`` run without a terminal: cancels unless told it may go ahead unattended.
+
+    A stub ``git`` logs each call and fails the pull, so the script stops before docker."""
+
+    def setUp(self):
+        if not shutil.which("bash"):
+            self.skipTest("bash not installed")
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        shutil.copy(Path(settings.BASE_DIR) / "update.sh", self.root / "update.sh")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        self.git_log = self.root / "git.log"
+        stub = bin_dir / "git"
+        stub.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{self.git_log}"\n'
+            'case "$1" in rev-parse) echo staging ;; pull) exit 1 ;; esac\n'
+        )
+        stub.chmod(0o755)
+        self.path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+    def run_update(self, *args, **env):
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("DEPLOY_")}
+        environment.update(PATH=self.path, **env)
+        result = subprocess.run(
+            ["bash", str(self.root / "update.sh"), *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=60,
+        )
+        calls = self.git_log.read_text().split("\n") if self.git_log.exists() else []
+        return result, calls
+
+    def test_without_a_terminal_it_cancels_and_touches_nothing(self):
+        result, calls = self.run_update()
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Cancelled", result.stdout)
+        self.assertNotIn("restore .", calls)
+
+    def test_yes_flag_and_env_var_go_ahead(self):
+        for args, env in ((("-y",), {}), (("--yes",), {}), ((), {"DEPLOY_UNATTENDED": "1"})):
+            with self.subTest(args=args, env=env):
+                self.git_log.unlink(missing_ok=True)
+                result, calls = self.run_update(*args, **env)
+                self.assertIn("y (unattended", result.stdout)
+                self.assertIn("restore .", calls)
+                self.assertIn("pull --ff-only origin staging", calls)
+                self.assertEqual(result.returncode, 1)  # the stub's pull failed, before docker
+
+    def test_an_unknown_option_changes_nothing(self):
+        result, calls = self.run_update("--force")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(calls, [])
 
 
 class DeployWindowTests(TestCase):

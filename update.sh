@@ -5,6 +5,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
+# Unattended mode (-y/--yes, or DEPLOY_UNATTENDED=1 in the calling environment, not .env) answers
+# every prompt with its default so staging can deploy from cron. It does NOT take a snapshot or
+# loosen any preflight guard: the cert-parameter and NGINX_TAG checks still abort.
+unattended="${DEPLOY_UNATTENDED:-}"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes) unattended="1" ;;
+        *) echo "Unknown option: $1 (usage: ./update.sh [-y|--yes])"; exit 2 ;;
+    esac
+    shift
+done
+
 ENV_FILE="$ROOT_DIR/.env"
 EXAMPLE_ENV_FILE="$ROOT_DIR/.env.example"
 
@@ -140,7 +152,7 @@ prompt_for_site_domain() {
         return
     fi
 
-    if [ -t 0 ]; then
+    if [ -t 0 ] && [ "$unattended" != "1" ]; then
         printf "Enter the site domain to use [127.0.0.1]: "
         read -r site_domain
     else
@@ -305,6 +317,9 @@ echo "This will erase any local uncommited changes. Did you make a snapshot? (y/
 # its own Hostinger snapshot has finished. Nothing else should set this.
 if [ "${DEPLOY_SNAPSHOT_TAKEN:-}" = "1" ]; then
     echo "y (snapshot taken by the deploy workflow)"
+    response="y"
+elif [ "$unattended" = "1" ]; then
+    echo "y (unattended: -y or DEPLOY_UNATTENDED=1)"
     response="y"
 elif [ -t 0 ]; then
     read -r response
