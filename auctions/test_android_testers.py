@@ -1,10 +1,15 @@
+import datetime
 import uuid
+from io import StringIO
 
+from django.core.management import CommandError, call_command
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
+from post_office.models import Email
 
 from auctions import help_guides, palette_routes
-from auctions.models import MobileDevice
+from auctions.models import MobileDevice, PageView, User, UserData
 from auctions.tests import StandardTestCase
 
 GROUP = "https://groups.google.com/g/example-testers"
@@ -19,6 +24,11 @@ class AndroidTestersTests(StandardTestCase):
         response = self.client.get(reverse("android_testers"))
         self.assertContains(response, f'href="{GROUP}"')
         self.assertContains(response, 'href="https://play.google.com/apps/testing/com.fishauctions.app"')
+
+    @override_settings(ENABLE_HELP=True)
+    def test_the_page_links_the_app_guide(self):
+        response = self.client.get(reverse("android_testers"))
+        self.assertContains(response, f'href="{help_guides.GUIDES["mobile-app"].url}"')
 
     @override_settings(PLAY_TESTERS_GROUP_URL="")
     def test_no_group_no_page(self):
@@ -58,3 +68,55 @@ class AndroidTestersTests(StandardTestCase):
     def test_the_app_guide_links_it(self):
         response = self.client.get(help_guides.GUIDES["mobile-app"].url)
         self.assertContains(response, f'href="{reverse("android_testers")}"')
+
+
+@override_settings(PLAY_TESTERS_GROUP_URL=GROUP, PLAY_STORE_URL="")
+class AndroidTestersInviteTests(StandardTestCase):
+    def _android_user(self, name, joined_days_ago=400, viewed_days_ago=10, os="ANDROID"):
+        user = User.objects.create_user(name, f"{name}@example.com", "x")
+        User.objects.filter(pk=user.pk).update(date_joined=timezone.now() - datetime.timedelta(days=joined_days_ago))
+        view = PageView.objects.create(user=user, os=os, url="/")
+        PageView.objects.filter(pk=view.pk).update(date_start=timezone.now() - datetime.timedelta(days=viewed_days_ago))
+        return user
+
+    def _sent_to(self):
+        return {
+            address
+            for to in Email.objects.filter(template__name="android_testers_invite").values_list("to", flat=True)
+            for address in to
+        }
+
+    def test_only_old_accounts_recently_on_android(self):
+        self._android_user("fits")
+        self._android_user("too-new", joined_days_ago=30)
+        self._android_user("too-long-ago", viewed_days_ago=120)
+        self._android_user("iphone", os="IPHONE")
+        UserData.objects.filter(user=self._android_user("unsubscribed")).update(has_unsubscribed=True)
+        call_command("android_testers_invite", stdout=StringIO())
+        self.assertEqual(self._sent_to(), {"fits@example.com"})
+
+    def test_the_email_links_the_group_play_and_the_guide(self):
+        self._android_user("fits")
+        call_command("android_testers_invite", stdout=StringIO())
+        html = Email.objects.get(template__name="android_testers_invite").html_message
+        self.assertIn(f'href="{GROUP}"', html)
+        self.assertIn('href="https://play.google.com/apps/testing/com.fishauctions.app"', html)
+        self.assertIn(help_guides.GUIDES["mobile-app"].url, html)
+
+    def test_a_rerun_sends_nothing_new(self):
+        self._android_user("fits")
+        call_command("android_testers_invite", stdout=StringIO())
+        call_command("android_testers_invite", stdout=StringIO())
+        self.assertEqual(Email.objects.filter(template__name="android_testers_invite").count(), 1)
+
+    def test_dry_run_sends_nothing(self):
+        self._android_user("fits")
+        out = StringIO()
+        call_command("android_testers_invite", "--dry-run", stdout=out)
+        self.assertIn("would email 1", out.getvalue())
+        self.assertFalse(self._sent_to())
+
+    @override_settings(PLAY_TESTERS_GROUP_URL="")
+    def test_refuses_without_the_closed_test(self):
+        with self.assertRaises(CommandError):
+            call_command("android_testers_invite", stdout=StringIO())

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %} Test the Android app {% endblock %}
 {% block content %}
+{% if enable_help %}<div class="alert alert-secondary" role="alert"><a href="{% url 'help_guide' slug='mobile-app' %}">What the app does</a></div>{% endif %}
 <h3>Help test the Android app</h3>
 <p>Use the Google account that's on your phone for both steps.</p>
 <p class="d-flex flex-wrap gap-2">
