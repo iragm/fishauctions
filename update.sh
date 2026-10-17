@@ -5,6 +5,39 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
+# Unattended mode, for staging deploying from cron: -y/--yes, or DEPLOY_UNATTENDED=1 when stdin is
+# not a terminal (so an exported variable never skips the questions for someone at a keyboard). It
+# answers the snapshot question YES, so `git restore .` runs with no snapshot, and keeps the
+# 127.0.0.1 default for an unset SITE_DOMAIN. It loosens no preflight guard: the cert-parameter and
+# NGINX_TAG checks still abort. Production never sets it; its poller sends DEPLOY_SNAPSHOT_TAKEN.
+unattended=""
+case "${DEPLOY_UNATTENDED:-}" in
+    1|true|yes) [ -t 0 ] || unattended="1" ;;
+    ""|0|false|no) ;;
+    *) echo "DEPLOY_UNATTENDED='${DEPLOY_UNATTENDED}' is not 1 or 0. Nothing was changed." >&2; exit 2 ;;
+esac
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes) unattended="1" ;;
+        -h|--help) echo "usage: ./update.sh [-y|--yes]"; exit 0 ;;
+        *) echo "Unknown option: $1 (usage: ./update.sh [-y|--yes]). Nothing was changed." >&2; exit 2 ;;
+    esac
+    shift
+done
+
+# Two cron runs overlapping would race git and `up --force-recreate`; a deploy can take 15 minutes.
+if [ "$unattended" = "1" ] && command -v flock >/dev/null; then
+    mkdir -p "$ROOT_DIR/logs"
+    if { exec 9>>"$ROOT_DIR/logs/.update.lock"; } 2>/dev/null; then
+        if ! flock -n 9; then
+            echo "Another ./update.sh is still running. Nothing was changed." >&2
+            exit 1
+        fi
+    else
+        echo "WARNING: could not open logs/.update.lock; running without the overlap lock."
+    fi
+fi
+
 ENV_FILE="$ROOT_DIR/.env"
 EXAMPLE_ENV_FILE="$ROOT_DIR/.env.example"
 
@@ -140,7 +173,7 @@ prompt_for_site_domain() {
         return
     fi
 
-    if [ -t 0 ]; then
+    if [ -t 0 ] && [ "$unattended" != "1" ]; then
         printf "Enter the site domain to use [127.0.0.1]: "
         read -r site_domain
     else
@@ -305,6 +338,9 @@ echo "This will erase any local uncommited changes. Did you make a snapshot? (y/
 # its own Hostinger snapshot has finished. Nothing else should set this.
 if [ "${DEPLOY_SNAPSHOT_TAKEN:-}" = "1" ]; then
     echo "y (snapshot taken by the deploy workflow)"
+    response="y"
+elif [ "$unattended" = "1" ]; then
+    echo "y (unattended: -y or DEPLOY_UNATTENDED=1)"
     response="y"
 elif [ -t 0 ]; then
     read -r response
