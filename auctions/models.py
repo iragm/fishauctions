@@ -301,8 +301,12 @@ def distance_to(
     return distance_raw_sql
 
 
-def guess_category(text, allowed=None):
-    """Guess a lot's category from the categories used by similarly-named lots, from ``allowed`` if given."""
+def guess_category(text, allowed=None, living=False):
+    """Guess a lot's category from the categories used by similarly-named lots, from ``allowed`` if given.
+
+    ``living``: the lot has a species, so only lots that have one too are asked. Otherwise "Green-Light
+    Medaka" is filed with the lights.
+    """
     keywords = []
     words = re.findall("[A-Z|a-z]{3,}", text.lower())
     for word in words:
@@ -323,6 +327,8 @@ def guess_category(text, allowed=None):
     )
     if allowed is not None:
         lot_qs = lot_qs.filter(species_category__in=allowed)
+    if living:
+        lot_qs = lot_qs.filter(species__isnull=False)
     q_objects = Q()
     for keyword in keywords:
         q_objects |= Q(lot_name__iregex=rf"\b{re.escape(keyword)}\b")
@@ -330,13 +336,12 @@ def guess_category(text, allowed=None):
     lot_qs = lot_qs.filter(q_objects)
 
     categories = {}
-    for lot in lot_qs:
+    for lot_name, category_pk in lot_qs.values_list("lot_name", "species_category_id"):
         matches = 0
         for keyword in keywords:
-            if keyword in lot.lot_name.lower():
+            if keyword in lot_name.lower():
                 matches += 1
-        category_total = categories.get(lot.species_category.pk, 0)
-        categories[lot.species_category.pk] = category_total + matches
+        categories[category_pk] = categories.get(category_pk, 0) + matches
     sorted_categories = sorted(categories.items(), key=lambda x: x[1], reverse=True)
     for key, value in sorted_categories:
         logger.debug("%s, %s", Category.objects.filter(pk=key).first(), value)
@@ -8225,7 +8230,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 if not self.auction.use_categories:
                     self.species_category = Category.objects.filter(name="Uncategorized").first()
                 else:
-                    result = guess_category(self.lot_name, allowed=allowed)
+                    result = guess_category(self.lot_name, allowed=allowed, living=bool(self.species_id))
                     if result:
                         self.species_category = result
                         self.category_automatically_added = True

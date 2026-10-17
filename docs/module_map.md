@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14701 lines)
+- **`models.py`** (14706 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -213,7 +213,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16597 lines)
+- **`palette_actions.py`** (16601 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -262,7 +262,7 @@ this only quotes its opening sentence.
 - **`species_categories.py`** (421 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
-- **`species_matching.py`** (1123 lines)
+- **`species_matching.py`** (1178 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1652 lines)
   The ``django_tables2`` tables behind every list on the site.
@@ -608,7 +608,7 @@ this only quotes its opening sentence.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
 - **`test_speakers.py`** (1366 lines)
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
-- **`test_species.py`** (5046 lines)
+- **`test_species.py`** (5115 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
 - **`test_square.py`** (943 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
@@ -970,7 +970,7 @@ Every view on the site, split by the part of it the view belongs to.
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1263 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (736 lines)
+- **`auction_extras.py`** (743 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1111 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
@@ -1051,7 +1051,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (361 lines)
+- **`species.py`** (362 lines)
   Adding species and common names, and the superuser's cleanup queue.
 - **`usability.py`** (197 lines)
   The usability reports, and linking auctions to clubs.

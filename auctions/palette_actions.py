@@ -923,8 +923,11 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
             # Partial match: reuse contents, not the name.
             data["lot_name"] = tidy_lot_name(lot_name)
     else:
-        data = {"lot_name": tidy_lot_name(lot_name), "species_category": _category_pk(lot_name, auction)}
         species = _certain_species(lot_name, user, auction)
+        data = {
+            "lot_name": tidy_lot_name(lot_name),
+            "species_category": _category_pk(lot_name, auction, living=bool(species)),
+        }
         if species:
             data["species"] = species.pk
             if species.category_id:
@@ -1224,15 +1227,16 @@ def add_a_lot_via_webform(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _category_pk(lot_name: str = "", auction=None):
+def _category_pk(lot_name: str = "", auction=None, living=False):
     """The category for a lot of this name via ``guess_category``, else Uncategorized. Category drives
-    browsing, notifications and BAP eligibility. Only ``auction``'s categories, when it narrows them.
+    browsing, notifications and BAP eligibility. Only ``auction``'s categories, when it narrows them;
+    ``living`` when the lot has a species.
     """
     from .models import Category, guess_category
 
     if lot_name:
         try:
-            guess = guess_category(lot_name, allowed=auction.lot_categories() if auction else None)
+            guess = guess_category(lot_name, allowed=auction.lot_categories() if auction else None, living=living)
         except Exception:  # pragma: no cover - a guess is never worth losing the lot over
             logger.exception("guess_category failed for %r", lot_name)
             guess = None

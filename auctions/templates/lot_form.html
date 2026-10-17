@@ -70,11 +70,51 @@ function setScientificName(enabled) {
 {% comment %}Point the category picker at the species' own category.  While the pickers are closed the server does this on save (clean_species_for_auction); once they are open the box has to already say what the lot is going to get, or the seller reads a category the lot will not end up in.{% endcomment %}
 function followSpeciesCategory() {
     var select = document.getElementById('id_species');
-    if (!select || !select.value) return;
-    var categoryId = speciesCategoryIds[select.value];
+    var categoryId = speciesChosen() ? speciesCategoryIds[select.value] : '';
     if (categoryId) {
         $('#id_species_category').val(String(categoryId));
+        categoryGuessed = true;
+    } else if (!$('#id_species_category').val() || categoryGuessed) {
+        // No species, or one that implies nothing: the guesser answers, asked the right way.
+        guessCategory();
     }
+}
+
+{% comment %}True while the category picker shows a guess (the keyword guesser's or the species'), not a person's pick: only then may a later answer replace it.  An edited lot's stored category counts when the site set it.{% endcomment %}
+var categoryGuessed = {% if form.instance.pk and form.instance.category_automatically_added %}true{% else %}false{% endif %};
+
+function speciesChosen() {
+    var select = document.getElementById('id_species');
+    return !!(auctionUsesScientificName && select && select.value);
+}
+
+{% comment %}The keyword guesser.  With a species picked it only asks lots that have one too, or "Green-Light Medaka" is filed with the lights.  An answer is dropped if, by the time it arrives, the name, the auction or the species changed, or a person picked a category.  A guess with no answer clears the guess before it, which was about some other name.{% endcomment %}
+function guessCategory() {
+    var name = $('#id_lot_name').val().trim();
+    if (!auctionUsesCategories || !name) return;
+    var auction = $('#id_auction').val() || '';
+    var species = speciesChosen() ? document.getElementById('id_species').value : '';
+    $.ajax({
+        type: "POST",
+        beforeSend: function (request) {
+            request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+        },
+        url: "{% url 'guess_category' %}",
+        data: {'lot_name': name, 'auction': auction, 'living': species ? '1' : ''},
+        success : function(result) {
+            if ($('#id_lot_name').val().trim() !== name) return;
+            if (($('#id_auction').val() || '') !== auction) return;
+            if ((speciesChosen() ? document.getElementById('id_species').value : '') !== species) return;
+            if ($('#id_species_category').val() && !categoryGuessed) return;
+            if (result['value'] && result['name'] !== "Uncategorized") {
+                $('#id_species_category').val(result['value']);
+                categoryGuessed = true;
+            } else if (categoryGuessed) {
+                $('#id_species_category').val('');
+            }
+            refreshSpeciesUI();
+        }
+    });
 }
 
 function chosenSpeciesLabel() {
@@ -103,7 +143,7 @@ function chosenCategoryName() {
 {% endcomment %}
 function refreshSpeciesUI() {
     var select = document.getElementById('id_species');
-    var speciesChosen = auctionUsesScientificName && select && !!select.value;
+    var hasSpecies = speciesChosen();
     $('#div_id_species').closest('.col-md-12').toggle(!!(auctionUsesScientificName && speciesRevealed));
     // The category is the *fallback* for the scientific name, not a companion to it.  A species
     // already knows its category -- Species.category comes from the family FishBase records, which
@@ -111,7 +151,7 @@ function refreshSpeciesUI() {
     // a question worth asking, and a seller who changed it would have their answer overwritten on
     // save anyway (clean_species_for_auction).  It comes back the moment the species goes away,
     // which is the case it is there for: a sponge filter or a mixed bag has no species to ask.
-    var categoryNeeded = auctionUsesCategories && speciesRevealed && !speciesChosen;
+    var categoryNeeded = auctionUsesCategories && speciesRevealed && !hasSpecies;
     // Except when it is the field with the error on it: hiding the box somebody has to fix is how
     // a form becomes unsubmittable.
     if (categoryHasError) { categoryNeeded = auctionUsesCategories; }
@@ -121,7 +161,7 @@ function refreshSpeciesUI() {
     // BooleanField behind a HiddenInput, so what it posts is the string in it.
     $('#id_category_shown').val(categoryNeeded ? '1' : '');
     var summary = '';
-    if (speciesChosen) {
+    if (hasSpecies) {
         summary = chosenSpeciesLabel();
     } else if (auctionUsesCategories && chosenCategoryName()) {
         summary = 'Category: ' + chosenCategoryName();
@@ -284,26 +324,14 @@ $(document).ready(function() {
     });
     $('#id_auction').change(function(data) {
         setAuction(true);
+        if (categoryGuessed) { guessCategory(); }
     });
-    {% comment %}The keyword guesser, for the category.  Asked whatever the picker is doing, because the picker is usually closed now: its answer is what the summary line shows when no species could be identified.  Never overrules a category that is already set.{% endcomment %}
+    {% comment %}The keyword guesser, for the category.  Asked whatever the picker is doing, because the picker is usually closed now: its answer is what the summary line shows when no species could be identified.  Never overrules a category a person set.{% endcomment %}
     $('#id_lot_name').change(function(data) {
         // Whatever happens next, the question has now been asked of this name.
         if (this.value.trim()) { speciesLookedUp = true; refreshSpeciesUI(); }
-        if (!auctionUsesCategories || $('#id_species_category').val()) return;
-        $.ajax({
-            type: "POST",
-            beforeSend: function (request) {
-                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-            },
-            url: "{% url 'guess_category' %}",
-            data: {'lot_name': this.value, 'auction': $('#id_auction').val() || ''},
-            success : function(result) {
-                if (result['value'] && result['name'] !== "Uncategorized") {
-                    $('#id_species_category').val(result['value']);
-                    refreshSpeciesUI();
-                }
-            }
-        });
+        if ($('#id_species_category').val() && !categoryGuessed) return;
+        guessCategory();
     });
 
     {% comment %}
@@ -377,7 +405,10 @@ $(document).ready(function() {
         followSpeciesCategory();
         refreshSpeciesUI();
     });
-    $('#id_species_category').on('change', refreshSpeciesUI);
+    $('#id_species_category').on('change', function() {
+        categoryGuessed = false;
+        refreshSpeciesUI();
+    });
     $('#species-edit').on('click', function() {
         speciesRevealed = true;
         refreshSpeciesUI();
