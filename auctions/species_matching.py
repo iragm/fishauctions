@@ -517,13 +517,57 @@ def _plain_species_ids(species_ids):
     return {parent or pk for pk, parent in Species.objects.filter(pk__in=species_ids).values_list("pk", "parent_id")}
 
 
+#: Punctuation that separates one thing from the next in a lot name ("Neon tetra, guppy"); a hyphen
+#: joins words ("Green-Light"), so it is not one.
+_SEPARATOR = re.compile(r"[^a-z0-9\s-]+")
+
+
+def _next_word(text, phrase):
+    """The word typed right after the first run of *phrase* in *text*, its last word maybe plural; ``""``
+    when nothing follows or punctuation does ("Neon tetra, guppy" lists two fish).
+    """
+    marked = _SEPARATOR.sub(" | ", re.sub(r"['‘’ʼ`]+", "", (text or "").lower()))
+    words = marked.replace("-", " ").split()
+    target = phrase.split()
+    size = len(target)
+    for start in range(len(words) - size + 1):
+        run = words[start : start + size]
+        if run[:-1] == target[:-1] and target[-1] in (run[-1], singularize(run[-1])):
+            following = words[start + size : start + size + 1]
+            return following[0] if following and following[0] != "|" else ""
+    return ""
+
+
+def _the_next_word_names_something_else(text, common, user=None, club=None, seen=None):
+    """The species the word right after *common* names, when that is a different fish; else ``[]``.
+
+    The noun is the thing being sold: "Blue Dragon Guppy" is a guppy, though "blue dragon" is also the
+    whole common name of a marine animal. Only the very next word, with nothing between: "Neon tetra,
+    guppy" and "zebra pleco and bristlenose" are two fish. A strain of that word's species ("Blue Grass
+    guppy") agrees with it and keeps its phrase. *seen* remembers the lookup per word.
+    """
+    word = _next_word(text, common.name_normalized)
+    after = keywords(word) if word else []
+    if not after:
+        return []
+    seen = {} if seen is None else seen
+    if word not in seen:
+        heads = _single_word_matches(after, user=user, club=club)
+        seen[word] = (heads, _plain_species_ids([species.pk for species in heads]))
+    heads, plain = seen[word]
+    if not heads or (common.species.parent_id or common.species_id) in plain:
+        return []
+    return heads
+
+
 def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=None):
     """Species the typed text genuinely names, ranked. Empty when nothing does.
 
     Strict, because a wrong species gets printed and scored while no answer falls through to the model:
 
     *Scientific token*: a word is a genus or epithet ("Tropheus duboisi maswa").
-    *Common-name phrase*: a whole multi-word common name appears in the lot name.
+    *Common-name phrase*: a whole multi-word common name appears in the lot name, unless the word right
+    after it names a different fish (:func:`_the_next_word_names_something_else`).
     *Single common name*: :func:`_single_word_matches`, only when nothing above matched.
     *Bare epithet*: the whole lot name is one epithet ("saulosi").
 
@@ -551,8 +595,14 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
     # Rule 2: every 2-to-5-word run looked up by equality; icontains returns thousands for "tetra".
     # Single-word names are left to later rules ("Bolivian ram" is not "Ram").
     phrases = _phrases(normalized)
+    named_after_it = {}
+    seen = {}
     if phrases:
         for common in visible_common_names(user, club).filter(name_normalized__in=phrases).select_related("species"):
+            head = _the_next_word_names_something_else(text, common, user=user, club=club, seen=seen)
+            if head:
+                named_after_it[frozenset(species.pk for species in head)] = head
+                continue
             score = STRONG_SCORE + len(common.name.split()) + (1 if common.is_preferred else 0)
             previous = scored.get(common.species_id)
             if previous is None or previous[0] < score:
@@ -572,6 +622,11 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
         if 0 < len(in_trade) <= MAX_GENUS_MATCHES:
             return in_trade
         # Too broad to answer, so fall through: "male bettas" still reaches the common name "betta".
+
+    # A phrase that only described the fish named after it: that fish is the answer, unless two
+    # phrases each described a different one.
+    if len(named_after_it) == 1:
+        return _rank(_alphabetical(next(iter(named_after_it.values()))), category)
 
     # Rule 3: an unambiguous single-word common name, after the rules above so it can't dilute them.
     single = _single_word_matches(words, user=user, club=club)

@@ -7,6 +7,7 @@ in only one of them. Permission checks are the caller's job.
 import logging
 import re
 
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import Auction, AuctionTOS, ClubHistory, ClubMember
@@ -243,8 +244,11 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
                 canonical, duplicate = find_by_email, existing_by_user
             else:
                 canonical, duplicate = existing_by_user, find_by_email
+            # An organizer's row in the pair means it isn't theirs alone to leave.
+            joined_both = canonical.created_by_joining and duplicate.created_by_joining
             canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
             obj = canonical
+            obj.created_by_joining = joined_both
         else:
             obj = find_by_email
             obj.user = user
@@ -257,6 +261,7 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
                 # Seed the email so save()'s email-change guard doesn't unlink the user. ``None``,
                 # not "", keeps the email__isnull admin filter working.
                 "email": user.email or None,
+                "created_by_joining": True,
             },
         )
     if pickup_location is not None:
@@ -278,7 +283,7 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
         obj.address = userdata.address
     if auction.is_club_managed:
         # The club owns the number and permissions; shared with the app's proximity join.
-        club_member, _created = ensure_club_member(
+        club_member, member_created = ensure_club_member(
             auction,
             user=user,
             name=obj.name,
@@ -288,6 +293,8 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
             admin_edited=False,
         )
         apply_club_member_to_tos(auction, obj, club_member)
+        if member_created and is_new_join:
+            obj.joined_into_club = True
     obj.save()
     userdata.last_auction_used = auction
     userdata.last_activity = django_timezone.now()
@@ -301,6 +308,116 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
             user=user,
         )
     return obj, is_new_join, ""
+
+
+LEAVE_REFUSALS = {
+    "added": "An organizer added you, so ask them to take you out.",
+    "activity": "You've already done things in this auction, so ask an organizer to take you out.",
+}
+
+
+def _has_activity(tos):
+    """Anything beyond the join on *tos*: what makes leaving an organizer's job."""
+    from .models import Bid, InvoiceAdjustment, InvoicePayment, Lot, PickupLocation, VolunteerSignup
+
+    lots = Lot.objects.filter(Q(auctiontos_seller=tos) | Q(auctiontos_winner=tos))
+    return bool(
+        tos.is_admin
+        or tos.checked_in
+        or tos.door_prize_called
+        # A lot they added and deleted unsold is the only one that doesn't count.
+        or lots.exclude(is_deleted=True, auctiontos_winner__isnull=True).exists()
+        or (tos.user_id and Bid.objects.filter(user_id=tos.user_id, lot_number__auction=tos.auction_id).exists())
+        or InvoiceAdjustment.objects.filter(invoice__auctiontos_user=tos).exists()
+        or InvoicePayment.objects.filter(invoice__auctiontos_user=tos).exists()
+        or VolunteerSignup.objects.filter(auctiontos=tos).exists()
+        or PickupLocation.objects.filter(contact_person=tos).exists()
+    )
+
+
+def leave_auction_problem(tos):
+    """Why *tos* can't take itself out of its auction, or ``""`` when it can; ``LEAVE_REFUSALS`` words it.
+
+    Leaving undoes a join and nothing more: ``"added"`` unless the person's own Join made the row
+    (``created_by_joining``; joining a row an organizer made doesn't count), ``"activity"`` once
+    anything else hangs off it. Either way the organizer sorts out the records.
+    """
+    if not tos.created_by_joining:
+        return "added"
+    if _has_activity(tos):
+        return "activity"
+    return ""
+
+
+def membership_made_by_joining(tos):
+    """The ClubMember that *tos*'s own join created, still unpaid and unused, or None.
+
+    Undoing that join undoes the membership too (Ira, 2026-10-16), along with the shadow rows it got in
+    the club's other auctions. Anything an admin touched, any dues, points or payments, or any activity
+    in another auction keeps it.
+    """
+    member = tos.clubmember
+    if (
+        not tos.joined_into_club
+        or member is None
+        or member.is_deleted
+        or member.admin_edited
+        or member.has_ever_paid
+        or any(getattr(member, f.name) for f in member._meta.fields if f.name.startswith("permission_"))
+        or member.bap_awards.exists()
+        or member.payments.exists()
+        or member.invoices.exclude(auctiontos_user=tos).exists()
+    ):
+        return None
+    for other in AuctionTOS.objects.filter(clubmember=member).exclude(pk=tos.pk):
+        if not other.manually_added or _has_activity(other):
+            return None
+    return member
+
+
+def leave_auction(tos):
+    """Delete *tos* if :func:`leave_auction_problem` still allows it; returns the problem, ``""`` once gone.
+
+    Checked again under a row lock so a double submit can't delete twice. An empty invoice goes with it,
+    and so does a membership the join created (:func:`membership_made_by_joining`).
+    """
+    from django.db import transaction
+
+    with transaction.atomic():
+        locked = AuctionTOS.objects.select_for_update().filter(pk=tos.pk).first()
+        if locked is None:
+            return ""
+        problem = leave_auction_problem(locked)
+        if problem:
+            return problem
+        member = membership_made_by_joining(locked)
+        auction = locked.auction
+        auction.create_history(applies_to="USERS", action=f"{locked.name} has left this auction", user=locked.user)
+        locked.delete()
+        if member is not None:
+            for shadow in AuctionTOS.objects.filter(clubmember=member).select_related("auction"):
+                shadow.auction.create_history(
+                    applies_to="USERS", action=f"{shadow.name} left {member.club}", user=member.user
+                )
+                shadow.delete()
+            member.is_deleted = True
+            member.save(update_fields=["is_deleted"])
+            ClubHistory.objects.create(
+                club=member.club,
+                user=member.user,
+                action=f"{member.name} left via auction '{auction.title}', which had made them a member",
+                applies_to="MEMBERS",
+                member=member,
+            )
+    return ""
+
+
+def paid_club_for(tos):
+    """The club whose dues *tos*'s person has paid, for the "leaving doesn't refund it" line, or None."""
+    if not tos.auction.is_club_managed:
+        return None
+    member = tos.club_member_record
+    return tos.auction.club if member and member.is_paid_member else None
 
 
 def existing_tos_for_club_member(auction, member):
@@ -905,6 +1022,8 @@ PER_RUN_TOS_STATE = {
     "print_reminder_email_sent": False,
     "time_spent_reading_rules": 0,
     "possible_duplicate": None,
+    # The copy made the row, not a join.
+    "created_by_joining": False,
 }
 
 DEFAULT_AUCTION_DESCRIPTION = """

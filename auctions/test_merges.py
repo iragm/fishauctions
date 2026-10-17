@@ -20,6 +20,7 @@ from auctions.models import (
     BapAward,
     Bid,
     Club,
+    ClubHistory,
     ClubMember,
     Invoice,
     InvoicePayment,
@@ -342,6 +343,33 @@ class MemberMergeTests(TestCase):
         self.assertEqual((self.kept.bap_points, payment.club_member), (5, self.kept))
         # Same-email merges happen on save, with nobody deciding.
         self.assertFalse(self.kept.permission_admin)
+
+    def test_adding_a_member_twice_merges_once(self):
+        now = timezone.now()
+        second = Auction.objects.create(
+            created_by=self.admin,
+            title="Second club auction",
+            is_online=False,
+            date_start=now - datetime.timedelta(days=1),
+            date_end=now + datetime.timedelta(days=1),
+            club=self.club,
+            manage_users_through_club="all",
+        )
+        PickupLocation.objects.create(name="Hall", auction=second, pickup_time=now + datetime.timedelta(days=2))
+        kept = ClubMember.objects.create(club=self.club, name="Twice Added", email="twice@example.com")
+        # Not in every auction yet, as a member deactivated before the auction was made.
+        AuctionTOS.objects.filter(auction=second, clubmember=kept).delete()
+
+        again = ClubMember.objects.create(club=self.club, name="Twice Added", email="twice@example.com")
+
+        again.refresh_from_db()
+        self.assertTrue(again.is_deleted)
+        self.assertEqual(ClubHistory.objects.filter(club=self.club, action__startswith="Merged member").count(), 1)
+        for auction in (self.auction, second):
+            self.assertEqual(
+                list(AuctionTOS.objects.filter(auction=auction, email="twice@example.com").values_list("clubmember")),
+                [(kept.pk,)],
+            )
 
     def test_a_check_in_carried_over_lets_them_bid(self):
         now = timezone.now()

@@ -1103,13 +1103,6 @@ ROUTE_LIST: list[Route] = [
         keywords=["dashboard", "site stats"],
     ),
     _r(
-        "admin_setup_checklist",
-        "Site setup checklist",
-        "Site admin",
-        admin=ADMIN_SUPERUSER,
-        keywords=["setup", "env", "integrations", "configure the site"],
-    ),
-    _r(
         "agent_proposals",
         "Changes agents proposed",
         "Site admin",
@@ -1259,6 +1252,7 @@ EXCLUDED: dict[str, str] = {
     "guess_category": _AUTOCOMPLETE,
     "get_auction_info": _API,
     "auction_page_action": "POST-only: the auction page's banner buttons. Nothing to look at.",
+    "auction_leave": "POST-only: the X next to Join on the auction page. Nothing to look at.",
     # JSON / HTMX fragments
     "get_ad": _API,
     "click_ad": _API,

@@ -832,7 +832,6 @@ NOT_IN_HELP: dict[str, str] = {
     "print_my_unprinted_labels": "Reached from the buy-now sale email, which says what it prints.",
     "blog_post": "Posts are announcements, read on their own.",
     "admin_dashboard": "Site operator only.",
-    "admin_setup_checklist": "Site operator only.",
     "agent_proposals": "Site operator only.",
     "species_gaps": "Site operator only.",
     "species_create": "Site operator only.",

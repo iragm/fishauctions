@@ -923,8 +923,11 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
             # Partial match: reuse contents, not the name.
             data["lot_name"] = tidy_lot_name(lot_name)
     else:
-        data = {"lot_name": tidy_lot_name(lot_name), "species_category": _category_pk(lot_name, auction)}
         species = _certain_species(lot_name, user, auction)
+        data = {
+            "lot_name": tidy_lot_name(lot_name),
+            "species_category": _category_pk(lot_name, auction, living=bool(species)),
+        }
         if species:
             data["species"] = species.pk
             if species.category_id:
@@ -1224,15 +1227,16 @@ def add_a_lot_via_webform(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _category_pk(lot_name: str = "", auction=None):
+def _category_pk(lot_name: str = "", auction=None, living=False):
     """The category for a lot of this name via ``guess_category``, else Uncategorized. Category drives
-    browsing, notifications and BAP eligibility. Only ``auction``'s categories, when it narrows them.
+    browsing, notifications and BAP eligibility. Only ``auction``'s categories, when it narrows them;
+    ``living`` when the lot has a species.
     """
     from .models import Category, guess_category
 
     if lot_name:
         try:
-            guess = guess_category(lot_name, allowed=auction.lot_categories() if auction else None)
+            guess = guess_category(lot_name, allowed=auction.lot_categories() if auction else None, living=living)
         except Exception:  # pragma: no cover - a guess is never worth losing the lot over
             logger.exception("guess_category failed for %r", lot_name)
             guess = None
@@ -3092,6 +3096,29 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def leave_auction(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Undo the user's own join, the X next to Join. ``services.leave_auction_problem`` says when an
+    organizer has to do it instead.
+    """
+    from .services import LEAVE_REFUSALS, paid_club_for
+    from .services import leave_auction as leave_auction_service
+
+    auction, problem = _auction_or_problem(request, params)
+    if problem:
+        return problem
+    tos = _own_tos(request.user, auction)
+    if not tos:
+        return _error(f"You aren't in {auction.title}.")
+    why = leave_auction_service(tos)
+    if why:
+        return _error(f"{auction.title}: {LEAVE_REFUSALS[why]}")
+    summary = f"You've left {auction.title}."
+    paid_club = paid_club_for(tos)
+    if paid_club:
+        summary += f" Your paid {paid_club.name} membership isn't cancelled or refunded."
+    return _ok(summary, auction=auction.slug)
+
+
 def _membership_card(member) -> dict[str, Any]:
     """One of the caller's own memberships, as the card widget and model read it.
 
@@ -4164,15 +4191,7 @@ def _membership_facts(user) -> list[dict[str, Any]]:
             "expiring_soon": bool(member.is_expiring_soon),
         }
         if member.club.enable_breeder_award_program:
-            entry["points"] = {
-                "bap": member.bap_points,
-                "bap_this_year": member.bap_points_ytd,
-            }
-            # HAP/CAP only where the club runs them separately.
-            if member.club.separate_hap:
-                entry["points"]["hap"] = member.hap_points
-            if member.club.separate_cap:
-                entry["points"]["cap"] = member.culture_points
+            entry["points"] = _member_points(member.club, member)
         facts.append(entry)
     return facts
 
@@ -5126,18 +5145,91 @@ def club_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
     return {"found": True, "summary": summary, "club_numbers": data}
 
 
+#: Breeder award tracks a member list filters on: the word -> (label, all-time column, this-year column).
+_MEMBER_POINT_TRACKS = {
+    "bap": ("BAP", "bap_points", "bap_points_ytd"),
+    "hap": ("HAP", "hap_points", "hap_points_ytd"),
+    "cap": ("CAP", "culture_points", "culture_points_ytd"),
+    "culture": ("CAP", "culture_points", "culture_points_ytd"),
+}
+
+
+def _member_points(club, member) -> dict[str, int]:
+    """A member's totals in the tracks this club runs: HAP and CAP only where the club keeps them apart."""
+    points = {"bap": member.bap_points, "bap_this_year": member.bap_points_ytd}
+    if club.separate_hap:
+        points.update(hap=member.hap_points, hap_this_year=member.hap_points_ytd)
+    if club.separate_cap:
+        points.update(cap=member.culture_points, cap_this_year=member.culture_points_ytd)
+    return points
+
+
 def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
-    """A club's members filtered by dues status. ``is_paid_member`` is applied in Python over one query,
-    then sliced.
+    """A club's members filtered by dues status and, when asked, by breeder award points. Points filter in
+    SQL; ``is_paid_member`` is applied in Python over the one query, then sliced. The points desk
+    (``permission_manage_bap``, as ``ClubBapView``) may list points without seeing anyone's dues.
     """
+    from .views import check_club_permission
+
     user = request.user
     club, problem = _club_or_problem(request, params)
     if problem:
         return problem
-    if not command_palette._can_manage_members(user, club):
+    track_word = _str(params, "points").lower()
+    min_points, max_points = _int(params, "min_points"), _int(params, "max_points")
+    if track_word.isdigit():
+        # "points=50" from a model that read award_points' schema means at least 50.
+        min_points, track_word = (min_points if min_points is not None else int(track_word)), ""
+    wants_points = bool(track_word) or min_points is not None or max_points is not None
+    sees_dues = command_palette._can_manage_members(user, club)
+    points_desk = club.enable_breeder_award_program and check_club_permission(user, club, "permission_manage_bap")
+    if not sees_dues and not (wants_points and points_desk):
         return _error(f"You don't have permission to see {club.name}'s members.")
     status = (_str(params, "status") or "all").lower().replace(" ", "_").replace("-", "_")
-    members = list(ClubMember.objects.filter(club=club, is_deleted=False).select_related("club").order_by("name", "pk"))
+    if not sees_dues:
+        if status != "all":
+            return _error(f"You can list {club.name}'s points, but not who has paid their dues.")
+    queryset = ClubMember.objects.filter(club=club, is_deleted=False).select_related("club").order_by("name", "pk")
+    points_label = ""
+    if wants_points:
+        if not club.enable_breeder_award_program:
+            return _error(f"{club.name} doesn't run a breeder award program, so nobody has points.")
+        track = _MEMBER_POINT_TRACKS.get(track_word or "bap")
+        if not track:
+            return _error("Points are bap, hap or cap.")
+        track_label, all_time, this_year = track
+        if (track_label == "HAP" and not club.separate_hap) or (track_label == "CAP" and not club.separate_cap):
+            return _error(f"{club.name} doesn't keep {track_label} separately; those points count as BAP there.")
+        column = this_year if _flag(params, "this_year") else all_time
+        if min_points is None and max_points is None:
+            min_points = 1
+        if min_points is not None and max_points is not None and min_points > max_points:
+            min_points, max_points = max_points, min_points
+        if not sees_dues:
+            # The points desk sees who has points, as the BAP pages show it, never the whole roster.
+            min_points = max(min_points or 1, 1)
+        if min_points is not None:
+            queryset = queryset.filter(**{f"{column}__gte": min_points})
+        if max_points is not None:
+            queryset = queryset.filter(**{f"{column}__lte": max_points})
+        queryset = queryset.order_by(f"-{column}", "name", "pk")
+        span = (
+            f"between {min_points} and {max_points}"
+            if min_points is not None and max_points is not None
+            else f"at least {min_points}"
+            if min_points is not None
+            else f"at most {max_points}"
+        )
+        unit = "point" if span.endswith(" 1") and not span.startswith("between") else "points"
+        points_label = f" with {span} {track_label} {unit}{' this year' if column == this_year else ''}"
+    limit, offset = _slice(params)
+    if status == "all":
+        total = queryset.count()
+        members = list(queryset[offset : offset + limit])
+        offset_in_page = 0
+    else:
+        members = list(queryset)
+        offset_in_page = offset
     if status in {"lapsed", "expired"}:
         members = [member for member in members if member.membership_status == "lapsed"]
         label = "have lapsed"
@@ -5158,23 +5250,27 @@ def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
         label = "have no account on this site"
     else:
         label = "are in this club"
-    total = len(members)
-    limit, offset = _slice(params)
-    rows = [
-        {
-            "name": untrusted_short(member.name or member.email or "") or "(no name)",
-            "membership_number": member.membership_number,
-            "bidder_number": member.bidder_number,
-            "expires": member.membership_expiration_date.strftime("%Y-%m-%d")
-            if member.membership_expiration_date
-            else None,
-            "paid_up": bool(member.is_paid_member),
-            "status": member.membership_status,
-            "expiring_within_30_days": bool(member.is_expiring_soon),
-            # No has_an_account per row; the ``no_account`` status answers that when asked.
-        }
-        for member in members[offset : offset + limit]
-    ]
+    if status != "all":
+        total = len(members)
+    shows_points = club.enable_breeder_award_program and (wants_points or points_desk)
+    rows = []
+    for member in members[offset_in_page : offset_in_page + limit]:
+        row: dict[str, Any] = {"name": untrusted_short(member.name or member.email or "") or "(no name)"}
+        if sees_dues:
+            row.update(
+                membership_number=member.membership_number,
+                bidder_number=member.bidder_number,
+                expires=member.membership_expiration_date.strftime("%Y-%m-%d")
+                if member.membership_expiration_date
+                else None,
+                paid_up=bool(member.is_paid_member),
+                status=member.membership_status,
+                expiring_within_30_days=bool(member.is_expiring_soon),
+                # No has_an_account per row; the ``no_account`` status answers that when asked.
+            )
+        if shows_points:
+            row["points"] = _member_points(club, member)
+        rows.append(row)
     return {
         "found": bool(total),
         "club": club.name,
@@ -5182,8 +5278,10 @@ def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
         "count": total,
         "showing": len(rows),
         "offset": offset,
-        "summary": f"{total} of {club.name}'s members {label}.{_showing(total, limit, offset)}",
-        "followups": _member_followups(club, None),
+        "summary": f"{total} of {club.name}'s members {label}{points_label}.{_showing(total, limit, offset)}",
+        "followups": _member_followups(club, None)
+        if sees_dues
+        else [{"label": f"Points for {club.name}", "url": reverse("club_bap", kwargs={"slug": club.slug})}],
         **_about(club=club),
     }
 
@@ -12435,6 +12533,26 @@ register(
 
 register(
     Action(
+        name="leave_auction",
+        description=(
+            "Take the user out of an auction they joined themselves, undoing the join. Refuses, saying "
+            "to ask an organizer, when an organizer added them or they have bids, lots or invoice "
+            "entries there. It only ever removes the person asking."
+        ),
+        params={
+            "auction": "string, optional. Auction slug or title. See my_context.",
+        },
+        danger=DANGER_CONFIRM,
+        resolver=leave_auction,
+        destructive=True,
+        aliases={"name"},
+        confirm_template="Leave",
+        examples=["take me out of the fall auction", "I joined the wrong auction"],
+    )
+)
+
+register(
+    Action(
         name="my_membership",
         description=(
             "Show the user their OWN club membership card: their membership number and its "
@@ -14278,16 +14396,26 @@ register(
     Action(
         name="list_club_members",
         description=(
-            "List a club's members by name, filtered by whether their dues are current. This is "
-            "how to answer 'who has lapsed?', 'who is about to expire?', 'who renewed?' — "
-            "club_numbers only counts them. The names it returns are what renew_member, "
-            "update_club_member and award_points take. Club staff only."
+            "List a club's members by name, filtered by whether their dues are current or by their "
+            "breeder award points. This is how to answer 'who has lapsed?', 'who is about to "
+            "expire?', 'who renewed?', 'who has BAP points?', 'who has between 50 and 500 HAP "
+            "points?' — club_numbers only counts them. Each row carries the member's point totals "
+            "when the club runs a breeder award program; a points filter lists highest first. The "
+            "names it returns are what renew_member, update_club_member and award_points take. "
+            "Club staff only; the points desk may list points."
         ),
         params={
             "status": (
                 "string, optional, default all. One of: all, paid, lapsed (paid once, not now), never_paid, "
                 "unpaid (lapsed or never paid), expiring, no_account."
             ),
+            "points": (
+                "string, optional. bap, hap or cap: only members with points in that track, highest "
+                "first. Alone it means at least 1 point."
+            ),
+            "min_points": "integer, optional. At least this many points (inclusive). Implies points=bap if not given.",
+            "max_points": "integer, optional. At most this many points (inclusive). Implies points=bap if not given.",
+            "this_year": "boolean, optional, default false. Filter on this year's points instead of the all-time total.",
             "club": "string, optional. Club name. See my_context.",
             "limit": "integer, optional, default 15. How many rows to return, up to 100.",
             "offset": "integer, optional, default 0. Skip this many rows — how you get the rest of a long list.",
@@ -15832,6 +15960,10 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "set_invoice_renewal": _PRECISE_TARGET,
     "resend_member_card": _PRECISE_TARGET,
     "leave_feedback": _PRECISE_TARGET,
+    "leave_auction": (
+        "Said once per auction at most, and often refused with a reason to read; the X next to Join "
+        "is right there on the auction page."
+    ),
     "hide_chat_message": _PRECISE_TARGET,
     "record_club_money": _PRECISE_TARGET,
     "rotate_lot_image": _PRECISE_TARGET,
@@ -15966,6 +16098,7 @@ SKILLS: dict[str, str] = {
     "ImageCreateView": "add_lot_image",
     "ImageDelete": "remove_lot_image",
     "AuctionInfo": "join_auction",
+    "AuctionLeave": "leave_auction",
     "ClubAnnouncementsView": "send_club_announcement",
     "ClubAnnouncementRetractView": "retract_announcement",
     "ClubEditView": "update_club_setting",

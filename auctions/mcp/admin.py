@@ -282,6 +282,9 @@ MCP_ONLY_PAGES = {
     "admin_session_replay": ("Read one person's session", "AdminSessionReplay"),
     "command_palette_analytics": ("Command palette searches", "CommandPaletteAnalyticsView"),
     "admin_free_text": ("Adjustments and custom fields", "AdminFreeTextUsage"),
+    "admin_setup_checklist": ("Setup checklist", "AdminSetupChecklistView"),
+    "admin_mobile_app": ("Mobile app adoption", "AdminMobileApp"),
+    "admin_auction_usage": ("Current auction usage", "AdminAuctionUsage"),
 }
 
 
@@ -1851,9 +1854,10 @@ ADMIN_TOOLS: dict[str, Action] = {
             name="read_admin_page",
             description=(
                 "Read one of the site's admin dashboards as text: species gaps, traffic, signups and "
-                "the rest of the Admin menu, plus four reports that are only here: usability, session "
-                "replay, command palette searches, and what invoice adjustments and custom fields are "
-                "used for. Rendered as the signed-in superuser."
+                "the rest of the Admin menu, plus reports that are only here: usability, session "
+                "replay, command palette searches, what invoice adjustments and custom fields are "
+                "used for, the site's setup checklist (which settings and integrations are configured), "
+                "mobile app adoption, and lots selling right now. Rendered as the signed-in superuser."
             ),
             params={
                 "page": "string, required. The page's name: " + ", ".join(sorted(readable_pages())) + ".",

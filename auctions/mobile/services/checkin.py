@@ -224,6 +224,10 @@ def join_auction(user, auction, now=None):
             admin_edited=False,
         )
         tos = _find_and_bind_tos(user, auction)
+        if tos is not None and _created:
+            # The shadow row of a member this join just made: theirs to leave, membership and all.
+            tos.created_by_joining = True
+            tos.joined_into_club = True
     created = False
     if tos is None:
         tos = AuctionTOS(
@@ -233,6 +237,7 @@ def join_auction(user, auction, now=None):
             email=user.email or None,
             name=user.get_full_name() or user.username,
             manually_added=False,
+            created_by_joining=True,
         )
         created = True
     else:

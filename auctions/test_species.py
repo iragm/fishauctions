@@ -1635,6 +1635,49 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         lot.refresh_from_db()
         self.assertEqual(lot.species_category, chosen)
 
+    def _filed_by_a_person(self, name, category, species=None):
+        """A lot the name guesser learns from: a person chose its category."""
+        lot = Lot.objects.create(lot_name=name, auction=self.online_auction, user=self.user, species=species)
+        Lot.objects.filter(pk=lot.pk).update(species_category=category, category_automatically_added=False)
+
+    def test_the_category_guesser_asks_only_living_lots_once_a_species_is_picked(self):
+        """ "Green-Light Medaka": the page asked before the species was known and filed it with the lights."""
+        hardware = Category.objects.create(name="Hardware")
+        oddballs = Category.objects.create(name="Misc and oddball fish")
+        medaka = make_species("Oryzias", "latipes", "Medaka")
+        self._filed_by_a_person("Green LED light", hardware)
+        self._filed_by_a_person("Medaka trio", oddballs, species=medaka)
+        self.client.login(username="my_lot", password="testpassword")
+        url = reverse("guess_category")
+        name = "Green-Light Dark Type Medaka"
+        self.assertEqual(self.client.post(url, {"lot_name": name}).json()["value"], hardware.pk)
+        self.assertEqual(self.client.post(url, {"lot_name": name, "living": "1"}).json()["value"], oddballs.pk)
+        self.assertEqual(self.client.post(url, {"lot_name": name, "living": "false"}).json()["value"], hardware.pk)
+
+    def test_the_page_asks_again_when_the_species_has_no_category(self):
+        from django.template.loader import get_template
+
+        source = get_template("lot_form.html").template.source
+        self.assertIn("'living': species ? '1' : ''", source)
+        # A species without a category re-asks, and a stale or overtaken answer is dropped.
+        self.assertIn("} else if (!$('#id_species_category').val() || categoryGuessed) {", source)
+        self.assertIn("!== species) return;", source)
+        self.assertIn("!== auction) return;", source)
+
+    def test_saving_a_lot_with_a_species_guesses_only_from_living_lots(self):
+        hardware = Category.objects.create(name="Hardware")
+        oddballs = Category.objects.create(name="Misc and oddball fish")
+        medaka = make_species("Oryzias", "latipes", "Medaka")
+        self._filed_by_a_person("Green LED light", hardware)
+        self._filed_by_a_person("Medaka trio", oddballs, species=medaka)
+        lot = Lot.objects.create(
+            lot_name="Green-Light Dark Type Medaka", auction=self.online_auction, user=self.user, species=medaka
+        )
+        self.assertEqual(lot.species_category, oddballs)
+        # Without a species it is still the lights' word.
+        sponge = Lot.objects.create(lot_name="Green light", auction=self.online_auction, user=self.user)
+        self.assertEqual(sponge.species_category, hardware)
+
     def test_the_suggestions_endpoint_reports_the_category(self):
         cichlids = Category.objects.create(name="Cichlids")
         Species.objects.filter(pk=self.guppy.pk).update(category=cichlids)
@@ -2007,6 +2050,12 @@ class SpeciesAutocompleteTests(StandardTestCase):
     def test_it_finds_a_species_by_common_name(self):
         response = self.client.get(self.url, {"q": "cherry"})
         self.assertIn("Neocaridina davidi", response.content.decode())
+
+    def test_a_quote_comes_back_as_text_not_an_entity(self):
+        """select2 escapes the label itself; escaping it here printed "Hybrid &#x27;Tibee&#x27;"."""
+        Species.objects.create(variety="Tibee", is_hybrid=True)
+        response = self.client.get(self.url, {"q": "Tibee", "varieties": "1"})
+        self.assertEqual([row["text"] for row in response.json()["results"]], ["Hybrid 'Tibee'"])
 
     def test_a_strain_is_never_offered_as_a_parent(self):
         Species.objects.create(
@@ -2640,6 +2689,26 @@ class SingleWordCommonNameTests(StandardTestCase):
     def test_a_phrase_still_beats_a_single_word(self):
         found, _ = suggest_species("wild caught bolivian ram", use_llm=False)
         self.assertEqual(list(found), [self.altispinosus])
+
+    def test_a_phrase_that_describes_the_fish_named_after_it_gives_way(self):
+        """ "Blue dragon" is a marine animal's whole common name; a Blue Dragon Guppy is a guppy."""
+        make_species("Glaucus", "atlanticus", "Blue dragon", aquarium_use="commercial")
+        found, _ = suggest_species("Blue Dragon Guppy - Breeding Pair", use_llm=False)
+        self.assertEqual(list(found), [self.guppy])
+
+    def test_two_fish_in_one_lot_name_keep_the_first(self):
+        tetra = make_species("Paracheirodon", "innesi", "Neon tetra", aquarium_use="commercial")
+        for name in ("Neon tetra and guppy", "Neon tetra, guppy", "Neon tetra / guppies", "Neon tetra & guppy"):
+            found, _ = suggest_species(name, use_llm=False)
+            self.assertEqual(list(found), [tetra], name)
+
+    def test_but_not_when_the_phrase_is_a_strain_of_that_fish(self):
+        strain = Species.objects.create(
+            genus="Poecilia", species="reticulata", variety="Blue Grass", parent=self.guppy, source="aquarium"
+        )
+        SpeciesCommonName.objects.create(species=strain, name="Blue grass", source="aquarium")
+        found, _ = suggest_species("Blue grass guppies", use_llm=False)
+        self.assertEqual(list(found), [strain])
 
     def test_an_ambiguous_word_answers_nothing(self):
         for index in range(MAX_SINGLE_WORD_MATCHES + 1):

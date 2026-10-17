@@ -208,7 +208,6 @@ urlpatterns = [
     path("clubs/add/", views.ClubAddView.as_view(), name="club_add"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
-    path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),
     path(
         "admin-dashboard/species-gaps/",
         views.SpeciesGapsView.as_view(),
@@ -626,6 +625,7 @@ urlpatterns = [
     path("buying/csv/", login_required(views.BuyingCSV.as_view()), name="my_won_lot_csv"),
     path("auctions/<slug:slug>/lotlist/", views.AuctionLotsCSV.as_view(), name="lot_list"),
     path("auctions/<slug:slug>/delete/", views.AuctionDelete.as_view(), name="auction_delete"),
+    path("auctions/<slug:slug>/leave/", views.AuctionLeave.as_view(), name="auction_leave"),
     path("auctions/<slug:slug>/chat/", views.AuctionChats.as_view(), name="auction_chat"),
     path(
         "auctions/<slug:slug>/paypal/<int:chunk>/",
