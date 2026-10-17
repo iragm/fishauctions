@@ -1,6 +1,7 @@
-"""Production deploys: the server's poller (``deploy/poller.py``) refusing what it should,
-``update.sh`` asking before it erases anything, and :mod:`auctions.deploy_window` saying when a
-deploy would hurt."""
+"""Deploys: the poller refusing what it should, update.sh asking first, and the deploy window.
+
+The server's poller is ``deploy/poller.py``; update.sh only skips its questions when told to; and
+:mod:`auctions.deploy_window` says when a deploy would hurt."""
 
 import datetime
 import fcntl
@@ -174,7 +175,8 @@ class UpdateScriptPromptTests(SimpleTestCase):
     A stub ``git`` logs each call and fails the pull, so the script stops before docker."""
 
     def setUp(self):
-        if not shutil.which("bash") or not shutil.which("flock"):
+        self.bash = shutil.which("bash")
+        if not self.bash or not shutil.which("flock"):
             self.skipTest("bash or flock not installed")
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -185,9 +187,7 @@ class UpdateScriptPromptTests(SimpleTestCase):
         self.git_log = self.root / "git.log"
         stub = bin_dir / "git"
         stub.write_text(
-            "#!/bin/sh\n"
-            f'echo "$*" >> "{self.git_log}"\n'
-            'case "$1" in rev-parse) echo staging ;; pull) exit 1 ;; esac\n'
+            f'#!/bin/sh\necho "$*" >> "{self.git_log}"\ncase "$1" in rev-parse) echo staging ;; pull) exit 1 ;; esac\n'
         )
         stub.chmod(0o755)
         self.path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
@@ -195,8 +195,8 @@ class UpdateScriptPromptTests(SimpleTestCase):
     def run_update(self, *args, **env):
         environment = {key: value for key, value in os.environ.items() if not key.startswith("DEPLOY_")}
         environment.update(PATH=self.path, **env)
-        result = subprocess.run(
-            ["bash", str(self.root / "update.sh"), *args],
+        result = subprocess.run(  # noqa: S603 -- our own script, from a temp copy
+            [self.bash, str(self.root / "update.sh"), *args],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -237,7 +237,7 @@ class UpdateScriptPromptTests(SimpleTestCase):
 
     def test_a_run_still_going_blocks_the_next(self):
         (self.root / "logs").mkdir()
-        with open(self.root / "logs" / ".update.lock", "a") as lock:
+        with (self.root / "logs" / ".update.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             result, calls = self.run_update("-y")
         self.assertEqual(result.returncode, 1)

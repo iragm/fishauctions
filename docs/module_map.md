@@ -418,9 +418,9 @@ this only quotes its opening sentence.
 - **`test_data_migrations.py`** (30 lines)
   Data migrations meet prod's rows, not a fresh database's, and one that raises stops the deploy
   `DoubledRowsTests`
-- **`test_deploy.py`** (227 lines)
-  Production deploys: the server's poller (``deploy/poller.py``) refusing what it should, and
-  `PollerVerifyTests`, `PollerPollTests`, `DeployWindowTests`
+- **`test_deploy.py`** (309 lines)
+  Deploys: the poller refusing what it should, update.sh asking first, and the deploy window.
+  `PollerVerifyTests`, `PollerPollTests`, `UpdateScriptPromptTests`, `DeployWindowTests`
 - **`test_direct_sales_off.py`** (109 lines)
   Selling outside an auction, switched off by ``ALLOW_USERS_TO_CREATE_LOTS``: nothing user facing offers it,
   `DirectSalesOffTests`
