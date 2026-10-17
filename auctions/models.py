@@ -301,8 +301,12 @@ def distance_to(
     return distance_raw_sql
 
 
-def guess_category(text, allowed=None):
-    """Guess a lot's category from the categories used by similarly-named lots, from ``allowed`` if given."""
+def guess_category(text, allowed=None, living=False):
+    """Guess a lot's category from the categories used by similarly-named lots, from ``allowed`` if given.
+
+    ``living``: the lot has a species, so only lots that have one too are asked. Otherwise "Green-Light
+    Medaka" is filed with the lights.
+    """
     keywords = []
     words = re.findall("[A-Z|a-z]{3,}", text.lower())
     for word in words:
@@ -323,6 +327,8 @@ def guess_category(text, allowed=None):
     )
     if allowed is not None:
         lot_qs = lot_qs.filter(species_category__in=allowed)
+    if living:
+        lot_qs = lot_qs.filter(species__isnull=False)
     q_objects = Q()
     for keyword in keywords:
         q_objects |= Q(lot_name__iregex=rf"\b{re.escape(keyword)}\b")
@@ -8225,7 +8231,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 if not self.auction.use_categories:
                     self.species_category = Category.objects.filter(name="Uncategorized").first()
                 else:
-                    result = guess_category(self.lot_name, allowed=allowed)
+                    result = guess_category(self.lot_name, allowed=allowed, living=bool(self.species_id))
                     if result:
                         self.species_category = result
                         self.category_automatically_added = True
