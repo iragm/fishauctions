@@ -25,7 +25,6 @@ class AndroidTestersTests(StandardTestCase):
         self.assertContains(response, f'href="{GROUP}"')
         self.assertContains(response, 'href="https://play.google.com/apps/testing/com.fishauctions.app"')
 
-    @override_settings(ENABLE_HELP=True)
     def test_the_page_links_the_app_guide(self):
         response = self.client.get(reverse("android_testers"))
         self.assertContains(response, f'href="{help_guides.GUIDES["mobile-app"].url}"')
@@ -72,10 +71,10 @@ class AndroidTestersTests(StandardTestCase):
 
 @override_settings(PLAY_TESTERS_GROUP_URL=GROUP, PLAY_STORE_URL="")
 class AndroidTestersInviteTests(StandardTestCase):
-    def _android_user(self, name, joined_days_ago=400, viewed_days_ago=10, os="ANDROID"):
-        user = User.objects.create_user(name, f"{name}@example.com", "x")
+    def _android_user(self, name, joined_days_ago=400, viewed_days_ago=10, platform="Android", email=None):
+        user = User.objects.create_user(name, email or f"{name}@example.com", "x")
         User.objects.filter(pk=user.pk).update(date_joined=timezone.now() - datetime.timedelta(days=joined_days_ago))
-        view = PageView.objects.create(user=user, os=os, url="/")
+        view = PageView.objects.create(user=user, platform=platform, url="/")
         PageView.objects.filter(pk=view.pk).update(date_start=timezone.now() - datetime.timedelta(days=viewed_days_ago))
         return user
 
@@ -90,8 +89,9 @@ class AndroidTestersInviteTests(StandardTestCase):
         self._android_user("fits")
         self._android_user("too-new", joined_days_ago=30)
         self._android_user("too-long-ago", viewed_days_ago=120)
-        self._android_user("iphone", os="IPHONE")
+        self._android_user("iphone", platform="iOS")
         UserData.objects.filter(user=self._android_user("unsubscribed")).update(has_unsubscribed=True)
+        UserData.objects.filter(user=self._android_user("leaving")).update(account_deletion_requested=timezone.now())
         call_command("android_testers_invite", stdout=StringIO())
         self.assertEqual(self._sent_to(), {"fits@example.com"})
 
@@ -103,11 +103,24 @@ class AndroidTestersInviteTests(StandardTestCase):
         self.assertIn('href="https://play.google.com/apps/testing/com.fishauctions.app"', html)
         self.assertIn(help_guides.GUIDES["mobile-app"].url, html)
 
-    def test_a_rerun_sends_nothing_new(self):
+    def test_a_rerun_sends_nothing_new_even_after_the_mail_log_is_purged(self):
         self._android_user("fits")
         call_command("android_testers_invite", stdout=StringIO())
+        Email.objects.all().delete()
         call_command("android_testers_invite", stdout=StringIO())
-        self.assertEqual(Email.objects.filter(template__name="android_testers_invite").count(), 1)
+        self.assertFalse(self._sent_to())
+
+    def test_one_email_per_inbox(self):
+        self._android_user("first", email="Shared@example.com")
+        self._android_user("second", email="shared@example.com")
+        call_command("android_testers_invite", stdout=StringIO())
+        self.assertEqual(len(self._sent_to()), 1)
+
+    def test_a_bad_address_does_not_stop_the_run(self):
+        self._android_user("bad", email="not-an-address")
+        self._android_user("good")
+        call_command("android_testers_invite", stdout=StringIO())
+        self.assertEqual(self._sent_to(), {"good@example.com"})
 
     def test_dry_run_sends_nothing(self):
         self._android_user("fits")

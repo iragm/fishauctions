@@ -294,7 +294,7 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
-- **`test_android_testers.py`** (122 lines)
+- **`test_android_testers.py`** (135 lines)
   `AndroidTestersTests`, `AndroidTestersInviteTests`
 - **`test_app_crashes.py`** (132 lines)
   The mobile app's own crash reports: ``POST /api/mobile/crashes/``, grouping, and ``list_app_crashes``.
@@ -722,9 +722,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 ## `auctions/management/commands/`
 
-- **`android_testers_invite.py`** (96 lines)
+- **`android_testers_invite.py`** (138 lines)
   Invite Android users to the Google Play closed test, once.
-  `eligible_users`, `already_invited`, `Command`
+  `eligible_users`, `invited_addresses`, `Command`
 - **`auction_emails.py`** (358 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
