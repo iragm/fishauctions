@@ -74,7 +74,46 @@ function followSpeciesCategory() {
     var categoryId = speciesCategoryIds[select.value];
     if (categoryId) {
         $('#id_species_category').val(String(categoryId));
+        categoryGuessed = true;
+    } else if (!$('#id_species_category').val() || categoryGuessed) {
+        guessCategory();
     }
+}
+
+{% comment %}True while the category picker shows a guess (the keyword guesser's or the species'), not a person's pick: only then may a later answer replace it.{% endcomment %}
+var categoryGuessed = false;
+
+function chosenSpeciesHasCategory() {
+    var select = document.getElementById('id_species');
+    return !!(auctionUsesScientificName && select && select.value && speciesCategoryIds[select.value]);
+}
+
+{% comment %}The keyword guesser.  With a species picked it only asks lots that have one too, or "Green-Light Medaka" is filed with the lights.  An answer is dropped if, by the time it arrives, the name changed, a person picked a category, or a species answered for it.{% endcomment %}
+function guessCategory() {
+    var name = $('#id_lot_name').val().trim();
+    if (!auctionUsesCategories || !name) return;
+    var select = document.getElementById('id_species');
+    var living = !!(auctionUsesScientificName && select && select.value);
+    $.ajax({
+        type: "POST",
+        beforeSend: function (request) {
+            request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+        },
+        url: "{% url 'guess_category' %}",
+        data: {'lot_name': name, 'auction': $('#id_auction').val() || '', 'living': living ? '1' : ''},
+        success : function(result) {
+            if ($('#id_lot_name').val().trim() !== name) return;
+            if ($('#id_species_category').val() && !categoryGuessed) return;
+            if (chosenSpeciesHasCategory()) return;
+            var nowLiving = !!(auctionUsesScientificName && select && select.value);
+            if (nowLiving !== living) return;
+            if (result['value'] && result['name'] !== "Uncategorized") {
+                $('#id_species_category').val(result['value']);
+                categoryGuessed = true;
+                refreshSpeciesUI();
+            }
+        }
+    });
 }
 
 function chosenSpeciesLabel() {
@@ -285,25 +324,12 @@ $(document).ready(function() {
     $('#id_auction').change(function(data) {
         setAuction(true);
     });
-    {% comment %}The keyword guesser, for the category.  Asked whatever the picker is doing, because the picker is usually closed now: its answer is what the summary line shows when no species could be identified.  Never overrules a category that is already set.{% endcomment %}
+    {% comment %}The keyword guesser, for the category.  Asked whatever the picker is doing, because the picker is usually closed now: its answer is what the summary line shows when no species could be identified.  Never overrules a category a person set.{% endcomment %}
     $('#id_lot_name').change(function(data) {
         // Whatever happens next, the question has now been asked of this name.
         if (this.value.trim()) { speciesLookedUp = true; refreshSpeciesUI(); }
-        if (!auctionUsesCategories || $('#id_species_category').val()) return;
-        $.ajax({
-            type: "POST",
-            beforeSend: function (request) {
-                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-            },
-            url: "{% url 'guess_category' %}",
-            data: {'lot_name': this.value, 'auction': $('#id_auction').val() || ''},
-            success : function(result) {
-                if (result['value'] && result['name'] !== "Uncategorized") {
-                    $('#id_species_category').val(result['value']);
-                    refreshSpeciesUI();
-                }
-            }
-        });
+        if ($('#id_species_category').val() && !categoryGuessed) return;
+        guessCategory();
     });
 
     {% comment %}
@@ -377,7 +403,10 @@ $(document).ready(function() {
         followSpeciesCategory();
         refreshSpeciesUI();
     });
-    $('#id_species_category').on('change', refreshSpeciesUI);
+    $('#id_species_category').on('change', function() {
+        categoryGuessed = false;
+        refreshSpeciesUI();
+    });
     $('#species-edit').on('click', function() {
         speciesRevealed = true;
         refreshSpeciesUI();

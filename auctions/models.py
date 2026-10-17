@@ -336,13 +336,12 @@ def guess_category(text, allowed=None, living=False):
     lot_qs = lot_qs.filter(q_objects)
 
     categories = {}
-    for lot in lot_qs:
+    for lot_name, category_pk in lot_qs.values_list("lot_name", "species_category_id"):
         matches = 0
         for keyword in keywords:
-            if keyword in lot.lot_name.lower():
+            if keyword in lot_name.lower():
                 matches += 1
-        category_total = categories.get(lot.species_category.pk, 0)
-        categories[lot.species_category.pk] = category_total + matches
+        categories[category_pk] = categories.get(category_pk, 0) + matches
     sorted_categories = sorted(categories.items(), key=lambda x: x[1], reverse=True)
     for key, value in sorted_categories:
         logger.debug("%s, %s", Category.objects.filter(pk=key).first(), value)

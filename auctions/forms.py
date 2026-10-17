@@ -91,7 +91,6 @@ from .models import (
     UserLabelPrefs,
     VolunteerJob,
     clean_email_address,
-    guess_category,
     normalize_species_name,
 )
 from .services import (
@@ -377,26 +376,10 @@ def clean_species_for_auction(cleaned_data, auction, field_name="species", *, de
     if derive_category and species and "species_category" in cleaned_data:
         # A cultivar inherits its parent's category.
         category = species.category or (species.parent.category if species.parent_id else None)
-        if not category or category.name == "Uncategorized":
-            posted = cleaned_data.get("species_category")
-            if (
-                instance is not None
-                and instance.pk
-                and not instance.category_automatically_added
-                and posted is not None
-                and posted.pk == instance.species_category_id
-                and species.pk == instance.species_id
-            ):
-                # Somebody already chose this lot's category, and the form posted it back unchanged.
-                return cleaned_data
-            # The species implies nothing, so the posted category is the name guesser's, asked before the
-            # species was known. Asked again knowing the lot is alive; never kept as a person's choice.
-            category = guess_category(
-                cleaned_data.get("lot_name") or "", allowed=auction.lot_categories(), living=True
-            ) or Category.objects.filter(name="Uncategorized").first()
-        cleaned_data["species_category"] = category
-        if instance is not None:
-            instance.category_automatically_added = True
+        if category and category.name != "Uncategorized":
+            cleaned_data["species_category"] = category
+            if instance is not None:
+                instance.category_automatically_added = True
         return cleaned_data
     note_category_chosen_by_person(instance, cleaned_data)
     return cleaned_data

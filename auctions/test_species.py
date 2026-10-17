@@ -1640,60 +1640,27 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         lot = Lot.objects.create(lot_name=name, auction=self.online_auction, user=self.user, species=species)
         Lot.objects.filter(pk=lot.pk).update(species_category=category, category_automatically_added=False)
 
-    def test_a_species_with_no_category_does_not_keep_the_name_guess(self):
-        """ "Green-Light Medaka": the guesser filed it with the lights before the species was known."""
-        from auctions.forms import clean_species_for_auction
-
-        self.online_auction.use_scientific_name = True
-        self.online_auction.save()
+    def test_the_category_guesser_asks_only_living_lots_once_a_species_is_picked(self):
+        """ "Green-Light Medaka": the page asked before the species was known and filed it with the lights."""
         hardware = Category.objects.create(name="Hardware")
         oddballs = Category.objects.create(name="Misc and oddball fish")
         medaka = make_species("Oryzias", "latipes", "Medaka")
         self._filed_by_a_person("Green LED light", hardware)
         self._filed_by_a_person("Medaka trio", oddballs, species=medaka)
-        lot = Lot(auction=self.online_auction)
-        cleaned = clean_species_for_auction(
-            {"species": medaka, "species_category": hardware, "lot_name": "Green-Light Dark Type Medaka"},
-            self.online_auction,
-            derive_category=True,
-            instance=lot,
-        )
-        self.assertEqual(cleaned["species_category"], oddballs)
-        self.assertTrue(lot.category_automatically_added)
+        self.client.login(username="my_lot", password="testpassword")
+        url = reverse("guess_category")
+        name = "Green-Light Dark Type Medaka"
+        self.assertEqual(self.client.post(url, {"lot_name": name}).json()["value"], hardware.pk)
+        self.assertEqual(self.client.post(url, {"lot_name": name, "living": "1"}).json()["value"], oddballs.pk)
 
-    def test_and_with_nothing_alive_to_go_on_it_is_uncategorized(self):
-        from auctions.forms import clean_species_for_auction
+    def test_the_page_asks_again_when_the_species_has_no_category(self):
+        from django.template.loader import get_template
 
-        self.online_auction.use_scientific_name = True
-        self.online_auction.save()
-        hardware = Category.objects.create(name="Hardware")
-        self._filed_by_a_person("Green LED light", hardware)
-        cleaned = clean_species_for_auction(
-            {"species": self.guppy, "species_category": hardware, "lot_name": "Green light guppy"},
-            self.online_auction,
-            derive_category=True,
-        )
-        self.assertEqual(cleaned["species_category"].name, "Uncategorized")
-
-    def test_a_category_somebody_already_chose_is_posted_back_unchanged(self):
-        from auctions.forms import clean_species_for_auction
-
-        self.online_auction.use_scientific_name = True
-        self.online_auction.save()
-        chosen = Category.objects.create(name="Livebearers")
-        lot = Lot.objects.get(pk=self.lot.pk)
-        Lot.objects.filter(pk=lot.pk).update(
-            species=self.guppy, species_category=chosen, category_automatically_added=False
-        )
-        lot.refresh_from_db()
-        cleaned = clean_species_for_auction(
-            {"species": self.guppy, "species_category": chosen, "lot_name": "Green light guppy"},
-            self.online_auction,
-            derive_category=True,
-            instance=lot,
-        )
-        self.assertEqual(cleaned["species_category"], chosen)
-        self.assertFalse(lot.category_automatically_added)
+        source = get_template("lot_form.html").template.source
+        self.assertIn("'living': living ? '1' : ''", source)
+        # A species without a category re-asks, and a stale or overtaken answer is dropped.
+        self.assertIn("} else if (!$('#id_species_category').val() || categoryGuessed) {", source)
+        self.assertIn("if (nowLiving !== living) return;", source)
 
     def test_saving_a_lot_with_a_species_guesses_only_from_living_lots(self):
         hardware = Category.objects.create(name="Hardware")
@@ -2726,6 +2693,11 @@ class SingleWordCommonNameTests(StandardTestCase):
         make_species("Glaucus", "atlanticus", "Blue dragon", aquarium_use="commercial")
         found, _ = suggest_species("Blue Dragon Guppy - Breeding Pair", use_llm=False)
         self.assertEqual(list(found), [self.guppy])
+
+    def test_two_fish_in_one_lot_name_keep_the_first(self):
+        tetra = make_species("Paracheirodon", "innesi", "Neon tetra", aquarium_use="commercial")
+        found, _ = suggest_species("Neon tetra and guppy", use_llm=False)
+        self.assertEqual(list(found), [tetra])
 
     def test_but_not_when_the_phrase_is_a_strain_of_that_fish(self):
         strain = Species.objects.create(
