@@ -3,6 +3,7 @@
 deploy would hurt."""
 
 import datetime
+import fcntl
 import importlib.util
 import json
 import os
@@ -173,8 +174,8 @@ class UpdateScriptPromptTests(SimpleTestCase):
     A stub ``git`` logs each call and fails the pull, so the script stops before docker."""
 
     def setUp(self):
-        if not shutil.which("bash"):
-            self.skipTest("bash not installed")
+        if not shutil.which("bash") or not shutil.which("flock"):
+            self.skipTest("bash or flock not installed")
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
@@ -210,6 +211,7 @@ class UpdateScriptPromptTests(SimpleTestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("Cancelled", result.stdout)
         self.assertNotIn("restore .", calls)
+        self.assertFalse([call for call in calls if call.startswith("pull")])
 
     def test_yes_flag_and_env_var_go_ahead(self):
         for args, env in ((("-y",), {}), (("--yes",), {}), ((), {"DEPLOY_UNATTENDED": "1"})):
@@ -221,10 +223,26 @@ class UpdateScriptPromptTests(SimpleTestCase):
                 self.assertIn("pull --ff-only origin staging", calls)
                 self.assertEqual(result.returncode, 1)  # the stub's pull failed, before docker
 
-    def test_an_unknown_option_changes_nothing(self):
-        result, calls = self.run_update("--force")
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(calls, [])
+    def test_an_unknown_option_or_value_changes_nothing(self):
+        for args, env in ((("--force",), {}), ((), {"DEPLOY_UNATTENDED": "maybe"})):
+            with self.subTest(args=args, env=env):
+                result, calls = self.run_update(*args, **env)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(calls, [])
+
+    def test_the_production_poller_answer_is_unchanged(self):
+        result, calls = self.run_update(DEPLOY_SNAPSHOT_TAKEN="1")
+        self.assertIn("y (snapshot taken by the deploy workflow)", result.stdout)
+        self.assertIn("restore .", calls)
+
+    def test_a_run_still_going_blocks_the_next(self):
+        (self.root / "logs").mkdir()
+        with open(self.root / "logs" / ".update.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            result, calls = self.run_update("-y")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("still running", result.stderr)
+        self.assertNotIn("restore .", calls)
 
 
 class DeployWindowTests(TestCase):
