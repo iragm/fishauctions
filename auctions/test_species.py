@@ -1652,15 +1652,17 @@ class SpeciesOnTheSingleLotFormTests(StandardTestCase):
         name = "Green-Light Dark Type Medaka"
         self.assertEqual(self.client.post(url, {"lot_name": name}).json()["value"], hardware.pk)
         self.assertEqual(self.client.post(url, {"lot_name": name, "living": "1"}).json()["value"], oddballs.pk)
+        self.assertEqual(self.client.post(url, {"lot_name": name, "living": "false"}).json()["value"], hardware.pk)
 
     def test_the_page_asks_again_when_the_species_has_no_category(self):
         from django.template.loader import get_template
 
         source = get_template("lot_form.html").template.source
-        self.assertIn("'living': living ? '1' : ''", source)
+        self.assertIn("'living': species ? '1' : ''", source)
         # A species without a category re-asks, and a stale or overtaken answer is dropped.
         self.assertIn("} else if (!$('#id_species_category').val() || categoryGuessed) {", source)
-        self.assertIn("if (nowLiving !== living) return;", source)
+        self.assertIn("!== species) return;", source)
+        self.assertIn("!== auction) return;", source)
 
     def test_saving_a_lot_with_a_species_guesses_only_from_living_lots(self):
         hardware = Category.objects.create(name="Hardware")
@@ -2696,8 +2698,9 @@ class SingleWordCommonNameTests(StandardTestCase):
 
     def test_two_fish_in_one_lot_name_keep_the_first(self):
         tetra = make_species("Paracheirodon", "innesi", "Neon tetra", aquarium_use="commercial")
-        found, _ = suggest_species("Neon tetra and guppy", use_llm=False)
-        self.assertEqual(list(found), [tetra])
+        for name in ("Neon tetra and guppy", "Neon tetra, guppy", "Neon tetra / guppies", "Neon tetra & guppy"):
+            found, _ = suggest_species(name, use_llm=False)
+            self.assertEqual(list(found), [tetra], name)
 
     def test_but_not_when_the_phrase_is_a_strain_of_that_fish(self):
         strain = Species.objects.create(

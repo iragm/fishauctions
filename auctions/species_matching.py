@@ -517,32 +517,44 @@ def _plain_species_ids(species_ids):
     return {parent or pk for pk, parent in Species.objects.filter(pk__in=species_ids).values_list("pk", "parent_id")}
 
 
-def _words_after(normalized, phrase):
-    """The words typed after the first run of *phrase* in *normalized*, its last word maybe plural."""
-    words = normalized.split()
+#: Punctuation that separates one thing from the next in a lot name ("Neon tetra, guppy"); a hyphen
+#: joins words ("Green-Light"), so it is not one.
+_SEPARATOR = re.compile(r"[^a-z0-9\s-]+")
+
+
+def _next_word(text, phrase):
+    """The word typed right after the first run of *phrase* in *text*, its last word maybe plural; ``""``
+    when nothing follows or punctuation does ("Neon tetra, guppy" lists two fish).
+    """
+    marked = _SEPARATOR.sub(" | ", re.sub(r"['‘’ʼ`]+", "", (text or "").lower()))
+    words = marked.replace("-", " ").split()
     target = phrase.split()
     size = len(target)
     for start in range(len(words) - size + 1):
         run = words[start : start + size]
         if run[:-1] == target[:-1] and target[-1] in (run[-1], singularize(run[-1])):
-            return words[start + size :]
-    return []
+            following = words[start + size : start + size + 1]
+            return following[0] if following and following[0] != "|" else ""
+    return ""
 
 
-def _the_next_word_names_something_else(normalized, common, user=None, club=None, seen=None):
+def _the_next_word_names_something_else(text, common, user=None, club=None, seen=None):
     """The species the word right after *common* names, when that is a different fish; else ``[]``.
 
     The noun is the thing being sold: "Blue Dragon Guppy" is a guppy, though "blue dragon" is also the
-    whole common name of a marine animal. Only the very next word: "Zebra pleco and bristlenose" is two
-    fish, not a bristlenose. A strain of that word's species ("Blue Grass guppy") agrees with it and
-    keeps its phrase. *seen* remembers the lookup per name, since several species can share one.
+    whole common name of a marine animal. Only the very next word, with nothing between: "Neon tetra,
+    guppy" and "zebra pleco and bristlenose" are two fish. A strain of that word's species ("Blue Grass
+    guppy") agrees with it and keeps its phrase. *seen* remembers the lookup per word.
     """
+    word = _next_word(text, common.name_normalized)
+    after = keywords(word) if word else []
+    if not after:
+        return []
     seen = {} if seen is None else seen
-    if common.name_normalized not in seen:
-        after = keywords(" ".join(_words_after(normalized, common.name_normalized)[:1]))
-        heads = _single_word_matches(after, user=user, club=club) if after else []
-        seen[common.name_normalized] = (heads, _plain_species_ids([species.pk for species in heads]))
-    heads, plain = seen[common.name_normalized]
+    if word not in seen:
+        heads = _single_word_matches(after, user=user, club=club)
+        seen[word] = (heads, _plain_species_ids([species.pk for species in heads]))
+    heads, plain = seen[word]
     if not heads or (common.species.parent_id or common.species_id) in plain:
         return []
     return heads
@@ -587,7 +599,7 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
     seen = {}
     if phrases:
         for common in visible_common_names(user, club).filter(name_normalized__in=phrases).select_related("species"):
-            head = _the_next_word_names_something_else(normalized, common, user=user, club=club, seen=seen)
+            head = _the_next_word_names_something_else(text, common, user=user, club=club, seen=seen)
             if head:
                 named_after_it[frozenset(species.pk for species in head)] = head
                 continue

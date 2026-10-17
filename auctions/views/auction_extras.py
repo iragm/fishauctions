@@ -501,7 +501,7 @@ class CategoryFinder(APIView):
         result = guess_category(
             lot_name,
             allowed=auction.lot_categories() if auction else None,
-            living=bool(request.POST.get("living")),
+            living=request.POST.get("living") in ("1", "true"),
         )
         if result:
             result = {"name": result.name, "value": result.pk}
