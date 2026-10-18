@@ -208,7 +208,6 @@ urlpatterns = [
     path("clubs/add/", views.ClubAddView.as_view(), name="club_add"),
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
-    path("admin-setup-checklist/", views.AdminSetupChecklistView.as_view(), name="admin_setup_checklist"),
     path(
         "admin-dashboard/species-gaps/",
         views.SpeciesGapsView.as_view(),
@@ -268,6 +267,10 @@ urlpatterns = [
         TemplateView.as_view(template_name="ads.txt", content_type="text/plain"),
     ),
     path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
+    path("offline-worker.js", views.OfflineWorkerView.as_view(), name="offline_worker"),
+    path("offline/", views.OfflinePageView.as_view(), name="offline"),
+    path("offline/snapshot/", views.OfflineSnapshotView.as_view(), name="offline_snapshot"),
+    path("offline/sync/", views.OfflineSyncView.as_view(), name="offline_sync"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
     path("lots/my-last-auction/", views.MyLastAuctionLots.as_view(), name="my_last_auction_lots"),
     path("lots/", views.AllLots.as_view(), name="allLots"),
@@ -626,6 +629,7 @@ urlpatterns = [
     path("buying/csv/", login_required(views.BuyingCSV.as_view()), name="my_won_lot_csv"),
     path("auctions/<slug:slug>/lotlist/", views.AuctionLotsCSV.as_view(), name="lot_list"),
     path("auctions/<slug:slug>/delete/", views.AuctionDelete.as_view(), name="auction_delete"),
+    path("auctions/<slug:slug>/leave/", views.AuctionLeave.as_view(), name="auction_leave"),
     path("auctions/<slug:slug>/chat/", views.AuctionChats.as_view(), name="auction_chat"),
     path(
         "auctions/<slug:slug>/paypal/<int:chunk>/",

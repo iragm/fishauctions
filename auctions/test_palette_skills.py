@@ -1887,6 +1887,94 @@ class MemberListPrivacyTests(ClubSkillTestCase):
         self.assertTrue(tools.read_only(palette_actions.get_action("list_club_members")))
 
 
+class MemberPointsListTests(ClubSkillTestCase):
+    """``list_club_members`` filtered by breeder award points: who has any, who is in a range."""
+
+    def setUp(self):
+        super().setUp()
+        self.club.enable_breeder_award_program = True
+        self.club.separate_hap = True
+        self.club.save()
+        self.club_member.bap_points = 40
+        self.club_member.save()
+        ClubMember.objects.create(club=self.club, name="Breeder Bea", bap_points=600, bap_points_ytd=60)
+        ClubMember.objects.create(club=self.club, name="Plant Pat", bap_points=120, hap_points=75)
+
+    def _names(self, result):
+        return [row["name"].strip("«»") for row in result["members"]]
+
+    def test_members_with_any_bap_points_highest_first(self):
+        result = self._run("list_club_members", {"club": self.club.name, "points": "bap"}, user=self.admin_user)
+        self.assertEqual(self._names(result), ["Breeder Bea", "Plant Pat", "Renewable Rita"])
+        self.assertEqual(result["members"][0]["points"]["bap"], 600)
+        self.assertIn("at least 1 BAP point.", result["summary"])
+
+    def test_a_range_is_inclusive_and_implies_bap(self):
+        result = self._run(
+            "list_club_members", {"club": self.club.name, "min_points": 40, "max_points": 500}, user=self.admin_user
+        )
+        self.assertEqual(self._names(result), ["Plant Pat", "Renewable Rita"])
+        self.assertIn("between 40 and 500 BAP points", result["summary"])
+
+    def test_hap_and_this_year(self):
+        hap = self._run(
+            "list_club_members",
+            {"club": self.club.name, "points": "hap", "min_points": 50, "max_points": 500},
+            user=self.admin_user,
+        )
+        self.assertEqual(self._names(hap), ["Plant Pat"])
+        ytd = self._run(
+            "list_club_members", {"club": self.club.name, "points": "bap", "this_year": True}, user=self.admin_user
+        )
+        self.assertEqual(self._names(ytd), ["Breeder Bea"])
+
+    def test_a_track_the_club_does_not_keep_separately_is_refused(self):
+        result = self._run("list_club_members", {"club": self.club.name, "points": "cap"}, user=self.admin_user)
+        self.assertIn("doesn't keep CAP separately", result["error"])
+
+    def test_no_program_no_points(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        result = self._run("list_club_members", {"club": self.club.name, "points": "bap"}, user=self.admin_user)
+        self.assertIn("doesn't run a breeder award program", result["error"])
+        plain = self._run("list_club_members", {"club": self.club.name}, user=self.admin_user)
+        self.assertNotIn("points", plain["members"][0])
+
+    def test_the_points_desk_lists_points_without_seeing_dues(self):
+        ClubMember.objects.create(club=self.club, user=self.userB, name="Desk Dan", permission_manage_bap=True)
+        refused = self._run("list_club_members", {"club": self.club.name}, user=self.userB)
+        self.assertIn("error", refused)
+        result = self._run("list_club_members", {"club": self.club.name, "points": "bap"}, user=self.userB)
+        self.assertEqual(self._names(result)[0], "Breeder Bea")
+        for row in result["members"]:
+            self.assertEqual(set(row), {"name", "points"})
+
+    def test_the_points_desk_never_gets_the_whole_roster(self):
+        ClubMember.objects.create(club=self.club, user=self.userB, name="Desk Dan", permission_manage_bap=True)
+        for params in ({"min_points": 0}, {"max_points": 0}, {"points": "bap", "min_points": -5}):
+            result = self._run("list_club_members", {"club": self.club.name, **params}, user=self.userB)
+            self.assertNotIn("Desk Dan", self._names(result), params)
+        refused = self._run(
+            "list_club_members", {"club": self.club.name, "points": "bap", "status": "lapsed"}, user=self.userB
+        )
+        self.assertIn("not who has paid", refused["error"])
+
+    def test_a_number_for_points_is_a_minimum(self):
+        result = self._run("list_club_members", {"club": self.club.name, "points": "100"}, user=self.admin_user)
+        self.assertEqual(self._names(result), ["Breeder Bea", "Plant Pat"])
+
+    def test_member_staff_off_the_points_desk_see_points_only_when_asked(self):
+        ClubMember.objects.create(club=self.club, user=self.userB, name="Viewer Val", permission_view=True)
+        plain = self._run("list_club_members", {"club": self.club.name}, user=self.userB)
+        self.assertNotIn("points", plain["members"][0])
+        asked = self._run("list_club_members", {"club": self.club.name, "points": "bap"}, user=self.userB)
+        self.assertIn("points", asked["members"][0])
+
+    def test_a_plain_member_cannot_list_points(self):
+        result = self._run("list_club_members", {"club": self.club.name, "points": "bap"}, user=self.userB)
+        self.assertIn("error", result)
+
+
 class SeveralLotsOfTheSameThingTests(SkillTestCase):
     """``count`` is the number of lots; ``quantity`` is fish per lot."""
 

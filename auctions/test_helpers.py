@@ -7,7 +7,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from auctions.models import (
@@ -17,6 +17,7 @@ from auctions.models import (
     Lot,
     add_price_info,
 )
+from auctions.test_support import mcp_only_page
 from auctions.tests import StandardTestCase
 
 
@@ -1338,14 +1339,16 @@ class AdminSetupChecklistViewTests(TestCase):
         ip_patcher.start()
         self.addCleanup(ip_patcher.stop)
 
-    def test_admin_menu_shows_setup_checklist_link(self):
+    def test_the_checklist_is_only_on_the_admin_mcp(self):
         response = self.client.get(reverse("home"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Setup Checklist")
+        self.assertNotContains(response, "Setup Checklist")
+        with self.assertRaises(NoReverseMatch):
+            reverse("admin_setup_checklist")
 
     @override_settings(SINGLE_CLUB_MODE=True, SETUP_COMPLETE=True)
     def test_setup_checklist_page_renders(self):
-        response = self.client.get(reverse("admin_setup_checklist"))
+        response = mcp_only_page(self.superuser, "admin_setup_checklist")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Setup Checklist")
         self.assertContains(response, "Single club mode")
@@ -1357,9 +1360,9 @@ class AdminSetupChecklistViewTests(TestCase):
 
     @override_settings(SITE_DOMAIN="127.0.0.1")
     def test_site_domain_item_treats_localhost_default_as_configured(self):
-        response = self.client.get(reverse("admin_setup_checklist"))
+        response = mcp_only_page(self.superuser, "admin_setup_checklist")
         self.assertEqual(response.status_code, 200)
-        setup_items = response.context["setup_items"]
+        setup_items = response.context_data["setup_items"]
         site_domain_item = next(item for item in setup_items if item["name"] == "Site domain")
         self.assertTrue(site_domain_item["configured"])
 
@@ -1369,16 +1372,16 @@ class AdminSetupChecklistViewTests(TestCase):
         EMAIL_HOST_PASSWORD="unsecure",
     )
     def test_email_delivery_item_requires_non_placeholder_smtp_credentials(self):
-        response = self.client.get(reverse("admin_setup_checklist"))
+        response = mcp_only_page(self.superuser, "admin_setup_checklist")
         self.assertEqual(response.status_code, 200)
-        setup_items = response.context["setup_items"]
+        setup_items = response.context_data["setup_items"]
         email_item = next(item for item in setup_items if item["name"] == "Email delivery")
         self.assertFalse(email_item["configured"])
 
     def test_wallet_items_say_uuid_links_can_add_and_not_owner_only(self):
         # Wallet cards are reachable by UUID link, not only by the owner.
-        response = self.client.get(reverse("admin_setup_checklist"))
-        setup_items = response.context["setup_items"]
+        response = mcp_only_page(self.superuser, "admin_setup_checklist")
+        setup_items = response.context_data["setup_items"]
         for name in ("Google Wallet membership cards", "Apple Wallet membership cards"):
             item = next(i for i in setup_items if i["name"] == name)
             self.assertIn("UUID link", item["what_it_does"])

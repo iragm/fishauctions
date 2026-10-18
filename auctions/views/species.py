@@ -15,7 +15,6 @@ from django.db.models import (
 from django.db.models.base import Model as Model
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
-from django.utils.html import format_html
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import TemplateView, View
 from django.views.generic.edit import (
@@ -69,7 +68,9 @@ class SpeciesAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
         return queryset.order_by("-freshwater", "trade_rank", "scientific_name")
 
     def get_result_label(self, result):
-        return format_html("{}", result.label)
+        # Plain text: none of the select2 boxes on this endpoint set data-html, so select2 escapes it
+        # itself, and an escaped label showed "Hybrid &#x27;Tibee&#x27;".
+        return result.label
 
 
 class SpeciesGapsView(AdminOnlyViewMixin, TemplateView):

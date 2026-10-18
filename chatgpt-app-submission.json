@@ -554,6 +554,18 @@
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
+    "leave_auction": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: take the user out of an auction they joined themselves, undoing the join.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes the user's own place in an auction, and is refused once they have bids, lots, invoice entries or were added by an organizer."
+      }
+    },
     "leave_feedback": {
       "annotations": {
         "readOnlyHint": false,
@@ -586,7 +598,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Only looks up and returns data (list a club's members by name, filtered by whether their dues are current).",
+        "read_only_justification": "Only looks up and returns data (list a club's members by name, filtered by whether their dues are current or by their breeder award points).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }

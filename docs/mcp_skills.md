@@ -45,6 +45,8 @@ view or service it goes through. This file keeps only choices that look like mis
   (`_my_memberships`, matched on `ClubMember.user`). Sending someone else's returns no number and no
   barcode. `MembershipCardPrivacyTests` walks every route.
 - `list_club_members` does not say whether a row has a site account.
+- `list_club_members` with a points filter also answers the points desk (`permission_manage_bap`),
+  whose rows carry names and points only: the BAP pages show it no dues.
 - `deny` leaves `bap_auto_reason` alone; undoing an undecided lot is a no-op, not a refusal.
 
 - `my_bidder_number` is the one read about a participant that is **not** admin-gated, because it is

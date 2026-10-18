@@ -1,9 +1,15 @@
-"""Production deploys: the server's poller (``deploy/poller.py``) refusing what it should, and
-:mod:`auctions.deploy_window` saying when a deploy would hurt."""
+"""Deploys: the poller refusing what it should, update.sh asking first, and the deploy window.
+
+The server's poller is ``deploy/poller.py``; update.sh only skips its questions when told to; and
+:mod:`auctions.deploy_window` says when a deploy would hurt."""
 
 import datetime
+import fcntl
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -161,6 +167,82 @@ class PollerPollTests(SimpleTestCase):
         self.assertNotIn("GITHUB_TOKEN", environment)
         self.assertEqual(environment["DEPLOY_BRANCH"], "master")
         self.assertEqual(environment["DEPLOY_SNAPSHOT_TAKEN"], "1")
+
+
+class UpdateScriptPromptTests(SimpleTestCase):
+    """``update.sh`` run without a terminal: cancels unless told it may go ahead unattended.
+
+    A stub ``git`` logs each call and fails the pull, so the script stops before docker."""
+
+    def setUp(self):
+        self.bash = shutil.which("bash")
+        if not self.bash or not shutil.which("flock"):
+            self.skipTest("bash or flock not installed")
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        shutil.copy(Path(settings.BASE_DIR) / "update.sh", self.root / "update.sh")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        self.git_log = self.root / "git.log"
+        stub = bin_dir / "git"
+        stub.write_text(
+            f'#!/bin/sh\necho "$*" >> "{self.git_log}"\ncase "$1" in rev-parse) echo staging ;; pull) exit 1 ;; esac\n'
+        )
+        stub.chmod(0o755)
+        self.path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+    def run_update(self, *args, **env):
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("DEPLOY_")}
+        environment.update(PATH=self.path, **env)
+        result = subprocess.run(  # noqa: S603 -- our own script, from a temp copy
+            [self.bash, str(self.root / "update.sh"), *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=60,
+        )
+        calls = self.git_log.read_text().split("\n") if self.git_log.exists() else []
+        return result, calls
+
+    def test_without_a_terminal_it_cancels_and_touches_nothing(self):
+        result, calls = self.run_update()
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Cancelled", result.stdout)
+        self.assertNotIn("restore .", calls)
+        self.assertFalse([call for call in calls if call.startswith("pull")])
+
+    def test_yes_flag_and_env_var_go_ahead(self):
+        for args, env in ((("-y",), {}), (("--yes",), {}), ((), {"DEPLOY_UNATTENDED": "1"})):
+            with self.subTest(args=args, env=env):
+                self.git_log.unlink(missing_ok=True)
+                result, calls = self.run_update(*args, **env)
+                self.assertIn("y (unattended", result.stdout)
+                self.assertIn("restore .", calls)
+                self.assertIn("pull --ff-only origin staging", calls)
+                self.assertEqual(result.returncode, 1)  # the stub's pull failed, before docker
+
+    def test_an_unknown_option_or_value_changes_nothing(self):
+        for args, env in ((("--force",), {}), ((), {"DEPLOY_UNATTENDED": "maybe"})):
+            with self.subTest(args=args, env=env):
+                result, calls = self.run_update(*args, **env)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(calls, [])
+
+    def test_the_production_poller_answer_is_unchanged(self):
+        result, calls = self.run_update(DEPLOY_SNAPSHOT_TAKEN="1")
+        self.assertIn("y (snapshot taken by the deploy workflow)", result.stdout)
+        self.assertIn("restore .", calls)
+
+    def test_a_run_still_going_blocks_the_next(self):
+        (self.root / "logs").mkdir()
+        with (self.root / "logs" / ".update.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            result, calls = self.run_update("-y")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("still running", result.stderr)
+        self.assertNotIn("restore .", calls)
 
 
 class DeployWindowTests(TestCase):

@@ -300,6 +300,7 @@ TEMPLATES = [
                 "auctions.context_processors.label_print_method",
                 "auctions.context_processors.account_nav",
                 "auctions.context_processors.android_testers",
+                "auctions.context_processors.offline_auction",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },
@@ -930,10 +931,9 @@ SUMMERNOTE_CONFIG = {
             # ['view', ['fullscreen', 'codeview', 'help']],
         ],
     },
-    "js": (
-        ("/static/summernote/bs5-hack.js"),
-        ("/static/summernote/clean-on-paste.js"),
-    ),
+    # Runs inside the editor's iframe, after summernote-bs5. Under js/, not summernote/: that one is
+    # collectstatic output, gitignored, so a file put there never ships.
+    "js": ("/static/js/summernote_bs5.js",),
 }
 
 X_FRAME_OPTIONS = "SAMEORIGIN"
@@ -1112,6 +1112,8 @@ REST_FRAMEWORK = {
         "mobile_auth": "10/min",
         # Sized for admin bulk work: checkout is 2 calls a buyer, labels 1 a lot; 200/hour blocked checkout.
         "mobile_api": "1000/hour",
+        # The emergency page asks whether the site is back every 20 seconds, per open tab.
+        "offline_page": "3000/hour",
         # Search-as-you-type peaks ~6 req/sec.
         "mobile_search": "120/min",
         # AR sessions send every few seconds.

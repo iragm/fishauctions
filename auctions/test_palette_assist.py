@@ -1051,7 +1051,7 @@ class ShortcutMiningTests(PaletteAssistTestCase):
         self.assertIsNone(palette_assist.shortcut_match(request, "my watched lots for the spring auction"))
 
     def test_a_shortcut_still_resolves_per_user_and_re_checks_permissions(self):
-        CommandPalettePage.objects.create(search_term="site setup", target="route:admin_setup_checklist")
+        CommandPalettePage.objects.create(search_term="site setup", target="route:admin_traffic")
         self.assertIsNone(palette_assist.shortcut_match(self._request_for(self.member), "site setup"))
 
     def test_an_unknown_route_target_resolves_to_nothing(self):
@@ -1173,7 +1173,7 @@ class RegistryTests(PaletteAssistTestCase):
 
     def test_prompt_does_not_offer_site_admin_pages_to_ordinary_users(self):
         prompt = palette_assist.build_system_prompt(self.member)
-        self.assertNotIn("admin_setup_checklist", prompt)
+        self.assertNotIn("admin_traffic", prompt)
 
 
 class StreamingTests(PaletteAssistTestCase):
