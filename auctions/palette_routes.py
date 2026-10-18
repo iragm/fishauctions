@@ -158,6 +158,12 @@ ROUTE_LIST: list[Route] = [
         ],
     ),
     _r("faq", "Frequently asked questions", "Browsing", keywords=["faq", "questions"]),
+    _r(
+        "offline",
+        "Emergency page for when the site is down",
+        "Browsing",
+        keywords=["offline", "site is down", "no internet", "outage", "emergency", "site not loading"],
+    ),
     _r("tos", "Terms of service", "Browsing", keywords=["terms", "user agreement", "rules of the site"]),
     _r("privacy_policy", "Privacy policy", "Browsing", keywords=["privacy", "data"]),
     _r(
@@ -1449,6 +1455,9 @@ EXCLUDED: dict[str, str] = {
     "lot_in_auction_with_slug": _DUPLICATE,
     "buying": "The page behind watched, won_lots and my_bids, which land on it filtered.",
     "service_worker": _INFRA,
+    "offline_worker": _INFRA,
+    "offline_snapshot": _API,
+    "offline_sync": _API,
 }
 
 #: Route families excluded by prefix with one reason, where listing every name would be noise.

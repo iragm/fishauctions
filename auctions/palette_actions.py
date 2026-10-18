@@ -16224,6 +16224,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "OfflineSyncView": (
+        "Hands the server entries the emergency page saved in the browser while the site was down. "
+        "They are the same sales, people and lots set_lot_winner, add_person and add_lot record, so an "
+        "assistant with the site back records them through those."
+    ),
     # The library
     "DocumentBatchView": (
         "Adds scanned pages to a batch and moves it on: putting its articles together, again, or deleting "

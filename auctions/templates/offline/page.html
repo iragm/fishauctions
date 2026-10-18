@@ -1,0 +1,95 @@
+{% load static %}<!DOCTYPE html>
+{% comment %}The emergency page (OfflinePageView). The service worker caches one copy per browser and shows it in place of
+any page the site can't serve, so nothing here may depend on who is looking or on the network: no base.html, no CDN,
+no csrf_token. Every file it loads is in OFFLINE_STATIC_FILES, or the worker won't have it. offline_page.js draws it.{% endcomment %}
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Offline - {{ navbar_brand|default:"auction.fish" }}</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
+  <link rel="stylesheet" href="{% static 'css/vendor/bootstrap.min.css' %}">
+  <link rel="stylesheet" href="{% static 'css/auction_site.css' %}">
+  <style>
+    .offline-num { max-width: 9rem; }
+    #offline-tabs .nav-link { padding: .4rem .7rem; }
+  </style>
+</head>
+<body>
+<main class="container py-3" style="max-width: 960px;">
+  <div id="offline-status" class="alert alert-secondary py-2" role="status">Loading&hellip;</div>
+  <div class="d-flex flex-wrap align-items-baseline gap-2 mb-2">
+    <h1 class="h5 mb-0" id="offline-auction">No auction saved on this device</h1>
+    <small class="text-muted" id="offline-age"></small>
+  </div>
+
+  <ul class="nav nav-tabs mb-3" id="offline-tabs" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-pane="winners" type="button">Set lot winners</button></li>
+    <li class="nav-item"><button class="nav-link" data-pane="users" type="button">Users</button></li>
+    <li class="nav-item"><button class="nav-link" data-pane="add-user" type="button">Add user</button></li>
+    <li class="nav-item"><button class="nav-link" data-pane="add-lots" type="button">Add lots</button></li>
+    <li class="nav-item"><button class="nav-link" data-pane="pending" type="button">Not sent <span class="badge bg-secondary" id="offline-pending-count">0</span></button></li>
+  </ul>
+
+  <section data-pane="winners">
+    <form id="winner-form" class="row g-2 align-items-end" autocomplete="off">
+      <div class="col-auto"><label class="form-label" for="winner-lot">Lot</label><input class="form-control offline-num" id="winner-lot" required></div>
+      <div class="col-auto"><label class="form-label" for="winner-bidder">Winner</label><input class="form-control offline-num" id="winner-bidder" inputmode="numeric"></div>
+      <div class="col-auto"><label class="form-label" for="winner-price">Price</label><input class="form-control offline-num" id="winner-price" inputmode="decimal"></div>
+      <div class="col-auto"><button class="btn btn-success" type="submit">Save</button></div>
+      <div class="col-auto"><button class="btn btn-secondary" type="button" id="winner-unsold">End lot unsold</button></div>
+    </form>
+    <div class="form-text" id="winner-preview">&nbsp;</div>
+    <div id="winner-message" class="mt-2"></div>
+    <table class="table table-sm mt-3"><tbody id="winner-recent"></tbody></table>
+  </section>
+
+  <section data-pane="users" hidden>
+    <input class="form-control mb-2" id="users-search" type="search" placeholder="Search" autocomplete="off">
+    <div class="table-responsive">
+      <table class="table table-sm">
+        <thead><tr><th>Bidder</th><th>Name</th><th class="text-end">Bought</th></tr></thead>
+        <tbody id="users-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section data-pane="add-user" hidden>
+    <form id="user-form" class="row g-2" autocomplete="off" style="max-width: 32rem;">
+      <div class="col-12"><label class="form-label" for="user-name">Name</label><input class="form-control" id="user-name" required></div>
+      <div class="col-6"><label class="form-label" for="user-bidder">Bidder number</label><input class="form-control" id="user-bidder" required></div>
+      <div class="col-6"><label class="form-label" for="user-phone">Phone</label><input class="form-control" id="user-phone" type="tel"></div>
+      <div class="col-12"><label class="form-label" for="user-email">Email</label><input class="form-control" id="user-email" type="email"></div>
+      <div class="col-12"><button class="btn btn-success" type="submit">Add user</button></div>
+    </form>
+    <div id="user-message" class="mt-2"></div>
+  </section>
+
+  <section data-pane="add-lots" hidden>
+    <form id="lot-form" class="row g-2 align-items-end" autocomplete="off">
+      <div class="col-auto"><label class="form-label" for="lot-seller">Seller</label><input class="form-control offline-num" id="lot-seller" required></div>
+      <div class="col-auto"><label class="form-label" for="lot-number">Lot number</label><input class="form-control offline-num" id="lot-number" required></div>
+      <div class="col"><label class="form-label" for="lot-name">Lot name</label><input class="form-control" id="lot-name" maxlength="40" required></div>
+      <div class="col-auto"><label class="form-label" for="lot-quantity">Quantity</label><input class="form-control" id="lot-quantity" type="number" min="1" value="1" style="max-width: 6rem;"></div>
+      <div class="col-auto"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="lot-donation"><label class="form-check-label" for="lot-donation">Donation</label></div></div>
+      <div class="col-auto"><button class="btn btn-success" type="submit">Add lot</button></div>
+    </form>
+    <div class="form-text" id="lot-preview">&nbsp;</div>
+    <div id="lot-message" class="mt-2"></div>
+  </section>
+
+  <section data-pane="pending" hidden>
+    <div class="d-flex flex-wrap gap-2 mb-2">
+      <button class="btn btn-primary btn-sm" type="button" id="pending-sync">Send now</button>
+      <button class="btn btn-secondary btn-sm" type="button" id="pending-csv">Download CSV</button>
+    </div>
+    <div id="pending-message"></div>
+    <table class="table table-sm"><tbody id="pending-rows"></tbody></table>
+  </section>
+</main>
+<noscript><p class="container">This page needs JavaScript.</p></noscript>
+<script src="{% static 'js/offline_store.js' %}"></script>
+<script src="{% static 'js/offline_page.js' %}"></script>
+</body>
+</html>

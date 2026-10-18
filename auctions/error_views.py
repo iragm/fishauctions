@@ -7,6 +7,10 @@ top-level handler and the real cause is lost (django/core/handlers/exception.py
 sends ``got_request_exception`` but never logs). These wrappers log the real
 exception before letting Django's fallback proceed.
 
+A 500 caused by the database or Redis being unreachable is sent as a 503 instead: it is an outage, not
+a bug on one page, and the 503 is what tells the emergency page's service worker (`offline/worker.js`)
+to show `/offline/` in its place. The page itself is the same 500 page, which links there.
+
 A 404 for anything other than a page (``/favicon.ico``, a missing image or script) is plain text.
 The 404 page renders ``base.html`` and so ``{{ csrf_token }}``; for a first-time visitor, whose
 favicon request goes out before the page's own response has set a cookie, that set a second
@@ -14,11 +18,17 @@ favicon request goes out before the page's own response has set a cookie, that s
 """
 
 import logging
+import sys
 
+import redis
+from django.db import InterfaceError, OperationalError
 from django.http import HttpResponseNotFound, HttpResponseServerError
 from django.views import defaults
 
 logger = logging.getLogger("auctions.errorpages")
+
+# Exceptions that mean a backing service is unreachable rather than a page being broken.
+OUTAGE_ERRORS = (OperationalError, InterfaceError, redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
 
 # Sec-Fetch-Dest values for which a person sees the response as a page.
 PAGE_DESTINATIONS = {"document", "iframe", "frame", "embed", "object"}
@@ -46,7 +56,10 @@ def error_404(request, exception=None):
 
 def error_500(request):
     try:
-        return defaults.server_error(request)
+        response = defaults.server_error(request)
+        if isinstance(sys.exc_info()[1], OUTAGE_ERRORS):
+            response.status_code = 503
+        return response
     except Exception:
         logger.exception("500 page render failed for %s; serving plain-text fallback", request.path)
         # Raising here would leave the ASGI handler to emit its own bare

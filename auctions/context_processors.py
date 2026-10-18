@@ -323,3 +323,46 @@ def android_testers(request):
 
         show = not MobileDevice.objects.filter(user=user, platform=MobileDevice.PLATFORM_ANDROID).exists()
     return {"show_android_testers": show}
+
+
+#: How long either side of an in-person auction's start the emergency page keeps a copy of it.
+OFFLINE_COPY_BEFORE = 2  # days
+OFFLINE_COPY_AFTER = 1  # days
+
+
+def offline_auction(request):
+    """The slug of the in-person auction a page should keep a copy of for /offline/, or ``""``.
+
+    The user's last auction, if they run it and it starts within a couple of days. Lazy: only
+    ``base.html`` asks, so partials and emails never pay for the query.
+    """
+
+    @functools.cache
+    def slug():
+        try:
+            return _offline_auction_slug(request)
+        except Exception:
+            # The 500 page renders base.html too, often with the database the reason it's rendering.
+            return ""
+
+    return {"offline_auction": slug}
+
+
+def _offline_auction_slug(request):
+    if not request.user.is_authenticated or getattr(request, "is_mobile_app", False):
+        return ""
+    import datetime
+
+    from django.utils import timezone
+
+    # The navbar has already loaded request.user.userdata, so this costs one query for the auction.
+    userdata = getattr(request.user, "userdata", None)
+    auction = userdata.last_auction_used if userdata else None
+    if not auction or auction.is_online or auction.is_deleted or not auction.date_start:
+        return ""
+    now = timezone.now()
+    opens = auction.date_start - datetime.timedelta(days=OFFLINE_COPY_BEFORE)
+    closes = auction.date_start + datetime.timedelta(days=OFFLINE_COPY_AFTER)
+    if not opens <= now <= closes:
+        return ""
+    return auction.slug if auction.permission_check(request.user) else ""

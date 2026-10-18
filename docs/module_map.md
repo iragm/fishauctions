@@ -117,7 +117,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (448 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (325 lines)
+- **`context_processors.py`** (368 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -141,7 +141,7 @@ this only quotes its opening sentence.
   `mailing_address`
 - **`email_routing.py`** (174 lines)
   `email_routing_enabled`, `email_routing_domain`, `build_routed_sender_address`, `sender_with_display_name`, `admin_routing_email`, `resolve_donation_alias`, `resolve_routing_info`, `resolve_routed_recipient`
-- **`error_views.py`** (54 lines)
+- **`error_views.py`** (67 lines)
   Error handlers that surface otherwise-swallowed tracebacks.
   `wants_page`, `error_404`, `error_500`
 - **`field_adoption.py`** (230 lines)
@@ -213,11 +213,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16601 lines)
+- **`palette_actions.py`** (16606 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1955 lines)
+- **`palette_routes.py`** (1964 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -543,6 +543,9 @@ this only quotes its opening sentence.
 - **`test_money_views.py`** (577 lines)
   The views that move money or decide who owes it: bulk invoice status changes (ready, paid), the lot
   `MarkInvoicesReadyTests`, `MarkInvoicesPaidTests`, `LotRefundDialogTests`, `BulkSetLotsWonTests`, `InvoiceViewTests`, `InvoiceCreateViewTests`, `BidDeleteTests`, `DynamicSetLotWinnerTests`, `LotEndUnsoldTests`
+- **`test_offline_web.py`** (298 lines)
+  Tests for the emergency page: /offline/, its service worker, and the session-signed sync behind it.
+  `OfflinePageTests`, `OfflineSnapshotWebTests`, `OfflineSyncWebTests`, `OfflineCopyContextTests`
 - **`test_openai_apps.py`** (226 lines)
   What a plugin directory asks of this server, beyond what an MCP client already asks.
   `with_oidc`, `without_oidc`, `DomainVerificationTests`, `WidgetPointerTests`, `OpenIDTests`
@@ -646,7 +649,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (410 lines)
+- **`test_tenancy.py`** (413 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_untrusted_text.py`** (114 lines)
@@ -682,7 +685,7 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1604 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
-- **`urls.py`** (1345 lines)
+- **`urls.py`** (1349 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -915,7 +918,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `LabelRenderer`, `PngLabelRenderer`, `get_renderer`, `supported_formats`
 - **`labels.py`** (109 lines)
   `LabelService`
-- **`offline.py`** (530 lines)
+- **`offline.py`** (555 lines)
   Offline mode for the app's in-person sale screens.
   `get_last_admin_auction`, `build_snapshot`, `apply_ops`
 - **`payments.py`** (624 lines)
@@ -1032,6 +1035,9 @@ Every view on the site, split by the part of it the view belongs to.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
+- **`offline.py`** (138 lines)
+  The emergency page at /offline/: set lot winners, add users and lots with the site down.
+  `worker_version`, `OfflinePageView`, `OfflineWorkerView`, `OfflineSnapshotView`, `OfflineSyncView`
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
@@ -1089,7 +1095,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1260 lines)
+- **`settings.py`** (1263 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

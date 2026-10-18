@@ -13,12 +13,14 @@ This re-implements the effects of :class:`auctions.views.AuctionTOSAdmin`,
 calling those request/response views. Keep them in sync.
 """
 
+import datetime
 import logging
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from auctions.bidding import MAX_BID
 from auctions.models import (
@@ -386,7 +388,7 @@ class _OpApplier:
         if self._invoice_blocks(winner):
             return self._conflict("invoice_not_open", f"Bidder {winner.bidder_number}'s invoice is not open")
 
-        self._set_winner(lot, winner, price)
+        self._set_winner(lot, winner, price, sold_at=self._recorded_at(op))
         self._record(op["op_id"], "set_winner", None, {})
         self._queue_recorded(lot)
         return "applied", {}
@@ -404,6 +406,22 @@ class _OpApplier:
         if self.auction.only_whole_dollar_bids and price != price.to_integral_value():
             return None
         return price
+
+    def _recorded_at(self, op):
+        """When the op was typed (its optional ``recorded_at``), so a sale synced an hour late keeps its
+        time. Ignored when missing, unparseable, in the future, or more than a day before the auction.
+        """
+        raw = op.get("recorded_at")
+        when = parse_datetime(raw) if isinstance(raw, str) else None
+        if when is None:
+            return None
+        if timezone.is_naive(when):
+            when = timezone.make_aware(when, datetime.UTC)
+        now = timezone.now()
+        earliest = self.auction.date_start - datetime.timedelta(days=1) if self.auction.date_start else None
+        if when > now or (earliest and when < earliest):
+            return None
+        return when
 
     def _server_sold_message(self, lot):
         symbol = self.auction.currency_symbol
@@ -430,11 +448,11 @@ class _OpApplier:
             user=self.user,
         )
 
-    def _set_winner(self, lot, winning_tos, winning_price):
+    def _set_winner(self, lot, winning_tos, winning_price, sold_at=None):
         """Mirror DynamicSetLotWinner.set_winner: winner, check-in side effects, history, bap."""
         lot.auctiontos_winner = winning_tos
         lot.winning_price = winning_price
-        lot.date_end = timezone.now()
+        lot.date_end = sold_at or timezone.now()
         lot.active = False
         lot.save()
         if (
@@ -508,6 +526,13 @@ class _OpApplier:
             with transaction.atomic():
                 status, payload = getattr(self, handler_name)(op)
         except Exception:
+            # Two syncs racing with the same op: the other one applied it, and our ledger insert hit the
+            # unique op_id. That's a replay, not a conflict.
+            led = MobileOfflineOp.objects.filter(op_id=op_id).first()
+            if led:
+                result.update(led.result_data or {})
+                result["status"] = "already_applied"
+                return result
             logger.exception("Offline op %s (%s) failed unexpectedly", op_id, op.get("type"))
             result.update(status="conflict", conflict="error", message="This change could not be applied")
             return result
