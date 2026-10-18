@@ -115,8 +115,10 @@ window.onload = function() {
             document.cookie = name + "=" + value + "; SameSite=Strict; path=/" + secure;
           }
         </script>
-        {% if not request.is_mobile_app %}
-        {% comment %}The emergency page's service worker and storage (offline_store.js). Not in the app: it has its own offline mode, which a worker answering for failed pages would hide.{% endcomment %}
+        {% comment %}The emergency page's service worker and storage (offline_store.js). Not in the app: it has its own offline mode, which a worker answering for failed pages would hide. Not without a request either: the 500 page renders with none, so it can't tell the app or a signed-in admin from a stranger, and would forget the admin's copy of the auction.{% endcomment %}
+        {% if request and request.is_mobile_app %}
+        <script>if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(function (all) { all.forEach(function (r) { var w = r.active || r.waiting || r.installing; if (w && w.scriptURL.indexOf('/offline-worker.js') !== -1) { r.unregister(); } }); }).catch(function () {}); }</script>
+        {% elif request %}
         <script type="text/javascript" src="{% static 'js/offline_store.js' %}" defer></script>
         <script>window.addEventListener('DOMContentLoaded', function () { if (window.OfflineStore) { window.OfflineStore.onPage({worker: '{% url "offline_worker" %}', user: {% if request.user.is_authenticated %}{{ request.user.pk|stringformat:"d" }}{% else %}null{% endif %}, auction: '{{ offline_auction|escapejs }}'}); } });</script>
         {% endif %}

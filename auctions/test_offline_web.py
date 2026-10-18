@@ -57,6 +57,31 @@ class OfflinePageTests(StandardTestCase):
         html = render_to_string("500.html", {})
         self.assertIn(reverse("offline"), html)
 
+    def test_the_500_page_never_runs_the_offline_script(self):
+        # Django renders it with no request, so it can't tell an admin from a stranger, or the app from a
+        # browser: it would forget the admin's copy, or put the worker in the app.
+        from django.template.loader import render_to_string
+
+        self.assertNotIn("OfflineStore.onPage", render_to_string("500.html", {}))
+
+    def test_a_database_outage_is_a_503_so_the_worker_steps_in(self):
+        from django.db import OperationalError
+
+        from auctions.error_views import error_500
+
+        request = RequestFactory().get("/")
+        for error, status in ((OperationalError("gone away"), 503), (ValueError("a bug"), 500)):
+            try:
+                raise error
+            except Exception:
+                response = error_500(request)
+            self.assertEqual(response.status_code, status, error)
+
+    def test_the_app_unregisters_a_worker_it_picked_up(self):
+        response = self.client.get(reverse("help"), HTTP_USER_AGENT="Mozilla/5.0 FishAuctionsApp/1.0 (Flutter; iOS)")
+        self.assertContains(response, "r.unregister()")
+        self.assertNotContains(response, "OfflineStore.onPage")
+
     def test_set_lot_winners_links_here_on_a_timeout(self):
         self.client.force_login(self.admin_user)
         response = self.client.get(reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug}))

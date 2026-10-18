@@ -15,6 +15,11 @@ const PRECACHE = [OFFLINE_URL{% for name in offline_static_files %}, '{% static 
 const OUTAGE = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
 
 self.addEventListener('install', (event) => {
+  if (self.navigator.userAgent.includes('FishAuctionsApp')) {
+    // The app has its own offline mode, which answering for its failed pages would hide.
+    event.waitUntil(self.registration.unregister());
+    return;
+  }
   event.waitUntil(
     caches.open(CACHE)
       .then((cache) => cache.addAll(PRECACHE.map((url) => new Request(url, { cache: 'reload' }))))

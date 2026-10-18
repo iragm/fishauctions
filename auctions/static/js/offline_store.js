@@ -104,29 +104,22 @@
     return match ? decodeURIComponent(match[1]) : '';
   }
 
-  /** {online, signedIn, data}. Online means Django answered; a 5xx or no answer is offline. */
+  /**
+   * {online, signedIn, data}. Online means Django answered; a 5xx or no answer is offline. A 429 is
+   * online with no answer (signedIn null), so nothing is decided on it.
+   */
   function getJSON(url) {
     return fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
       .then(function (response) {
         if (response.status >= 500) { return { online: false }; }
         if (response.status === 401 || response.status === 403) { return { online: true, signedIn: false }; }
-        if (!response.ok) { return { online: true, signedIn: true, data: null }; }
+        if (!response.ok) { return { online: true, signedIn: null, data: null }; }
         return response.json().then(function (data) { return { online: true, signedIn: true, data: data }; });
       })
       .catch(function () { return { online: false }; });
   }
 
   function ping() { return getJSON('/offline/snapshot/?ping=1'); }
-
-  /** Download a fresh copy of ``slug`` (or the caller's last admin auction) and keep it. */
-  function pull(slug) {
-    return getJSON('/offline/snapshot/' + (slug ? '?auction=' + encodeURIComponent(slug) : '')).then(function (answer) {
-      if (!answer.online || !answer.signedIn || !answer.data) { return answer; }
-      storageSet(LAST_PULL, String(Date.now()));
-      if (!answer.data.auction) { return answer; }
-      return saveSnapshot(answer.data).then(function () { return answer; });
-    });
-  }
 
   function withLock(work) {
     if (navigator.locks && navigator.locks.request) {
@@ -136,40 +129,66 @@
   }
 
   /**
-   * Send every pending entry this person may send. Resolves {online, signedIn, applied, conflicts}.
-   * An entry made under someone else's copy waits for them; one made with no copy at all goes to
-   * whichever auction the sender is running.
+   * Download a fresh copy of ``slug`` (or the caller's last admin auction) and keep it. Inside the lock,
+   * so a slow download can't land on top of the newer copy a send in another tab just saved.
    */
-  function sync() {
+  function pull(slug) {
+    return withLock(function () {
+      return getJSON('/offline/snapshot/' + (slug ? '?auction=' + encodeURIComponent(slug) : '')).then(function (answer) {
+        if (!answer.online || !answer.signedIn || !answer.data) { return answer; }
+        storageSet(LAST_PULL, String(Date.now()));
+        if (!answer.data.auction) { return answer; }
+        return saveSnapshot(answer.data).then(function () { return answer; });
+      });
+    });
+  }
+
+  /** Forget a copy that isn't this person's: someone signed out, or someone else signed in. */
+  function forgetUnlessOwner(userId) {
+    return getSnapshot().then(function (snapshot) {
+      return snapshot && snapshot.user_id !== userId ? clearSnapshot() : null;
+    });
+  }
+
+  /**
+   * Send every pending entry this person may send. Resolves {online, signedIn, applied, conflicts,
+   * waiting, unassigned}. An entry made under someone else's copy waits for them. One made with no copy
+   * at all names no auction, so it goes only when somebody picks one: ``assignTo``, from Send now.
+   */
+  function sync(assignTo) {
     return withLock(function () {
       return ping().then(function (status) {
-        if (!status.online || !status.signedIn) { return status; }
-        const userId = status.data ? status.data.user_id : null;
+        if (!status.online || !status.signedIn || !status.data) { return status; }
+        const userId = status.data.user_id;
         return Promise.all([listOps(), getSnapshot()]).then(function (loaded) {
           const ops = loaded[0];
           const snapshot = loaded[1];
-          const mine = ops.filter(function (op) {
-            return op.status === 'pending' && (!op.owner || op.owner === userId);
+          const pending = ops.filter(function (op) { return op.status === 'pending'; });
+          const summary = {
+            online: true,
+            signedIn: true,
+            applied: 0,
+            conflicts: 0,
+            waiting: pending.filter(function (op) { return op.owner && op.owner !== userId; }).length,
+            unassigned: pending.filter(function (op) { return !op.auction; }).length,
+          };
+          const groups = {};
+          pending.forEach(function (op) {
+            if (op.owner && op.owner !== userId) { return; }
+            const slug = op.auction || assignTo;
+            if (slug) { (groups[slug] = groups[slug] || []).push(op); }
           });
-          const summary = { online: true, signedIn: true, applied: 0, conflicts: 0, waiting: ops.length - mine.length };
-          if (!mine.length) { return summary; }
-          const fallback = snapshot && snapshot.auction && snapshot.user_id === userId ? Promise.resolve(snapshot.auction.slug)
-            : getJSON('/offline/snapshot/').then(function (answer) { return answer.data && answer.data.auction ? answer.data.auction.slug : null; });
-          return fallback.then(function (fallbackSlug) {
-            const groups = {};
-            mine.forEach(function (op) {
-              const slug = op.auction || fallbackSlug;
-              if (slug) { (groups[slug] = groups[slug] || []).push(op); }
-            });
-            let chain = Promise.resolve();
-            Object.keys(groups).forEach(function (slug) {
-              const list = groups[slug];
-              for (let start = 0; start < list.length; start += BATCH) {
-                const chunk = list.slice(start, start + BATCH);
-                chain = chain.then(function () { return send(slug, chunk, summary, snapshot); });
-              }
-            });
-            return chain.then(function () { return summary; });
+          let chain = Promise.resolve();
+          Object.keys(groups).forEach(function (slug) {
+            const list = groups[slug];
+            for (let start = 0; start < list.length; start += BATCH) {
+              const chunk = list.slice(start, start + BATCH);
+              chain = chain.then(function () { return send(slug, chunk, summary, snapshot); });
+            }
+          });
+          return chain.then(function () {
+            if (assignTo) { summary.unassigned = 0; }
+            return summary;
           });
         });
       });
@@ -254,24 +273,23 @@
     const userId = options.user || null;
     const used = storageGet(HAS_DATA) === '1';
     if (!used && !options.auction) { return; }
-    getSnapshot().then(function (snapshot) {
-      if (snapshot && snapshot.user_id !== userId) { return clearSnapshot(); }
-      return null;
-    }).catch(function () {});
+    const forgotten = forgetUnlessOwner(userId).catch(function () {});
     if (!options.auction) { return; }
     function tick() {
-      getSnapshot().then(function (snapshot) {
-        const last = Number(storageGet(LAST_PULL) || 0);
-        const stale = !snapshot || !snapshot.auction || snapshot.auction.slug !== options.auction || Date.now() - last > PULL_EVERY;
-        return listOps().then(function (ops) {
-          if (ops.some(function (op) { return op.status === 'pending'; })) { return sync(); }
-          return stale ? withLock(function () { return pull(options.auction); }) : null;
+      listOps().then(function (ops) {
+        const sending = ops.some(function (op) { return op.status === 'pending' && (!op.owner || op.owner === userId) && op.auction; });
+        return (sending ? sync() : Promise.resolve()).then(getSnapshot).then(function (snapshot) {
+          const last = Number(storageGet(LAST_PULL) || 0);
+          const stale = !snapshot || !snapshot.auction || snapshot.auction.slug !== options.auction || Date.now() - last > PULL_EVERY;
+          return stale ? pull(options.auction) : null;
         });
       }).catch(function () {});
     }
     if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(function () {}); }
-    tick();
-    window.setInterval(tick, 60 * 1000);
+    forgotten.then(function () {
+      tick();
+      window.setInterval(tick, 60 * 1000);
+    });
   }
 
   window.OfflineStore = {
@@ -284,6 +302,7 @@
     newOp: newOp,
     ping: ping,
     pull: pull,
+    forgetUnlessOwner: forgetUnlessOwner,
     sync: sync,
     csv: csv,
     onPage: onPage,

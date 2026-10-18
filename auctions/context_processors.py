@@ -355,9 +355,8 @@ def _offline_auction_slug(request):
 
     from django.utils import timezone
 
-    from auctions.models import UserData
-
-    userdata = UserData.objects.filter(user=request.user).select_related("last_auction_used").first()
+    # The navbar has already loaded request.user.userdata, so this costs one query for the auction.
+    userdata = getattr(request.user, "userdata", None)
     auction = userdata.last_auction_used if userdata else None
     if not auction or auction.is_online or auction.is_deleted or not auction.date_start:
         return ""

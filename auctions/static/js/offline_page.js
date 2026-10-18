@@ -9,7 +9,7 @@
   'use strict';
 
   const Store = window.OfflineStore;
-  const PING_EVERY = 15 * 1000;
+  const PING_EVERY = 20 * 1000;
   const PULL_EVERY = 5 * 60 * 1000;
   const state = { snapshot: null, ops: [], online: null, signedIn: null, replacing: null, confirm: null };
   const $ = function (id) { return document.getElementById(id); };
@@ -124,11 +124,12 @@
   function save(type, data, display, messageId, text) {
     const op = Store.newOp(type, data, state.snapshot);
     op.display = display;
-    const replaced = state.replacing;
+    // Only an entry of the same kind is being edited; anything else saved meanwhile replaces nothing.
+    const replaced = state.replacing && state.replacing.type === type ? state.replacing.op_id : null;
     state.replacing = null;
     state.confirm = null;
     return Store.putOp(op)
-      .then(function () { return replaced ? Store.deleteOp(replaced) : null; })
+      .then(function () { return replaced ? Store.undo(replaced) : null; })
       .then(load)
       .then(function () {
         say(messageId, text, 'success', el('button', { class: 'btn btn-sm btn-link p-0 text-dark', type: 'button', text: 'Undo', onclick: function () { undo(op.op_id, messageId); } }));
@@ -177,7 +178,8 @@
       text = 'Lot ' + display.lot + ' sold to ' + display.winner + ' for ' + money(price) + '.';
     }
     if (warnings.length && !confirmed(signature, warnings.join(' '), 'winner-message')) { return; }
-    const replaceEarlier = earlier && earlier.op_id !== state.replacing ? Store.undo(earlier.op_id) : Promise.resolve();
+    const editing = state.replacing ? state.replacing.op_id : null;
+    const replaceEarlier = earlier && earlier.op_id !== editing ? Store.undo(earlier.op_id) : Promise.resolve();
     replaceEarlier.then(function () { return save('set_winner', data, display, 'winner-message', text); }).then(function () {
       $('winner-lot').value = '';
       $('winner-bidder').value = '';
@@ -245,7 +247,7 @@
   }
 
   function edit(op) {
-    state.replacing = op.op_id;
+    state.replacing = { op_id: op.op_id, type: op.type };
     const d = op.display || {};
     if (op.type === 'set_winner') {
       show('winners');
@@ -410,24 +412,39 @@
       state.online = status.online;
       state.signedIn = status.signedIn;
       drawStatus();
-      if (!status.online || !status.signedIn) { return null; }
-      return Store.listOps().then(function (ops) {
-        if (ops.some(function (op) { return op.status === 'pending'; })) { return Store.sync(); }
-        if (!state.snapshot || Date.now() - Store.lastPull() > PULL_EVERY) {
-          return Store.pull(state.snapshot && state.snapshot.auction ? state.snapshot.auction.slug : null);
-        }
-        return null;
+      if (!status.online) { return null; }
+      // Only with an answer from the site: offline, the copy is the point of this page.
+      if (status.signedIn === false) { return Store.forgetUnlessOwner(null); }
+      if (!status.data) { return null; }
+      return Store.forgetUnlessOwner(status.data.user_id).then(Store.listOps).then(function (ops) {
+        return (ops.some(function (op) { return op.status === 'pending'; }) ? Store.sync() : Promise.resolve(null)).then(function (result) {
+          return Store.getSnapshot().then(function (snapshot) {
+            if (!snapshot || Date.now() - Store.lastPull() > PULL_EVERY) {
+              return Store.pull(snapshot && snapshot.auction ? snapshot.auction.slug : null).then(function () { return result; });
+            }
+            return result;
+          });
+        });
       });
     }).then(function (result) {
-      if (result && result.waiting) { say('pending-message', 'Some of these were entered by someone else signed in on this device, and wait for them.', 'secondary'); }
+      if (result) { explain(result); }
       return load();
     }).catch(function () {});
+  }
+
+  function explain(result) {
+    if (result.unassigned) {
+      say('pending-message', result.unassigned + ' were entered with no auction saved here. Send now puts them in yours.', 'warning');
+    } else if (result.waiting) {
+      say('pending-message', 'Some were entered by someone else signed in on this device, and wait for them.', 'secondary');
+    }
   }
 
   // -- wiring -----------------------------------------------------------------
 
   document.querySelectorAll('#offline-tabs .nav-link').forEach(function (button) {
-    button.addEventListener('click', function () { show(button.dataset.pane); });
+    // Leaving a pane abandons an Edit in it: the entry being edited stays as it was.
+    button.addEventListener('click', function () { state.replacing = null; show(button.dataset.pane); });
   });
   $('winner-form').addEventListener('submit', function (event) { event.preventDefault(); saveWinner(false); });
   $('winner-unsold').addEventListener('click', function () { saveWinner(true); });
@@ -439,9 +456,19 @@
   });
   $('users-search').addEventListener('input', drawUsers);
   $('pending-sync').addEventListener('click', function () {
+    const unassigned = live().filter(function (op) { return !op.auction; }).length;
+    let target = Promise.resolve(null);
+    if (unassigned) {
+      // Entries typed with no copy name no auction: the person sending them says which one.
+      target = Store.pull(null).then(function (answer) {
+        const a = answer && answer.data ? answer.data.auction : null;
+        if (!a) { return null; }
+        return window.confirm('Put the ' + unassigned + ' entries made with no auction saved into ' + a.title + '?') ? a.slug : null;
+      });
+    }
     say('pending-message', 'Sending…', 'secondary');
-    Store.sync().then(function (result) {
-      if (!result.online) { say('pending-message', "The site still isn't answering.", 'warning'); } else if (!result.signedIn) { say('pending-message', 'Sign in to send these.', 'warning'); } else { say('pending-message', result.applied + ' sent' + (result.conflicts ? ', ' + result.conflicts + ' need a look.' : '.'), result.conflicts ? 'warning' : 'success'); }
+    target.then(function (slug) { return Store.sync(slug); }).then(function (result) {
+      if (!result.online) { say('pending-message', "The site still isn't answering.", 'warning'); } else if (result.signedIn === false) { say('pending-message', 'Sign in to send these.', 'warning'); } else if (!result.signedIn) { say('pending-message', 'The site is busy. Try again in a minute.', 'warning'); } else if (result.unassigned || result.waiting) { explain(result); } else { say('pending-message', result.applied + ' sent' + (result.conflicts ? ', ' + result.conflicts + ' need a look.' : '.'), result.conflicts ? 'warning' : 'success'); }
       return load();
     });
   });

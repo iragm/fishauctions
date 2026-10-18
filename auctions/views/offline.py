@@ -91,7 +91,7 @@ class _OfflineAPIView(APIView):
 
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated]
-    throttle_scope = "mobile_api"
+    throttle_scope = "offline_page"
     throttle_classes = [ScopedRateThrottle]
 
 
