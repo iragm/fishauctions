@@ -82,6 +82,25 @@ class OfflinePageTests(StandardTestCase):
         self.assertContains(response, "r.unregister()")
         self.assertNotContains(response, "OfflineStore.onPage")
 
+    def test_the_help_has_a_section_to_link_to(self):
+        url = reverse("help_guide", kwargs={"slug": "run-an-in-person-auction"})
+        self.client.force_login(self.admin_user)
+        response = self.client.get(url)
+        self.assertContains(response, 'id="working-offline"')
+        self.assertContains(response, 'href="#working-offline"')
+        # The browser fills these in from its own copy; the server never knows what it holds.
+        self.assertContains(response, 'id="offline-copy" hidden')
+        self.assertContains(response, 'id="offline-not-kept" hidden')
+        self.assertContains(response, f"copyStatus({self.admin_user.pk})")
+        self.client.logout()
+        signed_out = self.client.get(url)
+        self.assertContains(signed_out, "copyStatus(null)")
+        self.assertNotContains(signed_out, 'id="offline-not-kept"')
+        self.client.force_login(self.admin_user)
+        app = self.client.get(url, HTTP_USER_AGENT="Mozilla/5.0 FishAuctionsApp/1.0 (Flutter; iOS)")
+        self.assertContains(app, 'id="working-offline"')
+        self.assertNotContains(app, "offline-copy")
+
     def test_set_lot_winners_links_here_on_a_timeout(self):
         self.client.force_login(self.admin_user)
         response = self.client.get(reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug}))

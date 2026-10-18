@@ -293,20 +293,18 @@
   }
 
   /**
-   * What this browser holds, for the help page: the auction it copied and when, and whether the browser
-   * has promised to keep it (persisted). Without that promise the copy still works and still syncs, but
-   * the browser may clear it to free space, and Safari clears it after a week or so without a visit.
+   * What this browser holds for this person, for the help page: the auction it copied and when, and
+   * whether the browser has promised to keep it (persisted). Without that promise the copy still works
+   * and still syncs, but the browser may clear it to free space, and Safari clears it after a week or so
+   * without a visit. Null when there is no copy, or it is someone else's (onPage is about to forget it).
    */
-  function copyStatus() {
-    if (storageGet(HAS_DATA) !== '1' || !window.indexedDB) { return Promise.resolve(null); }
+  function copyStatus(userId) {
+    if (!userId || storageGet(HAS_DATA) !== '1' || !window.indexedDB) { return Promise.resolve(null); }
     const kept = navigator.storage && navigator.storage.persisted ? navigator.storage.persisted().catch(function () { return null; }) : Promise.resolve(null);
     return Promise.all([getSnapshot(), kept]).then(function (loaded) {
       const snapshot = loaded[0];
-      return {
-        auction: snapshot && snapshot.auction ? snapshot.auction.title : null,
-        generatedAt: snapshot && snapshot.generated_at ? new Date(snapshot.generated_at) : null,
-        persisted: loaded[1],
-      };
+      if (!snapshot || !snapshot.auction || snapshot.user_id !== userId) { return null; }
+      return { auction: snapshot.auction.title, generatedAt: new Date(snapshot.generated_at), persisted: loaded[1] };
     });
   }
 
