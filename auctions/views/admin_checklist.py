@@ -236,9 +236,8 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
         """Tap to Pay on iPhone: the Apple-side steps on top of a working Square connection, shown only once
         Square is set up.
         """
-        from post_office.models import EmailTemplate
-
-        from auctions.management.commands.tap_to_pay_launch_announcement import EMAIL_TEMPLATE_NAME
+        from auctions.models import PushNotificationSent
+        from auctions.notifications import CATEGORY_TAP_TO_PAY_LAUNCH
 
         if not settings.SQUARE_APPLICATION_ID:
             return []
@@ -269,36 +268,24 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
             {
                 "section": section,
                 "name": "Launch email & push notification",
-                "configured": EmailTemplate.objects.filter(name=EMAIL_TEMPLATE_NAME).exists(),
+                # Done once sent, not once seeded: migration 0501 seeds the template everywhere.
+                "configured": PushNotificationSent.objects.filter(category=CATEGORY_TAP_TO_PAY_LAUNCH).exists(),
                 "what_it_does": (
                     "Apple's marketing requirements ask for a launch email and an in-app push to every eligible "
                     "merchant, due <strong>once the feature is generally available</strong> &mdash; not at first "
-                    "release. The wording and artwork for both <strong>must</strong> come from Apple's Tap to Pay "
-                    "Marketing Guide and Toolkit; the guide forbids writing your own. The command below therefore "
-                    "refuses to send until that copy is in place, rather than sending something that would fail review."
+                    "release. Both use the words from Apple's Tap to Pay Marketing Guide and Toolkit, which forbids "
+                    "writing your own: the email template is seeded from the toolkit, and the push copy is built "
+                    "into the command."
                 ),
-                "where_to_get_it": (
-                    "The toolkit's access page and password are on <strong>page 23 of the review guide PDF</strong> "
-                    "Apple sends with the development entitlement."
-                ),
-                "setup_steps": [
-                    "Download the &ldquo;Launch email&rdquo; template and the &ldquo;Value Proposition&rdquo; "
-                    "push-notification copy from Apple's toolkit.",
-                    f"Create an email template named <code>{EMAIL_TEMPLATE_NAME}</code> in the admin and paste the "
-                    "launch email into it.",
-                    "Run the command below with the push copy. Re-running is safe &mdash; nobody is contacted twice.",
-                ],
+                "where_to_get_it": "Nothing to get: run the command once Tap to Pay on iPhone is in the App Store.",
                 "snippets": [
                     {
                         "label": "Check who would be contacted, without sending:",
                         "code": "docker exec -it django python3 manage.py tap_to_pay_launch_announcement --dry-run",
                     },
                     {
-                        "label": "Send it:",
-                        "code": (
-                            "docker exec -it django python3 manage.py tap_to_pay_launch_announcement \\\n"
-                            '  --push-title "<from the toolkit>" --push-body "<from the toolkit>"'
-                        ),
+                        "label": "Send it (re-running is safe; nobody is contacted twice):",
+                        "code": "docker exec -it django python3 manage.py tap_to_pay_launch_announcement",
                     },
                 ],
                 "links": [

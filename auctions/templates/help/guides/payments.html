@@ -40,7 +40,12 @@
   <div class="col-md-6"><div class="card h-100"><div class="card-body">
     <h4 class="h6 card-title"><i class="bi bi-people"></i> In person</h4>
     <ul class="small mb-0 ps-3">
-      <li id="tap-to-pay">With the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a> and Square connected, people can tap a credit card on your phone to pay. No card reader needed.</li>
+      <li id="tap-to-pay">With the <a href="{% url 'help_guide' slug='mobile-app' %}">phone app</a> and Square connected, people can tap a credit card on your phone to pay. No card reader needed.
+        <details class="text-muted"><summary>Terms apply.</summary>
+          <p class="mt-2 mb-1">Tap to Pay on iPhone requires a supported payment app and the latest version of iOS. Update to the latest version by going to Settings &gt; General &gt; Software Update. Some contactless cards may not be accepted by your payment app. Transaction limits may apply. Tap to Pay on iPhone is not available in all markets. For Tap to Pay on iPhone countries and regions, see <a href="https://developer.apple.com/tap-to-pay/regions/">developer.apple.com/tap-to-pay/regions</a>.</p>
+          <p class="mb-0">Apple Pay is a service provided by Apple Payments Services LLC, a subsidiary of Apple Inc. Neither Apple Inc. nor Apple Payments Services LLC is a bank. Any card used in Apple Pay is offered by the card issuer.</p>
+        </details>
+      </li>
       <li>{% page "auction_quick_checkout" "Checkout" %} shows a QR code for each person.</li>
       <li>They scan it and pay on their own phone. It takes about ten seconds to come through.</li>
       <li>No QR code? The pay button is on their invoice too.</li>

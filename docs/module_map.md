@@ -434,7 +434,7 @@ this only quotes its opening sentence.
 - **`test_email_compliance.py`** (166 lines)
   The parts of an outgoing email that anti-spam law requires, and the donation footer's address.
   `render`, `EveryEmailTemplateCarriesTheFooterTests`, `FooterContentsTests`, `UnconfiguredAddressTests`, `DonationRequestNeedsAnAddressTests`
-- **`test_email_layout.py`** (208 lines)
+- **`test_email_layout.py`** (212 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
 - **`test_email_send_sites.py`** (348 lines)
@@ -644,7 +644,7 @@ this only quotes its opening sentence.
   `InvoiceOpenedTests`, `MaxBidPeekTests`, `RefundDialogTests`, `GrantingAuctionAdminTests`, `SellToOnlineHighBidderTests`, `BulkInvoiceStatusTests`
 - **`test_sweep_round_two.py`** (709 lines)
   Regression tests for the second review sweep: club member merge roles, BAP award lots, the API-key member
-- **`test_tap_to_pay.py`** (1162 lines)
+- **`test_tap_to_pay.py`** (1189 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
 - **`test_template_a11y.py`** (129 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
@@ -820,7 +820,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `normalize`, `split_is_faithful`, `Command`
 - **`sync_google_wallet_classes.py`** (104 lines)
   `Command`
-- **`tap_to_pay_launch_announcement.py`** (170 lines)
+- **`tap_to_pay_launch_announcement.py`** (158 lines)
   The Tap to Pay on iPhone launch announcement (Apple marketing requirements 6.1 and 6.3).
   `Command`
 - **`update_ar_positions.py`** (49 lines)
@@ -969,7 +969,7 @@ Every view on the site, split by the part of it the view belongs to.
 
 - **`account.py`** (621 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
-- **`admin_checklist.py`** (1061 lines)
+- **`admin_checklist.py`** (1048 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (841 lines)

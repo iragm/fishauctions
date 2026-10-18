@@ -21,6 +21,10 @@ def render(source, **context):
     return Template(source).render(Context(context))
 
 
+# Verbatim from a partner's toolkit, which forbids adding copy of our own, a greeting included.
+TOOLKIT_EMAILS = {"tap_to_pay_launch_email"}
+
+
 class LayoutTests(TestCase):
     def test_every_seeded_template_renders_as_a_full_page(self):
         """With an empty context, since a template that only renders with the right objects hides its syntax errors."""
@@ -38,7 +42,7 @@ class LayoutTests(TestCase):
 
     def test_every_seeded_template_opens_with_hey_and_has_no_sign_off(self):
         """The footer says who sent it, so a "Best wishes, <domain>" above it only repeats it."""
-        for template in EmailTemplate.objects.all():
+        for template in EmailTemplate.objects.exclude(name__in=TOOLKIT_EMAILS):
             for field in ("html_content", "content"):
                 body = (getattr(template, field) or "").split("{% block content %}")[-1].strip()
                 body = body.removeprefix("{% load email_tags %}")
