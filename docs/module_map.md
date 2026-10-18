@@ -495,6 +495,9 @@ this only quotes its opening sentence.
 - **`test_lot_views.py`** (1326 lines)
   The lot pages an auction is actually run from: labels, push, set-winner and the queue.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
+- **`test_markdown_admin.py`** (38 lines)
+  The markdown editor on the admin's blog post and FAQ pages.
+  `MarkdownAdminEditorTests`
 - **`test_marketing.py`** (856 lines)
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (763 lines)
