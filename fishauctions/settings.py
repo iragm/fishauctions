@@ -252,6 +252,8 @@ INSTALLED_APPS = [
     # OAuth 2.1 server for /mcp/. Optional: everything checks auctions.mcp.auth.oauth_enabled().
     "oauth2_provider",
 ]
+#: The markdown editor's preview button needs markdownfield.urls; the admin editor goes without it.
+SILENCED_SYSTEM_CHECKS = ["markdownfield.W002"]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 #: A request this slow is logged at WARNING; site_health groups them by path. 0 turns it off.
 SLOW_REQUEST_SECONDS = float(os.getenv("SLOW_REQUEST_SECONDS") or 5)

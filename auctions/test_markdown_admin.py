@@ -5,6 +5,8 @@ the package renamed the widget's context (``options_id`` became ``config_id``) t
 turned every change page into a 500. The package's own template and script now do the work.
 """
 
+import re
+
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
@@ -25,8 +27,12 @@ class MarkdownAdminEditorTests(TestCase):
     def assert_editor_renders(self, url):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "data-markdownfield=")
         self.assertContains(response, "markdownfield/markdownfield.")
+        # The script finds each editor's config by the id its textarea names; a missing one leaves
+        # a bare textarea.
+        html = response.content.decode()
+        config_id = re.search(r'data-markdownfield="([^"]+)"', html).group(1)
+        self.assertIn(f'<script id="{config_id}" type="application/json">', html)
 
     def test_blog_post_change_page_renders_the_editor(self):
         self.assert_editor_renders(reverse("admin:auctions_blogpost_change", args=[self.post.pk]))
