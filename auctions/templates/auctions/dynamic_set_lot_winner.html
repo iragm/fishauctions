@@ -142,6 +142,8 @@
       $.ajax({
           url: '{{ request.path }}',
           method: 'POST',
+          // A frozen server never answers; without this the clerk waits on a request that never ends.
+          timeout: 15000,
           beforeSend: function (request) {
                   request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
               },
@@ -156,6 +158,9 @@
             $("#success_banner").removeClass('d-none');
             let errorMessage = (xhr.responseJSON && xhr.responseJSON.error) || error || (status === 'error' || status === 'timeout' ? 'Network connection problem, try again' : 'An unexpected error occurred, try again');
             $("#success_message").text(`FAILED: ${errorMessage}`);
+            if (status === 'timeout' || xhr.status === 0 || xhr.status >= 500) {
+              $("#success_message").append(' ', $('<a class="text-reset fw-bold">').attr('href', "{% url 'offline' %}").text('Keep going offline'));
+            }
             $("#undo_button").addClass('d-none');
             if (done) { done(null); }
           }
