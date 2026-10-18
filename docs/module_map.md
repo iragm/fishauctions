@@ -543,7 +543,7 @@ this only quotes its opening sentence.
 - **`test_money_views.py`** (577 lines)
   The views that move money or decide who owes it: bulk invoice status changes (ready, paid), the lot
   `MarkInvoicesReadyTests`, `MarkInvoicesPaidTests`, `LotRefundDialogTests`, `BulkSetLotsWonTests`, `InvoiceViewTests`, `InvoiceCreateViewTests`, `BidDeleteTests`, `DynamicSetLotWinnerTests`, `LotEndUnsoldTests`
-- **`test_offline_web.py`** (298 lines)
+- **`test_offline_web.py`** (317 lines)
   Tests for the emergency page: /offline/, its service worker, and the session-signed sync behind it.
   `OfflinePageTests`, `OfflineSnapshotWebTests`, `OfflineSyncWebTests`, `OfflineCopyContextTests`
 - **`test_openai_apps.py`** (226 lines)

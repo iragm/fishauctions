@@ -260,7 +260,7 @@
 <div class="table-responsive">
 <table class="table table-sm">
   <tbody>
-    <tr><th>The internet</th><td>Hall wifi is often bad. A phone hotspot runs a laptop or two. The phone app and <a href="#site-down">the emergency page</a> keep Users, add lots and Set lot winners working with no connection. Keep a paper tally sheet anyway.</td></tr>
+    <tr><th>The internet</th><td>Hall wifi is often bad. A phone hotspot runs a laptop or two. The phone app and <a href="#working-offline">the emergency page</a> keep Users, add lots and Set lot winners working with no connection. Keep a paper tally sheet anyway.</td></tr>
     <tr><th>A lot sold to the wrong person</th><td>Type it again on Set lot winners with {% ui "Ignore errors and save" %}.</td></tr>
     <tr><th>A lot sold, then turned out dead or wrong</th><td>On the lot, {% ui "Admin actions" %}, {% ui "Remove or refund" %}, with a percentage.</td></tr>
     <tr><th>A seller brought back labels for lots that died</th><td>Remove those lots, so they aren't charged the unsold fee. This is why my club doesn't charge an unsold lot fee.</td></tr>
@@ -271,16 +271,46 @@
 </div>
 {% aitip %}Ask "undo the last sale", or "undo that".{% endaitip %}
 
-<h3 class="h6 mt-3" id="site-down">If the site goes down</h3>
-<p>Keep selling. Pick whichever of these you'll actually use on the day:</p>
+<h2 class="h5 mt-4" id="working-offline">Working offline</h2>
+<p>Could be a server outage, or your hall's wifi going down - either way, you can keep going.</p>
+{% if not request.is_mobile_app %}{% tip %}You can, and should, test this right now: turn off your wifi and reload this page.<span id="offline-copy" hidden> <span id="offline-copy-auction"></span> data should be available as of <span id="offline-copy-time"></span>.</span>{% endtip %}
+{% if help.signed_in %}<div id="offline-not-kept" hidden>{% helptip "exclamation-triangle" %}This browser hasn't agreed to keep its copy, so it may clear it to free up space. <a href="#working-offline" id="offline-keep">Ask it again</a>, or bookmark this site, which usually persuades Chrome.{% endhelptip %}</div>{% endif %}{% endif %}
+<p>Pick whichever of these you'll actually use on the day:</p>
 <ul>
   <li><strong>The phone app.</strong> Its offline mode keeps Users, add lots and Set lot winners working. See <a href="{% url 'help_guide' slug='mobile-app' %}#organizers">the app guide</a>.</li>
-  <li><strong>{% page "offline" "The emergency page" %}.</strong> Any browser that has opened this site shows it when the site can't be reached, with Set lot winners, Users (with what each person bought), Add user and Add lots. Entries stay on that computer, even through a restart, and go in when the site is back. Open the site on the clerk's laptop the morning of the auction, so it has a copy of your users and lots.</li>
-  <li><strong>An AI assistant.</strong> Tell it "I'll read you lot winners; keep them in a CSV, check whether auction.fish is back every few minutes, and when it is, enter them." Connect it <a href="{% url 'help_guide' slug='ai-agents' %}">before the day</a>.</li>
-  <li><strong>Paper.</strong> Lot, bidder, price, one line each.</li>
+  <li><strong>{% page "offline" "The emergency page" %}.</strong> Add users, lots, and set lot winners completely offline. Entries stay on that computer, even through a restart, and go in when the site is back.</li>
+  <li><strong>An AI assistant.</strong> Tell it "I'll read you lot winners; keep them in a CSV, check whether auction.fish is back every few minutes, and when it is, enter them." This only helps when the problem is auction.fish or Cloudflare, not your wifi. Connect it <a href="{% url 'help_guide' slug='ai-agents' %}">before the day</a>.</li>
 </ul>
 <p>Whatever you use, an entry that disagrees with the site (a lot somebody already sold online, say) isn't saved. You're shown it, to fix by hand.</p>
+{% tip %}Since inception, this site has had better uptime than Facebook and X. But it's always good to have a backup plan.{% endtip %}
 {% mike %}Mike can't figure out any of these, so his emergency plan is paper and a pencil. Mike's plan is honestly pretty viable.{% endmike %}
+{% if not request.is_mobile_app %}<script>
+  // Fills in the two notes above from this browser's own copy, which the server never sees.
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!window.OfflineStore) { return; }
+    function show() {
+      return window.OfflineStore.copyStatus({{ request.user.pk|default:'null' }}).then(function (copy) {
+        if (!copy) { return; }
+        if (!isNaN(copy.generatedAt)) {
+          document.getElementById('offline-copy-auction').textContent = copy.auction;
+          document.getElementById('offline-copy-time').textContent = copy.generatedAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+          document.getElementById('offline-copy').hidden = false;
+        }
+        const note = document.getElementById('offline-not-kept');
+        if (note) { note.hidden = copy.persisted !== false; }
+      }).catch(function () {});
+    }
+    const ask = document.getElementById('offline-keep');
+    if (ask) { ask.addEventListener('click', function (event) {
+      event.preventDefault();
+      window.OfflineStore.keep().then(function (granted) {
+        if (granted === false) { ask.replaceWith('It said no'); }
+        return show();
+      });
+    }); }
+    show();
+  });
+</script>{% endif %}
 
 <h2 class="h5 mt-4" id="after">After the auction</h2>
 <p><strong>Pay the sellers.</strong> Most clubs mail a check within a week or two, to the address on the seller's invoice. Filter the Users tab by {% ui "Club owes" %}. No address? Ask before you write the check. <a href="{% url 'help_guide' slug='payments' %}#seller-payouts">Why there's no payout button</a>.</p>

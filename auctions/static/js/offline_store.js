@@ -292,6 +292,28 @@
     });
   }
 
+  /**
+   * What this browser holds for this person, for the help page: the auction it copied and when, and
+   * whether the browser has promised to keep it (persisted). Without that promise the copy still works
+   * and still syncs, but the browser may clear it to free space, and Safari clears it after a week or so
+   * without a visit. Null when there is no copy, or it is someone else's (onPage is about to forget it).
+   */
+  function copyStatus(userId) {
+    if (!userId || storageGet(HAS_DATA) !== '1' || !window.indexedDB) { return Promise.resolve(null); }
+    const kept = navigator.storage && navigator.storage.persisted ? navigator.storage.persisted().catch(function () { return null; }) : Promise.resolve(null);
+    return Promise.all([getSnapshot(), kept]).then(function (loaded) {
+      const snapshot = loaded[0];
+      if (!snapshot || !snapshot.auction || snapshot.user_id !== userId) { return null; }
+      return { auction: snapshot.auction.title, generatedAt: new Date(snapshot.generated_at), persisted: loaded[1] };
+    });
+  }
+
+  /** Ask the browser to keep the copy. Called from a click, which is when Firefox will show its prompt. */
+  function keep() {
+    if (!navigator.storage || !navigator.storage.persist) { return Promise.resolve(null); }
+    return navigator.storage.persist().catch(function () { return null; });
+  }
+
   window.OfflineStore = {
     getSnapshot: getSnapshot,
     saveSnapshot: saveSnapshot,
@@ -306,6 +328,8 @@
     sync: sync,
     csv: csv,
     onPage: onPage,
+    copyStatus: copyStatus,
+    keep: keep,
     lastPull: function () { return Number(storageGet(LAST_PULL) || 0); },
   };
 })();
