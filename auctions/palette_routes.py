@@ -1456,6 +1456,7 @@ EXCLUDED: dict[str, str] = {
     "buying": "The page behind watched, won_lots and my_bids, which land on it filtered.",
     "service_worker": _INFRA,
     "offline_worker": _INFRA,
+    "offline_cloudflare": _INFRA,
     "offline_snapshot": _API,
     "offline_sync": _API,
 }

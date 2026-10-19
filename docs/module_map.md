@@ -217,7 +217,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1964 lines)
+- **`palette_routes.py`** (1965 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -546,7 +546,7 @@ this only quotes its opening sentence.
 - **`test_money_views.py`** (577 lines)
   The views that move money or decide who owes it: bulk invoice status changes (ready, paid), the lot
   `MarkInvoicesReadyTests`, `MarkInvoicesPaidTests`, `LotRefundDialogTests`, `BulkSetLotsWonTests`, `InvoiceViewTests`, `InvoiceCreateViewTests`, `BidDeleteTests`, `DynamicSetLotWinnerTests`, `LotEndUnsoldTests`
-- **`test_offline_web.py`** (317 lines)
+- **`test_offline_web.py`** (334 lines)
   Tests for the emergency page: /offline/, its service worker, and the session-signed sync behind it.
   `OfflinePageTests`, `OfflineSnapshotWebTests`, `OfflineSyncWebTests`, `OfflineCopyContextTests`
 - **`test_openai_apps.py`** (226 lines)
@@ -691,7 +691,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (139 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1349 lines)
+- **`urls.py`** (1350 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -1041,9 +1041,9 @@ Every view on the site, split by the part of it the view belongs to.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
-- **`offline.py`** (138 lines)
+- **`offline.py`** (189 lines)
   The emergency page at /offline/: set lot winners, add users and lots with the site down.
-  `worker_version`, `OfflinePageView`, `OfflineWorkerView`, `OfflineSnapshotView`, `OfflineSyncView`
+  `worker_version`, `OfflinePageView`, `OfflineCloudflarePageView`, `OfflineWorkerView`, `OfflineSnapshotView`, `OfflineSyncView`
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`

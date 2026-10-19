@@ -1,17 +1,21 @@
 {% load static %}<!DOCTYPE html>
 {% comment %}The emergency page (OfflinePageView). The service worker caches one copy per browser and shows it in place of
 any page the site can't serve, so nothing here may depend on who is looking or on the network: no base.html, no CDN,
-no csrf_token. Every file it loads is in OFFLINE_STATIC_FILES, or the worker won't have it. offline_page.js draws it.{% endcomment %}
+no csrf_token. Every file it loads is in OFFLINE_STATIC_FILES, or the worker won't have it. offline_page.js draws it.
+With `inline` (OfflineCloudflarePageView) those files are written into the page, for Cloudflare to store as its outage page.{% endcomment %}
 <html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Offline - {{ navbar_brand|default:"auction.fish" }}</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
+{% if inline %}  <meta name="offline-version" content="{{ inline.version }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ inline.favicon }}">
+  <style>{{ inline.css }}</style>
+{% else %}  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
   <link rel="stylesheet" href="{% static 'css/vendor/bootstrap.min.css' %}">
   <link rel="stylesheet" href="{% static 'css/auction_site.css' %}">
-  <style>
+{% endif %}  <style>
     .offline-num { max-width: 9rem; }
     #offline-tabs .nav-link { padding: .4rem .7rem; }
   </style>
@@ -89,7 +93,16 @@ no csrf_token. Every file it loads is in OFFLINE_STATIC_FILES, or the worker won
   </section>
 </main>
 <noscript><p class="container">This page needs JavaScript.</p></noscript>
-<script src="{% static 'js/offline_store.js' %}"></script>
+{% if inline %}<details class="container small text-body-secondary" style="max-width: 960px;"><summary>What went wrong</summary>::CLOUDFLARE_ERROR_500S_BOX::</details>
+<script>
+  if (navigator.userAgent.includes('FishAuctionsApp')) {
+    // The app has its own offline mode; this page would only hide it.
+    document.querySelector('main').replaceChildren("auction.fish isn't answering. The app's offline mode keeps working.");
+  } else {
+    {{ inline.js }}
+  }
+</script>
+{% else %}<script src="{% static 'js/offline_store.js' %}"></script>
 <script src="{% static 'js/offline_page.js' %}"></script>
-</body>
+{% endif %}</body>
 </html>
