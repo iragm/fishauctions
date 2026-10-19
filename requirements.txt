@@ -41,9 +41,9 @@ bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.111
+boto3==1.43.114
     # via django-ses
-botocore==1.43.111
+botocore==1.43.114
     # via
     #   boto3
     #   s3transfer
@@ -55,7 +55,7 @@ celery==5.6.3
     # via
     #   -r requirements.in
     #   django-celery-beat
-certifi==2026.7.22
+certifi==2026.10.18
     # via
     #   -r requirements.in
     #   httpcore
@@ -74,7 +74,7 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.6.0
+chardet==7.7.0
     # via -r requirements.in
 charset-normalizer==3.5.2
     # via
@@ -150,7 +150,7 @@ django==5.2.18
     #   djangorestframework
     #   djangorestframework-simplejwt
     #   easy-thumbnails
-django-allauth==65.19.7
+django-allauth==65.20.0
     # via -r requirements.in
 django-autocomplete-light==5.0.0
     # via -r requirements.in
@@ -190,7 +190,7 @@ django-qr-code==5.0.0
     # via -r requirements.in
 django-recaptcha==4.1.0
     # via -r requirements.in
-django-ses[events]==4.8.0
+django-ses[events]==4.8.2
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
@@ -216,7 +216,7 @@ firebase-admin==7.7.0
     # via -r requirements.in
 flatbuffers==25.12.19
     # via onnxruntime
-fonttools[woff]==4.66.1
+fonttools[woff]==4.67.0
     # via weasyprint
 frozenlist==1.8.0
     # via
@@ -228,7 +228,7 @@ google-api-core[grpc]==2.42.0
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-auth==2.61.0
+google-auth==2.62.0
     # via
     #   -r requirements.in
     #   google-api-core
@@ -241,7 +241,7 @@ google-cloud-core==2.8.0
     #   google-cloud-storage
 google-cloud-firestore==2.34.1
     # via firebase-admin
-google-cloud-storage==3.17.0
+google-cloud-storage==3.17.1
     # via firebase-admin
 google-crc32c==1.9.0
     # via
@@ -312,7 +312,7 @@ mailchimp-marketing==3.0.80
     # via -r requirements.in
 mammoth==1.11.0
     # via markitdown
-markdown==3.11
+markdown==3.11.1
     # via -r requirements.in
 markdown-it-py==4.2.0
     # via
@@ -375,7 +375,7 @@ pdfplumber==0.11.10
     # via markitdown
 piexif==1.1.3
     # via heif-image-plugin
-pillow==12.3.0
+pillow==13.0.0
     # via
     #   -r requirements.in
     #   django-qr-code
@@ -402,7 +402,7 @@ protobuf==7.36.2
     #   grpcio-status
     #   onnxruntime
     #   proto-plus
-py-vapid==1.9.4
+py-vapid==1.9.6
     # via pywebpush
 pyarrow==26.0.0
     # via -r requirements.in
@@ -428,9 +428,9 @@ pydantic-core==2.50.1
     # via
     #   pydantic
     #   squareup
-pydantic-settings==2.15.0
+pydantic-settings==2.16.0
     # via django-bootstrap-datepicker-plus
-pydyf==0.12.1
+pydyf==0.13.0
     # via weasyprint
 pygeomag==1.1.0
     # via -r requirements.in
@@ -513,7 +513,7 @@ six==1.17.0
     #   mailchimp-marketing
     #   markdownify
     #   python-dateutil
-soupsieve==3.0.2
+soupsieve==3.0.3
     # via beautifulsoup4
 sqlparse==0.6.0
     # via
@@ -543,6 +543,7 @@ typing-extensions==4.16.0
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
+    #   pydantic-settings
     #   pyopenssl
     #   python-pptx
     #   squareup
