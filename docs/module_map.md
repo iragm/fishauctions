@@ -434,7 +434,7 @@ this only quotes its opening sentence.
 - **`test_email_compliance.py`** (166 lines)
   The parts of an outgoing email that anti-spam law requires, and the donation footer's address.
   `render`, `EveryEmailTemplateCarriesTheFooterTests`, `FooterContentsTests`, `UnconfiguredAddressTests`, `DonationRequestNeedsAnAddressTests`
-- **`test_email_layout.py`** (208 lines)
+- **`test_email_layout.py`** (212 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
 - **`test_email_send_sites.py`** (348 lines)
@@ -504,7 +504,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1283 lines)
+- **`test_mcp_admin.py`** (1354 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -644,7 +644,7 @@ this only quotes its opening sentence.
   `InvoiceOpenedTests`, `MaxBidPeekTests`, `RefundDialogTests`, `GrantingAuctionAdminTests`, `SellToOnlineHighBidderTests`, `BulkInvoiceStatusTests`
 - **`test_sweep_round_two.py`** (709 lines)
   Regression tests for the second review sweep: club member merge roles, BAP award lots, the API-key member
-- **`test_tap_to_pay.py`** (1162 lines)
+- **`test_tap_to_pay.py`** (1189 lines)
   Tests for the Tap to Pay on iPhone review-guide work (TTP-1..4).
 - **`test_template_a11y.py`** (129 lines)
   Guards the two accessibility rules in auctions/template_a11y.py.
@@ -688,6 +688,9 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1604 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
+- **`uptime.py`** (139 lines)
+  When the server and each container last started, and the longest stretch with no page views.
+  `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
 - **`urls.py`** (1349 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
@@ -820,7 +823,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `normalize`, `split_is_faithful`, `Command`
 - **`sync_google_wallet_classes.py`** (104 lines)
   `Command`
-- **`tap_to_pay_launch_announcement.py`** (170 lines)
+- **`tap_to_pay_launch_announcement.py`** (158 lines)
   The Tap to Pay on iPhone launch announcement (Apple marketing requirements 6.1 and 6.3).
   `Command`
 - **`update_ar_positions.py`** (49 lines)
@@ -839,7 +842,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2056 lines)
+- **`admin.py`** (2066 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -969,7 +972,7 @@ Every view on the site, split by the part of it the view belongs to.
 
 - **`account.py`** (621 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
-- **`admin_checklist.py`** (1061 lines)
+- **`admin_checklist.py`** (1048 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (841 lines)
@@ -1089,9 +1092,9 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (256 lines)
+- **`celery.py`** (265 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
-  `start_auction_stats_task`, `start_bap_recalculation_tasks`, `debug_task`
+  `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
   Celery Beat scheduler working around a django-celery-beat 2.8.1 bug.
   `FixedDatabaseScheduler`

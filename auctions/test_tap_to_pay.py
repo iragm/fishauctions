@@ -928,29 +928,55 @@ class LaunchAnnouncementTests(StandardTestCase):
         call_command("tap_to_pay_launch_announcement", stdout=out, stderr=out, **kwargs)
         return out.getvalue()
 
-    def _make_template(self):
+    def _delete_template(self):
         from post_office.models import EmailTemplate
 
-        EmailTemplate.objects.create(
-            name="tap_to_pay_launch_email", subject="Tap to Pay on iPhone", content="toolkit copy"
-        )
+        EmailTemplate.objects.filter(name="tap_to_pay_launch_email").delete()
 
     def test_refuses_to_send_without_the_toolkit_email_template(self):
         from django.core.management.base import CommandError
 
-        with self.assertRaises(CommandError) as caught:
-            self._run(push_title="t", push_body="b")
-        self.assertIn("Marketing Guide and Toolkit", str(caught.exception))
-
-    def test_refuses_to_send_without_the_toolkit_push_copy(self):
-        from django.core.management.base import CommandError
-
-        self._make_template()
+        self._delete_template()
         with self.assertRaises(CommandError) as caught:
             self._run()
-        self.assertIn("Value Proposition", str(caught.exception))
+        self.assertIn("Marketing Guide and Toolkit", str(caught.exception))
+
+    def test_the_push_defaults_to_the_toolkit_copy(self):
+        from auctions.management.commands.tap_to_pay_launch_announcement import PUSH_BODY, PUSH_TITLE
+
+        with patch("auctions.tasks.send_push_to_user.delay") as push:
+            self._run()
+        self.assertEqual(push.call_args.kwargs["title"], PUSH_TITLE)
+        self.assertEqual(push.call_args.kwargs["body"], PUSH_BODY)
+
+    def test_the_push_leads_to_its_terms(self):
+        # The push says "Terms apply.", so tapping it has to land on the disclaimers.
+        with patch("auctions.tasks.send_push_to_user.delay") as push:
+            self._run()
+        from urllib.parse import urlsplit
+
+        url = push.call_args.kwargs["url"]
+        self.assertTrue(url.endswith("#tap-to-pay"))
+        page = self.client.get(urlsplit(url).path)
+        self.assertContains(page, 'id="tap-to-pay"')
+        self.assertContains(page, "Apple Payments Services LLC")
+
+    def test_the_seeded_email_renders(self):
+        from django.template import Context, Template
+        from post_office.models import EmailTemplate
+
+        template = EmailTemplate.objects.get(name="tap_to_pay_launch_email")
+        context = Context({"name": "A", "domain": "auction.fish", "unsubscribe": "x"})
+        html = Template(template.html_content).render(context)
+        text = Template(template.content).render(context)
+        for part in (html, text):
+            self.assertIn("Tap to Pay on iPhone", part)
+            self.assertIn("auction.fish/square/", part)
+            self.assertIn("EMVCo", part)
+        self.assertIn("launch_email_visual.jpg", html)
 
     def test_dry_run_reports_instead_of_refusing(self):
+        self._delete_template()
         output = self._run(dry_run=True)
         self.assertIn("Marketing Guide and Toolkit", output)
         self.assertIn("[DRY RUN]", output)
@@ -974,13 +1000,12 @@ class LaunchAnnouncementTests(StandardTestCase):
     def test_sends_once_and_only_once(self):
         from auctions.models import PushNotificationSent
 
-        self._make_template()
         with patch("auctions.tasks.send_push_to_user.delay") as push:
-            self._run(push_title="t", push_body="b")
+            self._run()
             self.assertEqual(push.call_count, 1)
             self.assertEqual(PushNotificationSent.objects.filter(category="tap_to_pay_launch").count(), 1)
             # Re-running is a no-op — nobody is announced to twice.
-            self._run(push_title="t", push_body="b")
+            self._run()
             self.assertEqual(push.call_count, 1)
 
 
@@ -1053,6 +1078,7 @@ class SetupChecklistTests(TestCase):
     def test_tap_to_pay_items_appear_once_square_exists(self):
         _, items = self._items()
         self.assertIn("Apple's publishing entitlement", items)
+        # Seeded by migration 0501, but not sent yet.
         self.assertFalse(items["Launch email & push notification"]["configured"])
 
     @override_settings(SQUARE_APPLICATION_ID="")
@@ -1062,10 +1088,11 @@ class SetupChecklistTests(TestCase):
         self.assertNotIn("Apple's publishing entitlement", items)
 
     @override_settings(SQUARE_APPLICATION_ID="sq0idp-x")
-    def test_launch_item_is_done_once_the_toolkit_template_exists(self):
-        from post_office.models import EmailTemplate
+    def test_launch_item_is_done_once_sent(self):
+        from auctions.models import PushNotificationSent
+        from auctions.notifications import CATEGORY_TAP_TO_PAY_LAUNCH
 
-        EmailTemplate.objects.create(name="tap_to_pay_launch_email", subject="s", content="toolkit copy")
+        PushNotificationSent.objects.create(user=self.superuser, category=CATEGORY_TAP_TO_PAY_LAUNCH)
         _, items = self._items()
         self.assertTrue(items["Launch email & push notification"]["configured"])
 

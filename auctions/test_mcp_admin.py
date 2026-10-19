@@ -16,9 +16,9 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
-from auctions import palette_actions
+from auctions import palette_actions, uptime
 from auctions.mcp import admin, admin_species, protocol, tools
-from auctions.models import AgentProposal, AssistantSkillRequest, Club, Lot, Species, UserAPIKey
+from auctions.models import AgentProposal, AssistantSkillRequest, Club, Lot, PageView, Species, UserAPIKey
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -1112,6 +1112,30 @@ class SiteHealthTests(AdminEndpointCase):
         self.assertEqual(slow["busiest"][1]["request"], "GET /lots/<id>/")
         self.assertIn("3 slow requests in the last hour, most often GET /lots/all/ (2).", result["content"][0]["text"])
 
+    def test_it_says_when_the_host_and_containers_started(self):
+        facts = self.call("site_health")["structuredContent"]
+        self.assertIsNotNone(facts["host_booted"])
+        started = facts["containers_started"]
+        self.assertIsNotNone(started["django"])
+        self.assertLessEqual(facts["host_booted"], started["django"])
+        self.assertEqual(set(started), {"django", "celery", "documents", "beat"})
+        self.assertIn("minutes", facts["longest_without_page_views_24h"][0])
+
+    def test_a_recent_reboot_and_a_silence_are_in_the_summary(self):
+        booted = timezone.now() - datetime.timedelta(hours=2)
+        PageView.objects.all().delete()
+        with mock.patch("auctions.uptime.host_booted", return_value=booted):
+            text = self.call("site_health")["content"][0]["text"]
+        self.assertIn(f"The server booted at {booted:%Y-%m-%d %H:%M} UTC.", text)
+        # No page views in the last day: the whole day is one silence.
+        self.assertIn("No page views for 1440 minutes from ", text)
+
+    def test_an_old_boot_is_not_in_the_summary(self):
+        booted = timezone.now() - datetime.timedelta(days=30)
+        with mock.patch("auctions.uptime.host_booted", return_value=booted):
+            text = self.call("site_health")["content"][0]["text"]
+        self.assertNotIn("The server booted", text)
+
 
 class QueryShapeTests(SimpleTestCase):
     def test_literals_never_leave(self):
@@ -1281,3 +1305,50 @@ class SlowRequestMiddlewareTests(SimpleTestCase):
     def test_a_quick_one_is_not(self):
         with self.assertNoLogs("auctions.slow_requests", level="WARNING"):
             self.run_request(0.2)
+
+
+@isolated_cache("uptime")
+class UptimeTests(StandardTestCase):
+    """``auctions.uptime``: start times, and the longest stretch with no page views."""
+
+    def _view_at(self, moment):
+        view = PageView.objects.create(url="/")
+        PageView.objects.filter(pk=view.pk).update(date_start=moment)
+
+    def test_the_longest_gap_between_views_is_found(self):
+        now = timezone.now()
+        for minutes_ago in [2, 10, 50, *range(100, 24 * 60, 20)]:
+            self._view_at(now - datetime.timedelta(minutes=minutes_ago))
+        longest, second, third = uptime.longest_quiet(now)
+        self.assertEqual(longest["minutes"], 50)
+        self.assertEqual(longest["from"], (now - datetime.timedelta(minutes=100)).isoformat())
+        self.assertEqual(longest["to"], (now - datetime.timedelta(minutes=50)).isoformat())
+        self.assertEqual(second["minutes"], 40)
+        self.assertEqual(third["minutes"], 20)
+
+    def test_an_outage_is_the_longest_gap(self):
+        now = timezone.now()
+        for minutes_ago in range(0, 24 * 60, 5):
+            if not 300 <= minutes_ago <= 330:
+                self._view_at(now - datetime.timedelta(minutes=minutes_ago, seconds=30))
+        quiet = uptime.longest_quiet(now)[0]
+        self.assertEqual(quiet["minutes"], 40)
+        self.assertEqual(quiet["to"], (now - datetime.timedelta(minutes=295, seconds=30)).isoformat())
+
+    def test_the_silence_up_to_now_counts(self):
+        now = timezone.now()
+        for minutes_ago in range(40, 24 * 60, 5):
+            self._view_at(now - datetime.timedelta(minutes=minutes_ago))
+        quiet = uptime.longest_quiet(now)[0]
+        self.assertEqual(quiet["minutes"], 40)
+        self.assertEqual(quiet["to"], now.isoformat())
+
+    def test_a_worker_records_its_start_for_the_web_container(self):
+        uptime.record_start("beat")
+        started = uptime.uptime()["containers_started"]
+        self.assertEqual(started["beat"], started["django"])
+        self.assertIsNone(started["celery"])
+
+    def test_a_worker_starts_when_the_cache_is_down(self):
+        with mock.patch("auctions.uptime.cache.set", side_effect=ConnectionError("down")):
+            uptime.record_start("celery")

@@ -734,8 +734,8 @@ def _deploy_window() -> dict[str, Any]:
 
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host,
-    and whether now is a quiet time to deploy."""
-    from auctions import app_crashes
+    when the host and containers last started, and whether now is a quiet time to deploy."""
+    from auctions import app_crashes, uptime
 
     deployed = _deployed_commit()
     pending = _pending_migrations()
@@ -745,6 +745,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     database = _database()
     slow = _slow_requests()
     window = _deploy_window()
+    started = uptime.uptime()
     facts = {
         **deployed,
         # Short: a full 40-character hash is exactly what redact() takes for a credential.
@@ -755,6 +756,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "errors_last_24h": errors,
         "app_crashes_last_24h": crashes,
         **host,
+        **started,
         "database": database,
         "slow_requests_last_hour": slow,
         "debug": settings.DEBUG,
@@ -781,6 +783,12 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
             f" {slow['total']} slow request{'s' if slow['total'] != 1 else ''} in the last hour, "
             f"most often {busiest['request']} ({busiest['times']})."
         )
+    booted = uptime.host_booted()
+    if booted and timezone.now() - booted < ERROR_WINDOW:
+        summary += f" The server booted at {booted:%Y-%m-%d %H:%M} UTC."
+    quiet = started["longest_without_page_views_24h"][0]
+    if quiet["minutes"] >= uptime.QUIET_WARN.total_seconds() // 60:
+        summary += f" No page views for {quiet['minutes']} minutes from {quiet['from'][:16].replace('T', ' ')} UTC."
     if window["verdict"] != "quiet":
         summary += " " + window["advice"]
     return _ok(summary, **facts)
@@ -1905,8 +1913,10 @@ ADMIN_TOOLS: dict[str, Action] = {
                 "What is deployed and whether it is well: branch and commit, migrations not yet "
                 "applied, Celery queue depths, when beat last ran, the last 24 hours of logged "
                 "errors grouped by kind, the app crashes reported in that time, the server's disk, "
-                "memory and load, the database's running queries (longest first, literals removed), "
-                "and the last hour's slow requests grouped by path."
+                "memory and load, when the host booted and each container, the database and Redis "
+                "started, the longest stretches with no page views in the last day, the database's "
+                "running queries (longest first, literals removed), and the last hour's slow requests "
+                "grouped by path."
             ),
             params={},
             danger=DANGER_SAFE,

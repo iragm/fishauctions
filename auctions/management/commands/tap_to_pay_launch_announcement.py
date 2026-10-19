@@ -1,23 +1,17 @@
 """The Tap to Pay on iPhone launch announcement (Apple marketing requirements 6.1 and 6.3).
 
 6.1 asks for a launch email to eligible users and 6.3 for an in-app push, both once the feature is
-generally available. 6.2, the in-app splash, is already in the app.
+generally available. 6.2, the in-app splash, is in the app.
 
-This works out who is eligible and sends to them. It deliberately does not write the copy: Apple's
-Marketing Guide and Toolkit supply both, and forbid substituting your own words or artwork. So it
-**refuses to send until that copy is in place** rather than shipping a plausible default:
-
-* the email body is a post_office template named ``tap_to_pay_launch_email``, pasted in via the
-  admin;
-* the push title and body are ``--push-title`` / ``--push-body``, from the toolkit.
-
-The toolkit's access page and password are on page 23 of Apple's review guide PDF; the admin setup
-checklist walks through it.
+Apple's Marketing Guide and Toolkit supply the words for both and forbid substituting your own. The
+email is the post_office template ``tap_to_pay_launch_email`` (seeded by migration 0501 from the
+toolkit's copy deck); the push defaults to the toolkit's "Value proposition" push copy. The command
+still refuses to send if someone deletes the template, rather than sending something else.
 
 Usage::
 
     manage.py tap_to_pay_launch_announcement --dry-run
-    manage.py tap_to_pay_launch_announcement --push-title "<toolkit>" --push-body "<toolkit>"
+    manage.py tap_to_pay_launch_announcement
 
 One-shot but safe to re-run: ``PushNotificationSent`` with the category below is the ledger for both
 halves, so nobody is emailed or pushed twice.
@@ -42,17 +36,15 @@ EMAIL_TEMPLATE_NAME = "tap_to_pay_launch_email"
 
 MISSING_EMAIL_TEMPLATE = (
     f"No post_office email template named '{EMAIL_TEMPLATE_NAME}' exists.\n"
-    "Apple's marketing requirements (6.1) say the launch email must use the template from the Tap "
-    "to Pay on iPhone Marketing Guide and Toolkit — writing your own is not permitted. Create the "
-    "template at /admin/post_office/emailtemplate/ with that name, pasting in the toolkit copy, "
-    "then run this again. Toolkit access is on page 23 of Apple's review guide PDF."
+    "Migration 0501 seeds it with the copy from Apple's Tap to Pay on iPhone Marketing Guide and "
+    "Toolkit (6.1 forbids writing your own). Restore it from that migration, then run this again."
 )
 
-MISSING_PUSH_COPY = (
-    "--push-title and --push-body are required.\n"
-    "Apple's marketing requirements (6.3) say the push must use the 'Value Proposition' copy from "
-    "the Tap to Pay on iPhone Marketing Guide and Toolkit — writing your own is not permitted. "
-    "Toolkit access is on page 23 of Apple's review guide PDF."
+# The toolkit's "Value proposition" push copy (US copy deck, September 2026), word for word.
+PUSH_TITLE = "Accept in-person payments with Tap to Pay on iPhone."
+PUSH_BODY = (
+    "Accept in-person, contactless payments right on your iPhone, from physical debit and credit cards to "
+    "Apple Pay and other digital wallets. Terms apply."
 )
 
 
@@ -60,8 +52,8 @@ class Command(BaseCommand):
     help = "Send the Tap to Pay on iPhone launch email and push to eligible merchants (Apple 6.1 + 6.3)"
 
     def add_arguments(self, parser):
-        parser.add_argument("--push-title", default="", help="Push title, from Apple's toolkit")
-        parser.add_argument("--push-body", default="", help="Push body, from Apple's toolkit")
+        parser.add_argument("--push-title", default=PUSH_TITLE, help="Push title, from Apple's toolkit")
+        parser.add_argument("--push-body", default=PUSH_BODY, help="Push body, from Apple's toolkit")
         parser.add_argument("--dry-run", action="store_true", help="List recipients without sending")
         parser.add_argument("--email-only", action="store_true", help="Requirement 6.1 only")
         parser.add_argument("--push-only", action="store_true", help="Requirement 6.3 only")
@@ -73,11 +65,6 @@ class Command(BaseCommand):
 
         if do_email:
             self._require_email_template(dry_run)
-        if do_push and not (options["push_title"] and options["push_body"]):
-            if not dry_run:
-                raise CommandError(MISSING_PUSH_COPY)
-            self.stdout.write(self.style.WARNING(MISSING_PUSH_COPY))
-            do_push = False
 
         recipients = list(self.eligible_users())
         self.stdout.write(f"{len(recipients)} eligible merchant(s).")
@@ -163,8 +150,9 @@ class Command(BaseCommand):
             user.pk,
             title=title,
             body=body,
-            # The Square info page: what the feature is, and the reconnect button for an account
-            # that predates the in-person scope.
-            url=f"https://{Site.objects.get_current().domain}{reverse('square_seller')}",
+            # The Tap to Pay line of the payments guide: its "Terms apply." holds the disclaimers the
+            # push's own "Terms apply." has to lead to, and the Square section with the reconnect
+            # button for an account that predates the in-person scope is just above it.
+            url=f"https://{Site.objects.get_current().domain}{reverse('help_guide', kwargs={'slug': 'payments'})}#tap-to-pay",
             category=CATEGORY,
         )
