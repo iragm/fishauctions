@@ -269,6 +269,7 @@ urlpatterns = [
     path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
     path("offline-worker.js", views.OfflineWorkerView.as_view(), name="offline_worker"),
     path("offline/", views.OfflinePageView.as_view(), name="offline"),
+    path("offline/cloudflare/", views.OfflineCloudflarePageView.as_view(), name="offline_cloudflare"),
     path("offline/snapshot/", views.OfflineSnapshotView.as_view(), name="offline_snapshot"),
     path("offline/sync/", views.OfflineSyncView.as_view(), name="offline_sync"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),

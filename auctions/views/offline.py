@@ -9,7 +9,9 @@ app's offline sync (:mod:`auctions.mobile.services.offline`) behind the site's o
 the app's tokens. Ids, idempotency and conflicts are all decided there.
 """
 
+import base64
 import hashlib
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from django.contrib.staticfiles import finders
 from django.http import HttpResponse
 from django.template.loader import get_template, render_to_string
 from django.utils.decorators import method_decorator
+from django.utils.safestring import mark_safe
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import TemplateView, View
@@ -31,7 +34,13 @@ from auctions.mobile.serializers import OfflineSyncSerializer
 from auctions.mobile.services import offline
 from auctions.models import Auction
 
-__all__ = ["OfflinePageView", "OfflineSnapshotView", "OfflineSyncView", "OfflineWorkerView"]
+__all__ = [
+    "OfflineCloudflarePageView",
+    "OfflinePageView",
+    "OfflineSnapshotView",
+    "OfflineSyncView",
+    "OfflineWorkerView",
+]
 
 #: What the worker caches, besides the page itself. Everything the page loads must be here.
 OFFLINE_STATIC_FILES = (
@@ -69,6 +78,48 @@ class OfflinePageView(TemplateView):
         context = super().get_context_data(**kwargs)
         context["offline_static_files"] = OFFLINE_STATIC_FILES
         return context
+
+
+class OfflineCloudflarePageView(OfflinePageView):
+    """The emergency page as one file, for Cloudflare's 5xx custom page (zone custom_pages ``500_errors``).
+
+    Cloudflare stores a copy and shows it whenever it can't reach the site. That is the only time a
+    browser without the worker sees it, so the page can't load anything from here: its CSS and JS are
+    written in. It runs on the address that failed, which is this site, so it shares IndexedDB with
+    /offline/ and its entries go in the same way. Cloudflare keeps the copy it took, so a deploy that
+    changes the page or its files needs the custom page re-fetched: the page names the worker version it
+    was built from, which /offline-worker.js also names, and routines/cloudflare.md compares the two.
+    """
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["inline"] = _inline_files()
+        return context
+
+
+def _inline_files():
+    """OFFLINE_STATIC_FILES, written into one page. Not cached: this is fetched once per deploy, by Cloudflare."""
+
+    def read(name, pattern):
+        text = Path(finders.find(name)).read_text(encoding="utf-8")
+        # Anything that would reach out to the network (fonts, source maps) goes: the network is what's down.
+        text = re.sub(pattern, "", text)
+        # A literal "</" would end the <script> or <style> early; "<\\/" means the same to both.
+        return text.replace("</", "<\\/")
+
+    css = [
+        read(name, r"@import url\([^)]*\);|/\*# sourceMappingURL=[^*]*\*/")
+        for name in OFFLINE_STATIC_FILES
+        if name.endswith(".css")
+    ]
+    js = [read(name, r"//# sourceMappingURL=\S*") for name in OFFLINE_STATIC_FILES if name.endswith(".js")]
+    favicon = Path(finders.find("favicon-32x32.png")).read_bytes()
+    return {
+        "css": mark_safe("\n".join(css)),  # noqa: S308 -- our own static files
+        "js": mark_safe("\n".join(js)),  # noqa: S308 -- our own static files
+        "favicon": "data:image/png;base64," + base64.b64encode(favicon).decode(),
+        "version": worker_version(),
+    }
 
 
 class OfflineWorkerView(View):

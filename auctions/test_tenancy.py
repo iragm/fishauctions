@@ -52,7 +52,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "site_webmanifest", "javascript-catalog", "assetlinks", "apple_app_site_association",
         # The emergency page and its worker are the same for everyone; the snapshot is only an auction the
         # caller runs (null for a stranger), so it is their own.
-        "offline", "offline_worker", "offline_snapshot",
+        "offline", "offline_worker", "offline_snapshot", "offline_cloudflare",
         # Barcodes render bars for a number; they hold no membership lookup (see ClubBarcodeView).
         "club_barcode", "club_barcode_png",
         # Autocompletes scope their own querysets to what the caller may see.
