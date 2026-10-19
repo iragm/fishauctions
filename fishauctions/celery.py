@@ -3,7 +3,7 @@
 import os
 
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import beat_init, worker_ready
 
 # Constants
 WORKER_READY_TASK_DELAY_SECONDS = 5  # Delay before starting self-scheduling tasks after worker is ready
@@ -245,6 +245,15 @@ def start_bap_recalculation_tasks(sender, **kwargs):
     from auctions.tasks import bootstrap_bap_recalculation_tasks
 
     bootstrap_bap_recalculation_tasks(timezone.now() + timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
+
+
+@worker_ready.connect
+@beat_init.connect
+def record_container_start(sender, **kwargs):
+    """Tell site_health when this container started; the web container can't see it otherwise."""
+    from auctions import uptime
+
+    uptime.record_start(os.environ.get("LOG_SERVICE_NAME") or "celery")
 
 
 @app.task(bind=True, ignore_result=True)

@@ -504,7 +504,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1283 lines)
+- **`test_mcp_admin.py`** (1354 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (727 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -688,6 +688,9 @@ this only quotes its opening sentence.
   `patch_views`, `WritableMediaRoot`, `give_contact_info`, `CsvImportTestMixin`, `StandardTestCase`, `SuiteStaysFastTests`, `EveryTestStartsInTheSiteTimezoneTests`
 - **`tests_selenium.py`** (1604 lines)
   Selenium browser tests for client-side JavaScript, HTMx and websockets.
+- **`uptime.py`** (139 lines)
+  When the server and each container last started, and the longest stretch with no page views.
+  `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
 - **`urls.py`** (1349 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
@@ -839,7 +842,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2056 lines)
+- **`admin.py`** (2066 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -1089,9 +1092,9 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (256 lines)
+- **`celery.py`** (265 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
-  `start_auction_stats_task`, `start_bap_recalculation_tasks`, `debug_task`
+  `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
   Celery Beat scheduler working around a django-celery-beat 2.8.1 bug.
   `FixedDatabaseScheduler`
