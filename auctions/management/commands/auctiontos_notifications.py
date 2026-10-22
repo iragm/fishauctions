@@ -3,6 +3,7 @@ import datetime
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
+from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
 
@@ -13,14 +14,15 @@ from auctions.models import (
     AuctionTOS,
     Lot,
 )
-from auctions.notifications import CATEGORY_AUCTION_REMINDER, notify_user
+from auctions.notifications import CATEGORY_ACCOUNT, CATEGORY_AUCTION_REMINDER, notify_user
 
 #: How long after an online auction ends its sellers can still be reminded to print their labels.
 PRINT_REMINDER_WINDOW = datetime.timedelta(days=3)
 #: Joined from further than this (miles) from their pickup location, and someone is asked to check their map marker.
 LOCATION_CHECK_MILES = 100
-#: How long after joining that question is asked.
+#: How long after joining that question is asked, and after how long it's too late to bother.
 LOCATION_CHECK_DELAY = datetime.timedelta(hours=1)
+LOCATION_CHECK_WINDOW = datetime.timedelta(days=2)
 
 _TOS_PUSH_TITLES = {
     "online_auction_welcome": "You're in — {auction}",
@@ -243,6 +245,8 @@ class Command(BaseCommand):
             base_qs.filter(
                 location_check_email_sent=False,
                 createdon__lte=timezone.now() - LOCATION_CHECK_DELAY,
+                # A row the organizer added weeks ago and the person later joined through is old news.
+                createdon__gte=timezone.now() - LOCATION_CHECK_WINDOW,
                 user__userdata__location_confirmed=False,
             )
             # A pickup location without a map marker would put everyone thousands of miles away.
@@ -257,11 +261,20 @@ class Command(BaseCommand):
             tos.save(update_fields=["location_check_email_sent"])
             if tos.user_id in asked or tos.auction.closed or not tos.user.email:
                 continue
+            if not tos.auction.is_online and tos.auction.date_start < timezone.now():
+                continue
             if tos.distance_traveled <= LOCATION_CHECK_MILES:
                 continue
             asked.add(tos.user_id)
-            mail.send(
-                tos.user.email,
-                template="location_check",
-                context={"domain": current_site.domain, "tos": tos},
+            notify_user(
+                tos.user,
+                category=CATEGORY_ACCOUNT,
+                title="Is your location right?",
+                body=f"You joined {tos.auction} from a long way away. Tap to check your map marker.",
+                url=f"https://{current_site.domain}{reverse('contact_info')}",
+                send_email=lambda tos=tos: mail.send(
+                    tos.user.email,
+                    template="location_check",
+                    context={"domain": current_site.domain, "tos": tos},
+                ),
             )

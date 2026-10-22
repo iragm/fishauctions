@@ -155,7 +155,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6517 lines)
+- **`forms.py`** (6523 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14706 lines)
+- **`models.py`** (14728 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -475,6 +475,9 @@ this only quotes its opening sentence.
 - **`test_lifecycle.py`** (404 lines)
   Tests for phase 9: milestones, lapsing definition, session replay and cohorts.
   `ClubHistoryFixture`, `LapsingTests`, `CohortTests`, `SignInStitchTests`, `SessionTimelineTests`, `MedianMemberTests`, `UnreachedShareTests`, `MilestoneReachTests`, `SessionReplayPageTests`
+- **`test_location_check.py`** (174 lines)
+  The far-from-pickup location check, its "yes, my location is accurate" box, and the setup box for experienced creators.
+  `LocationCheckTests`, `ConfirmBoxTests`, `SetupBoxTests`
 - **`test_login_required_dispatch.py`** (59 lines)
   Signed-out visitors are turned away, not handed a 500, by views that override ``dispatch``.
   `AnonymousDispatchTests`
@@ -740,7 +743,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`auction_promos.py`** (334 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
-- **`auctiontos_notifications.py`** (233 lines)
+- **`auctiontos_notifications.py`** (280 lines)
   `send_tos_notification`, `Command`
 - **`backfill_lot_species.py`** (384 lines)
   Attach a species to lots that predate the species list.

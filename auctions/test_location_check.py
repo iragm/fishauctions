@@ -103,7 +103,7 @@ class LocationCheckTests(StandardTestCase):
             context={"domain": Site.objects.get_current().domain, "tos": self.online_tos},
         )
         email = Email.objects.get(to="organizer@example.com")
-        self.assertIn(f"from about {self.online_tos.distance_traveled} miles away", email.message)
+        self.assertRegex(email.message, r"from about \d+ miles away")
 
 
 class ConfirmBoxTests(StandardTestCase):

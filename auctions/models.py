@@ -7700,6 +7700,20 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 return location.distance
         return -1
 
+    @property
+    def distance_traveled_for_user(self):
+        """``distance_traveled`` in this person's own unit, for their emails."""
+        from auctions.templatetags.distance_filters import distance_display
+
+        return distance_display(self.distance_traveled, self.user)
+
+    @property
+    def distance_traveled_for_organizer(self):
+        """``distance_traveled`` in the auction creator's unit, for the organizer's emails."""
+        from auctions.templatetags.distance_filters import distance_display
+
+        return distance_display(self.distance_traveled, self.auction.created_by)
+
     @cached_property
     def previous_auctions_count(self):
         return AuctionTOS.objects.filter(email=self.email, createdon__lte=self.createdon).exclude(pk=self.pk).count()
