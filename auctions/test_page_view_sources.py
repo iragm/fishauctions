@@ -202,7 +202,12 @@ class DiscordLinkTests(StandardTestCase):
 
         self.assertEqual(discord_events.discord_link("https://x.test/?slug"), "https://x.test/?slug&utm_source=discord")
         self.assertEqual(discord_events.discord_link("https://x.test/a/"), "https://x.test/a/?utm_source=discord")
-        self.assertIn("utm_source=discord", discord_events._auction_location(self.online_auction))
+        # A fragment stays last, where the browser still sends the query.
+        self.assertEqual(
+            discord_events.discord_link("https://x.test/club/c/#event-12"),
+            "https://x.test/club/c/?utm_source=discord#event-12",
+        )
+        self.assertIn("utm_source=discord", discord_events.auction_location(self.online_auction))
         self.assertEqual(PageView.source_labels({"discord"})["discord"], "Posted on Discord")
 
     def test_an_event_location_too_long_for_the_tag_stays_whole(self):

@@ -317,9 +317,8 @@ class Command(BaseCommand):
                 auction.save(update_fields=["discord_event_created"])
                 continue
 
-            auction_url = discord_events.discord_link(
-                f"https://{domain}/?{auction.slug}", discord_events.EVENT_LOCATION_LIMIT
-            )
+            # The location sync_auction_events patches it to later.
+            auction_url = discord_events.auction_location(auction)
 
             # The same window the club calendar uses, so an update later can't disagree with
             # what was created here.

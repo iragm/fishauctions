@@ -125,9 +125,9 @@ this only quotes its opening sentence.
 - **`deploy_window.py`** (135 lines)
   Whether now is a quiet time to deploy production: traffic against its usual lows, and auctions in play.
   `hourly_views`, `quietest_hour`, `auctions_in_play`, `deploy_window`, `summary`
-- **`discord_events.py`** (351 lines)
+- **`discord_events.py`** (354 lines)
   Discord scheduled events for clubs.
-  `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`, `discord_link`
+  `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`, `discord_link`, `auction_location`
 - **`dmca.py`** (245 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
@@ -567,7 +567,7 @@ this only quotes its opening sentence.
 - **`test_page_view_history_is_kept.py`** (47 lines)
   Repeat views of a page are history, not duplicates.
   `RepeatViewsAreKeptTests`
-- **`test_page_view_sources.py`** (230 lines)
+- **`test_page_view_sources.py`** (235 lines)
   Where visitors came from, and the address the browser is left showing.
   `SourceLabelTests`, `SellerLotIdsTests`, `JoinSourcesStatTests`, `AddressBarTests`, `DiscordLinkTests`
 - **`test_page_view_url.py`** (116 lines)
@@ -746,7 +746,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`android_testers_invite.py`** (138 lines)
   Invite Android users to the Google Play closed test, once.
   `eligible_users`, `invited_addresses`, `Command`
-- **`auction_emails.py`** (360 lines)
+- **`auction_emails.py`** (359 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
 - **`auction_promos.py`** (334 lines)

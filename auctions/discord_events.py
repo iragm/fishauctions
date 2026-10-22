@@ -18,6 +18,7 @@ cancelled one removed.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from django.conf import settings
@@ -27,7 +28,7 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://discord.com/api/v10"
-#: Discord cuts a scheduled event's location here.
+#: Discord refuses (400) a scheduled event whose location is longer than this.
 EVENT_LOCATION_LIMIT = 100
 TIMEOUT = 10
 
@@ -299,7 +300,7 @@ def _sync_one_auction_event(club, auction):
         _store_auction_event_state(auction)
         return False
 
-    location = _auction_location(auction)
+    location = auction_location(auction)
     status = _patch_scheduled_event(
         club.discord_server_id, auction.discord_event_id, auction.title, start, end, location
     )
@@ -335,11 +336,13 @@ def discord_link(url, limit=None):
     """``url`` tagged ``utm_source=discord``, so page views from links the bot posts say where they came
     from. Left untagged when the tag would push it past ``limit`` (an event location is cut at 100).
     """
-    tagged = f"{url}{'&' if '?' in url else '?'}utm_source=discord"
+    parts = urlsplit(url)
+    query = f"{parts.query}&utm_source=discord" if parts.query else "utm_source=discord"
+    tagged = urlunsplit(parts._replace(query=query))
     return url if limit and len(tagged) > limit else tagged
 
 
-def _auction_location(auction):
+def auction_location(auction):
     """Discord shows this as the event's location; the auction's page is the useful thing."""
     domain = Site.objects.get_current().domain
     return discord_link(f"https://{domain}/?{auction.slug}", EVENT_LOCATION_LIMIT)
