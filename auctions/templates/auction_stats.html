@@ -962,6 +962,15 @@ How many of your users are taking advantage of features on this webiste?
   var compareData = {% if compare_auction and compare_stats_referrers_json %}{{ compare_stats_referrers_json|safe }}{% else %}null{% endif %};
   createBarChart('auction_stats_referrers', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
+{% if auction.get_stat_join_sources.labels or compare_auction.get_stat_join_sources.labels %}
+<h4>How people who joined found it</h4>
+<canvas id="auction_stats_join_sources" width="500" height="400"></canvas>
+<script type="text/javascript">
+  var mainData = {{ stats_join_sources_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_join_sources_json %}{{ compare_stats_join_sources_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_join_sources', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
+</script>
+{% endif %}
 
 <div><a href="{% url 'auction_main' slug=auction.slug %}" class="btn btn-primary active">Back to rules</a></div>
 {% endblock %}

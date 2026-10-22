@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14803 lines)
+- **`models.py`** (14948 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -564,6 +564,9 @@ this only quotes its opening sentence.
 - **`test_page_view_history_is_kept.py`** (47 lines)
   Repeat views of a page are history, not duplicates.
   `RepeatViewsAreKeptTests`
+- **`test_page_view_sources.py`** (196 lines)
+  Where visitors came from, and the address the browser is left showing.
+  `SourceLabelTests`, `SellerLotIdsTests`, `JoinSourcesStatTests`, `AddressBarTests`
 - **`test_page_view_url.py`** (116 lines)
   The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
@@ -980,7 +983,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (841 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
-- **`auction_admin.py`** (1263 lines)
+- **`auction_admin.py`** (1265 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (743 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
@@ -1039,7 +1042,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (387 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1329 lines)
+- **`lot_pages.py`** (1321 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -1061,7 +1064,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (688 lines)
+- **`site_pages.py`** (693 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
