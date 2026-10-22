@@ -65,7 +65,8 @@ class LotSearchBySpeciesTests(StandardTestCase):
             lots_of_species_q("123", self.user)
 
     def test_half_a_name_adds_nothing(self):
-        self.assertEqual(self.found("Neocar"), {self.by_scientific})
+        # Only the lot names and tagged species that contain it, as before.
+        self.assertEqual(self.found("Neocar"), {self.tagged, self.by_scientific})
 
     def test_another_persons_unapproved_species_is_not_used(self):
         hidden = make_species("Caridina", "secretus", "Ghost tiger")
