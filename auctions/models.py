@@ -11,6 +11,7 @@ A `.delay()` from a signal must go inside transaction.on_commit.
 
 import datetime
 import logging
+import math
 import re
 import secrets
 import statistics
@@ -5625,38 +5626,38 @@ class Auction(CachedPropertiesMixin, models.Model):
         return AuctionCampaign.objects.filter(auction=self.pk, kind=AuctionCampaign.KIND_VIEW).order_by("-timestamp")
 
     @cached_property
-    def number_of_reminder_emails(self):
-        return self.campaigns_qs.exclude(result="ERR").count()
+    def reminder_stats(self):
+        """Join reminders actually sent here (``AuctionCampaign.reminder_stats``)."""
+        return AuctionCampaign.reminder_stats(self.campaigns_qs)
 
     @cached_property
-    def reminder_email_clicks(self):
-        if self.number_of_reminder_emails == 0:
-            return 0
-        return (
-            self.campaigns_qs.exclude(result="ERR").exclude(result="NONE").count()
-            / self.number_of_reminder_emails
-            * 100
+    def all_auctions_reminder_stats(self):
+        """The same for every auction, over every campaign there is: worked out once an hour."""
+        return cache.get_or_set(
+            "all_auctions_reminder_stats",
+            lambda: AuctionCampaign.reminder_stats(AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW)),
+            60 * 60,
         )
 
-    @cached_property
+    @property
+    def number_of_reminder_emails(self):
+        return self.reminder_stats["sent"]
+
+    @property
+    def reminder_email_clicks(self):
+        return self.reminder_stats["click_rate"]
+
+    @property
     def reminder_email_joins(self):
-        if self.number_of_reminder_emails == 0:
-            return 0
-        return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
+        return self.reminder_stats["join_rate"]
 
-    @cached_property
+    @property
     def all_auctions_reminder_email_clicks(self):
-        campaigns = AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW).exclude(result="ERR")
-        if not campaigns.exists():
-            return 0
-        return campaigns.exclude(result="NONE").count() / campaigns.count() * 100
+        return self.all_auctions_reminder_stats["click_rate"]
 
-    @cached_property
+    @property
     def all_auctions_reminder_email_joins(self):
-        campaigns = AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW).exclude(result="ERR")
-        if not campaigns.exists():
-            return 0
-        return campaigns.filter(result="JOINED").count() / campaigns.count() * 100
+        return self.all_auctions_reminder_stats["join_rate"]
 
     @cached_property
     def promo_stats(self):
@@ -5910,43 +5911,50 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"labels": [], "providers": [], "data": []}
 
     def set_stat_activity(self):
-        """Calculate and return activity chart data"""
+        """Activity per day, counted from the auction's end (online) or start (in person).
+
+        Bin ``i`` is day ``first_offset + i`` from that anchor, and the chart lines a compared
+        auction up by it. Normally 16 days before to 4 after, kept there while the auction runs with
+        days still to come as ``None`` (a gap); an auction more than 6 days off shows its last 21
+        days instead, so there is something to see.
+        """
         bins = 21
-        days_before = 16
-        days_after = bins - days_before
-        dates_messed_with = False
-
-        if self.is_online:
-            date_start = self.date_end - timezone.timedelta(days=days_before)
-            date_end = self.date_end + timezone.timedelta(days=days_after)
-        else:  # in person
-            date_start = self.date_start - timezone.timedelta(days=days_before)
-            date_end = self.date_start + timezone.timedelta(days=days_after)
-
-        # A future date_end shifts the graph to the same range ending now.
-        if date_end > timezone.now():
-            time_difference = date_end - date_start
-            date_end = timezone.now()
-            date_start = date_end - time_difference
-            dates_messed_with = True
+        day = timezone.timedelta(days=1)
+        anchor = self.date_end if self.is_online else self.date_start
+        now = timezone.now()
+        first_offset = -16
+        if anchor > now + 6 * day:
+            first_offset = -math.ceil((anchor - now) / day) - 15
+        date_start = anchor + first_offset * day
+        date_end = date_start + bins * day
 
         views = self.page_views
         joins = AuctionTOS.objects.filter(auction=self)
         new_lots = Lot.objects.filter(auction=self)
         searches = SearchHistory.objects.filter(auction=self)
         bids = LotHistory.objects.filter(lot__auction=self, changed_price=True)
-        watches = Watch.objects.filter(lot_number__auction=self)
+        # Unwatched lots too: the chart counts when people watched.
+        watches = Watch.all_objects.filter(lot_number__auction=self)
+
+        future = [date_start + i * day > now for i in range(bins)]
+
+        def binned(queryset, field):
+            # Only the window: bin_data reads every row it's given.
+            queryset = queryset.filter(**{f"{field}__gte": date_start, f"{field}__lt": date_end})
+            counts = bin_data(queryset, field, bins, date_start, date_end)
+            return [None if later else count for count, later in zip(counts, future, strict=True)]
 
         return {
-            "labels": self._get_activity_labels(bins, days_before, days_after, dates_messed_with),
+            "labels": self._get_activity_labels(range(first_offset, first_offset + bins)),
+            "first_offset": first_offset,
             "providers": ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"],
             "data": [
-                bin_data(views, "date_start", bins, date_start, date_end),
-                bin_data(joins, "createdon", bins, date_start, date_end),
-                bin_data(new_lots, "date_posted", bins, date_start, date_end),
-                bin_data(searches, "createdon", bins, date_start, date_end),
-                bin_data(bids, "timestamp", bins, date_start, date_end),
-                bin_data(watches, "createdon", bins, date_start, date_end),
+                binned(views, "date_start"),
+                binned(joins, "createdon"),
+                binned(new_lots, "date_posted"),
+                binned(searches, "createdon"),
+                binned(bids, "timestamp"),
+                binned(watches, "createdon"),
             ],
         }
 
@@ -6236,7 +6244,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
         searches = SearchHistory.objects.filter(user__isnull=False, auction=self).values("user").distinct().count()
         seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
-        watch_qs = Watch.objects.filter(lot_number__auction=self).values("user").distinct()
+        watch_qs = Watch.all_objects.filter(lot_number__auction=self).values("user").distinct()
         watches = watch_qs.count()
         watch_percent = int(watches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         notifications = (
@@ -6477,16 +6485,13 @@ class Auction(CachedPropertiesMixin, models.Model):
 
         return stats
 
-    def _get_activity_labels(self, bins, days_before, days_after, dates_messed_with):
-        """Helper method to generate labels for activity chart"""
-        if dates_messed_with:
-            return [(f"{i - 1} days ago") for i in range(bins, 0, -1)]
-        before = [(f"{i} days before") for i in range(days_before, 0, -1)]
-        after = [(f"{i} days after") for i in range(1, days_after)]
-        midpoint = "start"
-        if self.is_online:
-            midpoint = "end"
-        return before + [midpoint] + after
+    def _get_activity_labels(self, offsets):
+        """ "3 days before", "end" (in person: "start"), "2 days after", one per day offset."""
+        midpoint = "end" if self.is_online else "start"
+        return [
+            f"{-offset} days before" if offset < 0 else f"{offset} days after" if offset else midpoint
+            for offset in offsets
+        ]
 
     def custom_random_counts(self, options, exclude=None):
         """How many live lots here, other than *exclude*, hold each of *options*, keyed by the option
@@ -7470,9 +7475,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
         if self.user:
             # The join reminder's row and the promo's row, when there are both.
-            AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").update(
-                result="JOINED"
-            )
+            # ERR stays: that reminder was never sent.
+            AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(
+                result__in=["JOINED", "ERR"]
+            ).update(result="JOINED")
 
     @cached_property
     def display_name_for_admins(self):
@@ -11453,8 +11459,18 @@ class Bid(InvalidatesRelatedCache, models.Model):
         moving.update(user=to_user)
 
 
+class WatchManager(models.Manager):
+    """Watches still on: un-watching sets ``is_deleted``, and ``Watch.all_objects`` keeps them for stats."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+
+
 class Watch(InvalidatesRelatedCache, models.Model):
-    """Users can watch lots: listed on their page, with an email before the end."""
+    """Users can watch lots: listed on their page, with an email before the end.
+
+    Un-watching is a soft delete, so an auction's stats still count everyone who watched.
+    """
 
     # Lot.number_of_watchers
     invalidates_cache_on = ("lot_number",)
@@ -11462,6 +11478,27 @@ class Watch(InvalidatesRelatedCache, models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
     createdon = models.DateTimeField(auto_now_add=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
+
+    objects = WatchManager()
+    all_objects = models.Manager()
+
+    @classmethod
+    def set_watching(cls, user, lot, watching):
+        """Watch or un-watch *lot* for *user*; watching again revives the old row."""
+        if watching:
+            watch = cls.all_objects.filter(lot_number=lot, user=user).order_by("is_deleted", "pk").first()
+            if not watch:
+                cls.objects.create(lot_number=lot, user=user)
+            elif watch.is_deleted:
+                # Counted on the activity chart as a new watch, the day it happens.
+                watch.is_deleted = False
+                watch.createdon = timezone.now()
+                watch.save(update_fields=["is_deleted", "createdon"])
+        else:
+            cls.objects.filter(lot_number=lot, user=user).update(is_deleted=True)
+        # Lot.number_of_watchers
+        lot.invalidate_cached_properties()
 
     def __str__(self):
         return str(self.user) + " watching " + str(self.lot_number)
@@ -12052,6 +12089,8 @@ class UserData(CachedPropertiesMixin, models.Model):
             merge_unique_relation(AuctionIgnore, "auction_id")
             merge_unique_relation(UserIgnoreCategory, "category_id")
             merge_unique_relation(Watch, "lot_number_id")
+            # Un-watched rows aren't unique, and are only kept for stats.
+            Watch.all_objects.filter(user=source_user, is_deleted=True).update(user=user_to_merge_to)
             merge_unique_relation(ChatSubscription, "lot_id", merge=merge_chat_subscription)
             updated_interest_ids = set()
             existing_interests = {
@@ -13316,6 +13355,42 @@ class AuctionCampaign(CachedPropertiesMixin, models.Model):
         db_index=True,
     )
     email_sent = models.BooleanField(default=False)
+
+    #: The reminder goes out at least this long after the view (``auctiontos_notifications``).
+    REMINDER_DELAY = datetime.timedelta(hours=24)
+
+    @classmethod
+    def reminder_stats(cls, view_campaigns):
+        """How many of *view_campaigns* (``KIND_VIEW`` rows) were sent a join reminder, and the share of
+        those who opened its link and who joined after it.
+
+        Sent: ``auctiontos_notifications`` picked the row up and didn't mark it ``ERR``, and the person
+        hadn't joined by the time it could have gone out (a join that early made it ``ERR`` once, but
+        any later save of their AuctionTOS used to turn it back into ``JOINED``). Opened: a page view
+        carries the row's ``src``; ``VIEWED`` alone misses everyone who went on to join.
+        """
+        joined = AuctionTOS.objects.filter(user=OuterRef("user"), auction=OuterRef("auction"))
+        early_join = joined.filter(
+            createdon__lt=ExpressionWrapper(
+                OuterRef("timestamp") + cls.REMINDER_DELAY, output_field=models.DateTimeField()
+            )
+        )
+        counts = (
+            view_campaigns.filter(email_sent=True, user__isnull=False, auction__isnull=False)
+            .exclude(result="ERR")
+            .exclude(Exists(early_join))
+            .aggregate(
+                sent=Count("pk"),
+                opened=Count("pk", filter=Exists(PageView.objects.filter(source=OuterRef("uuid")))),
+                joined=Count("pk", filter=Exists(joined)),
+            )
+        )
+        sent = counts["sent"]
+        return {
+            "sent": sent,
+            "click_rate": counts["opened"] / sent * 100 if sent else 0,
+            "join_rate": counts["joined"] / sent * 100 if sent else 0,
+        }
 
     @staticmethod
     def promo_key_for(auction, user):

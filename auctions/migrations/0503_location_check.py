@@ -34,7 +34,7 @@ def forwards(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0501_tap_to_pay_launch_email"),
+        ("auctions", "0502_watch_is_deleted"),
         ("post_office", "0011_models_help_text"),
     ]
 
