@@ -495,6 +495,9 @@ class MobileLabelBatchTests(StandardTestCase):
                 auctiontos_seller=self.lot.auctiontos_seller,
                 user=self.lot.user,
                 quantity=1,
+                # Sold: an online lot has no label until it is (Lot.label_can_be_printed).
+                auctiontos_winner=self.lot.auctiontos_winner,
+                winning_price=10,
             )
             for i in range(2)
         ]
@@ -507,6 +510,14 @@ class MobileLabelBatchTests(StandardTestCase):
         body = self._post({"lots": pks}).json()
         self.assertEqual([entry["lot"] for entry in body["labels"]], pks)
         self.assertEqual(body["remaining"], [])
+
+    def test_an_unsold_online_lot_is_skipped(self):
+        unsold = Lot.objects.create(
+            lot_name="not yet", auction=self.lot.auction, auctiontos_seller=self.lot.auctiontos_seller, quantity=1
+        )
+        body = self._post({"lots": [unsold.pk]}).json()
+        self.assertEqual(body["labels"], [])
+        self.assertEqual([entry["lot"] for entry in body["skipped"]], [unsold.pk])
 
     def test_each_entry_is_a_png(self):
         entry = self._post({"lots": [self.lot.pk]}).json()["labels"][0]

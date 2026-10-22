@@ -1430,6 +1430,7 @@ EXCLUDED: dict[str, str] = {
     "club_member_apple_wallet": _TOKEN,
     "club_member_apple_wallet_by_uuid": _TOKEN,
     "account_deleted": "Shown once, after the account is already gone and the user is signed out.",
+    "upload_too_large": "Shown by nginx in place of its own page when an upload is over its size limit.",
     # Infrastructure
     "site_webmanifest": _INFRA,
     "command_palette": _INFRA,

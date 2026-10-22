@@ -331,6 +331,7 @@ urlpatterns = [
     re_path(r"^mcp/admin/?$", AdminMCPEndpointView.as_view(), name="mcp_admin"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
+    path("upload-too-large/", views.UploadTooLarge.as_view(), name="upload_too_large"),
     path("account/", views.MyAccount.as_view(), name="account"),
     path("account/setup/", views.AccountSetupRedirect.as_view(), name="account_setup"),
     path("invoices/", login_required(views.Invoices.as_view()), name="my_invoices"),

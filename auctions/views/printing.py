@@ -465,6 +465,9 @@ class SingleLotLabelView(LotLabelView):
                 "You can't print labels for other people's lots unless you are an admin",
             )
             return redirect(reverse("home"))
+        if not self.lot.label_can_be_printed:
+            messages.error(request, Lot.LABEL_NOT_SOLD_REASON)
+            return redirect(self.lot.lot_link)
         # ?format=png or ?fmt=png returns one PNG like the mobile endpoint, with
         # ?resolution=WIDTHxHEIGHT&dpi=N (default 600x400 @ 203dpi).
         if (request.GET.get("format") or request.GET.get("fmt")) == "png":
