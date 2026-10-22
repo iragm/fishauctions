@@ -9,8 +9,10 @@ speakers, volunteers, printing, mobile, voice.
 A `.delay()` from a signal must go inside transaction.on_commit.
 """
 
+import collections
 import datetime
 import logging
+import math
 import re
 import secrets
 import statistics
@@ -5625,38 +5627,38 @@ class Auction(CachedPropertiesMixin, models.Model):
         return AuctionCampaign.objects.filter(auction=self.pk, kind=AuctionCampaign.KIND_VIEW).order_by("-timestamp")
 
     @cached_property
-    def number_of_reminder_emails(self):
-        return self.campaigns_qs.exclude(result="ERR").count()
+    def reminder_stats(self):
+        """Join reminders actually sent here (``AuctionCampaign.reminder_stats``)."""
+        return AuctionCampaign.reminder_stats(self.campaigns_qs)
 
     @cached_property
-    def reminder_email_clicks(self):
-        if self.number_of_reminder_emails == 0:
-            return 0
-        return (
-            self.campaigns_qs.exclude(result="ERR").exclude(result="NONE").count()
-            / self.number_of_reminder_emails
-            * 100
+    def all_auctions_reminder_stats(self):
+        """The same for every auction, over every campaign there is: worked out once an hour."""
+        return cache.get_or_set(
+            "all_auctions_reminder_stats",
+            lambda: AuctionCampaign.reminder_stats(AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW)),
+            60 * 60,
         )
 
-    @cached_property
+    @property
+    def number_of_reminder_emails(self):
+        return self.reminder_stats["sent"]
+
+    @property
+    def reminder_email_clicks(self):
+        return self.reminder_stats["click_rate"]
+
+    @property
     def reminder_email_joins(self):
-        if self.number_of_reminder_emails == 0:
-            return 0
-        return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
+        return self.reminder_stats["join_rate"]
 
-    @cached_property
+    @property
     def all_auctions_reminder_email_clicks(self):
-        campaigns = AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW).exclude(result="ERR")
-        if not campaigns.exists():
-            return 0
-        return campaigns.exclude(result="NONE").count() / campaigns.count() * 100
+        return self.all_auctions_reminder_stats["click_rate"]
 
-    @cached_property
+    @property
     def all_auctions_reminder_email_joins(self):
-        campaigns = AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW).exclude(result="ERR")
-        if not campaigns.exists():
-            return 0
-        return campaigns.filter(result="JOINED").count() / campaigns.count() * 100
+        return self.all_auctions_reminder_stats["join_rate"]
 
     @cached_property
     def promo_stats(self):
@@ -5750,6 +5752,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         ):
             return True
         return False
+
+    @cached_property
+    def admin_checklist_basics_done(self):
+        """Created, rules edited and location set: all an experienced creator needs the setup box for."""
+        return bool(self.admin_checklist_rules_updated and self.admin_checklist_location_set)
 
     @cached_property
     def admin_checklist_completed(self):
@@ -5905,43 +5912,50 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"labels": [], "providers": [], "data": []}
 
     def set_stat_activity(self):
-        """Calculate and return activity chart data"""
+        """Activity per day, counted from the auction's end (online) or start (in person).
+
+        Bin ``i`` is day ``first_offset + i`` from that anchor, and the chart lines a compared
+        auction up by it. Normally 16 days before to 4 after, kept there while the auction runs with
+        days still to come as ``None`` (a gap); an auction more than 6 days off shows its last 21
+        days instead, so there is something to see.
+        """
         bins = 21
-        days_before = 16
-        days_after = bins - days_before
-        dates_messed_with = False
-
-        if self.is_online:
-            date_start = self.date_end - timezone.timedelta(days=days_before)
-            date_end = self.date_end + timezone.timedelta(days=days_after)
-        else:  # in person
-            date_start = self.date_start - timezone.timedelta(days=days_before)
-            date_end = self.date_start + timezone.timedelta(days=days_after)
-
-        # A future date_end shifts the graph to the same range ending now.
-        if date_end > timezone.now():
-            time_difference = date_end - date_start
-            date_end = timezone.now()
-            date_start = date_end - time_difference
-            dates_messed_with = True
+        day = timezone.timedelta(days=1)
+        anchor = self.date_end if self.is_online else self.date_start
+        now = timezone.now()
+        first_offset = -16
+        if anchor > now + 6 * day:
+            first_offset = -math.ceil((anchor - now) / day) - 15
+        date_start = anchor + first_offset * day
+        date_end = date_start + bins * day
 
         views = self.page_views
         joins = AuctionTOS.objects.filter(auction=self)
         new_lots = Lot.objects.filter(auction=self)
         searches = SearchHistory.objects.filter(auction=self)
         bids = LotHistory.objects.filter(lot__auction=self, changed_price=True)
-        watches = Watch.objects.filter(lot_number__auction=self)
+        # Unwatched lots too: the chart counts when people watched.
+        watches = Watch.all_objects.filter(lot_number__auction=self)
+
+        future = [date_start + i * day > now for i in range(bins)]
+
+        def binned(queryset, field):
+            # Only the window: bin_data reads every row it's given.
+            queryset = queryset.filter(**{f"{field}__gte": date_start, f"{field}__lt": date_end})
+            counts = bin_data(queryset, field, bins, date_start, date_end)
+            return [None if later else count for count, later in zip(counts, future, strict=True)]
 
         return {
-            "labels": self._get_activity_labels(bins, days_before, days_after, dates_messed_with),
+            "labels": self._get_activity_labels(range(first_offset, first_offset + bins)),
+            "first_offset": first_offset,
             "providers": ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"],
             "data": [
-                bin_data(views, "date_start", bins, date_start, date_end),
-                bin_data(joins, "createdon", bins, date_start, date_end),
-                bin_data(new_lots, "date_posted", bins, date_start, date_end),
-                bin_data(searches, "createdon", bins, date_start, date_end),
-                bin_data(bids, "timestamp", bins, date_start, date_end),
-                bin_data(watches, "createdon", bins, date_start, date_end),
+                binned(views, "date_start"),
+                binned(joins, "createdon"),
+                binned(new_lots, "date_posted"),
+                binned(searches, "createdon"),
+                binned(bids, "timestamp"),
+                binned(watches, "createdon"),
             ],
         }
 
@@ -6110,6 +6124,75 @@ class Auction(CachedPropertiesMixin, models.Model):
         }
 
     @property
+    def get_stat_join_sources(self):
+        """Join sources chart data from cached stats."""
+        if self.cached_stats and "join_sources" in self.cached_stats:
+            return self.cached_stats["join_sources"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_join_sources(self):
+        """How the people who joined found this auction, from the first view of it before joining that says.
+
+        A view says when it carries an arrival ``?src=``/``?utm_source=`` (not one of our own pages'
+        :data:`PageView.INTERNAL_SOURCES`) or another site's referrer. Where the link was pasted beats
+        "a copied link", so a ``copied_link`` view with an outside referrer counts as that referrer. The
+        anonymous views a joiner made before signing in count too, through ``SignInStitch``. Two queries
+        on this auction's views, bounded to its joiners and to before the last join. Views from before
+        2026-09-09 name only a lot, so older auctions are mostly "No link tracked".
+        """
+        from django.contrib.sites.models import Site
+
+        joined = dict(
+            AuctionTOS.objects.filter(auction=self, user__isnull=False, manually_added=False).values_list(
+                "user_id", "createdon"
+            )
+        )
+        first = {}
+        if joined:
+            # Referrers are stored without a scheme (``views.ajax.clean_referrer``).
+            domain = Site.objects.get_current().domain
+            says = (Q(source__gt="") & ~Q(source__in=PageView.INTERNAL_SOURCES)) | (
+                Q(referrer__gt="") & ~Q(referrer__startswith=domain)
+            )
+            views = PageView.objects.filter(says, auction=self, date_start__lte=max(joined.values()))
+            columns = ("source", "referrer", "date_start")
+            rows = list(views.filter(user_id__in=list(joined)).values_list("user_id", *columns))
+            stitched = dict(SignInStitch.objects.filter(user_id__in=list(joined)).values_list("session_id", "user_id"))
+            if stitched:
+                rows += [
+                    (stitched[session_id], *rest)
+                    for session_id, *rest in views.filter(user__isnull=True, session_id__in=list(stitched)).values_list(
+                        "session_id", *columns
+                    )
+                ]
+            for user_id, source, referrer, date_start in sorted(rows, key=lambda row: row[3]):
+                if user_id in first or date_start > joined[user_id]:
+                    continue
+                outside_referrer = referrer and not referrer.startswith(domain)
+                if (
+                    source
+                    and source not in PageView.INTERNAL_SOURCES
+                    and not (source == "copied_link" and outside_referrer)
+                ):
+                    first[user_id] = ("source", source)
+                elif outside_referrer:
+                    first[user_id] = ("referrer", referrer)
+        labels = PageView.source_labels({value for kind, value in first.values() if kind == "source"})
+        counts = collections.Counter()
+        for user_id in joined:
+            kind, value = first.get(user_id, ("source", ""))
+            if kind == "referrer":
+                counts[value.split("/")[0]] += 1
+            else:
+                counts[labels.get(value, PageView.SOURCE_LABELS[""])] += 1
+        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return {
+            "labels": [label for label, _ in ordered],
+            "providers": ["People who joined"],
+            "data": [[count for _, count in ordered]],
+        }
+
+    @property
     def get_stat_travel_distance(self):
         """Get travel distance chart data from cached stats"""
         if self.cached_stats and "travel_distance" in self.cached_stats:
@@ -6231,7 +6314,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
         searches = SearchHistory.objects.filter(user__isnull=False, auction=self).values("user").distinct().count()
         seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
-        watch_qs = Watch.objects.filter(lot_number__auction=self).values("user").distinct()
+        watch_qs = Watch.all_objects.filter(lot_number__auction=self).values("user").distinct()
         watches = watch_qs.count()
         watch_percent = int(watches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         notifications = (
@@ -6438,6 +6521,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         stats["auctioneer_speed"] = self.set_stat_auctioneer_speed()
         stats["lot_sell_prices"] = self.set_stat_lot_sell_prices()
         stats["referrers"] = self.set_stat_referrers()
+        stats["join_sources"] = self.set_stat_join_sources()
         stats["travel_distance"] = self.set_stat_travel_distance()
         stats["previous_auctions"] = self.set_stat_previous_auctions()
         stats["lots_submitted"] = self.set_stat_lots_submitted()
@@ -6472,16 +6556,13 @@ class Auction(CachedPropertiesMixin, models.Model):
 
         return stats
 
-    def _get_activity_labels(self, bins, days_before, days_after, dates_messed_with):
-        """Helper method to generate labels for activity chart"""
-        if dates_messed_with:
-            return [(f"{i - 1} days ago") for i in range(bins, 0, -1)]
-        before = [(f"{i} days before") for i in range(days_before, 0, -1)]
-        after = [(f"{i} days after") for i in range(1, days_after)]
-        midpoint = "start"
-        if self.is_online:
-            midpoint = "end"
-        return before + [midpoint] + after
+    def _get_activity_labels(self, offsets):
+        """ "3 days before", "end" (in person: "start"), "2 days after", one per day offset."""
+        midpoint = "end" if self.is_online else "start"
+        return [
+            f"{-offset} days before" if offset < 0 else f"{offset} days after" if offset else midpoint
+            for offset in offsets
+        ]
 
     def custom_random_counts(self, options, exclude=None):
         """How many live lots here, other than *exclude*, hold each of *options*, keyed by the option
@@ -6729,6 +6810,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     confirm_email_sent = models.BooleanField(default=False, blank=True)
     second_confirm_email_sent = models.BooleanField(default=False, blank=True)
     print_reminder_email_sent = models.BooleanField(default=False, blank=True)
+    # The "is your location right?" email to someone who joined from far away. See auctiontos_notifications.
+    location_check_email_sent = models.BooleanField(default=False, blank=True)
     is_admin = models.BooleanField(
         default=False,
         verbose_name="Grant admin permissions to help run this auction",
@@ -7463,9 +7546,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
 
         if self.user:
             # The join reminder's row and the promo's row, when there are both.
-            AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").update(
-                result="JOINED"
-            )
+            # ERR stays: that reminder was never sent.
+            AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(
+                result__in=["JOINED", "ERR"]
+            ).update(result="JOINED")
 
     @cached_property
     def display_name_for_admins(self):
@@ -7692,6 +7776,20 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
                 )
                 return location.distance
         return -1
+
+    @property
+    def distance_traveled_for_user(self):
+        """``distance_traveled`` in this person's own unit, for their emails."""
+        from auctions.templatetags.distance_filters import distance_display
+
+        return distance_display(self.distance_traveled, self.user)
+
+    @property
+    def distance_traveled_for_organizer(self):
+        """``distance_traveled`` in the auction creator's unit, for the organizer's emails."""
+        from auctions.templatetags.distance_filters import distance_display
+
+        return distance_display(self.distance_traveled, self.auction.created_by)
 
     @cached_property
     def previous_auctions_count(self):
@@ -9626,7 +9724,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         counts["total"] = sum(counts.values())
         return counts
 
-    # Labels for our own ``src`` values; anything else shows raw.
+    # Labels for the lot page's own ``src`` values; the rest are PageView.SOURCE_LABELS.
     PAGE_VIEW_SOURCE_LABELS = {
         "": "Opened the lot page directly",
         "ar": '"Open lot page" from lot scanning',
@@ -9634,13 +9732,6 @@ class Lot(CachedPropertiesMixin, models.Model):
         "ar_zoom": "Aimed at this label up close while scanning",
         "ar_zoom_full": "Held on the label until the lot card opened",
         "qr": "Scanned the printed QR code",
-        "lot_list": "From a lot list",
-        "recommended": "From recommended lots",
-        "feedback": "From the leave-feedback page",
-        "invoice_sold": "From an invoice (sold)",
-        "invoice_bought": "From an invoice (bought)",
-        "userpage": "From a user's page",
-        "ban_page": "From the no-show page",
     }
     # AR sources are one row per (user, lot), so views equal people.
     AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
@@ -9648,33 +9739,11 @@ class Lot(CachedPropertiesMixin, models.Model):
     @cached_property
     def page_view_source_breakdown(self):
         """Page views grouped by ``src`` with unique viewers (users plus anonymous sessions), most first. One
-        query. None and "" are merged.
+        query, plus one when a join reminder or promotion sent anyone. Rows with the same label are merged.
         """
-        rows = (
-            PageView.objects.filter(lot_number=self.lot_number)
-            .values("source")
-            .annotate(
-                views=Count("pk"),
-                users=Count("user", distinct=True),
-                sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
-            )
+        return PageView.source_breakdown(
+            PageView.objects.filter(lot_number=self.lot_number), self.PAGE_VIEW_SOURCE_LABELS
         )
-        merged = {}
-        for row in rows:
-            source = row["source"] or ""
-            entry = merged.setdefault(
-                source,
-                {
-                    "source": source,
-                    "label": self.PAGE_VIEW_SOURCE_LABELS.get(source, source),
-                    "is_ar_event": source in self.AR_PAGE_VIEW_SOURCES,
-                    "views": 0,
-                    "unique": 0,
-                },
-            )
-            entry["views"] += row["views"]
-            entry["unique"] += row["users"] + row["sessions"]
-        return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
     @cached_property
     def number_of_bids(self):
@@ -11445,8 +11514,18 @@ class Bid(InvalidatesRelatedCache, models.Model):
         moving.update(user=to_user)
 
 
+class WatchManager(models.Manager):
+    """Watches still on: un-watching sets ``is_deleted``, and ``Watch.all_objects`` keeps them for stats."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+
+
 class Watch(InvalidatesRelatedCache, models.Model):
-    """Users can watch lots: listed on their page, with an email before the end."""
+    """Users can watch lots: listed on their page, with an email before the end.
+
+    Un-watching is a soft delete, so an auction's stats still count everyone who watched.
+    """
 
     # Lot.number_of_watchers
     invalidates_cache_on = ("lot_number",)
@@ -11454,6 +11533,27 @@ class Watch(InvalidatesRelatedCache, models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
     createdon = models.DateTimeField(auto_now_add=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
+
+    objects = WatchManager()
+    all_objects = models.Manager()
+
+    @classmethod
+    def set_watching(cls, user, lot, watching):
+        """Watch or un-watch *lot* for *user*; watching again revives the old row."""
+        if watching:
+            watch = cls.all_objects.filter(lot_number=lot, user=user).order_by("is_deleted", "pk").first()
+            if not watch:
+                cls.objects.create(lot_number=lot, user=user)
+            elif watch.is_deleted:
+                # Counted on the activity chart as a new watch, the day it happens.
+                watch.is_deleted = False
+                watch.createdon = timezone.now()
+                watch.save(update_fields=["is_deleted", "createdon"])
+        else:
+            cls.objects.filter(lot_number=lot, user=user).update(is_deleted=True)
+        # Lot.number_of_watchers
+        lot.invalidate_cached_properties()
 
     def __str__(self):
         return str(self.user) + " watching " + str(self.lot_number)
@@ -11530,6 +11630,109 @@ class PageView(CachedPropertiesMixin, models.Model):
         ),
         default="UNKNOWN",
     )
+
+    #: Readable names for our own ``?src=`` / ``?utm_source=`` values. Anything else (a club's API key name,
+    #: another site's ``utm_source``) shows as written; a campaign's uuid is looked up (:meth:`source_labels`).
+    SOURCE_LABELS = {
+        "": "No link tracked",
+        "copied_link": "A copied link",
+        "lot_list": "From a lot list",
+        "lot_tile": "From a lot list",
+        "recommended": "From recommended lots",
+        "my_lots": "From the selling page",
+        "buying": "From the buying page",
+        "feedback": "From the leave-feedback page",
+        "invoice_sold": "From an invoice (sold)",
+        "invoice_bought": "From an invoice (bought)",
+        "userpage": "From a user's page",
+        "ban_page": "From the no-show page",
+        "chat": "From the messages page",
+        "chat_notification": "From a new-messages email",
+        "email": "From a watched-lots email",
+        "outbid": "From an outbid email",
+        "notification": "From an invoice email",
+        "weekly_email": "From the weekly email",
+        "admin": "From an admin page",
+        "twitter": "Shared on X (Twitter)",
+        "facebook": "Shared on Facebook",
+        "qr": "Scanned a printed QR code",
+        "ar": "From lot scanning in the app",
+        "ar_scan": "Scanned a label in the app",
+        "ar_zoom": "Aimed at a label up close in the app",
+        "ar_zoom_full": "Held on a label in the app",
+    }
+    #: Links between our own pages: how someone moved around once here, not how they arrived.
+    INTERNAL_SOURCES = (
+        "lot_list",
+        "lot_tile",
+        "recommended",
+        "my_lots",
+        "buying",
+        "feedback",
+        "invoice_sold",
+        "invoice_bought",
+        "userpage",
+        "ban_page",
+        "chat",
+        "admin",
+    )
+    _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+    @classmethod
+    def source_labels(cls, sources, overrides=None):
+        """``{source: label}`` for ``sources``. A source that is an ``AuctionCampaign`` uuid (join reminder and
+        promotion links carry one) is named for its campaign: one query, only when there are any.
+        """
+        labels = {**cls.SOURCE_LABELS, **(overrides or {})}
+        result = {source: labels.get(source, source) for source in sources}
+        uuids = [source for source in sources if source and cls._UUID.match(source)]
+        if uuids:
+            for uuid, kind, source in AuctionCampaign.objects.filter(uuid__in=uuids).values_list(
+                "uuid", "kind", "source"
+            ):
+                if kind == AuctionCampaign.KIND_VIEW:
+                    result[uuid] = "From a join reminder email"
+                elif source == AuctionCampaign.SOURCE_PROMO_PUSH:
+                    result[uuid] = "From a promotion in the app"
+                else:
+                    result[uuid] = "From a promotion email"
+        return result
+
+    @classmethod
+    def source_breakdown(cls, page_views, overrides=None):
+        """``page_views`` grouped by source, labelled, most viewed first: ``source`` (the first), ``sources``
+        (all of them), ``label``, ``is_ar_event``, ``views`` and ``unique`` (users plus anonymous sessions). None
+        and "" are one source, and sources that share a label are one row.
+        """
+        rows = list(
+            page_views.values("source").annotate(
+                views=Count("pk"),
+                users=Count("user", distinct=True),
+                sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
+            )
+        )
+        labels = cls.source_labels({row["source"] or "" for row in rows}, overrides)
+        merged = {}
+        for row in rows:
+            source = row["source"] or ""
+            label = labels[source]
+            entry = merged.setdefault(
+                label,
+                {
+                    "source": source,
+                    "sources": [],
+                    "label": label,
+                    "is_ar_event": source in Lot.AR_PAGE_VIEW_SOURCES,
+                    "views": 0,
+                    "unique": 0,
+                },
+            )
+            if source not in entry["sources"]:
+                entry["sources"].append(source)
+            entry["is_ar_event"] = entry["is_ar_event"] or source in Lot.AR_PAGE_VIEW_SOURCES
+            entry["views"] += row["views"]
+            entry["unique"] += row["users"] + row["sessions"]
+        return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
     def __str__(self):
         thing = self.url
@@ -11723,6 +11926,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     location_coordinates.help_text = (
         "Make sure your map marker is correctly placed - you will get notifications about nearby auctions"
     )
+    location_confirmed = models.BooleanField(default=False, blank=True, verbose_name="Yes, my location is accurate")
     last_ip_address = models.CharField(max_length=100, blank=True, null=True)
     email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
     email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen.  If you'd like to get a notification right away, <a href='https://github.com/iragm/fishauctions/issues/224'>leave a comment here</a>"
@@ -12043,6 +12247,8 @@ class UserData(CachedPropertiesMixin, models.Model):
             merge_unique_relation(AuctionIgnore, "auction_id")
             merge_unique_relation(UserIgnoreCategory, "category_id")
             merge_unique_relation(Watch, "lot_number_id")
+            # Un-watched rows aren't unique, and are only kept for stats.
+            Watch.all_objects.filter(user=source_user, is_deleted=True).update(user=user_to_merge_to)
             merge_unique_relation(ChatSubscription, "lot_id", merge=merge_chat_subscription)
             updated_interest_ids = set()
             existing_interests = {
@@ -13307,6 +13513,42 @@ class AuctionCampaign(CachedPropertiesMixin, models.Model):
         db_index=True,
     )
     email_sent = models.BooleanField(default=False)
+
+    #: The reminder goes out at least this long after the view (``auctiontos_notifications``).
+    REMINDER_DELAY = datetime.timedelta(hours=24)
+
+    @classmethod
+    def reminder_stats(cls, view_campaigns):
+        """How many of *view_campaigns* (``KIND_VIEW`` rows) were sent a join reminder, and the share of
+        those who opened its link and who joined after it.
+
+        Sent: ``auctiontos_notifications`` picked the row up and didn't mark it ``ERR``, and the person
+        hadn't joined by the time it could have gone out (a join that early made it ``ERR`` once, but
+        any later save of their AuctionTOS used to turn it back into ``JOINED``). Opened: a page view
+        carries the row's ``src``; ``VIEWED`` alone misses everyone who went on to join.
+        """
+        joined = AuctionTOS.objects.filter(user=OuterRef("user"), auction=OuterRef("auction"))
+        early_join = joined.filter(
+            createdon__lt=ExpressionWrapper(
+                OuterRef("timestamp") + cls.REMINDER_DELAY, output_field=models.DateTimeField()
+            )
+        )
+        counts = (
+            view_campaigns.filter(email_sent=True, user__isnull=False, auction__isnull=False)
+            .exclude(result="ERR")
+            .exclude(Exists(early_join))
+            .aggregate(
+                sent=Count("pk"),
+                opened=Count("pk", filter=Exists(PageView.objects.filter(source=OuterRef("uuid")))),
+                joined=Count("pk", filter=Exists(joined)),
+            )
+        )
+        sent = counts["sent"]
+        return {
+            "sent": sent,
+            "click_rate": counts["opened"] / sent * 100 if sent else 0,
+            "join_rate": counts["joined"] / sent * 100 if sent else 0,
+        }
 
     @staticmethod
     def promo_key_for(auction, user):

@@ -217,7 +217,7 @@ def _delete_personal_rows(user):
     PayPalSeller.objects.filter(user=user).delete()
     SquareSeller.objects.filter(user=user).delete()
 
-    Watch.objects.filter(user=user).delete()
+    Watch.all_objects.filter(user=user).delete()
     AbandonedBid.objects.filter(user=user).delete()
     ChatSubscription.objects.filter(user=user).delete()
     SearchHistory.objects.filter(user=user).delete()

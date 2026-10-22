@@ -5907,10 +5907,8 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     watching = _flag(params, "watching")
     if watching is None:
         watching = not (_str(params, "action").lower() in {"unwatch", "remove", "stop"} or params.get("unwatch"))
-    existing = Watch.objects.filter(lot_number=lot, user=user).first()
+    Watch.set_watching(user, lot, watching)
     if watching:
-        if not existing:
-            Watch.objects.create(lot_number=lot, user=user)
         summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is on your watch list."
         followups = [
             {"label": "View this lot", "url": lot.lot_link},
@@ -5932,8 +5930,6 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
                 "describes": f"watching {untrusted_short(lot.lot_name)}",
             },
         )
-    if existing:
-        existing.delete()
     return _ok(
         f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, off your watch list.",
         lot_id=lot.pk,

@@ -188,6 +188,12 @@ body .select2-container--default .select2-search--dropdown .select2-search__fiel
     color: #303030;
 }
 
+/* The dropdown's box sets no background, so under data-bs-theme="dark" (color-scheme: dark) the
+   browser paints the native input dark, and the text above was dark on dark. */
+body .select2-container--default .select2-search--dropdown .select2-search__field {
+    background-color: #fff;
+}
+
 body .select2-container--default .select2-search--inline .select2-search__field::placeholder,
 body .select2-container--default .select2-search--dropdown .select2-search__field::placeholder {
     color: #6c757d;

@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import timedelta
 from random import randint
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -280,9 +281,10 @@ class ToDefaultLandingPage(View):
     """Send the user back to where they left off."""
 
     def tos_check(self, request, auction, routeByLastAuction):
+        # Each page gets its own address back in the browser (base_page_view.html), so it can be copied.
         if not auction:
             if request.user.is_authenticated:
-                return AllLots.as_view()(request)
+                return AllLots.as_view(rewrite_url=reverse("allLots"))(request)
             else:
                 if settings.ENABLE_PROMO_PAGE:
                     # A redirect, not the page drawn here, so its address is the one signed-in users see.
@@ -290,16 +292,16 @@ class ToDefaultLandingPage(View):
                     query = request.META.get("QUERY_STRING")
                     return redirect(reverse("promo") + (f"?{query}" if query else ""))
                 else:
-                    return AllAuctions.as_view()(request)
+                    return AllAuctions.as_view(rewrite_url=reverse("auctions"))(request)
         # Only check TOS if authenticated
         if request.user.is_authenticated and AuctionTOS.objects.filter(user=request.user, auction=auction).exists():
             return AllLots.as_view(
-                rewrite_url=f"/?{auction.slug}",
+                rewrite_url=f"{reverse('allLots')}?{urlencode({'auction': auction.slug})}",
                 auction=auction,
                 routeByLastAuction=routeByLastAuction,
             )(request)
         # Anonymous or not joined – send to auction info page
-        return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
+        return AuctionInfo.as_view(rewrite_url=auction.get_absolute_url(), auction=auction)(request)
 
     def get(self, request, *args, **kwargs):
         data = request.GET.copy()
@@ -397,6 +399,8 @@ class AllAuctions(LocationMixin, HTMxTableView):
     filterset_class = AuctionFilter
     template_name = "all_auctions.html"
     htmx_table_header_template = "auctions/partials/all_auctions_table_header.html"
+    # The address shown when "/" draws this page.
+    rewrite_url = None
     # paginate_by = 100
 
     def get_queryset(self):
@@ -493,6 +497,7 @@ class AllAuctions(LocationMixin, HTMxTableView):
         if self.request.user.is_superuser:
             context["show_new_auction_button"] = True
         context["nearby_filter_active"] = getattr(self, "nearby_filter_active", False)
+        context["rewrite_url"] = self.rewrite_url
         user_has_location = getattr(self, "_user_has_location", False)
         context["user_has_location"] = user_has_location
         if user_has_location and self.request.user.is_authenticated:
