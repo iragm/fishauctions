@@ -308,12 +308,20 @@ class LotHTMxTable(tables.Table):
         result += format_html(
             '<div><a href=\'#\' hx-get="{}" hx-target="#modals-here" hx-trigger="click"'
             ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-            '<i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>'
-            '<div><a href="{}"><i class="bi bi-tag ms-1 me-1"></i>{}</a></div>'
-            '<div><a href="{}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller\'s invoice</a></div>',
+            '<i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>',
             reverse("lot_refund", kwargs={"pk": record.pk}),
-            reverse("single_lot_label", kwargs={"pk": record.pk}),
-            "Reprint label" if record.label_printed else "Print label",
+        )
+        # Lot.label_can_be_printed, read off the table's auction rather than a query per row.
+        if not (self.auction and self.auction.is_online) or (
+            record.auctiontos_winner_id and record.winning_price is not None
+        ):
+            result += format_html(
+                '<div><a href="{}"><i class="bi bi-tag ms-1 me-1"></i>{}</a></div>',
+                reverse("single_lot_label", kwargs={"pk": record.pk}),
+                "Reprint label" if record.label_printed else "Print label",
+            )
+        result += format_html(
+            '<div><a href="{}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller\'s invoice</a></div>',
             record.seller_invoice_link,
         )
         if self.auction and not self.auction.is_online:

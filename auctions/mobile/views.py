@@ -776,6 +776,8 @@ class MobileLotLabelView(APIView):
                 {"detail": "You do not have permission to print this lot's label."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if not lot.label_can_be_printed:
+            return Response({"detail": Lot.LABEL_NOT_SOLD_REASON}, status=status.HTTP_400_BAD_REQUEST)
 
         # Same WeasyPrint pipeline as web SingleLotLabelView.
         fmt = (request.GET.get("fmt") or "").lower()
@@ -850,6 +852,8 @@ class MobileLotLabelBatchView(APIView):
                 skipped.append({"lot": pk, "detail": "Lot not found."})
             elif not MobileLotLabelView._can_access(request.user, lot):
                 skipped.append({"lot": pk, "detail": "You do not have permission to print this lot's label."})
+            elif not lot.label_can_be_printed:
+                skipped.append({"lot": pk, "detail": Lot.LABEL_NOT_SOLD_REASON})
             else:
                 wanted.append(lot)
 

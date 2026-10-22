@@ -860,12 +860,57 @@ def user_can_clone_lot(user, lot) -> bool:
     return bool(lot.user_id and lot.user_id == user.pk)
 
 
-def clone_lot_values(lot) -> dict:
+#: Each custom field, with the auction setting that names it. A value only means something under its
+#: name, so a copy keeps it only where the new auction calls the field the same thing.
+CLONE_CUSTOM_FIELD_NAMES = {
+    "custom_checkbox": "custom_checkbox_name",
+    "custom_field_1": "custom_field_1_name",
+    "custom_dropdown": "custom_dropdown_name",
+}
+_CUSTOM_FIELD_BLANK = {"custom_checkbox": False, "custom_field_1": "", "custom_dropdown": ""}
+
+
+def _same_field_name(a, b) -> bool:
+    return bool(a and b) and a.strip().casefold() == b.strip().casefold()
+
+
+def lot_has_auction_default_minimum(lot) -> bool:
+    """Whether *lot*'s minimum bid is just its auction's minimum, rather than one the seller chose."""
+    return bool(lot.auction_id) and lot.reserve_price == lot.auction.minimum_bid
+
+
+def clone_lot_values(lot, target_auction=None) -> dict:
     """The values a copy of *lot* starts with. Foreign keys come back as instances (form ``initial``); a
     caller building form data swaps in pks. The scientific name is kept unless the target auction has
     the field off.
+
+    Given the auction the copy goes into, a minimum bid that was only the old auction's minimum becomes
+    the new one's, and a custom field's value is kept only if both auctions give the field the same name.
     """
-    return {field: getattr(lot, field) for field in CLONE_LOT_FIELDS}
+    values = {field: getattr(lot, field) for field in CLONE_LOT_FIELDS}
+    if target_auction is None:
+        return values
+    if lot_has_auction_default_minimum(lot):
+        values["reserve_price"] = target_auction.minimum_bid
+    for field, name_setting in CLONE_CUSTOM_FIELD_NAMES.items():
+        old_name = getattr(lot.auction, name_setting, "") if lot.auction_id else ""
+        if not _same_field_name(old_name, getattr(target_auction, name_setting, "")):
+            values[field] = _CUSTOM_FIELD_BLANK[field]
+    return values
+
+
+def clone_lot_hints(lot) -> dict:
+    """What lot_form.html needs to redo ``clone_lot_values`` when the seller picks another auction."""
+    auction = lot.auction if lot.auction_id else None
+    return {
+        "minimum_follows_auction": lot_has_auction_default_minimum(lot),
+        "values": {
+            "custom_checkbox": lot.custom_checkbox,
+            "custom_field_1": lot.custom_field_1 or "",
+            "custom_dropdown": lot.custom_dropdown or "",
+        },
+        "names": {field: (getattr(auction, setting, "") or "") for field, setting in CLONE_CUSTOM_FIELD_NAMES.items()},
+    }
 
 
 def copy_lot_images(original_lot, new_lot):

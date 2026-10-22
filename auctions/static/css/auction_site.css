@@ -1018,3 +1018,7 @@ body.has-unsaved-changes-bar {
 /* The contact form's honeypot (ContactForm.website): off screen rather than display:none, which some
    bots check for. A person never sees it, so only a bot fills it in. */
 #div_id_website { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+/* The SOLD stamp across a sold lot's picture: lot tiles, the lot page and the projector view. Above
+   the carousel, and click-through so the image underneath still works. */
+.sold-stamp { position: absolute; z-index: 3; transform: rotate(-20deg); color: var(--bs-danger); font-weight: 700; pointer-events: none; }

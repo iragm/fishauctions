@@ -263,6 +263,19 @@ class PromoSite(TemplateView):
         return context
 
 
+class UploadTooLarge(TemplateView):
+    """The page nginx shows when a request is over ``client_max_body_size`` (``error_page 413`` in
+    nginx_fishauctions.conf), instead of its own bare one. The status stays 413.
+    """
+
+    template_name = "upload_too_large.html"
+
+    def get(self, request, *args, **kwargs):
+        response = super().get(request, *args, **kwargs)
+        response.status_code = 413
+        return response
+
+
 class ToDefaultLandingPage(View):
     """Send the user back to where they left off."""
 

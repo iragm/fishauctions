@@ -155,7 +155,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6517 lines)
+- **`forms.py`** (6544 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14706 lines)
+- **`models.py`** (14721 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -213,11 +213,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16606 lines)
+- **`palette_actions.py`** (16608 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1965 lines)
+- **`palette_routes.py`** (1966 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -240,7 +240,7 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (854 lines)
   DRF serializers for the club API.
-- **`services.py`** (1503 lines)
+- **`services.py`** (1548 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
@@ -264,7 +264,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1178 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1652 lines)
+- **`tables.py`** (1660 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1882 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -489,6 +489,9 @@ this only quotes its opening sentence.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
 - **`test_lot_money_fixes.py`** (440 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
+- **`test_lot_page_fixes.py`** (223 lines)
+  The lot page and label fixes: the SOLD stamp, online labels only once sold, pasted images, the upload
+  `image_bytes`, `SoldStampTests`, `OnlineLabelsOnlyOnceSoldTests`, `PastedImageTests`, `UploadTooLargeTests`, `CopiedLotTests`, `WatchNoteTests`
 - **`test_lot_page_views.py`** (377 lines)
   The two page-view history modals: one lot's, and every lot on the selling dashboard.
   `PageViewHistoryHelperTests`, `LotPageViewHistoryViewTests`, `SellingDashboardPageViewHistoryTests`
@@ -691,7 +694,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (139 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1350 lines)
+- **`urls.py`** (1351 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -898,7 +901,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
 - **`urls.py`** (141 lines)
-- **`views.py`** (1581 lines)
+- **`views.py`** (1585 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -979,7 +982,7 @@ Every view on the site, split by the part of it the view belongs to.
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1263 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (743 lines)
+- **`auction_extras.py`** (744 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1111 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
@@ -1036,7 +1039,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (387 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1329 lines)
+- **`lot_pages.py`** (1361 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -1051,14 +1054,14 @@ Every view on the site, split by the part of it the view belongs to.
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
 - **`payments.py`** (1075 lines)
   Connecting PayPal and Square accounts and taking payments through them.
-- **`printing.py`** (531 lines)
+- **`printing.py`** (534 lines)
   Labels: what gets drawn on them, and getting them to a printer.
   `LotLabelView`, `UnprintedLotLabelsView`, `SingleLotLabelView`, `RemotePrintJobMixin`, `RemotePrintJobStatusView`, `RemotePrintJobRetryView`, `RemotePrintJobCancelView`
 - **`selling.py`** (1192 lines)
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (688 lines)
+- **`site_pages.py`** (701 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.

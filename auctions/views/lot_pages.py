@@ -27,6 +27,7 @@ from django.db.models.functions import TruncDate
 from django.http import (
     Http404,
     HttpResponseRedirect,
+    JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import date as date_format
@@ -649,6 +650,17 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
     def get_lot(self, request, *args, **kwargs):
         return get_object_or_404(Lot, pk=kwargs["lot"], is_deleted=False)
 
+    @property
+    def is_paste(self):
+        """An image pasted onto the lot page, posted by fetch(): answered in JSON, not a page."""
+        return self.request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    def refuse(self, message):
+        if self.is_paste:
+            return JsonResponse({"error": message}, status=400)
+        messages.error(self.request, message)
+        return redirect(self.get_success_url())
+
     def dispatch(self, request, *args, **kwargs):
         self.lot = self.get_lot(self, request, *args, **kwargs)
         if not self.lot:
@@ -658,14 +670,9 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             )
             return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
         if not self.lot.image_permission_check(request.user):
-            messages.error(request, "You can't add an image to this lot")
-            return redirect(self.get_success_url())
+            return self.refuse("You can't add an image to this lot")
         if self.lot.image_count > 5:
-            messages.error(
-                request,
-                "You can't add another image to this lot.  Delete one and try again",
-            )
-            return redirect(self.get_success_url())
+            return self.refuse("You can't add another image to this lot.  Delete one and try again")
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -699,7 +706,16 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             )
             return self.form_invalid(form)
         # Anything else (permissions, disk, database) is ours: let it 500 so admins hear.
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        if self.is_paste:
+            return JsonResponse({"ok": True})
+        return response
+
+    def form_invalid(self, form):
+        if self.is_paste:
+            errors = [error for field_errors in form.errors.values() for error in field_errors]
+            return JsonResponse({"error": errors[0] if errors else "That image couldn't be added."}, status=400)
+        return super().form_invalid(form)
 
 
 class QuickBulkAddImages(ImageCreateView):
@@ -854,7 +870,7 @@ class LotValidation(LoginRequiredMixin):
                 except Exception as e:
                     logger.exception(e)
             msg = mark_safe("Created lot! ")
-            if not lot.image_count:
+            if not (lot.image_count or form.cleaned_data.get("pasted_image") or form.cleaned_data.get("image_url")):
                 msg += format_html(
                     "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
                     lot.lot_number,
@@ -881,6 +897,22 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
+        pasted_image = form.cleaned_data.get("pasted_image")
+        # ImageCreateView's limit, counted fresh: images were just copied or added from a URL.
+        if pasted_image and LotImage.objects.filter(lot_number=lot).count() <= 5:
+            # A broken file is a message; anything else is ours to hear about.
+            try:
+                LotImage(
+                    lot_number=lot,
+                    image=pasted_image,
+                    is_primary=not LotImage.objects.filter(lot_number=lot).exists(),
+                    image_source="RANDOM",
+                ).save()
+            except IMAGE_PROCESSING_EXCEPTIONS as e:
+                logger.info("Rejected pasted lot image: %s", e)
+                messages.error(
+                    self.request, "We couldn't process the pasted image.  Try adding it again from the lot page."
+                )
         # Record what the seller did with the offered species (never writes the cache). See
         # species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:

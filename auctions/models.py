@@ -779,6 +779,8 @@ class Club(CloudflareImageMixin, models.Model):
         upload_to="club_icons/",
         blank=True,
         null=True,
+        # Kept no bigger than this, like every uploaded image: the original is not stored.
+        resize_source={"size": (1000, 1000), "quality": 90},
         help_text="Square logo shown beside the club name and on Google/Apple Wallet membership cards.",
     )
     google_wallet_class_created = models.BooleanField(
@@ -9013,6 +9015,19 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return True
         return False
 
+    #: Why ``label_can_be_printed`` is False, for every place that would have offered the label.
+    LABEL_NOT_SOLD_REASON = "In an online auction, a lot's label can be printed once it sells."
+
+    @property
+    def label_can_be_printed(self):
+        """An online auction's label goes on the bag handed to the buyer, so only a sold lot has one --
+        the same rule as a whole sheet (``AuctionTOS.print_labels_qs``).
+        """
+        auction = self.auctiontos_seller.auction if self.auctiontos_seller_id else self.auction
+        if auction and auction.is_online:
+            return bool(self.auctiontos_winner_id and self.winning_price is not None)
+        return True
+
     @property
     def bap_placeholder(self):
         """Points label: Culture, HAP or BAP by club settings and category."""
@@ -13150,7 +13165,7 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
 
 
 class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
-    image = ThumbnailerImageField(upload_to="images/", blank=True)
+    image = ThumbnailerImageField(upload_to="images/", blank=True, resize_source={"size": (1000, 1000), "quality": 85})
     campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=50, default="Click here")
     text = models.CharField(max_length=40, blank=True, null=True)

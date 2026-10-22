@@ -529,6 +529,7 @@ class AuctionFinder(APIView):
             result = {
                 "use_categories": self.auction.use_categories,
                 "reserve_price": self.auction.reserve_price,
+                "minimum_bid": self.auction.minimum_bid,
                 "buy_now": self.auction.buy_now,
                 "use_quantity_field": self.auction.use_quantity_field,
                 "custom_checkbox_name": self.auction.custom_checkbox_name,

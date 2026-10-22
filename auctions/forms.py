@@ -97,6 +97,7 @@ from .services import (
     auction_to_copy,
     bidder_number_conflict,
     bidder_number_taken_message,
+    clone_lot_hints,
     clone_lot_values,
     member_holding_bidder_number,
     user_can_clone_lot,
@@ -1397,6 +1398,8 @@ class EditLot(forms.ModelForm):
             Div(
                 HTML(
                     f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
+                    if self.lot.label_can_be_printed
+                    else ""
                 ),
                 HTML(
                     '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
@@ -2994,6 +2997,8 @@ class CreateLotForm(forms.ModelForm):
     #: Set by refreshSpeciesUI() in lot_form.html when the category picker is on screen. While closed,
     #: its posted value is a leftover and gets derived; once opened, it's the user's answer.
     category_shown = forms.BooleanField(required=False, widget=forms.HiddenInput())
+    #: Filled by pasting a picture onto the page (lot_form.html); added to the lot once it is saved.
+    pasted_image = forms.ImageField(required=False, label="", widget=forms.FileInput(attrs={"accept": "image/*"}))
 
     show_payment_pickup_info = forms.BooleanField(required=False, label="Show payment/pickup info")
     AUCTION_CHOICES = [
@@ -3060,6 +3065,9 @@ class CreateLotForm(forms.ModelForm):
         self.cloned_from = kwargs.pop("cloned_from")
         self.auction = kwargs.pop("auction")
         super().__init__(*args, **kwargs)
+        self.clone_source = None
+        #: For lot_form.html to redo the copy's minimum bid and custom fields when the auction changes.
+        self.clone_hints = None
         self.fields["auction"].queryset = self.user.userdata.available_auctions_to_submit_lots
         if self.auction:
             if self.fields["auction"].queryset.filter(pk=self.auction.pk).exists():
@@ -3080,8 +3088,8 @@ class CreateLotForm(forms.ModelForm):
                 clone_from_lot = Lot.objects.filter(pk=self.cloned_from, is_deleted=False).first()
                 # you can only clone your lots
                 if user_can_clone_lot(self.user, clone_from_lot):
-                    for field, value in clone_lot_values(clone_from_lot).items():
-                        self.fields[field].initial = value
+                    # Its values go in once the auction the copy goes into is known, below.
+                    self.clone_source = clone_from_lot
                     self.fields["cloned_from"].initial = int(self.cloned_from)
             # default to making new lots part of a club auction
             self.fields["part_of_auction"].initial = "True"
@@ -3130,6 +3138,11 @@ class CreateLotForm(forms.ModelForm):
             initial_auction = self.fields["auction"].initial
             if initial_auction and isinstance(initial_auction, Auction):
                 selected_auction = initial_auction
+        if self.clone_source:
+            for field, value in clone_lot_values(self.clone_source, selected_auction).items():
+                self.fields[field].initial = value
+            if not self.is_bound:
+                self.clone_hints = clone_lot_hints(self.clone_source)
         self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
         self.fields["custom_dropdown"].required = False
         self.fields["custom_dropdown"].help_text = ""
@@ -3178,6 +3191,7 @@ class CreateLotForm(forms.ModelForm):
             "cloned_from",
             "species_offered",
             "image_url",
+            Div("pasted_image", css_class="d-none"),
             Div(
                 Div(
                     "part_of_auction",
@@ -3211,6 +3225,11 @@ class CreateLotForm(forms.ModelForm):
                         "<span id='species-summary-text'></span>"
                         "<button type='button' id='species-edit' class='btn btn-link btn-sm p-0 ms-1 align-baseline'>"
                         "Change</button></div>"
+                    ),
+                    HTML(
+                        "<div id='pasted-image-preview' class='d-none mb-3'>"
+                        "<img src='' alt='Pasted image' class='img-thumbnail' style='max-height: 150px;'>"
+                        "<div class='text-muted small'>This image is added to the lot when you save</div></div>"
                     ),
                     css_class="col-md-12",
                 ),
@@ -3306,6 +3325,14 @@ class CreateLotForm(forms.ModelForm):
             Submit("submit", "Save", css_class="create-update-lot btn-success mt-1 mr-1"),
             HTML("</span>"),
         )
+
+    def clean_pasted_image(self):
+        """As ``CreateImageForm.clean_image``: a broken picture is a field error, not a 500."""
+        image = self.cleaned_data.get("pasted_image")
+        if isinstance(image, UploadedFile):
+            validate_uploaded_image(image)
+            image = jpeg_safe_upload(image)
+        return image
 
     def clean(self):
         cleaned_data = super().clean()
