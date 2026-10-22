@@ -14,7 +14,7 @@
 {% if can_make_club_admin %}
       <br><form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="make_creator_club_admin" class="btn btn-info btn-sm mt-2">Make {{ auction.created_by.username }} admin of {{ creator_club }}</button></form>
 {% endif %}
-{% if not auction.admin_checklist_completed and not auction.admin_checklist_mostly_completed or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
+{% if not auction.admin_checklist_completed and not auction.admin_checklist_basics_done or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
   <ul class="list-unstyled">
     <li><i class="bi bi-check-square-fill text-success"></i> Create your auction</li>
