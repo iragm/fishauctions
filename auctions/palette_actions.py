@@ -4371,12 +4371,11 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
         # ``query`` matches lot name and species names, so "which daphnia is left" is one call.
         from .species_matching import lots_of_species_q
 
-        user = request.user if request.user.is_authenticated else None
         lots = lots.filter(
             Q(lot_name__icontains=query)
             | Q(species__common_name__icontains=query)
             | Q(species__scientific_name__icontains=query)
-            | (lots_of_species_q(query, user=user) or Q(pk__in=[]))
+            | lots_of_species_q(query, user=request.user)
         )
         label += f" and match “{query}”"
     # Participants can browse every lot anyway; only seller names are admin-only.

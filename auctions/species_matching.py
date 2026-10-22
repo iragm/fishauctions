@@ -419,28 +419,44 @@ def exact_matches(text, user=None, club=None):
 MAX_SEARCH_NAMES = 30
 
 
-def lots_of_species_q(text, user=None, prefix=""):
-    """A ``Q`` for the lot filters: lots of the species *text* names exactly, or ``None``.
+def lots_of_species_q(text, user=None):
+    """A ``Q`` for the lot filters: lots of the species *text* names exactly. Matches nothing otherwise.
 
     Typing "Neocaridina davidi" finds the lots tagged with it or its strains, and the untagged ones
     called "cherry shrimp"; typing a common name finds the ones called by its scientific name. Only an
     exact name expands (:func:`exact_matches`: indexed lookups, at most :data:`MAX_SUGGESTIONS`
-    species), so half-typed text costs three small queries and adds nothing.
+    species), so half-typed text costs a few small queries and adds nothing.
     """
+    nothing = Q(pk__in=[])
+    if len(text or "") < 3 or not re.search(r"[A-Za-z]", text):
+        return nothing
+    if user is not None and not getattr(user, "is_authenticated", False):
+        user = None
     species = exact_matches(text, user=user)
     if not species:
-        return None
+        return nothing
     ids = [each.pk for each in species]
-    names = {each.scientific_name for each in species} | {each.common_name for each in species}
-    names |= set(
-        visible_common_names(user).filter(species_id__in=ids).values_list("name", flat=True)[:MAX_SEARCH_NAMES]
+    # Scientific names first: the slice below keeps them.
+    names = [each.scientific_name for each in species] + [each.common_name for each in species]
+    names += (
+        visible_common_names(user)
+        .filter(species_id__in=ids)
+        .order_by("-is_preferred", "name")
+        .values_list("name", flat=True)[: MAX_SEARCH_NAMES * 3]
     )
-    # Short names ("Ram") would match inside half the lot names on the site.
-    names = sorted(name for name in names if len(name.strip()) >= 4)[:MAX_SEARCH_NAMES]
-    q = Q(**{f"{prefix}species_id__in": ids}) | Q(**{f"{prefix}species__parent_id__in": ids})
+    # Short names ("Ram") match inside other words.
+    names = list(dict.fromkeys(name.strip() for name in names if len(name.strip()) >= 4))
+    # A name other species share ("Pleco") would find every lot of those too.
+    shared = set(
+        SpeciesCommonName.objects.filter(name_normalized__in=[normalize(name) for name in names])
+        .exclude(species_id__in=ids)
+        .values_list("name_normalized", flat=True)
+    )
+    names = [name for name in names if normalize(name) not in shared][:MAX_SEARCH_NAMES]
+    q = Q(species_id__in=ids) | Q(species__parent_id__in=ids)
     if names:
-        # One pass over lot_name, not one LIKE per name. The column's collation ignores case.
-        q |= Q(**{f"{prefix}lot_name__iregex": "|".join(re.escape(name.strip()) for name in names)})
+        # One pass over lot_name, not one LIKE per name. Whole words; the collation ignores case.
+        q |= Q(lot_name__iregex=r"\b(" + "|".join(re.escape(name) for name in names) + r")\b")
     return q
 
 

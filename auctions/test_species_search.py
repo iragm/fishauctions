@@ -45,13 +45,32 @@ class LotSearchBySpeciesTests(StandardTestCase):
         strain_lot = Lot.objects.create(lot_name="Blues", auction=self.online_auction, user=self.user, species=blue)
         self.assertIn(strain_lot, self.found("cherry shrimp"))
 
+    def test_a_name_other_species_share_is_not_expanded(self):
+        from auctions.models import SpeciesCommonName
+
+        amano = make_species("Caridina", "multidentata", "Amano shrimp")
+        for species in (self.shrimp, amano):
+            SpeciesCommonName.objects.create(species=species, name="Dwarf shrimp")
+        Lot.objects.filter(pk=self.other.pk).update(lot_name="Dwarf shrimp mix")
+        self.assertNotIn(self.other, self.found("Neocaridina davidi"))
+
+    def test_names_match_whole_words(self):
+        Lot.objects.filter(pk=self.other.pk).update(lot_name="Bigcherry shrimpy")
+        self.assertNotIn(self.other, self.found("Neocaridina davidi"))
+
+    def test_a_number_asks_nothing(self):
+        with self.assertNumQueries(0):
+            from auctions.species_matching import lots_of_species_q
+
+            lots_of_species_q("123", self.user)
+
     def test_half_a_name_adds_nothing(self):
         self.assertEqual(self.found("Neocar"), {self.by_scientific})
 
     def test_another_persons_unapproved_species_is_not_used(self):
         hidden = make_species("Caridina", "secretus", "Ghost tiger")
         Species.objects.filter(pk=hidden.pk).update(approved=False, added_by=self.user_with_no_lots)
-        Lot.objects.filter(pk=self.other.pk).update(species=hidden)
+        Lot.objects.filter(pk=self.other.pk).update(lot_name="Ghost tiger")
         self.assertEqual(self.found("Caridina secretus"), set())
 
     def test_the_admin_search_without_a_request(self):
@@ -112,18 +131,26 @@ class SpeciesQuickCreateTests(StandardTestCase):
         self.assertFalse(Species.objects.exclude(pk__in=[hidden.pk, self.pleco.pk]).exists())
 
     def test_anything_but_a_scientific_name_is_refused(self):
-        for typed in ["Ancistrus", "Ancistrus 123", "Ancistrus <b>x</b>", "Ancistrus a b c", ""]:
+        for typed in ["Ancistrus", "Ancistrus 123", "Ancistrus <b>x</b>", "Ancistrus a b c", "Ancistrus sp", ""]:
             self.assertEqual(self.client.post(self.url, {"scientific_name": typed}).status_code, 400, typed)
         self.assertEqual(Species.objects.count(), 1)
 
-    def test_the_lot_category_is_kept(self):
+    def test_a_common_name_on_a_real_genus_is_refused(self):
+        response = self.client.post(self.url, {"scientific_name": "Ancistrus plecos"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Ancistrus cirrhosus", response.json()["error"])
+
+    def test_the_genus_category_is_kept(self):
         from auctions.models import Category
 
         plecos = Category.objects.create(name="Plecos")
-        response = self.client.post(self.url, {"scientific_name": "Ancistrus sp. L144", "category": plecos.pk})
+        Species.objects.filter(pk=self.pleco.pk).update(category=plecos, trade_rank=Species.TRADE_RANK_SPECIES)
+        response = self.client.post(self.url, {"scientific_name": "Ancistrus ranunculus"})
         species = Species.objects.get(pk=response.json()["id"])
         self.assertEqual(species.category, plecos)
-        self.assertEqual(species.scientific_name, "Ancistrus sp. l144")
+        # An unreviewed row reorders nothing.
+        self.pleco.refresh_from_db()
+        self.assertEqual(self.pleco.trade_rank, Species.TRADE_RANK_SPECIES)
 
     def test_a_person_can_only_have_so_many_waiting(self):
         Species.objects.bulk_create(

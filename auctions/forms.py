@@ -248,17 +248,16 @@ if (!window.speciesSearchWired) {
       var box = button.closest('[data-species-search]');
       var form = box.closest('form');
       var token = form && form.querySelector('[name=csrfmiddlewaretoken]');
-      var category = form && form.querySelector('[name=species_category]');
       button.disabled = true;
+      function refused(message) { button.replaceWith(document.createTextNode(message || 'Could not add it.')); }
       $.post(box.dataset.speciesCreate, {
         scientific_name: button.dataset.speciesCreate,
-        category: category ? category.value : '',
         csrfmiddlewaretoken: token ? token.value : ''
       }).done(function (data) {
-        choose(box, data.id, data.text);
+        // A signed-out session answers with the login page, not JSON.
+        if (data && data.id) { choose(box, data.id, data.text); } else { refused(); }
       }).fail(function (xhr) {
-        button.replaceWith(document.createTextNode(
-          (xhr.responseJSON && xhr.responseJSON.error) || 'Could not add it.'));
+        refused(xhr.responseJSON && xhr.responseJSON.error);
       });
     });
   })();

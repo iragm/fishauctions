@@ -10,6 +10,8 @@ import re
 from dal import autocomplete
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.models import User
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -30,19 +32,20 @@ from auctions.forms import (
     SpeciesCommonNameForm,
 )
 from auctions.models import (
-    Category,
     Lot,
     Species,
     SpeciesNameRejection,
     SpeciesSearchCache,
     normalize_species_name,
 )
-from auctions.species_matching import remember as remember_species
 from auctions.species_matching import (
+    base_words,
+    singularize,
     species_already_named,
     split_scientific_name,
     visible_species,
 )
+from auctions.species_matching import remember as remember_species
 
 from .base import AdminOnlyViewMixin, AuctionAdminAnywhereViewMixin
 
@@ -178,18 +181,19 @@ class SpeciesApproveView(AdminOnlyViewMixin, View):
 
 #: Species one person may have waiting for review at once: enough for a club's odd fish, too few to
 #: fill the review with junk.
-MAX_PENDING_PER_USER = 25
+MAX_PENDING_PER_USER = 10
 
-#: Genus, epithet in letters, and an optional subspecies or trade code ("Ancistrus sp. L144").
-_QUICK_NAME = re.compile(r"[A-Za-z]+ [A-Za-z.'-]+( [A-Za-z0-9.'-]+)?")
+#: Genus, epithet and an optional subspecies, letters only.
+_QUICK_NAME = re.compile(r"[A-Za-z]+( [A-Za-z.'-]+){1,2}")
 
 
 class SpeciesQuickCreate(LoginRequiredMixin, View):
     """The full-page lot form's "Add": a scientific name the search can't find becomes a species.
 
     Visible only to its author (no club) until the weekly species review approves it or merges it into
-    the species it was a typo of. The genus must already be on the list, or a common name ("cherry
-    shrimp") would become a genus. Answers ``{"id", "text"}`` for the picker, or ``{"error"}``.
+    the species it was a typo of. The genus must already be on the list, and the epithet must not be a
+    word of that genus' common names, or "cherry shrimp" and "Corydoras catfish" would become species.
+    Answers ``{"id", "text"}`` for the picker, or ``{"error"}``.
     """
 
     def post(self, request, *args, **kwargs):
@@ -200,32 +204,36 @@ class SpeciesQuickCreate(LoginRequiredMixin, View):
         existing = species_already_named(genus, epithet, user=request.user)
         if existing:
             return JsonResponse({"id": existing.pk, "text": existing.label})
-        relative = (
-            visible_species(request.user).filter(genus__iexact=genus, is_hybrid=False).order_by("trade_rank").first()
-        )
+        relatives = visible_species(request.user).filter(genus__iexact=genus, is_hybrid=False)
+        relative = relatives.order_by("trade_rank").first()
         if relative is None:
             return JsonResponse({"error": f"{genus} isn't a genus on the list.  Check the spelling."}, status=400)
-        if Species.objects.filter(added_by=request.user, approved=False).count() >= MAX_PENDING_PER_USER:
-            return JsonResponse({"error": "You have plenty of species waiting for review already."}, status=400)
-        chosen = request.POST.get("category") or ""
-        category = Category.objects.filter(pk=int(chosen)).first() if chosen.isdigit() else None
-        species = Species.objects.create(
-            genus=relative.genus,
-            species=epithet,
-            # Family, habitat and category from the genus: what a lot of it is filed under.
-            family=relative.family,
-            order=relative.order,
-            freshwater=relative.freshwater,
-            brackish=relative.brackish,
-            saltwater=relative.saltwater,
-            category=category or relative.category,
-            source="admin",
-            # Somebody is selling it.
-            in_trade_override=True,
-            added_by=request.user,
-            approved=request.user.is_superuser,
-        )
-        Species.recompute_trade_ranks(genus=species.genus)
+        words = set(base_words(epithet)) | {singularize(word) for word in base_words(epithet)}
+        if not words or relatives.filter(common_name_normalized__iregex=rf"\b({'|'.join(words)})\b").exists():
+            return JsonResponse({"error": f"Type the species' scientific name, e.g. {relative.label}."}, status=400)
+        # select_for_update: two quick clicks mustn't both get under the cap.
+        with transaction.atomic():
+            User.objects.select_for_update().filter(pk=request.user.pk).first()
+            if Species.objects.filter(added_by=request.user, approved=False).count() >= MAX_PENDING_PER_USER:
+                return JsonResponse({"error": "You have plenty of species waiting for review already."}, status=400)
+            existing = species_already_named(genus, epithet, user=request.user)
+            if existing:
+                return JsonResponse({"id": existing.pk, "text": existing.label})
+            # Family, habitat and category from the genus. trade_rank is left alone: an unreviewed row
+            # must not reorder the genus for everyone (recompute_trade_ranks runs on approval).
+            species = Species.objects.create(
+                genus=relative.genus,
+                species=epithet,
+                family=relative.family,
+                order=relative.order,
+                freshwater=relative.freshwater,
+                brackish=relative.brackish,
+                saltwater=relative.saltwater,
+                category=relative.category,
+                source="admin",
+                added_by=request.user,
+                approved=request.user.is_superuser,
+            )
         return JsonResponse({"id": species.pk, "text": species.label})
 
 

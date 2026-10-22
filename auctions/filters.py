@@ -63,14 +63,6 @@ TEXT_FILTER_MAX_LENGTH = 200
 TEXT_FILTER_MAX_FRAGMENTS = 5
 
 
-def _species_q(text, user=None):
-    """Lots of the species *text* names exactly, by any of its names (``lots_of_species_q``), or a ``Q``
-    matching nothing extra."""
-    if user is not None and not getattr(user, "is_authenticated", False):
-        user = None
-    return lots_of_species_q(text, user=user) or Q(pk__in=[])
-
-
 class AuctionFilter(django_filters.FilterSet):
     """Filter for the main auctions list"""
 
@@ -467,7 +459,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_dropdown__icontains=value)
                 | Q(custom_random__iexact=value)
                 | Q(auction__title__icontains=value)
-                | _species_q(value, getattr(getattr(self, "request", None), "user", None))
+                | lots_of_species_q(value, getattr(getattr(self, "request", None), "user", None))
             )
         return queryset
 
@@ -1076,7 +1068,7 @@ class LotFilter(django_filters.FilterSet):
                     # branch above, where a number means a lot number.
                     | Q(custom_random__iexact=fragment)
                     | Q(auctiontos_seller__bidder_number=fragment)
-                    | _species_q(fragment, self.user)
+                    | lots_of_species_q(fragment, self.user)
                 )
             return queryset.filter(qList)
 
@@ -1175,7 +1167,7 @@ class BuyingLotFilter(django_filters.FilterSet):
                 | Q(species__scientific_name__icontains=value)
                 | Q(species__common_name__icontains=value)
                 | Q(custom_lot_number=value)
-                | _species_q(value, self.request.user)
+                | lots_of_species_q(value, self.request.user)
             )
             if value.isdecimal():
                 q |= Q(lot_number_int=value)
