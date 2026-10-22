@@ -1429,10 +1429,7 @@ class MobileLotWatchView(APIView):
             return Response({"detail": "Lot not found."}, status=status.HTTP_404_NOT_FOUND)
 
         watch = serializer.validated_data["watch"]
-        if watch:
-            Watch.objects.get_or_create(lot_number=lot, user=request.user)
-        else:
-            Watch.objects.filter(lot_number=lot, user=request.user).delete()
+        Watch.set_watching(request.user, lot, watch)
         return Response({"watched": watch})
 
 

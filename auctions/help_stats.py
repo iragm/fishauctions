@@ -318,7 +318,7 @@ def _watchers(min_people) -> dict:
     people = AuctionTOS.objects.filter(
         user__isnull=False, auction__in=_recent_auctions().filter(is_online=True, promote_this_auction=True)
     )
-    watched = Watch.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
+    watched = Watch.all_objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
     counts = people.aggregate(n=Count("pk"), watching=Count("pk", filter=Exists(watched)))
     return {"online_watchers": _pct(counts["watching"], counts["n"])} if counts["n"] >= min_people else {}
 
