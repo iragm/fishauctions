@@ -915,7 +915,7 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
     # A previous listing supplies photos, description, and (on an exact match) capitalisation.
     previous, name_was_exact = find_lot_to_copy(tos.user, lot_name, exclude_auction=auction)
     if previous:
-        data = clone_lot_values(previous)
+        data = clone_lot_values(previous, auction)
         # Form data, so foreign keys as pks.
         data["species_category"] = previous.species_category_id
         data["species"] = previous.species_id
@@ -1005,7 +1005,7 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
         **({"reused_a_previous_lot": reused} if reused else {}),
         followups=[
             {"label": "View this lot", "url": lot.lot_link},
-            _lot_label_followup(lot),
+            *([_lot_label_followup(lot)] if lot.label_can_be_printed else []),
             *([{"label": "Edit this lot", "url": reverse("edit_lot", kwargs={"pk": lot.pk})}] if previous else []),
         ],
     )
@@ -2251,6 +2251,8 @@ def print_labels(request, params: dict[str, Any]) -> dict[str, Any]:
             allowed = False
         if not allowed:
             return _error("You can only print labels for your own lots, unless you run that auction.")
+        if not lot.label_can_be_printed:
+            return _error(Lot.LABEL_NOT_SOLD_REASON)
         # ``url`` is the label page; the lot link rides as ``lot_url`` (made absolute over MCP).
         echo = _lot_echo(lot)
         echo["lot_url"] = echo.pop("url")
@@ -6174,7 +6176,7 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         **_lot_echo(lot),
         followups=[
             {"label": "View this lot", "url": lot.lot_link},
-            _lot_label_followup(lot),
+            *([_lot_label_followup(lot)] if lot.label_can_be_printed else []),
         ],
         undo={"action": "edit_lot", "params": undo_params, "describes": f"the change to {lot.lot_name}"},
     )

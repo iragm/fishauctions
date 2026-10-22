@@ -9111,6 +9111,19 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return True
         return False
 
+    #: Why ``label_can_be_printed`` is False, for every place that would have offered the label.
+    LABEL_NOT_SOLD_REASON = "In an online auction, a lot's label can be printed once it sells."
+
+    @property
+    def label_can_be_printed(self):
+        """An online auction's label goes on the bag handed to the buyer, so only a sold lot has one --
+        the same rule as a whole sheet (``AuctionTOS.print_labels_qs``).
+        """
+        auction = self.auctiontos_seller.auction if self.auctiontos_seller_id else self.auction
+        if auction and auction.is_online:
+            return bool(self.auctiontos_winner_id and self.winning_price is not None)
+        return True
+
     @property
     def bap_placeholder(self):
         """Points label: Culture, HAP or BAP by club settings and category."""

@@ -1,39 +1,33 @@
 {% extends "base.html" %}
 {{ form.media }}
 {% load crispy_forms_tags %}
+{% load static %}
 {% block extra_js %}
+<script src="{% static 'js/image_paste.js' %}"></script>
 <script type="text/javascript">
 $('#auction-form').submit(function(event){
     $(this).find(':input[type=submit]').prop('disabled', true);
 });
 // Allow pasting an image from the clipboard anywhere on the page
-document.addEventListener('paste', function(e) {
-    const clipboard = e.clipboardData;
-    if (!clipboard) return;
-    let imageItem = null;
-    for (const item of clipboard.items) {
-        if (item.kind === 'file' && item.type.startsWith('image/')) {
-            imageItem = item;
-            break;
-        }
+const imageInput = document.getElementById('id_image');
+function showImageError(message) {
+    let error = document.getElementById('image-size-error');
+    if (!error && !message) return;
+    if (!error) {
+        error = document.createElement('div');
+        error.id = 'image-size-error';
+        error.className = 'text-danger small mb-2';
+        imageInput.insertAdjacentElement('afterend', error);
     }
-    if (!imageItem) return;
-    // If the clipboard also contains text and the user is pasting into a text
-    // field, assume they want the text, not the image
-    const target = e.target;
-    const isTextEntry = target && (target.tagName === 'TEXTAREA' ||
-        (target.tagName === 'INPUT' && !['file', 'checkbox', 'radio', 'submit', 'button'].includes(target.type)));
-    if (isTextEntry && clipboard.getData('text')) return;
-    const file = imageItem.getAsFile();
+    error.textContent = message;
+}
+lotImages.guardInput(imageInput, showImageError);
+document.addEventListener('paste', function(e) {
+    const file = lotImages.fromPaste(e);
     if (!file) return;
     e.preventDefault();
-    const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-    const named = new File([file], 'pasted-image-' + Date.now() + '.' + ext, {type: file.type});
-    const input = document.getElementById('id_image');
-    const dt = new DataTransfer();
-    dt.items.add(named);
-    input.files = dt.files;
-    input.dispatchEvent(new Event('change', {bubbles: true}));
+    lotImages.setInputFile(imageInput, file);
+    imageInput.dispatchEvent(new Event('change', {bubbles: true}));
 });
 // Show a preview whenever an image is selected (pasted or picked from disk)
 document.getElementById('id_image').addEventListener('change', function() {

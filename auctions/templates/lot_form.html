@@ -1,10 +1,43 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
+{% load static %}
 {% block extra_css %}
 <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
 {% endblock %}
 {% block extra_js %}
 <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+<script src="{% static 'js/image_paste.js' %}"></script>
+<script type="text/javascript">
+{% comment %}Paste a picture anywhere on the form and it becomes the lot's image when the lot is saved (CreateLotForm.pasted_image).{% endcomment %}
+document.addEventListener('DOMContentLoaded', function () {
+    var input = document.getElementById('id_pasted_image');
+    var preview = document.getElementById('pasted-image-preview');
+    if (!input || !preview) return;
+    var img = preview.querySelector('img');
+    var note = preview.querySelector('div');
+    var savedNote = note.textContent;
+    document.addEventListener('paste', function (e) {
+        var file = lotImages.fromPaste(e);
+        if (!file) return;
+        e.preventDefault();
+        lotImages.whileBusy(input.form, lotImages.fitForUpload(file)).then(function (small) {
+            lotImages.setInputFile(input, small);
+            if (img.src) URL.revokeObjectURL(img.src);
+            img.src = URL.createObjectURL(small);
+            img.classList.remove('d-none');
+            note.textContent = savedNote;
+            note.classList.remove('text-danger');
+        }, function (error) {
+            lotImages.setInputFile(input, null);
+            img.classList.add('d-none');
+            note.textContent = error.message;
+            note.classList.add('text-danger');
+        }).then(function () {
+            preview.classList.remove('d-none');
+        });
+    });
+});
+</script>
 <script type="text/javascript">
 
 
@@ -175,6 +208,62 @@ function refreshSpeciesUI() {
     $('#species-summary').toggleClass('d-none', speciesRevealed || !summary);
 }
 
+{% comment %}A copied lot: when the seller picks another auction, redo what services.clone_lot_values did for the first one -- the auction's minimum bid unless the old lot set its own, and custom field values only under a field of the same name. The page arrives with that already done for the auction it opens on (or with what the seller posted), so the first answer only notes which fields hold something else: those are the seller's, and are left alone from then on, like anything typed in later.{% endcomment %}
+var cloneHints = (function () {
+    var el = document.getElementById('clone-hints');
+    return el ? JSON.parse(el.textContent) : null;
+})();
+var cloneHintsSeen = false;
+$(function () {
+    $('#id_reserve_price, #id_custom_checkbox, #id_custom_field_1, #id_custom_dropdown').on('input change', function () {
+        $(this).data('seller-edited', true);
+    });
+});
+function sameFieldName(a, b) {
+    return !!(a && b) && a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+function noteSellerValues(result) {
+    var $reserve = $('#id_reserve_price');
+    var reserve = parseFloat($reserve.val());
+    if (reserve !== parseFloat(cloneHints.reserve_price) && reserve !== parseFloat(result.minimum_bid)) {
+        $reserve.data('seller-edited', true);
+    }
+    if ($('#id_custom_checkbox').prop('checked') && !cloneHints.values.custom_checkbox) {
+        $('#id_custom_checkbox').data('seller-edited', true);
+    }
+    ['custom_field_1', 'custom_dropdown'].forEach(function (name) {
+        var $field = $('#id_' + name);
+        var value = $field.val() || '';
+        if (value && value !== cloneHints.values[name]) $field.data('seller-edited', true);
+    });
+}
+function applyCloneHints(result) {
+    if (!cloneHints) return;
+    if (!cloneHintsSeen) {
+        cloneHintsSeen = true;
+        noteSellerValues(result);
+        return;
+    }
+    var $reserve = $('#id_reserve_price');
+    if (cloneHints.minimum_follows_auction && !$reserve.data('seller-edited') && result.minimum_bid !== undefined) {
+        $reserve.val(result.minimum_bid);
+    }
+    var $checkbox = $('#id_custom_checkbox');
+    if (!$checkbox.data('seller-edited')) {
+        $checkbox.prop('checked', sameFieldName(cloneHints.names.custom_checkbox, result.custom_checkbox_name) && cloneHints.values.custom_checkbox);
+    }
+    var $field = $('#id_custom_field_1');
+    if (!$field.data('seller-edited')) {
+        $field.val(sameFieldName(cloneHints.names.custom_field_1, result.custom_field_1_name) ? cloneHints.values.custom_field_1 : '');
+    }
+    var $dropdown = $('#id_custom_dropdown');
+    if (!$dropdown.data('seller-edited')) {
+        var keep = sameFieldName(cloneHints.names.custom_dropdown, result.custom_dropdown_name) &&
+            (result.custom_dropdown_options || []).indexOf(cloneHints.values.custom_dropdown) !== -1;
+        $dropdown.val(keep ? cloneHints.values.custom_dropdown : '');
+    }
+}
+
 function setAuctionRequiredFields(val) {
     $.ajax({
             type: "POST",
@@ -272,6 +361,7 @@ function setAuctionRequiredFields(val) {
                     if (result.buy_now == 'required') {
                         $('#id_buy_now_price').attr('required', true);
                     }
+                    applyCloneHints(result);
                 } else {
                     // reset to defaults
                     $('#div_id_quantity').closest('.col-md-3').show();
@@ -480,6 +570,7 @@ $(document).ready(function() {
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
             {% crispy form form.helper %}
+{% if form.clone_hints %}{{ form.clone_hints|json_script:"clone-hints" }}{% endif %}
 <div class="modal fade" id="joinAuction" tabindex="-1" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
