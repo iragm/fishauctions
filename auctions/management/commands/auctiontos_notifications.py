@@ -17,6 +17,10 @@ from auctions.notifications import CATEGORY_AUCTION_REMINDER, notify_user
 
 #: How long after an online auction ends its sellers can still be reminded to print their labels.
 PRINT_REMINDER_WINDOW = datetime.timedelta(days=3)
+#: Joined from further than this (miles) from their pickup location, and someone is asked to check their map marker.
+LOCATION_CHECK_MILES = 100
+#: How long after joining that question is asked.
+LOCATION_CHECK_DELAY = datetime.timedelta(hours=1)
 
 _TOS_PUSH_TITLES = {
     "online_auction_welcome": "You're in — {auction}",
@@ -109,6 +113,7 @@ class Command(BaseCommand):
             # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
             tos.save(update_fields=["confirm_email_sent"])
             send_tos_notification("in_person_auction_welcome", tos)
+        self.send_location_checks(base_qs)
         print_reminder_qs = base_qs.filter(print_reminder_email_sent=False)
         online_auction_print_reminder = print_reminder_qs.filter(
             auction__is_online=True,
@@ -231,3 +236,32 @@ class Command(BaseCommand):
                     send_email=lambda email=email, campaign_kwargs=campaign_kwargs: mail.send(email, **campaign_kwargs),
                     auction_pk=campaign.auction.pk,
                 )
+
+    def send_location_checks(self, base_qs):
+        """Ask someone who joined from far away whether their map marker is right, until they say it is."""
+        due = (
+            base_qs.filter(
+                location_check_email_sent=False,
+                createdon__lte=timezone.now() - LOCATION_CHECK_DELAY,
+                user__userdata__location_confirmed=False,
+            )
+            # A pickup location without a map marker would put everyone thousands of miles away.
+            .exclude(pickup_location__latitude=0, pickup_location__longitude=0)
+            .select_related("auction", "pickup_location", "user__userdata")
+        )
+        asked = set()
+        current_site = Site.objects.get_current()
+        for tos in due:
+            tos.location_check_email_sent = True
+            # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+            tos.save(update_fields=["location_check_email_sent"])
+            if tos.user_id in asked or tos.auction.closed or not tos.user.email:
+                continue
+            if tos.distance_traveled <= LOCATION_CHECK_MILES:
+                continue
+            asked.add(tos.user_id)
+            mail.send(
+                tos.user.email,
+                template="location_check",
+                context={"domain": current_site.domain, "tos": tos},
+            )

@@ -5752,6 +5752,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         return False
 
     @cached_property
+    def admin_checklist_basics_done(self):
+        """Created, rules edited and location set: all an experienced creator needs the setup box for."""
+        return bool(self.admin_checklist_rules_updated and self.admin_checklist_location_set)
+
+    @cached_property
     def admin_checklist_completed(self):
         if (
             self.admin_checklist_mostly_completed
@@ -6729,6 +6734,8 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     confirm_email_sent = models.BooleanField(default=False, blank=True)
     second_confirm_email_sent = models.BooleanField(default=False, blank=True)
     print_reminder_email_sent = models.BooleanField(default=False, blank=True)
+    # The "is your location right?" email to someone who joined from far away. See auctiontos_notifications.
+    location_check_email_sent = models.BooleanField(default=False, blank=True)
     is_admin = models.BooleanField(
         default=False,
         verbose_name="Grant admin permissions to help run this auction",
@@ -11710,6 +11717,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     location_coordinates.help_text = (
         "Make sure your map marker is correctly placed - you will get notifications about nearby auctions"
     )
+    location_confirmed = models.BooleanField(default=False, blank=True, verbose_name="Yes, my location is accurate")
     last_ip_address = models.CharField(max_length=100, blank=True, null=True)
     email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
     email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen.  If you'd like to get a notification right away, <a href='https://github.com/iragm/fishauctions/issues/224'>leave a comment here</a>"
