@@ -227,7 +227,7 @@ function deactivate_lot() {
 <script type="text/javascript">
     {% comment %}Paste a picture anywhere on the page and it is added to the lot, through the same view as the Add image button.{% endcomment %}
     document.addEventListener('paste', function (e) {
-        var file = lotImages.fromPaste(e);
+        var file = lotImages.fromPaste(e, true);
         if (!file) return;
         e.preventDefault();
         lotImages.fitForUpload(file).then(function (small) {

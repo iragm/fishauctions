@@ -779,8 +779,6 @@ class Club(CloudflareImageMixin, models.Model):
         upload_to="club_icons/",
         blank=True,
         null=True,
-        # Kept no bigger than this, like every uploaded image: the original is not stored.
-        resize_source={"size": (1000, 1000), "quality": 90},
         help_text="Square logo shown beside the club name and on Google/Apple Wallet membership cards.",
     )
     google_wallet_class_created = models.BooleanField(
@@ -13165,7 +13163,7 @@ class AdCampaignGroup(CachedPropertiesMixin, models.Model):
 
 
 class AdCampaign(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
-    image = ThumbnailerImageField(upload_to="images/", blank=True, resize_source={"size": (1000, 1000), "quality": 85})
+    image = ThumbnailerImageField(upload_to="images/", blank=True)
     campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=50, default="Click here")
     text = models.CharField(max_length=40, blank=True, null=True)

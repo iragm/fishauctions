@@ -496,6 +496,16 @@ def jpeg_safe_upload(uploaded_image):
     return ContentFile(converted.getvalue(), name=name)
 
 
+def clean_new_image_upload(image):
+    """A form's ``clean_<image field>``: a fresh upload fully decoded, so a broken file is a field error
+    rather than a 500 (ImageField only checks headers), and made JPEG-safe. Anything else as it was.
+    """
+    if isinstance(image, UploadedFile):
+        validate_uploaded_image(image)
+        image = jpeg_safe_upload(image)
+    return image
+
+
 def clean_summernote(html, max_length=16383):
     """Sanitize and shorten a summernote field."""
     html = sanitize_summernote_html(html)
@@ -2187,12 +2197,7 @@ class CreateImageForm(forms.ModelForm):
         """Fully decode a new upload so a broken image is a field error rather than a 500 (ImageField only
         checks headers).
         """
-        image = self.cleaned_data.get("image")
-        # Only a newly uploaded file.
-        if isinstance(image, UploadedFile):
-            validate_uploaded_image(image)
-            image = jpeg_safe_upload(image)
-        return image
+        return clean_new_image_upload(self.cleaned_data.get("image"))
 
     def clean(self):
         cleaned_data = super().clean()
@@ -3141,8 +3146,7 @@ class CreateLotForm(forms.ModelForm):
         if self.clone_source:
             for field, value in clone_lot_values(self.clone_source, selected_auction).items():
                 self.fields[field].initial = value
-            if not self.is_bound:
-                self.clone_hints = clone_lot_hints(self.clone_source)
+            self.clone_hints = clone_lot_hints(self.clone_source)
         self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
         self.fields["custom_dropdown"].required = False
         self.fields["custom_dropdown"].help_text = ""
@@ -3327,15 +3331,13 @@ class CreateLotForm(forms.ModelForm):
         )
 
     def clean_pasted_image(self):
-        """As ``CreateImageForm.clean_image``: a broken picture is a field error, not a 500."""
-        image = self.cleaned_data.get("pasted_image")
-        if isinstance(image, UploadedFile):
-            validate_uploaded_image(image)
-            image = jpeg_safe_upload(image)
-        return image
+        return clean_new_image_upload(self.cleaned_data.get("pasted_image"))
 
     def clean(self):
         cleaned_data = super().clean()
+        if self.errors.get("pasted_image"):
+            # The field itself is hidden, so its error would be too.
+            self.add_error(None, f"The pasted image: {self.errors['pasted_image'][0]}")
 
         # Client-side validation bypass just leaves the lot unavailable.
         auction = cleaned_data.get("auction")
@@ -6139,12 +6141,7 @@ class SpeakerForm(forms.ModelForm):
 
     def clean_image(self):
         """Reject corrupt uploads as a field error (see CreateImageForm.clean_image)."""
-        image = self.cleaned_data.get("image")
-        # Only fresh uploads.
-        if isinstance(image, UploadedFile):
-            validate_uploaded_image(image)
-            image = jpeg_safe_upload(image)
-        return image
+        return clean_new_image_upload(self.cleaned_data.get("image"))
 
 
 class SpeakerCommentForm(forms.ModelForm):

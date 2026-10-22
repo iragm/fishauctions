@@ -45,8 +45,10 @@
         return shrink(file);
     }
 
-    // The image in a paste event, named, or null. Text pasted into a text box stays text.
-    function fromPaste(event) {
+    // The image in a paste event, named, or null. Text pasted into a text box stays text; with
+    // ``textBoxesKeepImages`` an image pasted into one is left alone too (the lot page, where a paste
+    // reloads the page and would lose what was typed).
+    function fromPaste(event, textBoxesKeepImages) {
         var clipboard = event.clipboardData;
         if (!clipboard) return null;
         var item = null;
@@ -62,7 +64,7 @@
         if (target && target.isContentEditable) return null;
         var isTextEntry = target && (target.tagName === 'TEXTAREA' ||
             (target.tagName === 'INPUT' && ['file', 'checkbox', 'radio', 'submit', 'button'].indexOf(target.type) === -1));
-        if (isTextEntry && clipboard.getData('text')) return null;
+        if (isTextEntry && (textBoxesKeepImages || clipboard.getData('text'))) return null;
         var file = item.getAsFile();
         if (!file) return null;
         var ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
@@ -76,12 +78,26 @@
         input.files = dt.files;
     }
 
-    // Shrink whatever is picked in *input* when it is too big; *onError* gets the message otherwise.
+    // Hold *form*'s submit buttons down until *promise* settles, so a file still being shrunk isn't
+    // left behind (or sent at full size).
+    function whileBusy(form, promise) {
+        var buttons = form ? form.querySelectorAll('[type=submit]') : [];
+        buttons.forEach(function (button) { button.disabled = true; });
+        function release() { buttons.forEach(function (button) { button.disabled = false; }); }
+        promise.then(release, release);
+        return promise;
+    }
+
+    // Shrink whatever is picked in *input* when it is too big. *onError* gets the message when it
+    // can't be, and '' whenever a usable file is picked.
     function guardInput(input, onError) {
         input.addEventListener('change', function () {
             var file = input.files && input.files[0];
-            if (!file || file.size <= MAX_UPLOAD_BYTES) return;
-            fitForUpload(file).then(function (small) {
+            if (!file || file.size <= MAX_UPLOAD_BYTES) {
+                if (file) onError('');
+                return;
+            }
+            whileBusy(input.form, fitForUpload(file)).then(function (small) {
                 setInputFile(input, small);
                 input.dispatchEvent(new Event('change', {bubbles: true}));
             }, function (error) {
@@ -97,6 +113,7 @@
         fitForUpload: fitForUpload,
         fromPaste: fromPaste,
         setInputFile: setInputFile,
+        whileBusy: whileBusy,
         guardInput: guardInput,
     };
 })();

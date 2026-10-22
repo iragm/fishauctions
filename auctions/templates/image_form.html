@@ -12,6 +12,7 @@ $('#auction-form').submit(function(event){
 const imageInput = document.getElementById('id_image');
 function showImageError(message) {
     let error = document.getElementById('image-size-error');
+    if (!error && !message) return;
     if (!error) {
         error = document.createElement('div');
         error.id = 'image-size-error';

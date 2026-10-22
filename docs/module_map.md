@@ -155,7 +155,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6544 lines)
+- **`forms.py`** (6541 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14721 lines)
+- **`models.py`** (14719 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -240,7 +240,7 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (854 lines)
   DRF serializers for the club API.
-- **`services.py`** (1548 lines)
+- **`services.py`** (1549 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
@@ -489,7 +489,7 @@ this only quotes its opening sentence.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
 - **`test_lot_money_fixes.py`** (440 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
-- **`test_lot_page_fixes.py`** (223 lines)
+- **`test_lot_page_fixes.py`** (281 lines)
   The lot page and label fixes: the SOLD stamp, online labels only once sold, pasted images, the upload
   `image_bytes`, `SoldStampTests`, `OnlineLabelsOnlyOnceSoldTests`, `PastedImageTests`, `UploadTooLargeTests`, `CopiedLotTests`, `WatchNoteTests`
 - **`test_lot_page_views.py`** (377 lines)
@@ -524,7 +524,7 @@ this only quotes its opening sentence.
 - **`test_merges.py`** (414 lines)
   What a merge carries over: everything that points at the participant, club member or account it closes.
   `relations_to`, `MergeCoverageTests`, `ParticipantMergeTests`, `MemberMergeTests`
-- **`test_mobile_features.py`** (2729 lines)
+- **`test_mobile_features.py`** (2740 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -982,7 +982,7 @@ Every view on the site, split by the part of it the view belongs to.
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1263 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (744 lines)
+- **`auction_extras.py`** (745 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1111 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
@@ -1039,7 +1039,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (387 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1361 lines)
+- **`lot_pages.py`** (1371 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.

@@ -178,7 +178,8 @@ class AuctionBulkPrintingPDF(LotLabelView):
             if self.print_only_unprinted:
                 self.queryset = self.auction.unprinted_labels_qs
             else:
-                self.queryset = self.auction.lots_qs
+                # labels_qs, not lots_qs: an online lot has no label until it sells.
+                self.queryset = self.auction.labels_qs
             self.queryset = self.queryset.filter(auctiontos_seller__pk__in=self.selected_tos)
         if not self.get_queryset():
             if not self.selected_tos:

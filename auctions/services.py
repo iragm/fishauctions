@@ -904,6 +904,7 @@ def clone_lot_hints(lot) -> dict:
     auction = lot.auction if lot.auction_id else None
     return {
         "minimum_follows_auction": lot_has_auction_default_minimum(lot),
+        "reserve_price": str(lot.reserve_price),
         "values": {
             "custom_checkbox": lot.custom_checkbox,
             "custom_field_1": lot.custom_field_1 or "",

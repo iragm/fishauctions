@@ -69,6 +69,17 @@ class OnlineLabelsOnlyOnceSoldTests(StandardTestCase):
         self.lot.save()
         self.assertContains(self.client.get(self.lot.lot_link), reverse("single_lot_label", kwargs={"pk": self.lot.pk}))
 
+    def test_admin_bulk_print_of_everything_still_skips_unsold_online_lots(self):
+        self.client.force_login(self.admin_user)
+        response = self.client.get(
+            reverse("auction_printing_pdf", kwargs={"slug": self.online_auction.slug}),
+            {"selected_tos": f"[{self.online_tos.pk}]", "print_only_unprinted": "False", "pdf": 1},
+        )
+        self.assertEqual(response.status_code, 200)
+        printed = [label for label in response.context_data["labels"] if label != "empty"]
+        self.assertIn(self.lot, printed)
+        self.assertNotIn(self.unsoldLot, printed)
+
     def test_mobile_label_is_refused(self):
         from .test_mobile_features import _bearer
 
@@ -151,6 +162,53 @@ class PastedImageTests(WritableMediaRoot, StandardTestCase):
         self.assertEqual(response.status_code, 302)
         lot = Lot.objects.get(lot_name="Pasted lot")
         self.assertEqual(LotImage.objects.filter(lot_number=lot, is_primary=True).count(), 1)
+
+    def _post_new_lot(self, pasted):
+        return self.client.post(
+            f"{reverse('new_lot')}?auction={self.open_auction.slug}",
+            {
+                "lot_name": "Pasted lot",
+                "auction": self.open_auction.pk,
+                "quantity": 1,
+                "reserve_price": "5",
+                "part_of_auction": "True",
+                "run_duration": "10",
+                "pasted_image": pasted,
+            },
+        )
+
+    def test_a_bad_paste_on_the_form_says_so(self):
+        response = self._post_new_lot(SimpleUploadedFile("p.jpg", b"not an image", content_type="image/jpeg"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "The pasted image:")
+
+    def test_a_paste_is_not_added_to_a_lot_whose_images_are_borrowed(self):
+        lot = Lot.objects.create(
+            lot_name="source", auction=self.open_auction, auctiontos_seller=self.online_tos, quantity=1, user=self.user
+        )
+        Lot.objects.create(
+            lot_name="sold copy",
+            auction=self.open_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            use_images_from=lot,
+            winning_price=5,
+            auctiontos_winner=self.online_tos,
+        )
+        self.assertTrue(lot.can_be_edited, lot.cannot_be_edited_reason)
+        self.client.post(
+            reverse("edit_lot", kwargs={"pk": lot.pk}),
+            {
+                "lot_name": "source",
+                "auction": self.open_auction.pk,
+                "quantity": 1,
+                "reserve_price": "5",
+                "part_of_auction": "True",
+                "run_duration": "10",
+                "pasted_image": SimpleUploadedFile("p.jpg", image_bytes(), content_type="image/jpeg"),
+            },
+        )
+        self.assertFalse(LotImage.objects.filter(lot_number=lot).exists())
 
     def test_the_lot_page_listens_for_pastes_only_for_who_can_add_images(self):
         lot = Lot.objects.create(

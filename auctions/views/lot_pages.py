@@ -854,7 +854,8 @@ class LotValidation(LoginRequiredMixin):
             lot.donation = False
         # someday we may change this to be a field on the form, but for now we need to collect data
         lot.promotion_weight = randint(0, 20)
-        if lot.pk:
+        is_new = not lot.pk
+        if not is_new:
             # this is an existing lot
             lot.save()
         else:
@@ -869,18 +870,6 @@ class LotValidation(LoginRequiredMixin):
                         copy_lot_images(original_lot, lot)
                 except Exception as e:
                     logger.exception(e)
-            msg = mark_safe("Created lot! ")
-            if not (lot.image_count or form.cleaned_data.get("pasted_image") or form.cleaned_data.get("image_url")):
-                msg += format_html(
-                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
-                    lot.lot_number,
-                )
-            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
-            messages.success(
-                self.request,
-                msg,
-                extra_tags="safe",
-            )
         # if image_url is set, add an image to the lot using this URL, then clear the field
         image_url = form.cleaned_data.get("image_url")
         if image_url:
@@ -898,8 +887,15 @@ class LotValidation(LoginRequiredMixin):
             lot.image_url = None
             lot.save(update_fields=["image_url"])
         pasted_image = form.cleaned_data.get("pasted_image")
-        # ImageCreateView's limit, counted fresh: images were just copied or added from a URL.
-        if pasted_image and LotImage.objects.filter(lot_number=lot).count() <= 5:
+        if not pasted_image:
+            pass
+        elif not lot.image_permission_check(self.request.user):
+            # ImageCreateView's rule, e.g. a sold lot showing this lot's pictures.
+            messages.error(self.request, "The pasted image wasn't added: this lot's images can't be changed.")
+        elif LotImage.objects.filter(lot_number=lot).count() > 5:
+            # ImageCreateView's limit, counted fresh: images were just copied or added from a URL.
+            messages.error(self.request, "The pasted image wasn't added: this lot already has the most images it can.")
+        else:
             # A broken file is a message; anything else is ours to hear about.
             try:
                 LotImage(
@@ -913,6 +909,20 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(
                     self.request, "We couldn't process the pasted image.  Try adding it again from the lot page."
                 )
+        if is_new:
+            # After the images, so "add an image" is only suggested to a lot that really has none.
+            msg = mark_safe("Created lot! ")
+            if not LotImage.objects.filter(lot_number=lot).exists():
+                msg += format_html(
+                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
+                    lot.lot_number,
+                )
+            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
+            messages.success(
+                self.request,
+                msg,
+                extra_tags="safe",
+            )
         # Record what the seller did with the offered species (never writes the cache). See
         # species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:
