@@ -415,6 +415,35 @@ def exact_matches(text, user=None, club=None):
     return list(found.values())[:MAX_SUGGESTIONS]
 
 
+#: Names one search may expand to: each is part of one ``REGEXP`` over ``lot_name``.
+MAX_SEARCH_NAMES = 30
+
+
+def lots_of_species_q(text, user=None, prefix=""):
+    """A ``Q`` for the lot filters: lots of the species *text* names exactly, or ``None``.
+
+    Typing "Neocaridina davidi" finds the lots tagged with it or its strains, and the untagged ones
+    called "cherry shrimp"; typing a common name finds the ones called by its scientific name. Only an
+    exact name expands (:func:`exact_matches`: indexed lookups, at most :data:`MAX_SUGGESTIONS`
+    species), so half-typed text costs three small queries and adds nothing.
+    """
+    species = exact_matches(text, user=user)
+    if not species:
+        return None
+    ids = [each.pk for each in species]
+    names = {each.scientific_name for each in species} | {each.common_name for each in species}
+    names |= set(
+        visible_common_names(user).filter(species_id__in=ids).values_list("name", flat=True)[:MAX_SEARCH_NAMES]
+    )
+    # Short names ("Ram") would match inside half the lot names on the site.
+    names = sorted(name for name in names if len(name.strip()) >= 4)[:MAX_SEARCH_NAMES]
+    q = Q(**{f"{prefix}species_id__in": ids}) | Q(**{f"{prefix}species__parent_id__in": ids})
+    if names:
+        # One pass over lot_name, not one LIKE per name. The column's collation ignores case.
+        q |= Q(**{f"{prefix}lot_name__iregex": "|".join(re.escape(name.strip()) for name in names)})
+    return q
+
+
 def _named_after_the_same_thing(normalized, candidates):
     """Narrow a shared synonym to the species really called that, by its designated name.
 

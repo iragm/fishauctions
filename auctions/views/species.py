@@ -5,6 +5,7 @@ unapproved and scoped to them and their club. The gaps page approves, merges or 
 """
 
 import logging
+import re
 
 from dal import autocomplete
 from django.contrib import messages
@@ -13,6 +14,7 @@ from django.db.models import (
     Q,
 )
 from django.db.models.base import Model as Model
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -28,6 +30,7 @@ from auctions.forms import (
     SpeciesCommonNameForm,
 )
 from auctions.models import (
+    Category,
     Lot,
     Species,
     SpeciesNameRejection,
@@ -36,6 +39,8 @@ from auctions.models import (
 )
 from auctions.species_matching import remember as remember_species
 from auctions.species_matching import (
+    species_already_named,
+    split_scientific_name,
     visible_species,
 )
 
@@ -169,6 +174,59 @@ class SpeciesApproveView(AdminOnlyViewMixin, View):
         species_admin.approve(species)
         messages.success(request, f"{species.label} is now suggested for everyone.")
         return redirect("species_gaps")
+
+
+#: Species one person may have waiting for review at once: enough for a club's odd fish, too few to
+#: fill the review with junk.
+MAX_PENDING_PER_USER = 25
+
+#: Genus, epithet in letters, and an optional subspecies or trade code ("Ancistrus sp. L144").
+_QUICK_NAME = re.compile(r"[A-Za-z]+ [A-Za-z.'-]+( [A-Za-z0-9.'-]+)?")
+
+
+class SpeciesQuickCreate(LoginRequiredMixin, View):
+    """The full-page lot form's "Add": a scientific name the search can't find becomes a species.
+
+    Visible only to its author (no club) until the weekly species review approves it or merges it into
+    the species it was a typo of. The genus must already be on the list, or a common name ("cherry
+    shrimp") would become a genus. Answers ``{"id", "text"}`` for the picker, or ``{"error"}``.
+    """
+
+    def post(self, request, *args, **kwargs):
+        typed = " ".join((request.POST.get("scientific_name") or "").split())[:200]
+        if not _QUICK_NAME.fullmatch(typed):
+            return JsonResponse({"error": "Type the genus and species, e.g. Ancistrus cirrhosus."}, status=400)
+        genus, epithet = split_scientific_name(typed)
+        existing = species_already_named(genus, epithet, user=request.user)
+        if existing:
+            return JsonResponse({"id": existing.pk, "text": existing.label})
+        relative = (
+            visible_species(request.user).filter(genus__iexact=genus, is_hybrid=False).order_by("trade_rank").first()
+        )
+        if relative is None:
+            return JsonResponse({"error": f"{genus} isn't a genus on the list.  Check the spelling."}, status=400)
+        if Species.objects.filter(added_by=request.user, approved=False).count() >= MAX_PENDING_PER_USER:
+            return JsonResponse({"error": "You have plenty of species waiting for review already."}, status=400)
+        chosen = request.POST.get("category") or ""
+        category = Category.objects.filter(pk=int(chosen)).first() if chosen.isdigit() else None
+        species = Species.objects.create(
+            genus=relative.genus,
+            species=epithet,
+            # Family, habitat and category from the genus: what a lot of it is filed under.
+            family=relative.family,
+            order=relative.order,
+            freshwater=relative.freshwater,
+            brackish=relative.brackish,
+            saltwater=relative.saltwater,
+            category=category or relative.category,
+            source="admin",
+            # Somebody is selling it.
+            in_trade_override=True,
+            added_by=request.user,
+            approved=request.user.is_superuser,
+        )
+        Species.recompute_trade_ranks(genus=species.genus)
+        return JsonResponse({"id": species.pk, "text": species.label})
 
 
 def species_page_success_url(request):
