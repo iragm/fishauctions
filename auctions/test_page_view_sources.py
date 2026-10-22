@@ -194,3 +194,42 @@ class AddressBarTests(StandardTestCase):
         html = self.client.get(self.online_auction.get_absolute_url()).content.decode()
         self.assertIn(f"/?{self.online_auction.slug}&amp;utm_source=copied_link", html)
         self.assertIn("utm_source%3Dfacebook", html)
+
+
+class DiscordLinkTests(StandardTestCase):
+    def test_links_the_bot_posts_say_discord(self):
+        from auctions import discord_events
+
+        self.assertEqual(discord_events.discord_link("https://x.test/?slug"), "https://x.test/?slug&utm_source=discord")
+        self.assertEqual(discord_events.discord_link("https://x.test/a/"), "https://x.test/a/?utm_source=discord")
+        # A fragment stays last, where the browser still sends the query.
+        self.assertEqual(
+            discord_events.discord_link("https://x.test/club/c/#event-12"),
+            "https://x.test/club/c/?utm_source=discord#event-12",
+        )
+        self.assertIn("utm_source=discord", discord_events.auction_location(self.online_auction))
+        self.assertEqual(PageView.source_labels({"discord"})["discord"], "Posted on Discord")
+
+    def test_an_event_location_too_long_for_the_tag_stays_whole(self):
+        from auctions import discord_events
+
+        url = "https://x.test/?" + "a" * 80
+        self.assertEqual(discord_events.discord_link(url, discord_events.EVENT_LOCATION_LIMIT), url)
+
+    def test_channel_message_carries_the_tag(self):
+        from unittest import mock
+
+        from auctions.management.commands import auction_emails
+        from auctions.models import Club
+
+        club = Club.objects.create(name="Discord club", discord_server_id="guild", auction_channel_id="chan")
+        Auction.objects.filter(pk=self.online_auction.pk).update(
+            club=club,
+            promote_this_auction=True,
+            date_start=timezone.now() - timedelta(minutes=5),
+            first_discord_sent=False,
+            second_discord_sent=True,
+        )
+        with mock.patch.object(auction_emails, "_send_discord_channel_message", return_value=True) as send:
+            auction_emails.Command()._send_discord_notifications(timezone.now(), "x.test")
+        self.assertIn(f"https://x.test/?{self.online_auction.slug}&utm_source=discord", send.call_args[0][1])

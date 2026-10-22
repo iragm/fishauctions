@@ -125,9 +125,9 @@ this only quotes its opening sentence.
 - **`deploy_window.py`** (135 lines)
   Whether now is a quiet time to deploy production: traffic against its usual lows, and auctions in play.
   `hourly_views`, `quietest_hour`, `auctions_in_play`, `deploy_window`, `summary`
-- **`discord_events.py`** (341 lines)
+- **`discord_events.py`** (354 lines)
   Discord scheduled events for clubs.
-  `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`
+  `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`, `discord_link`, `auction_location`
 - **`dmca.py`** (245 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14961 lines)
+- **`models.py`** (14962 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -567,9 +567,9 @@ this only quotes its opening sentence.
 - **`test_page_view_history_is_kept.py`** (47 lines)
   Repeat views of a page are history, not duplicates.
   `RepeatViewsAreKeptTests`
-- **`test_page_view_sources.py`** (196 lines)
+- **`test_page_view_sources.py`** (235 lines)
   Where visitors came from, and the address the browser is left showing.
-  `SourceLabelTests`, `SellerLotIdsTests`, `JoinSourcesStatTests`, `AddressBarTests`
+  `SourceLabelTests`, `SellerLotIdsTests`, `JoinSourcesStatTests`, `AddressBarTests`, `DiscordLinkTests`
 - **`test_page_view_url.py`** (116 lines)
   The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
@@ -746,7 +746,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`android_testers_invite.py`** (138 lines)
   Invite Android users to the Google Play closed test, once.
   `eligible_users`, `invited_addresses`, `Command`
-- **`auction_emails.py`** (358 lines)
+- **`auction_emails.py`** (359 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
 - **`auction_promos.py`** (334 lines)
@@ -1033,7 +1033,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_reports.py`** (829 lines)
   What a club's officers read: history, stats, the treasurer's report, money in and out.
   `ClubHistoryView`, `ClubStatsView`, `ClubTreasurerReportView`, `ClubTreasurerReportExportView`, `ClubMoneyCreateView`, `ClubMoneyBalanceView`, `ClubMemberCSVImportView`, `ClubMemberCSVExportView`
-- **`discord.py`** (971 lines)
+- **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`documents.py`** (482 lines)

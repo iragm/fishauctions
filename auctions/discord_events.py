@@ -18,6 +18,7 @@ cancelled one removed.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from django.conf import settings
@@ -27,6 +28,8 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://discord.com/api/v10"
+#: Discord refuses (400) a scheduled event whose location is longer than this.
+EVENT_LOCATION_LIMIT = 100
 TIMEOUT = 10
 
 PRIVACY_GUILD_ONLY = 2
@@ -91,7 +94,7 @@ def _event_payload(name, start_time, end_time, location, description="", *, crea
         "name": name[:100],
         "scheduled_start_time": start_time.isoformat(),
         "scheduled_end_time": end_time.isoformat(),
-        "entity_metadata": {"location": (location or "See details")[:100]},
+        "entity_metadata": {"location": (location or "See details")[:EVENT_LOCATION_LIMIT]},
     }
     if creating:
         payload["privacy_level"] = PRIVACY_GUILD_ONLY
@@ -297,7 +300,7 @@ def _sync_one_auction_event(club, auction):
         _store_auction_event_state(auction)
         return False
 
-    location = _auction_location(auction)
+    location = auction_location(auction)
     status = _patch_scheduled_event(
         club.discord_server_id, auction.discord_event_id, auction.title, start, end, location
     )
@@ -329,13 +332,23 @@ def _store_auction_event_state(auction):
     )
 
 
-def _auction_location(auction):
+def discord_link(url, limit=None):
+    """``url`` tagged ``utm_source=discord``, so page views from links the bot posts say where they came
+    from. Left untagged when the tag would push it past ``limit`` (an event location is cut at 100).
+    """
+    parts = urlsplit(url)
+    query = f"{parts.query}&utm_source=discord" if parts.query else "utm_source=discord"
+    tagged = urlunsplit(parts._replace(query=query))
+    return url if limit and len(tagged) > limit else tagged
+
+
+def auction_location(auction):
     """Discord shows this as the event's location; the auction's page is the useful thing."""
     domain = Site.objects.get_current().domain
-    return f"https://{domain}/?{auction.slug}"
+    return discord_link(f"https://{domain}/?{auction.slug}", EVENT_LOCATION_LIMIT)
 
 
 def _club_event_fallback_location(event):
     """Discord insists on a location for external events; fall back to the club page."""
     domain = Site.objects.get_current().domain
-    return f"https://{domain}{event.get_absolute_url()}"
+    return discord_link(f"https://{domain}{event.get_absolute_url()}", EVENT_LOCATION_LIMIT)

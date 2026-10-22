@@ -11655,6 +11655,7 @@ class PageView(CachedPropertiesMixin, models.Model):
         "admin": "From an admin page",
         "twitter": "Shared on X (Twitter)",
         "facebook": "Shared on Facebook",
+        "discord": "Posted on Discord",
         "qr": "Scanned a printed QR code",
         "ar": "From lot scanning in the app",
         "ar_scan": "Scanned a label in the app",
