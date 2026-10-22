@@ -217,7 +217,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1965 lines)
+- **`palette_routes.py`** (1966 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -616,7 +616,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
 - **`test_species.py`** (5115 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_species_search.py`** (177 lines)
+- **`test_species_search.py`** (178 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.
   `LotSearchBySpeciesTests`, `SpeciesQuickCreateTests`
 - **`test_square.py`** (943 lines)
