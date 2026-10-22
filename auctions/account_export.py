@@ -279,7 +279,11 @@ def export(user):
             .select_related("lot")
         ],
         "watched_lots": [
-            {"lot": _plain(row.lot_number), "watched_since": _plain(row.createdon)}
+            {
+                "lot": _plain(row.lot_number),
+                "watched_since": _plain(row.createdon),
+                "still_watching": not row.is_deleted,
+            }
             for row in Watch.all_objects.filter(user=user).select_related("lot_number")
         ],
         "bids_started_and_not_placed": [

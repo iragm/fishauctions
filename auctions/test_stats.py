@@ -1240,6 +1240,17 @@ class ActivityChartAlignmentTests(StandardTestCase):
         self.assertEqual(views[14:], [None] * 7)
         self.assertNotIn(None, views[:14])
 
+    def test_an_auction_weeks_away_shows_its_last_three_weeks(self):
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=30, hours=1)
+        self.online_auction.save()
+        activity = self.online_auction.set_stat_activity()
+        self.assertEqual(activity["first_offset"], -46)
+        self.assertEqual(activity["labels"][0], "46 days before")
+        self.assertEqual(activity["labels"][-1], "26 days before")
+        # Today is bin 15, so only the last five days are still to come.
+        self.assertEqual(activity["data"][0][16:], [None] * 5)
+        self.assertNotIn(None, activity["data"][0][:16])
+
     def test_ended_auctions_line_up(self):
         a = self.online_auction.set_stat_activity()
         self.in_person_auction.is_online = True
@@ -1280,8 +1291,11 @@ class WatchSoftDeleteTests(StandardTestCase):
 
         Watch.set_watching(self.userB, self.lot, True)
         Watch.set_watching(self.userB, self.lot, False)
+        Watch.all_objects.filter(user=self.userB).update(createdon=timezone.now() - datetime.timedelta(days=10))
         Watch.set_watching(self.userB, self.lot, True)
-        self.assertEqual(Watch.all_objects.filter(user=self.userB, lot_number=self.lot).count(), 1)
+        rows = Watch.all_objects.filter(user=self.userB, lot_number=self.lot)
+        self.assertEqual(rows.count(), 1)
+        self.assertGreater(rows.get().createdon, timezone.now() - datetime.timedelta(minutes=1))
         self.assertEqual(Lot.objects.get(pk=self.lot.pk).number_of_watchers, 1)
 
     def test_the_watch_endpoint_soft_deletes(self):

@@ -27,6 +27,7 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
+from django.utils.functional import cached_property
 from django.views.generic import View
 from webpush.models import PushInformation
 
@@ -230,12 +231,17 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
 
         return super().dispatch(request, *args, **kwargs)
 
+    @cached_property
+    def fresh_activity(self):
+        """No cached stats yet: worked out once for both the labels and the data."""
+        return self.auction.set_stat_activity()
+
     def get_labels(self):
         # Check if we have cached stats
         if self.auction.cached_stats and "activity" in self.auction.cached_stats:
             return self.auction.cached_stats["activity"]["labels"]
 
-        return self.auction.set_stat_activity()["labels"]
+        return self.fresh_activity["labels"]
 
     def get_providers(self):
         # Check if we have cached stats
@@ -266,7 +272,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         if self.auction.cached_stats and "activity" in self.auction.cached_stats:
             data = self.auction.cached_stats["activity"]["data"]
         else:
-            data = self.auction.set_stat_activity()["data"]
+            data = self.fresh_activity["data"]
 
         # Add comparison auction data if available
         if (

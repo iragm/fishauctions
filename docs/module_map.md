@@ -29,7 +29,7 @@ this only quotes its opening sentence.
 - **`account_deletion.py`** (445 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
-- **`account_export.py`** (307 lines)
+- **`account_export.py`** (311 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
 - **`account_merge.py`** (421 lines)
@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14770 lines)
+- **`models.py`** (14781 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -625,7 +625,7 @@ this only quotes its opening sentence.
 - **`test_static_html.py`** (85 lines)
   ``format_html`` is never called with nothing to format, and ``static_html`` only ever takes a literal.
   `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
-- **`test_stats.py`** (1348 lines)
+- **`test_stats.py`** (1364 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
 - **`test_stats_and_browse_views.py`** (629 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
@@ -984,7 +984,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`auction_pages.py`** (1111 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
-- **`auction_stats.py`** (1075 lines)
+- **`auction_stats.py`** (1081 lines)
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.

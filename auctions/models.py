@@ -11,6 +11,7 @@ A `.delay()` from a signal must go inside transaction.on_commit.
 
 import datetime
 import logging
+import math
 import re
 import secrets
 import statistics
@@ -5631,7 +5632,12 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @cached_property
     def all_auctions_reminder_stats(self):
-        return AuctionCampaign.reminder_stats(AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW))
+        """The same for every auction, over every campaign there is: worked out once an hour."""
+        return cache.get_or_set(
+            "all_auctions_reminder_stats",
+            lambda: AuctionCampaign.reminder_stats(AuctionCampaign.objects.filter(kind=AuctionCampaign.KIND_VIEW)),
+            60 * 60,
+        )
 
     @property
     def number_of_reminder_emails(self):
@@ -5900,18 +5906,22 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"labels": [], "providers": [], "data": []}
 
     def set_stat_activity(self):
-        """Activity per day around the auction's end (online) or start (in person).
+        """Activity per day, counted from the auction's end (online) or start (in person).
 
-        The window stays anchored there even while the auction runs, with days still to come as
-        ``None`` (a gap on the chart), so a running auction lines up day for day with the one it's
-        compared to.
+        Bin ``i`` is day ``first_offset + i`` from that anchor, and the chart lines a compared
+        auction up by it. Normally 16 days before to 4 after, kept there while the auction runs with
+        days still to come as ``None`` (a gap); an auction more than 6 days off shows its last 21
+        days instead, so there is something to see.
         """
         bins = 21
-        days_before = 16
-        days_after = bins - days_before
+        day = timezone.timedelta(days=1)
         anchor = self.date_end if self.is_online else self.date_start
-        date_start = anchor - timezone.timedelta(days=days_before)
-        date_end = anchor + timezone.timedelta(days=days_after)
+        now = timezone.now()
+        first_offset = -16
+        if anchor > now + 6 * day:
+            first_offset = -math.ceil((anchor - now) / day) - 15
+        date_start = anchor + first_offset * day
+        date_end = date_start + bins * day
 
         views = self.page_views
         joins = AuctionTOS.objects.filter(auction=self)
@@ -5921,8 +5931,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         # Unwatched lots too: the chart counts when people watched.
         watches = Watch.all_objects.filter(lot_number__auction=self)
 
-        now = timezone.now()
-        future = [date_start + timezone.timedelta(days=i) > now for i in range(bins)]
+        future = [date_start + i * day > now for i in range(bins)]
 
         def binned(queryset, field):
             # Only the window: bin_data reads every row it's given.
@@ -5931,7 +5940,8 @@ class Auction(CachedPropertiesMixin, models.Model):
             return [None if later else count for count, later in zip(counts, future, strict=True)]
 
         return {
-            "labels": self._get_activity_labels(days_before, days_after),
+            "labels": self._get_activity_labels(range(first_offset, first_offset + bins)),
+            "first_offset": first_offset,
             "providers": ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"],
             "data": [
                 binned(views, "date_start"),
@@ -6470,14 +6480,13 @@ class Auction(CachedPropertiesMixin, models.Model):
 
         return stats
 
-    def _get_activity_labels(self, days_before, days_after):
-        """Helper method to generate labels for activity chart"""
-        before = [(f"{i} days before") for i in range(days_before, 0, -1)]
-        after = [(f"{i} days after") for i in range(1, days_after)]
-        midpoint = "start"
-        if self.is_online:
-            midpoint = "end"
-        return before + [midpoint] + after
+    def _get_activity_labels(self, offsets):
+        """ "3 days before", "end" (in person: "start"), "2 days after", one per day offset."""
+        midpoint = "end" if self.is_online else "start"
+        return [
+            f"{-offset} days before" if offset < 0 else f"{offset} days after" if offset else midpoint
+            for offset in offsets
+        ]
 
     def custom_random_counts(self, options, exclude=None):
         """How many live lots here, other than *exclude*, hold each of *options*, keyed by the option
@@ -11461,8 +11470,10 @@ class Watch(InvalidatesRelatedCache, models.Model):
             if not watch:
                 cls.objects.create(lot_number=lot, user=user)
             elif watch.is_deleted:
+                # Counted on the activity chart as a new watch, the day it happens.
                 watch.is_deleted = False
-                watch.save(update_fields=["is_deleted"])
+                watch.createdon = timezone.now()
+                watch.save(update_fields=["is_deleted", "createdon"])
         else:
             cls.objects.filter(lot_number=lot, user=user).update(is_deleted=True)
         # Lot.number_of_watchers
