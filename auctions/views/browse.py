@@ -741,15 +741,8 @@ class WatchOrUnwatch(APIView):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
             return HttpResponse("Failure")
-        obj = Watch.objects.filter(lot_number=lot, user=user).first()
-        if not obj:
-            obj = Watch.objects.create(lot_number=lot, user=user)
-        if watch == "false":  # string not bool...
-            obj.delete()
-        if obj:
-            return HttpResponse("Success")
-        else:
-            return HttpResponse("Failure")
+        Watch.set_watching(user, lot, watch != "false")  # string not bool...
+        return HttpResponse("Success")
 
 
 class PlaceBid(APIView):

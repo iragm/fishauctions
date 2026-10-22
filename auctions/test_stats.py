@@ -1223,3 +1223,142 @@ class LotsAddedAndLabelsPrintedByTests(StandardTestCase):
         page = response.content.decode()
         self.assertRegex(page, r"Lots added by sellers / by admins</td>\s*<td>1 / 1</td>")
         self.assertRegex(page, r"Labels first printed by sellers / by admins</td>\s*<td>0 / 0</td>")
+
+
+class ActivityChartAlignmentTests(StandardTestCase):
+    """The activity chart is anchored on the end of an online auction even while it runs, so two
+    auctions compared on it line up day for day."""
+
+    def test_running_auction_keeps_its_end_in_the_middle(self):
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=2, hours=1)
+        self.online_auction.save()
+        activity = self.online_auction.set_stat_activity()
+        self.assertEqual(activity["labels"][16], "end")
+        self.assertEqual(len(activity["labels"]), 21)
+        views = activity["data"][0]
+        # Days still to come are gaps, not zeros; today and before are counted.
+        self.assertEqual(views[14:], [None] * 7)
+        self.assertNotIn(None, views[:14])
+
+    def test_an_auction_weeks_away_shows_its_last_three_weeks(self):
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=30, hours=1)
+        self.online_auction.save()
+        activity = self.online_auction.set_stat_activity()
+        self.assertEqual(activity["first_offset"], -46)
+        self.assertEqual(activity["labels"][0], "46 days before")
+        self.assertEqual(activity["labels"][-1], "26 days before")
+        # Today is bin 15, so only the last five days are still to come.
+        self.assertEqual(activity["data"][0][16:], [None] * 5)
+        self.assertNotIn(None, activity["data"][0][:16])
+
+    def test_ended_auctions_line_up(self):
+        a = self.online_auction.set_stat_activity()
+        self.in_person_auction.is_online = True
+        self.in_person_auction.date_start = timezone.now() - datetime.timedelta(days=50)
+        self.in_person_auction.date_end = timezone.now() - datetime.timedelta(days=40)
+        self.in_person_auction.save()
+        b = self.in_person_auction.set_stat_activity()
+        self.assertEqual(a["labels"], b["labels"])
+        self.assertNotIn(None, b["data"][0])
+
+    def test_joins_land_on_the_day_relative_to_the_end(self):
+        end = timezone.now() - datetime.timedelta(days=10)
+        self.online_auction.date_start = end - datetime.timedelta(days=7)
+        self.online_auction.date_end = end
+        self.online_auction.save()
+        AuctionTOS.objects.filter(pk=self.tosB.pk).update(createdon=end - datetime.timedelta(hours=12))
+        joins = self.online_auction.set_stat_activity()["data"][1]
+        self.assertEqual(joins[15], 1)
+
+
+class WatchSoftDeleteTests(StandardTestCase):
+    """Un-watching keeps the row, so the stats still count everyone who watched."""
+
+    def test_unwatch_hides_but_keeps_the_row(self):
+        from auctions.models import Watch
+
+        Watch.set_watching(self.userB, self.lot, True)
+        Watch.set_watching(self.userB, self.lot, False)
+        self.assertFalse(Watch.objects.filter(user=self.userB, lot_number=self.lot).exists())
+        self.assertTrue(Watch.all_objects.filter(user=self.userB, lot_number=self.lot, is_deleted=True).exists())
+        self.assertEqual(Lot.objects.get(pk=self.lot.pk).number_of_watchers, 0)
+        feature_use = self.online_auction.set_stat_feature_use()
+        self.assertGreater(feature_use["data"][0][3], 0)
+        self.assertEqual(sum(n or 0 for n in self.online_auction.set_stat_activity()["data"][5]), 1)
+
+    def test_watching_again_revives_the_same_row(self):
+        from auctions.models import Watch
+
+        Watch.set_watching(self.userB, self.lot, True)
+        Watch.set_watching(self.userB, self.lot, False)
+        Watch.all_objects.filter(user=self.userB).update(createdon=timezone.now() - datetime.timedelta(days=10))
+        Watch.set_watching(self.userB, self.lot, True)
+        rows = Watch.all_objects.filter(user=self.userB, lot_number=self.lot)
+        self.assertEqual(rows.count(), 1)
+        self.assertGreater(rows.get().createdon, timezone.now() - datetime.timedelta(minutes=1))
+        self.assertEqual(Lot.objects.get(pk=self.lot.pk).number_of_watchers, 1)
+
+    def test_the_watch_endpoint_soft_deletes(self):
+        from auctions.models import Watch
+
+        self.client.force_login(self.userB)
+        url = f"/api/watchitem/{self.lot.pk}/"
+        self.client.post(url, {"watch": "true"})
+        self.client.post(url, {"watch": "false"})
+        self.assertTrue(Watch.all_objects.filter(user=self.userB, lot_number=self.lot, is_deleted=True).exists())
+        self.assertFalse(Watch.objects.filter(user=self.userB).exists())
+
+
+class JoinReminderStatsTests(StandardTestCase):
+    """Only reminders that went out count, and only joins after them."""
+
+    def _campaign(self, user, *, sent=True, result="NONE", hours_ago=48):
+        from auctions.models import AuctionCampaign
+
+        campaign = AuctionCampaign.objects.create(auction=self.online_auction, user=user, email=user.email)
+        AuctionCampaign.objects.filter(pk=campaign.pk).update(
+            email_sent=sent, result=result, timestamp=timezone.now() - datetime.timedelta(hours=hours_ago)
+        )
+        return campaign
+
+    def _stats(self):
+        return Auction.objects.get(pk=self.online_auction.pk).reminder_stats
+
+    def test_counts_only_what_was_sent(self):
+        stranger = User.objects.create_user(username="stranger", password="x", email="s@example.com")
+        self._campaign(stranger)
+        # Not yet picked up by the job, or picked up and not sent.
+        waiting = User.objects.create_user(username="waiting", password="x", email="w@example.com")
+        self._campaign(waiting, sent=False, hours_ago=2)
+        skipped = User.objects.create_user(username="skipped", password="x", email="k@example.com")
+        self._campaign(skipped, result="ERR")
+        self.assertEqual(self._stats(), {"sent": 1, "click_rate": 0, "join_rate": 0})
+
+    def test_a_member_who_joined_before_the_reminder_is_not_a_reminder_join(self):
+        # userB joined in the fixture, before this view: the job marked the row ERR, and a later
+        # save of their AuctionTOS must not turn it into a join.
+        campaign = self._campaign(self.userB, result="ERR")
+        self.tosB.save()
+        campaign.refresh_from_db()
+        self.assertEqual(campaign.result, "ERR")
+        self.assertEqual(self._stats()["sent"], 0)
+
+    def test_rows_already_flipped_to_joined_are_left_out(self):
+        # What the old AuctionTOS.save left behind: ERR turned into JOINED for someone already in.
+        AuctionTOS.objects.filter(pk=self.tosB.pk).update(createdon=timezone.now() - datetime.timedelta(hours=40))
+        self._campaign(self.userB, result="JOINED")
+        self.assertEqual(self._stats()["sent"], 0)
+
+    def test_click_and_join_after_the_reminder(self):
+        clicker = User.objects.create_user(username="clicker", password="x", email="c@example.com")
+        joiner = User.objects.create_user(username="joiner", password="x", email="j@example.com")
+        self._campaign(User.objects.create_user(username="ignorer", password="x", email="i@example.com"))
+        clicked = self._campaign(clicker)
+        self._campaign(joiner)
+        PageView.objects.create(user=clicker, auction=self.online_auction, source=clicked.uuid)
+        # Joined without clicking: a join, not a click.
+        AuctionTOS.objects.create(user=joiner, auction=self.online_auction, pickup_location=self.location)
+        stats = self._stats()
+        self.assertEqual(stats["sent"], 3)
+        self.assertAlmostEqual(stats["click_rate"], 100 / 3)
+        self.assertAlmostEqual(stats["join_rate"], 100 / 3)

@@ -3622,6 +3622,7 @@ class UserLocation(forms.ModelForm):
             "location_coordinates",
             "address",
             "club",
+            "location_confirmed",
         )
 
     def __init__(self, *args, **kwargs):
@@ -3649,6 +3650,10 @@ class UserLocation(forms.ModelForm):
         self.fields["club"].widget = HiddenInput()
         if self.instance.club:
             self.fields["club_affiliation"].initial = self.instance.club.name
+        # Only once a location is saved: the visit that first sets it has nothing to confirm yet.
+        has_location = bool(self.instance.pk and (self.instance.latitude or self.instance.longitude))
+        if not has_location:
+            del self.fields["location_confirmed"]
         self.helper.layout = Layout(
             "club",
             Div(
@@ -3677,6 +3682,7 @@ class UserLocation(forms.ModelForm):
             Div(
                 Div("address"),
                 Div("location_coordinates"),
+                *([Div("location_confirmed")] if has_location else []),
             ),
             Submit("submit", "Save", css_class="btn-success"),
         )
