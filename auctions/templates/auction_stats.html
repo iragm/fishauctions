@@ -603,7 +603,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
             <br>
             -->
             {% endif %}
-<br><h4>Promotions and join reminder emails</h4>
+<br><h4>Promotions and join reminders</h4>
 <p class="text-muted small">{% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}No join reminders: this auction has no in-person pickup location.{% else %}People who view without joining get a reminder a day later.{% endif %}</p>
 <div class="table-responsive">
 <table class="table table-striped">
@@ -618,21 +618,21 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
     </thead>
     <tbody>
         <tr>
-            <td>Users who received a join reminder email</td>
+            <td>Users sent a join reminder</td>
             <td>{{auction.number_of_reminder_emails}}</td>
             {% if compare_auction %}
             <td>{{compare_auction.number_of_reminder_emails}}</td>
             {% endif %}
         </tr>
         <tr>
-            <td>Click rate for join reminder email</td>
+            <td>Clicked the join reminder</td>
             <td>{{auction.reminder_email_clicks|floatformat:2}}% ({{auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
             {% if compare_auction %}
             <td>{{compare_auction.reminder_email_clicks|floatformat:2}}% ({{compare_auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
             {% endif %}
         </tr>
         <tr>
-            <td>Join rate for join reminder email</td>
+            <td>Joined after the join reminder</td>
             <td>{{auction.reminder_email_joins|floatformat:2}}% ({{auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
             {% if compare_auction %}
             <td>{{compare_auction.reminder_email_joins|floatformat:2}}% ({{compare_auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>

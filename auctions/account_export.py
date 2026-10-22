@@ -280,7 +280,7 @@ def export(user):
         ],
         "watched_lots": [
             {"lot": _plain(row.lot_number), "watched_since": _plain(row.createdon)}
-            for row in Watch.objects.filter(user=user).select_related("lot_number")
+            for row in Watch.all_objects.filter(user=user).select_related("lot_number")
         ],
         "bids_started_and_not_placed": [
             {"lot": _plain(row.lot), "how_far": row.get_stage_display(), "when": _plain(row.updatedon)}

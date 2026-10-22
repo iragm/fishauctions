@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14706 lines)
+- **`models.py`** (14770 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -213,7 +213,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16606 lines)
+- **`palette_actions.py`** (16602 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -625,7 +625,7 @@ this only quotes its opening sentence.
 - **`test_static_html.py`** (85 lines)
   ``format_html`` is never called with nothing to format, and ``static_html`` only ever takes a literal.
   `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
-- **`test_stats.py`** (1225 lines)
+- **`test_stats.py`** (1348 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
 - **`test_stats_and_browse_views.py`** (629 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
@@ -898,7 +898,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
 - **`urls.py`** (141 lines)
-- **`views.py`** (1581 lines)
+- **`views.py`** (1578 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -984,13 +984,13 @@ Every view on the site, split by the part of it the view belongs to.
 - **`auction_pages.py`** (1111 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
-- **`auction_stats.py`** (1116 lines)
+- **`auction_stats.py`** (1075 lines)
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1087 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (952 lines)
+- **`browse.py`** (945 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (508 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
