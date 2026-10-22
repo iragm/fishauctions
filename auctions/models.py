@@ -9,6 +9,7 @@ speakers, volunteers, printing, mobile, voice.
 A `.delay()` from a signal must go inside transaction.on_commit.
 """
 
+import collections
 import datetime
 import logging
 import math
@@ -6118,6 +6119,75 @@ class Auction(CachedPropertiesMixin, models.Model):
         }
 
     @property
+    def get_stat_join_sources(self):
+        """Join sources chart data from cached stats."""
+        if self.cached_stats and "join_sources" in self.cached_stats:
+            return self.cached_stats["join_sources"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_join_sources(self):
+        """How the people who joined found this auction, from the first view of it before joining that says.
+
+        A view says when it carries an arrival ``?src=``/``?utm_source=`` (not one of our own pages'
+        :data:`PageView.INTERNAL_SOURCES`) or another site's referrer. Where the link was pasted beats
+        "a copied link", so a ``copied_link`` view with an outside referrer counts as that referrer. The
+        anonymous views a joiner made before signing in count too, through ``SignInStitch``. Two queries
+        on this auction's views, bounded to its joiners and to before the last join. Views from before
+        2026-09-09 name only a lot, so older auctions are mostly "No link tracked".
+        """
+        from django.contrib.sites.models import Site
+
+        joined = dict(
+            AuctionTOS.objects.filter(auction=self, user__isnull=False, manually_added=False).values_list(
+                "user_id", "createdon"
+            )
+        )
+        first = {}
+        if joined:
+            # Referrers are stored without a scheme (``views.ajax.clean_referrer``).
+            domain = Site.objects.get_current().domain
+            says = (Q(source__gt="") & ~Q(source__in=PageView.INTERNAL_SOURCES)) | (
+                Q(referrer__gt="") & ~Q(referrer__startswith=domain)
+            )
+            views = PageView.objects.filter(says, auction=self, date_start__lte=max(joined.values()))
+            columns = ("source", "referrer", "date_start")
+            rows = list(views.filter(user_id__in=list(joined)).values_list("user_id", *columns))
+            stitched = dict(SignInStitch.objects.filter(user_id__in=list(joined)).values_list("session_id", "user_id"))
+            if stitched:
+                rows += [
+                    (stitched[session_id], *rest)
+                    for session_id, *rest in views.filter(user__isnull=True, session_id__in=list(stitched)).values_list(
+                        "session_id", *columns
+                    )
+                ]
+            for user_id, source, referrer, date_start in sorted(rows, key=lambda row: row[3]):
+                if user_id in first or date_start > joined[user_id]:
+                    continue
+                outside_referrer = referrer and not referrer.startswith(domain)
+                if (
+                    source
+                    and source not in PageView.INTERNAL_SOURCES
+                    and not (source == "copied_link" and outside_referrer)
+                ):
+                    first[user_id] = ("source", source)
+                elif outside_referrer:
+                    first[user_id] = ("referrer", referrer)
+        labels = PageView.source_labels({value for kind, value in first.values() if kind == "source"})
+        counts = collections.Counter()
+        for user_id in joined:
+            kind, value = first.get(user_id, ("source", ""))
+            if kind == "referrer":
+                counts[value.split("/")[0]] += 1
+            else:
+                counts[labels.get(value, PageView.SOURCE_LABELS[""])] += 1
+        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return {
+            "labels": [label for label, _ in ordered],
+            "providers": ["People who joined"],
+            "data": [[count for _, count in ordered]],
+        }
+
+    @property
     def get_stat_travel_distance(self):
         """Get travel distance chart data from cached stats"""
         if self.cached_stats and "travel_distance" in self.cached_stats:
@@ -6446,6 +6516,7 @@ class Auction(CachedPropertiesMixin, models.Model):
         stats["auctioneer_speed"] = self.set_stat_auctioneer_speed()
         stats["lot_sell_prices"] = self.set_stat_lot_sell_prices()
         stats["referrers"] = self.set_stat_referrers()
+        stats["join_sources"] = self.set_stat_join_sources()
         stats["travel_distance"] = self.set_stat_travel_distance()
         stats["previous_auctions"] = self.set_stat_previous_auctions()
         stats["lots_submitted"] = self.set_stat_lots_submitted()
@@ -9619,7 +9690,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         counts["total"] = sum(counts.values())
         return counts
 
-    # Labels for our own ``src`` values; anything else shows raw.
+    # Labels for the lot page's own ``src`` values; the rest are PageView.SOURCE_LABELS.
     PAGE_VIEW_SOURCE_LABELS = {
         "": "Opened the lot page directly",
         "ar": '"Open lot page" from lot scanning',
@@ -9627,13 +9698,6 @@ class Lot(CachedPropertiesMixin, models.Model):
         "ar_zoom": "Aimed at this label up close while scanning",
         "ar_zoom_full": "Held on the label until the lot card opened",
         "qr": "Scanned the printed QR code",
-        "lot_list": "From a lot list",
-        "recommended": "From recommended lots",
-        "feedback": "From the leave-feedback page",
-        "invoice_sold": "From an invoice (sold)",
-        "invoice_bought": "From an invoice (bought)",
-        "userpage": "From a user's page",
-        "ban_page": "From the no-show page",
     }
     # AR sources are one row per (user, lot), so views equal people.
     AR_PAGE_VIEW_SOURCES = ("ar_scan", "ar_zoom", "ar_zoom_full")
@@ -9641,33 +9705,11 @@ class Lot(CachedPropertiesMixin, models.Model):
     @cached_property
     def page_view_source_breakdown(self):
         """Page views grouped by ``src`` with unique viewers (users plus anonymous sessions), most first. One
-        query. None and "" are merged.
+        query, plus one when a join reminder or promotion sent anyone. Rows with the same label are merged.
         """
-        rows = (
-            PageView.objects.filter(lot_number=self.lot_number)
-            .values("source")
-            .annotate(
-                views=Count("pk"),
-                users=Count("user", distinct=True),
-                sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
-            )
+        return PageView.source_breakdown(
+            PageView.objects.filter(lot_number=self.lot_number), self.PAGE_VIEW_SOURCE_LABELS
         )
-        merged = {}
-        for row in rows:
-            source = row["source"] or ""
-            entry = merged.setdefault(
-                source,
-                {
-                    "source": source,
-                    "label": self.PAGE_VIEW_SOURCE_LABELS.get(source, source),
-                    "is_ar_event": source in self.AR_PAGE_VIEW_SOURCES,
-                    "views": 0,
-                    "unique": 0,
-                },
-            )
-            entry["views"] += row["views"]
-            entry["unique"] += row["users"] + row["sessions"]
-        return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
     @cached_property
     def number_of_bids(self):
@@ -11554,6 +11596,109 @@ class PageView(CachedPropertiesMixin, models.Model):
         ),
         default="UNKNOWN",
     )
+
+    #: Readable names for our own ``?src=`` / ``?utm_source=`` values. Anything else (a club's API key name,
+    #: another site's ``utm_source``) shows as written; a campaign's uuid is looked up (:meth:`source_labels`).
+    SOURCE_LABELS = {
+        "": "No link tracked",
+        "copied_link": "A copied link",
+        "lot_list": "From a lot list",
+        "lot_tile": "From a lot list",
+        "recommended": "From recommended lots",
+        "my_lots": "From the selling page",
+        "buying": "From the buying page",
+        "feedback": "From the leave-feedback page",
+        "invoice_sold": "From an invoice (sold)",
+        "invoice_bought": "From an invoice (bought)",
+        "userpage": "From a user's page",
+        "ban_page": "From the no-show page",
+        "chat": "From the messages page",
+        "chat_notification": "From a new-messages email",
+        "email": "From a watched-lots email",
+        "outbid": "From an outbid email",
+        "notification": "From an invoice email",
+        "weekly_email": "From the weekly email",
+        "admin": "From an admin page",
+        "twitter": "Shared on X (Twitter)",
+        "facebook": "Shared on Facebook",
+        "qr": "Scanned a printed QR code",
+        "ar": "From lot scanning in the app",
+        "ar_scan": "Scanned a label in the app",
+        "ar_zoom": "Aimed at a label up close in the app",
+        "ar_zoom_full": "Held on a label in the app",
+    }
+    #: Links between our own pages: how someone moved around once here, not how they arrived.
+    INTERNAL_SOURCES = (
+        "lot_list",
+        "lot_tile",
+        "recommended",
+        "my_lots",
+        "buying",
+        "feedback",
+        "invoice_sold",
+        "invoice_bought",
+        "userpage",
+        "ban_page",
+        "chat",
+        "admin",
+    )
+    _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+    @classmethod
+    def source_labels(cls, sources, overrides=None):
+        """``{source: label}`` for ``sources``. A source that is an ``AuctionCampaign`` uuid (join reminder and
+        promotion links carry one) is named for its campaign: one query, only when there are any.
+        """
+        labels = {**cls.SOURCE_LABELS, **(overrides or {})}
+        result = {source: labels.get(source, source) for source in sources}
+        uuids = [source for source in sources if source and cls._UUID.match(source)]
+        if uuids:
+            for uuid, kind, source in AuctionCampaign.objects.filter(uuid__in=uuids).values_list(
+                "uuid", "kind", "source"
+            ):
+                if kind == AuctionCampaign.KIND_VIEW:
+                    result[uuid] = "From a join reminder email"
+                elif source == AuctionCampaign.SOURCE_PROMO_PUSH:
+                    result[uuid] = "From a promotion in the app"
+                else:
+                    result[uuid] = "From a promotion email"
+        return result
+
+    @classmethod
+    def source_breakdown(cls, page_views, overrides=None):
+        """``page_views`` grouped by source, labelled, most viewed first: ``source`` (the first), ``sources``
+        (all of them), ``label``, ``is_ar_event``, ``views`` and ``unique`` (users plus anonymous sessions). None
+        and "" are one source, and sources that share a label are one row.
+        """
+        rows = list(
+            page_views.values("source").annotate(
+                views=Count("pk"),
+                users=Count("user", distinct=True),
+                sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
+            )
+        )
+        labels = cls.source_labels({row["source"] or "" for row in rows}, overrides)
+        merged = {}
+        for row in rows:
+            source = row["source"] or ""
+            label = labels[source]
+            entry = merged.setdefault(
+                label,
+                {
+                    "source": source,
+                    "sources": [],
+                    "label": label,
+                    "is_ar_event": source in Lot.AR_PAGE_VIEW_SOURCES,
+                    "views": 0,
+                    "unique": 0,
+                },
+            )
+            if source not in entry["sources"]:
+                entry["sources"].append(source)
+            entry["is_ar_event"] = entry["is_ar_event"] or source in Lot.AR_PAGE_VIEW_SOURCES
+            entry["views"] += row["views"]
+            entry["unique"] += row["users"] + row["sessions"]
+        return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
 
     def __str__(self):
         thing = self.url
