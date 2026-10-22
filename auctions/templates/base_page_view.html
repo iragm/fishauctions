@@ -16,19 +16,34 @@ tasks.backfill_page_view_auctions is walking those rows in the background so tha
 auctions/test_page_view_beacon.py is the ratchet for all of it.{% endcomment %}
 
 <script>
-    var urlParams = new URLSearchParams(window.location.search);
-    var src = urlParams.get('src');
-    var uid = urlParams.get('uid');
-    // Remove the "src" parameter from the URL
-    var newUrl = window.location.href.replace(/(\?|&)src=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
-    // Remove uid
-    newUrl = newUrl.replace(/(\?|&)uid=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
-    window.history.replaceState(null, document.title, newUrl)
     {% comment %}Empty on the pages that are not about a lot or an auction, which is most of them. The server treats an empty string as "not given" -- see PageViewCreate in views/ajax.py.{% endcomment %}
     var pageViewSubject = {
         lot: "{{ page_view_lot|default_if_none:'' }}",
         auction: "{{ page_view_auction|default_if_none:'' }}",
     };
+    {% comment %}Where a visitor came from: ?src= on our own links (older ones), ?utm_source= on the rest and
+    on other sites' links. Both are taken off the address bar along with uid and the other utm_ tags, and
+    a lot or auction page gets utm_source=copied_link back, so a link copied out of the address bar says
+    so. A reload or a back button is the same visit, not a copied link. The app has no address bar.
+    rewrite_url is the address of the page a view drew somewhere else ("/" draws the lot list), so what is
+    copied opens the same page.{% endcomment %}
+    var urlParams = new URLSearchParams(window.location.search);
+    var src = urlParams.get('src') || urlParams.get('utm_source');
+    var uid = urlParams.get('uid');
+    var navigation = (performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || {};
+    if (src === 'copied_link' && (navigation.type === 'reload' || navigation.type === 'back_forward')) {
+        src = null;
+    }
+    var cleanUrl = new URL("{{ rewrite_url|default:''|escapejs }}" || window.location.href, window.location.href);
+    cleanUrl.hash = window.location.hash;
+    Array.from(cleanUrl.searchParams.keys()).forEach(function (key) {
+        if (key === 'src' || key === 'uid' || key.indexOf('utm_') === 0) { cleanUrl.searchParams.delete(key); }
+    });
+    {% if not request.is_mobile_app %}if (pageViewSubject.lot || pageViewSubject.auction) {
+        cleanUrl.searchParams.set('utm_source', 'copied_link');
+    }{% endif %}
+    {% comment %}URLSearchParams writes "?slug=" for the bare "?slug" that "/" reads an auction from.{% endcomment %}
+    window.history.replaceState(null, document.title, cleanUrl.pathname + cleanUrl.search.replace(/=(?=&|$)/g, '') + cleanUrl.hash);
     var pageViewSent = false;
     function pageView(data) {
         if (pageViewSent) { return; }

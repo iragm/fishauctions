@@ -111,7 +111,7 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     """A short traffic history: totals, a breakdown by ``?src=``, a daily stacked chart and top referrers.
 
     ``page_views`` must already be narrowed to what this reader may see; this adds the date bound. Four
-    aggregate queries, no rows fetched. ``source`` is the primary breakdown because we label it;
+    aggregate queries (five if a campaign link was used), no rows fetched. ``source`` is the primary breakdown because we label it;
     ``referrer`` is usually a bare origin (strict-origin-when-cross-origin), kept for "who linked here".
     """
     now = timezone.localtime()
@@ -119,27 +119,8 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     recent = page_views.filter(date_start__gte=start)
 
-    # None and "" both mean no ?src=, merged as in Lot.page_view_source_breakdown.
-    merged = {}
-    for row in recent.values("source").annotate(
-        views=Count("pk"),
-        users=Count("user", distinct=True),
-        sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
-    ):
-        source = row["source"] or ""
-        entry = merged.setdefault(
-            source,
-            {
-                "source": source,
-                "label": Lot.PAGE_VIEW_SOURCE_LABELS.get(source, source),
-                "is_ar_event": source in Lot.AR_PAGE_VIEW_SOURCES,
-                "views": 0,
-                "unique": 0,
-            },
-        )
-        entry["views"] += row["views"]
-        entry["unique"] += row["users"] + row["sessions"]
-    sources = sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
+    # Every view here is a lot page, so the lot page's labels apply.
+    sources = PageView.source_breakdown(recent, Lot.PAGE_VIEW_SOURCE_LABELS)
 
     # One group-by gives both day totals and the per-source split.
     counted = collections.defaultdict(int)
@@ -149,7 +130,11 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     # Every day gets a column, quiet ones included. Sources beyond the cap become "Everything else".
     window = [first_day + timedelta(days=offset) for offset in range(days)]
     bands = [row["label"] for row in sources[:PAGE_VIEW_HISTORY_CHART_SOURCES]]
-    band_of = {row["source"]: min(index, PAGE_VIEW_HISTORY_CHART_SOURCES) for index, row in enumerate(sources)}
+    band_of = {
+        source: min(index, PAGE_VIEW_HISTORY_CHART_SOURCES)
+        for index, row in enumerate(sources)
+        for source in row["sources"]
+    }
     if len(sources) > PAGE_VIEW_HISTORY_CHART_SOURCES:
         bands.append("Everything else")
     chart_data = [[0] * days for _ in bands]
@@ -250,23 +235,30 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
         )
 
 
+def seller_lot_ids(user):
+    """Pks of the lots ``user`` sells (matched as ``UserLotFilter`` does), as a list.
+
+    A list, not a subquery: given ``lot_number__in=<subquery with an OR across a join>`` MariaDB drove
+    the PageView side by ``date_start`` and probed every view on the site in the window, about a minute
+    for a seller with a few hundred views. A literal list keeps it on the lot index. Two queries rather
+    than the OR, which can't use an index either.
+    """
+    lots = Lot.objects.exclude(is_deleted=True).order_by()
+    ids = set(lots.filter(user=user).values_list("pk", flat=True))
+    ids.update(lots.filter(auctiontos_seller__user=user).values_list("pk", flat=True))
+    return sorted(ids)
+
+
 class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
-    """The same 15 days totalled over the requesting user's lots (matched as ``UserLotFilter`` does), as a
-    subquery so the PageView query stays owner-bounded. Kept per user for
-    :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`, so only the first click waits for it.
+    """The same 15 days totalled over the requesting user's lots (:func:`seller_lot_ids`). Kept per user
+    for :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`, so only the first click waits for it.
     """
 
     def get(self, request):
         key = f"selling_page_view_history:{request.user.pk}"
         history = cache.get(key)
         if history is None:
-            lots = (
-                Lot.objects.exclude(is_deleted=True)
-                .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
-                .order_by()
-                .values("pk")
-            )
-            history = page_view_history(PageView.objects.filter(lot_number__in=lots))
+            history = page_view_history(PageView.objects.filter(lot_number_id__in=seller_lot_ids(request.user)))
             cache.set(key, history, SELLING_PAGE_VIEW_HISTORY_SECONDS)
         return render(
             request,

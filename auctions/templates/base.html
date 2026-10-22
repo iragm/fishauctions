@@ -25,13 +25,6 @@
   })(window,document,'script','dataLayer','{{ GOOGLE_TAG_ID }}');</script>{% endif %}
   <!-- End Google Tag Manager -->
 {% endblock %}
-{% if rewrite_url %}
-<script>
-window.onload = function() {
-    history.pushState("{{ rewrite_url }}", "", "{{ rewrite_url }}");
-}
-</script>
-{% endif %}
   <html class="no-js" lang="en" data-bs-theme="dark">
     <head>
         <meta charset="utf-8" />
