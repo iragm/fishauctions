@@ -27,6 +27,8 @@ auctions/test_page_view_beacon.py is the ratchet for all of it.{% endcomment %}
     so. A reload or a back button is the same visit, not a copied link. The app has no address bar.
     rewrite_url is the address of the page a view drew somewhere else ("/" draws the lot list), so what is
     copied opens the same page.{% endcomment %}
+    {% comment %}PageView.url is the address asked for, so it is read before the rewrite.{% endcomment %}
+    var pageViewPath = window.location.pathname;
     var urlParams = new URLSearchParams(window.location.search);
     var src = urlParams.get('src') || urlParams.get('utm_source');
     var uid = urlParams.get('uid');
@@ -52,7 +54,7 @@ auctions/test_page_view_beacon.py is the ratchet for all of it.{% endcomment %}
         data.src = src;
         data.uid = uid;
         {# PageView.url stores a site-relative path -- see page_view_path() in views/ajax.py. #}
-        data.url = window.location.pathname;
+        data.url = pageViewPath;
         data.title = document.title;
         data.referrer = document.referrer;
         {% comment %}The server only writes a row for first_view. The ten-second heartbeat that sent

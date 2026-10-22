@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14818 lines)
+- **`models.py`** (14851 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -561,7 +561,7 @@ this only quotes its opening sentence.
 - **`test_page_view_history_is_kept.py`** (47 lines)
   Repeat views of a page are history, not duplicates.
   `RepeatViewsAreKeptTests`
-- **`test_page_view_sources.py`** (155 lines)
+- **`test_page_view_sources.py`** (196 lines)
   Where visitors came from, and the address the browser is left showing.
   `SourceLabelTests`, `SellerLotIdsTests`, `JoinSourcesStatTests`, `AddressBarTests`
 - **`test_page_view_url.py`** (116 lines)

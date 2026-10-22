@@ -10,7 +10,7 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Auction, AuctionCampaign, AuctionTOS, Lot, PageView, PickupLocation
+from auctions.models import Auction, AuctionCampaign, AuctionTOS, Lot, PageView, PickupLocation, SignInStitch
 from auctions.tests import StandardTestCase
 from auctions.views import page_view_history
 from auctions.views.lot_pages import seller_lot_ids
@@ -104,7 +104,8 @@ class JoinSourcesStatTests(StandardTestCase):
         _view(auction=self.auction, user=first, source="facebook", when=before - timedelta(hours=1))
         _view(auction=self.auction, user=first, source="copied_link", when=before)
         _view(auction=self.auction, user=second, source="copied_link", when=before)
-        _view(auction=self.auction, user=third, referrer="https://www.facebook.com/", when=before)
+        # Stored as clean_referrer leaves it: no scheme.
+        _view(auction=self.auction, user=third, referrer="forum.example.com/t/123", when=before)
         # After joining: not how they found it.
         _view(auction=self.auction, user=fourth, source="newsletter", when=self.joined_at + timedelta(hours=1))
         self.assertEqual(
@@ -112,14 +113,49 @@ class JoinSourcesStatTests(StandardTestCase):
             {
                 "Shared on Facebook": 1,
                 "A copied link": 1,
-                "www.facebook.com": 1,
+                "forum.example.com": 1,
                 "No link tracked": 2,  # the fourth and fifth; the admin-added one isn't a join
             },
         )
 
+    def test_our_own_pages_are_not_how_anyone_arrived(self):
+        before = self.joined_at - timedelta(hours=1)
+        first, second, *_ = self.people
+        _view(auction=self.auction, user=first, source="lot_tile", referrer="example.com/lots", when=before)
+        _view(auction=self.auction, user=second, source="lot_list", when=before - timedelta(minutes=5))
+        _view(auction=self.auction, user=second, source="email", when=before)
+        stat = self.stat()
+        self.assertEqual(stat["From a watched-lots email"], 1)
+        self.assertNotIn("From a lot list", stat)
+
+    def test_where_a_copied_link_was_pasted_beats_copied_link(self):
+        _view(
+            auction=self.auction,
+            user=self.people[0],
+            source="copied_link",
+            referrer="Facebook",
+            when=self.joined_at - timedelta(hours=1),
+        )
+        self.assertEqual(self.stat()["Facebook"], 1)
+
+    def test_views_from_before_signing_in_count(self):
+        SignInStitch.objects.create(user=self.people[0], session_id="anon-before-signup")
+        _view(
+            auction=self.auction,
+            session_id="anon-before-signup",
+            source="twitter",
+            when=self.joined_at - timedelta(days=1),
+        )
+        self.assertEqual(self.stat()["Shared on X (Twitter)"], 1)
+
     def test_nobody_joined(self):
         AuctionTOS.objects.filter(auction=self.auction).delete()
         self.assertEqual(self.stat(), {})
+
+    def test_stats_page_leaves_it_out_until_there_is_data(self):
+        self.client.force_login(self.user)
+        url = reverse("auction_stats", kwargs={"slug": self.auction.slug})
+        self.assertNotContains(self.client.get(url), "auction_stats_join_sources")
 
     def test_stats_page_renders_it(self):
         self.auction.recalculate_stats()
@@ -133,6 +169,11 @@ class AddressBarTests(StandardTestCase):
     def test_lot_page_tags_the_address_with_copied_link(self):
         html = self.client.get(self.lot.lot_link, HTTP_USER_AGENT="Mozilla/5.0").content.decode()
         self.assertIn("cleanUrl.searchParams.set('utm_source', 'copied_link')", html)
+
+    def test_the_view_is_recorded_at_the_address_asked_for(self):
+        html = self.client.get(self.lot.lot_link).content.decode()
+        self.assertIn("var pageViewPath = window.location.pathname;", html)
+        self.assertLess(html.index("var pageViewPath"), html.index("window.history.replaceState"))
 
     def test_not_in_the_app(self):
         app = self.client.get(self.lot.lot_link, HTTP_USER_AGENT="Mozilla/5.0 FishAuctionsApp/1.0 (Flutter; iOS)")

@@ -19,7 +19,7 @@ import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 import channels.layers
 from asgiref.sync import async_to_sync
@@ -6118,10 +6118,14 @@ class Auction(CachedPropertiesMixin, models.Model):
         return {"labels": [], "providers": [], "data": []}
 
     def set_stat_join_sources(self):
-        """How the people who joined found this auction: for each, the first view of it before joining that
-        carried a ``?src=``/``?utm_source=`` (labelled as ``PageView.source_labels`` does), else another
-        site's referrer, else "No link tracked". One query on this auction's views, bounded to its joiners.
-        Views from before 2026-09-09 name only a lot, so older auctions are mostly "No link tracked".
+        """How the people who joined found this auction, from the first view of it before joining that says.
+
+        A view says when it carries an arrival ``?src=``/``?utm_source=`` (not one of our own pages'
+        :data:`PageView.INTERNAL_SOURCES`) or another site's referrer. Where the link was pasted beats
+        "a copied link", so a ``copied_link`` view with an outside referrer counts as that referrer. The
+        anonymous views a joiner made before signing in count too, through ``SignInStitch``. Two queries
+        on this auction's views, bounded to its joiners and to before the last join. Views from before
+        2026-09-09 name only a lot, so older auctions are mostly "No link tracked".
         """
         from django.contrib.sites.models import Site
 
@@ -6130,29 +6134,42 @@ class Auction(CachedPropertiesMixin, models.Model):
                 "user_id", "createdon"
             )
         )
-        domain = Site.objects.get_current().domain
-        own = (domain, f"https://{domain}", f"http://{domain}")
         first = {}
         if joined:
-            views = (
-                PageView.objects.filter(auction=self, user_id__in=list(joined))
-                .filter(Q(source__gt="") | Q(referrer__gt=""))
-                .order_by("date_start")
-                .values_list("user_id", "source", "referrer", "date_start")
+            # Referrers are stored without a scheme (``views.ajax.clean_referrer``).
+            domain = Site.objects.get_current().domain
+            says = (Q(source__gt="") & ~Q(source__in=PageView.INTERNAL_SOURCES)) | (
+                Q(referrer__gt="") & ~Q(referrer__startswith=domain)
             )
-            for user_id, source, referrer, date_start in views:
+            views = PageView.objects.filter(says, auction=self, date_start__lte=max(joined.values()))
+            columns = ("source", "referrer", "date_start")
+            rows = list(views.filter(user_id__in=list(joined)).values_list("user_id", *columns))
+            stitched = dict(SignInStitch.objects.filter(user_id__in=list(joined)).values_list("session_id", "user_id"))
+            if stitched:
+                rows += [
+                    (stitched[session_id], *rest)
+                    for session_id, *rest in views.filter(user__isnull=True, session_id__in=list(stitched)).values_list(
+                        "session_id", *columns
+                    )
+                ]
+            for user_id, source, referrer, date_start in sorted(rows, key=lambda row: row[3]):
                 if user_id in first or date_start > joined[user_id]:
                     continue
-                if source:
+                outside_referrer = referrer and not referrer.startswith(domain)
+                if (
+                    source
+                    and source not in PageView.INTERNAL_SOURCES
+                    and not (source == "copied_link" and outside_referrer)
+                ):
                     first[user_id] = ("source", source)
-                elif referrer and not referrer.startswith(own):
+                elif outside_referrer:
                     first[user_id] = ("referrer", referrer)
         labels = PageView.source_labels({value for kind, value in first.values() if kind == "source"})
         counts = collections.Counter()
         for user_id in joined:
             kind, value = first.get(user_id, ("source", ""))
             if kind == "referrer":
-                counts[urlparse(value).netloc or value] += 1
+                counts[value.split("/")[0]] += 1
             else:
                 counts[labels.get(value, PageView.SOURCE_LABELS[""])] += 1
         ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
@@ -11573,6 +11590,21 @@ class PageView(CachedPropertiesMixin, models.Model):
         "ar_zoom": "Aimed at a label up close in the app",
         "ar_zoom_full": "Held on a label in the app",
     }
+    #: Links between our own pages: how someone moved around once here, not how they arrived.
+    INTERNAL_SOURCES = (
+        "lot_list",
+        "lot_tile",
+        "recommended",
+        "my_lots",
+        "buying",
+        "feedback",
+        "invoice_sold",
+        "invoice_bought",
+        "userpage",
+        "ban_page",
+        "chat",
+        "admin",
+    )
     _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
     @classmethod
@@ -11626,6 +11658,7 @@ class PageView(CachedPropertiesMixin, models.Model):
             )
             if source not in entry["sources"]:
                 entry["sources"].append(source)
+            entry["is_ar_event"] = entry["is_ar_event"] or source in Lot.AR_PAGE_VIEW_SOURCES
             entry["views"] += row["views"]
             entry["unique"] += row["users"] + row["sessions"]
         return sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
