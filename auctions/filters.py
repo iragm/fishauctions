@@ -56,6 +56,7 @@ from .models import (
     distance_to,
 )
 from .queryset_annotations import add_tos_info
+from .species_matching import lots_of_species_q
 
 #: LotFilter's search box: at most this many characters and this many " or " alternatives.
 TEXT_FILTER_MAX_LENGTH = 200
@@ -458,6 +459,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_dropdown__icontains=value)
                 | Q(custom_random__iexact=value)
                 | Q(auction__title__icontains=value)
+                | lots_of_species_q(value, getattr(getattr(self, "request", None), "user", None))
             )
         return queryset
 
@@ -1066,6 +1068,7 @@ class LotFilter(django_filters.FilterSet):
                     # branch above, where a number means a lot number.
                     | Q(custom_random__iexact=fragment)
                     | Q(auctiontos_seller__bidder_number=fragment)
+                    | lots_of_species_q(fragment, self.user)
                 )
             return queryset.filter(qList)
 
@@ -1164,6 +1167,7 @@ class BuyingLotFilter(django_filters.FilterSet):
                 | Q(species__scientific_name__icontains=value)
                 | Q(species__common_name__icontains=value)
                 | Q(custom_lot_number=value)
+                | lots_of_species_q(value, self.request.user)
             )
             if value.isdecimal():
                 q |= Q(lot_number_int=value)

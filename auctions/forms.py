@@ -175,6 +175,22 @@ if (!window.speciesSearchWired) {
   (function () {
     var timer = null;
     function results(box) { return box.querySelector('[data-species-search-results]'); }
+    function choose(box, id, text) {
+      var select = document.getElementById(box.dataset.speciesSearch);
+      if (!select) { return; }
+      if (!select.querySelector('option[value="' + id + '"]')) {
+        var option = document.createElement('option');
+        option.value = id;
+        option.textContent = text;
+        select.appendChild(option);
+      }
+      select.value = id;
+      // Marks it as a person's choice, so a later lot-name edit can't quietly replace it.
+      select.dataset.userChosen = '1';
+      $(select).trigger('change');
+      results(box).innerHTML = '';
+      box.querySelector('input').value = '';
+    }
     function run(box) {
       var query = box.querySelector('input').value.trim();
       var list = results(box);
@@ -189,7 +205,16 @@ if (!window.speciesSearchWired) {
           var empty = document.createElement('div');
           empty.className = 'list-group-item text-muted small';
           empty.textContent = 'No species found. ';
-          if (box.dataset.speciesAdd) {
+          var words = query.split(/\\s+/).length;
+          if (box.dataset.speciesCreate && words >= 2 && words <= 3) {
+            // A scientific name the list lacks: one click adds it, for this seller only until reviewed.
+            var create = document.createElement('button');
+            create.type = 'button';
+            create.className = 'btn btn-link btn-sm p-0 align-baseline';
+            create.dataset.speciesCreate = query;
+            create.textContent = 'Add ' + query;
+            empty.appendChild(create);
+          } else if (box.dataset.speciesAdd) {
             var add = document.createElement('a');
             add.href = '/species/new/?lot_name=' + encodeURIComponent(query)
                      + '&next=' + encodeURIComponent(window.location.pathname);
@@ -216,22 +241,25 @@ if (!window.speciesSearchWired) {
       clearTimeout(timer);
       timer = setTimeout(function () { run(box); }, 250);
     });
-    $(document).on('click', '[data-species-search-results] button', function () {
-      var box = this.closest('[data-species-search]');
-      var select = document.getElementById(box.dataset.speciesSearch);
-      if (!select) { return; }
-      if (!select.querySelector('option[value="' + this.dataset.speciesId + '"]')) {
-        var option = document.createElement('option');
-        option.value = this.dataset.speciesId;
-        option.textContent = this.textContent;
-        select.appendChild(option);
-      }
-      select.value = this.dataset.speciesId;
-      // Marks it as a person's choice, so a later lot-name edit can't quietly replace it.
-      select.dataset.userChosen = '1';
-      $(select).trigger('change');
-      results(box).innerHTML = '';
-      box.querySelector('input').value = '';
+    $(document).on('click', '[data-species-search-results] button[data-species-id]', function () {
+      choose(this.closest('[data-species-search]'), this.dataset.speciesId, this.textContent);
+    });
+    $(document).on('click', '[data-species-search-results] button[data-species-create]', function () {
+      var button = this;
+      var box = button.closest('[data-species-search]');
+      var form = box.closest('form');
+      var token = form && form.querySelector('[name=csrfmiddlewaretoken]');
+      button.disabled = true;
+      function refused(message) { button.replaceWith(document.createTextNode(message || 'Could not add it.')); }
+      $.post(box.dataset.speciesCreate, {
+        scientific_name: button.dataset.speciesCreate,
+        csrfmiddlewaretoken: token ? token.value : ''
+      }).done(function (data) {
+        // A signed-out session answers with the login page, not JSON.
+        if (data && data.id) { choose(box, data.id, data.text); } else { refused(); }
+      }).fail(function (xhr) {
+        refused(xhr.responseJSON && xhr.responseJSON.error);
+      });
     });
   })();
 }
@@ -246,10 +274,11 @@ class SpeciesSelect(forms.Select):
     ``searchable`` adds a search box for species the matcher can't reach from the name. Off by default.
     """
 
-    def __init__(self, attrs=None, choices=(), *, searchable=False, can_add=False):
+    def __init__(self, attrs=None, choices=(), *, searchable=False, can_add=False, can_create=False):
         super().__init__(attrs, choices)
         self.searchable = searchable
         self.can_add = can_add
+        self.can_create = can_create
 
     def optgroups(self, name, value, attrs=None):
         chosen = [str(item) for item in value if item not in ("", None)]
@@ -267,6 +296,8 @@ class SpeciesSelect(forms.Select):
             return html
         select_id = (attrs or {}).get("id") or f"id_{name}"
         add = ' data-species-add="1"' if self.can_add else ""
+        if self.can_create:
+            add += f' data-species-create="{escape(reverse("species_quick_create"))}"'
         return mark_safe(  # noqa: S308 - the only interpolation is an id Django built
             html
             + f'<div class="species-search mt-1" data-species-search="{escape(select_id)}"{add}>'
@@ -300,6 +331,7 @@ def configure_species_field(
     always_render=False,
     searchable=False,
     can_add=False,
+    can_create=False,
     picker=True,
     dal_for=None,
 ):
@@ -307,7 +339,8 @@ def configure_species_field(
 
     Hidden (not removed) when the auction has the field off; ``clean_species_for_auction`` ignores
     posted values. ``always_render`` is for the form where the auction is chosen in the form.
-    ``can_add`` offers "add to the list" and assumes an auction-admin audience. ``picker=False`` is the
+    ``can_add`` offers "add to the list" and assumes an auction-admin audience. ``can_create`` offers a
+    one-click add of a typed scientific name the search can't find (``SpeciesQuickCreate``). ``picker=False`` is the
     quick-add pages: a hidden input filled from one certain match, still validated.
     """
     field = fields.get(field_name)
@@ -344,6 +377,7 @@ def configure_species_field(
         attrs={"class": "form-select species-select", "data-species-select": "1"},
         searchable=searchable,
         can_add=can_add,
+        can_create=can_create,
     )
     field.help_text = "Suggested from the lot name.  Pick No species for equipment and mixed lots."
     if searchable:
@@ -3151,7 +3185,7 @@ class CreateLotForm(forms.ModelForm):
         self.fields["custom_dropdown"].required = False
         self.fields["custom_dropdown"].help_text = ""
         # Always rendered, shown and hidden by JS with the chosen auction.
-        configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
+        configure_species_field(self.fields, selected_auction, always_render=True, searchable=True, can_create=True)
         narrow_categories(
             self.fields["species_category"],
             selected_auction,
