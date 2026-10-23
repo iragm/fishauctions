@@ -1,0 +1,27 @@
+{% comment %}The confirm-bid dialog, shared by the lot page and the buying dashboard's quick bid. The page's
+own script fills #confirmDialogText and wires #finalize-bid. with_amount adds an amount box for a page
+that has none of its own; the script sets its currency, step and starting value per lot.{% endcomment %}
+<div class="modal fade" id="confirmBid" tabindex="-1" role="dialog" aria-labelledby="confirmBidLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="confirmBidLabel">Confirm bid</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                {% if with_amount %}
+                <div class="input-group has-validation mb-3" style="max-width: 14rem;">
+                    <span class="input-group-text" id="confirmBidCurrency">$</span>
+                    <input type="number" id="confirmBidAmount" class="form-control" min="1" step="1" aria-label="Amount">
+                    <div class="invalid-feedback">Enter an amount to bid</div>
+                </div>
+                {% endif %}
+                <div id='confirmDialogText'>Enter an amount</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id='finalize-bid' class="btn btn-success text-dark">Place bid</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>

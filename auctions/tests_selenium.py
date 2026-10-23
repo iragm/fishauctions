@@ -24,7 +24,17 @@ from django.test import Client, SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions.models import Auction, AuctionTOS, Bid, Category, Lot, LotQueueEntry, PickupLocation, UserData
+from auctions.models import (
+    Auction,
+    AuctionTOS,
+    Bid,
+    Category,
+    Lot,
+    LotQueueEntry,
+    PickupLocation,
+    UserData,
+    Watch,
+)
 
 try:
     from channels.testing import ChannelsLiveServerTestCase
@@ -1121,6 +1131,50 @@ class BidPlacementE2ETests(LiveBiddingTestCase):
         self.assertIn(bob.username, self.text_of(alice_browser, "high_bidder_name"))
         self.assertNotIn("30", self.text_of(alice_browser, "price"))
         self.assertNotIn("30", self.text_of(alice_browser, "high_bidder_name"))
+
+
+@unittest.skipUnless(
+    CHANNELS_LIVE_AVAILABLE and SELENIUM_AVAILABLE and selenium_available(),
+    "Selenium and channels' live server are both needed",
+)
+@tag("selenium")
+class BuyingDashboardLiveTests(LiveBiddingTestCase):
+    """Quick bid from the buying dashboard, and its table following somebody else's bid without a reload."""
+
+    def _cell(self, driver):
+        # One read in the page: the refresh swaps the rows, so a held element can go stale mid-read.
+        return driver.execute_script(
+            "var t = document.querySelector('#table-container tbody'); return t ? t.innerText : '';"
+        )
+
+    def test_quick_bid_then_outbid_live(self):
+        alice = self.make_bidder("e2e_quick_alice")
+        bob = self.make_bidder("e2e_quick_bob")
+        Watch.objects.create(user=alice, lot_number=self.lot)
+        alice_browser = self.new_browser(alice)
+        alice_browser.get(self.live_server_url + reverse("buying") + f"?auction={self.auction.slug}")
+        WebDriverWait(alice_browser, 30).until(
+            lambda d: d.execute_script(
+                "var s = window.buyingWebSocket && window.buyingWebSocket(); return !!s && s.readyState === 1"
+            )
+        )
+        self.assertIn("Watched", self._cell(alice_browser))
+
+        alice_browser.find_element(By.CSS_SELECTOR, ".quick-bid").click()
+        amount = WebDriverWait(alice_browser, 10).until(EC.visibility_of_element_located((By.ID, "confirmBidAmount")))
+        self.assertEqual(amount.get_attribute("value"), "10")
+        amount.clear()
+        amount.send_keys("25")
+        WebDriverWait(alice_browser, 10).until(EC.element_to_be_clickable((By.ID, "finalize-bid"))).click()
+        WebDriverWait(alice_browser, 15).until(lambda d: "your max $25" in self._cell(d))
+        self.assertIn("Bid", self._cell(alice_browser))
+
+        bob_browser = self.new_browser(bob)
+        self.open_lot(bob_browser)
+        self.place_bid(bob_browser, 40)
+        WebDriverWait(alice_browser, 15).until(lambda d: "Outbid" in self._cell(d))
+        self.assertIn("your max $25", self._cell(alice_browser))
+        self.assertNotIn("40", self._cell(alice_browser))
 
 
 @unittest.skipUnless(

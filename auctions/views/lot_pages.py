@@ -8,7 +8,6 @@ import collections
 import logging
 import secrets
 from datetime import timedelta
-from decimal import Decimal
 from random import randint
 from urllib.parse import urlencode
 
@@ -388,12 +387,7 @@ class ViewLot(DetailView):
             if viewer_bid:
                 context["viewer_bid_pk"] = viewer_bid.pk
                 context["viewer_bid"] = viewer_bid.amount
-                if lot.auction and not lot.auction.only_whole_dollar_bids:
-                    defaultBidAmount = viewer_bid.amount + Decimal("0.01")
-                else:
-                    defaultBidAmount = viewer_bid.amount + 1
             else:
-                defaultBidAmount = 0
                 context["viewer_bid"] = None
             # App push replaces browser subscription; a WebView has no Push API either.
             context["has_app_push"] = user_has_app_push(self.request.user)
@@ -404,37 +398,13 @@ class ViewLot(DetailView):
                 context["has_app_push"] or PushInformation.objects.filter(user=self.request.user).exists()
             )
         else:
-            defaultBidAmount = 0
             context["viewer_bid"] = None
             context["has_app_push"] = False
             context["can_subscribe_to_webpush"] = False
             context["has_push_subscription"] = False
-        if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
-            defaultBidAmount = lot.buy_now_price
-            context["force_buy_now"] = True
-        else:
-            context["force_buy_now"] = False
-        if not lot.sealed_bid:
-            # reserve price if there are no bids
-            if not lot.high_bidder:
-                defaultBidAmount = lot.reserve_price
-            else:
-                if lot.auction and not lot.auction.only_whole_dollar_bids:
-                    # 5% rounded down to nearest cent, minimum $0.01
-                    min_increment = max(
-                        (lot.high_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
-                        Decimal("0.01"),
-                    )
-                else:
-                    # 5% rounded down to nearest dollar, minimum $1
-                    min_increment = max(
-                        (lot.high_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
-                        Decimal(1),
-                    )
-                if defaultBidAmount > lot.high_bid + min_increment:
-                    pass
-                else:
-                    defaultBidAmount = lot.high_bid + min_increment
+        context["force_buy_now"] = bool(
+            lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price
+        )
         context["viewer_pk"] = self.request.user.pk
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
@@ -447,12 +417,8 @@ class ViewLot(DetailView):
             )
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
-        context["only_whole_dollar_bids"] = lot.auction.only_whole_dollar_bids if lot.auction else True
-        # Whole-dollar auctions show ".00" beside the box, so the default must be an integer, rounded
-        # up (it's the minimum next bid). Visible since 0437 made money columns decimal.
-        if context["only_whole_dollar_bids"]:
-            defaultBidAmount = int(Decimal(defaultBidAmount).to_integral_value(rounding="ROUND_CEILING"))
-        context["amount"] = defaultBidAmount
+        context["only_whole_dollar_bids"] = lot.only_whole_dollar_bids
+        context["amount"] = lot.suggested_bid(context["viewer_bid"])
         context["watched"] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context["category"] = lot.species_category
         context["user_tos"] = None

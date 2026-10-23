@@ -3,12 +3,18 @@
 import csv
 import datetime
 import io
+import re
+from collections import Counter
+from decimal import Decimal
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import AnonymousUser, User
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
+from auctions.consumers import BuyingConsumer
 from auctions.models import Auction, AuctionTOS, Bid, Invoice, Lot, PickupLocation, Watch
 from auctions.tests import StandardTestCase
 
@@ -87,7 +93,7 @@ class BuyingDashboardTests(StandardTestCase):
 
     def test_one_auction_has_no_auction_column(self):
         columns = [column.name for column in self.client.get(self.url).context["table"].columns]
-        self.assertEqual(columns, ["status", "lot_number", "lot_name", "price"])
+        self.assertEqual(columns, ["status", "lot_number", "lot_name", "price", "bid"])
 
     def test_all_auctions_is_the_last_option_in_the_dropdown(self):
         html = self.client.get(self.url).content.decode()
@@ -212,6 +218,248 @@ class BuyingDashboardTests(StandardTestCase):
         response = self.client.get(reverse("buying") + f"?auction={self.in_person_auction.slug}")
         self.assertEqual(response.context["note"], "ended")
         self.assertContains(response, "has ended")
+
+
+class BuyingDashboardBiddingTests(StandardTestCase):
+    """Max bid beside the price, quick bid, and the live refresh, on an online auction still open."""
+
+    def setUp(self):
+        super().setUp()
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.online_auction.save()
+        self.client.force_login(self.userB)
+        self.url = reverse("buying") + f"?auction={self.online_auction.slug}"
+        self.open_lot = Lot.objects.create(
+            lot_name="Open <guppy>",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            reserve_price=5,
+            active=True,
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Lots under 20 minutes old can't be bid on yet.
+        Lot.objects.filter(pk=self.open_lot.pk).update(date_posted=timezone.now() - datetime.timedelta(hours=1))
+        self.open_lot.refresh_from_db()
+
+    def _row(self, lot, **params):
+        html = self.client.get(reverse("buying"), {"auction": self.online_auction.slug, **params}).content.decode()
+        return next(row.split("</tr>")[0] for row in html.split("<tr")[1:] if lot.lot_link in row)
+
+    def test_max_bid_beside_the_current_bid(self):
+        Bid.objects.create(user=self.userB, lot_number=self.open_lot, amount=20)
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=self.open_lot, amount=10)
+        row = self._row(self.open_lot)
+        self.assertIn("$11", row)
+        self.assertIn("your max $20", row)
+
+    def test_no_max_bid_when_only_watching(self):
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        self.assertNotIn("your max", self._row(self.open_lot))
+
+    def test_sealed_bid_shows_your_max_but_not_the_price(self):
+        self.online_auction.sealed_bid = True
+        self.online_auction.save()
+        Bid.objects.create(user=self.userB, lot_number=self.open_lot, amount=7)
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=self.open_lot, amount=30)
+        row = self._row(self.open_lot)
+        self.assertIn("your max $7", row)
+        self.assertNotIn("$30", row)
+
+    def test_quick_bid_starts_one_step_over_the_price(self):
+        Bid.objects.create(user=self.userB, lot_number=self.open_lot, amount=8)
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=self.open_lot, amount=40)
+        row = self._row(self.open_lot)
+        self.assertIn("quick-bid", row)
+        self.assertIn(f'data-bid-url="{reverse("lot_bid", kwargs={"pk": self.open_lot.pk})}"', row)
+        self.assertIn(f'data-amount="{self.open_lot.suggested_bid(Decimal(8))}"', row)
+        self.assertIn('data-lot-name="Open &lt;guppy&gt;"', row)
+        self.assertIn(">Bid</button>", row)
+
+    def test_no_quick_bid_once_a_lot_is_done(self):
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        self.assertIn("quick-bid", self._row(self.open_lot))
+        self.open_lot.date_end = timezone.now() - datetime.timedelta(minutes=1)
+        self.open_lot.save()
+        self.assertNotIn("quick-bid", self._row(self.open_lot))
+        self.assertNotIn("quick-bid", self._row(self.lot))
+
+    def test_buy_now_only_offers_the_buy_now_price(self):
+        self.online_auction.online_bidding = "buy_now_only"
+        self.online_auction.save()
+        self.open_lot.buy_now_price = 25
+        self.open_lot.save()
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        row = self._row(self.open_lot)
+        self.assertIn('data-amount="25', row)
+        self.assertIn('data-buy-now="1"', row)
+        self.assertIn(">Buy now</button>", row)
+
+    def test_one_confirm_dialog_shared_with_the_lot_page(self):
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        buying = self.client.get(self.url).content.decode()
+        lot_page = self.client.get(self.open_lot.lot_link).content.decode()
+        for html in (buying, lot_page):
+            self.assertEqual(html.count('id="confirmBid"'), 1)
+            self.assertEqual(html.count("id='finalize-bid'"), 1)
+        self.assertIn('id="confirmBidAmount"', buying)
+        self.assertNotIn('id="confirmBidAmount"', lot_page)
+        self.assertIn("/ws/buying/", buying)
+
+    def test_lot_page_bid_box_uses_the_same_suggestion(self):
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=self.open_lot, amount=40)
+        response = self.client.get(self.open_lot.lot_link)
+        self.assertEqual(response.context["amount"], self.open_lot.suggested_bid(None))
+        self.assertEqual(response.context["amount"], 6)  # $5 minimum, whole dollars
+
+    def test_refresh_marker_pins_the_auction_on_screen(self):
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        self.userB.userdata.last_auction_used = self.online_auction
+        self.userB.userdata.save()
+        response = self.client.get(reverse("buying"))
+        self.assertContains(response, f'data-url="/buying/?auction={self.online_auction.slug}"')
+        self.assertContains(response, f"/ws/buying/?auction={self.online_auction.pk}")
+
+    def test_queries_do_not_grow_with_rows(self):
+        def count():
+            with CaptureQueriesContext(connection) as queries:
+                self.client.get(self.url)
+            return [re.sub(r"\d+", "N", query["sql"])[:300] for query in queries]
+
+        Bid.objects.create(user=self.userB, lot_number=self.open_lot, amount=8)
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=self.open_lot, amount=9)
+        count()  # the first request also warms per-session caches
+        one = count()
+        for n in range(5):
+            lot = Lot.objects.create(
+                lot_name=f"More {n}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                active=True,
+                date_end=self.open_lot.date_end,
+            )
+            Lot.objects.filter(pk=lot.pk).update(date_posted=self.open_lot.date_posted)
+            Bid.objects.create(user=self.userB, lot_number=lot, amount=8)
+            Bid.objects.create(user=self.user_with_no_lots, lot_number=lot, amount=9)
+        more = count()
+        extra = Counter(more) - Counter(one)
+        self.assertEqual(len(more), len(one), "\n".join(f"{n}x {sql}" for sql, n in extra.items()))
+
+    def test_refresh_marker_repeats_the_request_on_screen(self):
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        response = self.client.get(
+            reverse("buying"), {"auction": self.online_auction.slug, "query": "guppy"}, HTTP_HX_REQUEST="true"
+        )
+        self.assertContains(
+            response, f'id="buying-refresh" data-url="/buying/?auction={self.online_auction.slug}&amp;query=guppy"'
+        )
+
+
+class FakeLayer:
+    def __init__(self):
+        self.groups = []
+
+    async def group_add(self, group, channel):
+        self.groups.append(group)
+
+    async def group_discard(self, group, channel):
+        self.groups.remove(group)
+
+
+class BuyingConsumerTests(StandardTestCase):
+    """The socket joins the open lots you follow and says only that one changed."""
+
+    def _consumer(self, user):
+        consumer = BuyingConsumer()
+        consumer.scope = {"user": user}
+        consumer.channel_name = "test.channel"
+        consumer.channel_layer = FakeLayer()
+        consumer.sent = []
+        consumer.accept = lambda: None
+        consumer.close = lambda: consumer.sent.append("closed")
+        consumer.send = lambda text_data: consumer.sent.append(text_data)
+        return consumer
+
+    def _open_lot(self, name, **kwargs):
+        return Lot.objects.create(
+            lot_name=name,
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            active=True,
+            date_end=timezone.now() + datetime.timedelta(days=1),
+            **kwargs,
+        )
+
+    def test_joins_open_lots_watched_or_bid_on(self):
+        watched = self._open_lot("Watched")
+        Watch.objects.create(user=self.userB, lot_number=watched)
+        bid_on = self._open_lot("Bid on")
+        Bid.objects.create(user=self.userB, lot_number=bid_on, amount=5)
+        withdrawn = self._open_lot("Bid withdrawn")
+        Bid.objects.create(user=self.userB, lot_number=withdrawn, amount=5, is_deleted=True)
+        unwatched = self._open_lot("Unwatched")
+        Watch.objects.create(user=self.userB, lot_number=unwatched, is_deleted=True)
+        sold = self._open_lot("Sold", winning_price=5)
+        Watch.objects.create(user=self.userB, lot_number=sold)
+        someone_elses = self._open_lot("Someone else's")
+        Watch.objects.create(user=self.user_with_no_lots, lot_number=someone_elses)
+        consumer = self._consumer(self.userB)
+        consumer.connect()
+        self.assertEqual(sorted(consumer.channel_layer.groups), sorted([f"lot_{watched.pk}", f"lot_{bid_on.pk}"]))
+        consumer.disconnect(1000)
+        self.assertEqual(consumer.channel_layer.groups, [])
+
+    def test_only_the_auction_on_screen(self):
+        here = self._open_lot("Here")
+        Watch.objects.create(user=self.userB, lot_number=here)
+        elsewhere = Lot.objects.create(
+            lot_name="Elsewhere", auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos, quantity=1
+        )
+        Watch.objects.create(user=self.userB, lot_number=elsewhere)
+        consumer = self._consumer(self.userB)
+        consumer.scope["query_string"] = f"auction={self.online_auction.pk}".encode()
+        consumer.connect()
+        self.assertEqual(consumer.channel_layer.groups, [f"lot_{here.pk}"])
+        everything = self._consumer(self.userB)
+        everything.connect()
+        self.assertEqual(sorted(everything.channel_layer.groups), sorted([f"lot_{here.pk}", f"lot_{elsewhere.pk}"]))
+
+    def test_a_failed_join_still_leaves_what_it_joined(self):
+        for name in ("One", "Two"):
+            Watch.objects.create(user=self.userB, lot_number=self._open_lot(name))
+        consumer = self._consumer(self.userB)
+        calls = []
+
+        async def flaky(group, channel):
+            calls.append(group)
+            if len(calls) == 2:
+                message = "redis went away"
+                raise ConnectionError(message)
+            consumer.channel_layer.groups.append(group)
+
+        consumer.channel_layer.group_add = flaky
+        with self.assertLogs("auctions.consumers", level="ERROR"):
+            consumer.connect()
+        self.assertEqual(consumer.groups_joined, calls[:1])
+        consumer.disconnect(1000)
+        self.assertEqual(consumer.channel_layer.groups, [])
+
+    def test_anonymous_is_closed(self):
+        consumer = self._consumer(AnonymousUser())
+        consumer.connect()
+        self.assertEqual(consumer.sent, ["closed"])
+        self.assertEqual(consumer.channel_layer.groups, [])
+
+    def test_bids_ping_and_chat_does_not(self):
+        consumer = self._consumer(self.userB)
+        consumer.chat_message({"type": "chat_message", "info": "CHAT", "message": "hi"})
+        self.assertEqual(consumer.sent, [])
+        consumer.chat_message(
+            {"type": "chat_message", "info": "NEW_HIGH_BIDDER", "message": "x", "current_high_bid": 5}
+        )
+        self.assertEqual(consumer.sent, ['{"type": "lot_changed"}'])
 
 
 class BuyingDashboardPushNoteTests(StandardTestCase):
