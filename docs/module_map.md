@@ -80,7 +80,7 @@ this only quotes its opening sentence.
 - **`auction_form_layout.py`** (223 lines)
   The layout of ``AuctionEditForm``: what an organizer sees first, and what is behind *Advanced*.
   `build_layout`, `advanced_fields_in_use`
-- **`auction_nav.py`** (218 lines)
+- **`auction_nav.py`** (224 lines)
   The auction admin menu: the ribbon's tabs, and the page its **More** tab opens.
   `Row`, `Group`, `groups_for`
 - **`auction_survey.py`** (212 lines)
@@ -199,7 +199,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14994 lines)
+- **`models.py`** (14999 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -322,7 +322,7 @@ this only quotes its opening sentence.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
   Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images.
-- **`test_auction_nav.py`** (75 lines)
+- **`test_auction_nav.py`** (115 lines)
   `AuctionNavTests`
 - **`test_auction_promos.py`** (493 lines)
   ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.

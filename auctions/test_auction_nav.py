@@ -6,7 +6,15 @@ from auctions import auction_nav
 from auctions.models import Auction, Club, ClubMember
 from auctions.tests import StandardTestCase
 
-IN_PERSON_ONLY = {"Print labels", "Print paddles", "Recruit volunteers", "Lot queue", "Set lot winners", "Checkout"}
+IN_PERSON_ONLY = {
+    "Print labels",
+    "Print paddles",
+    "Recruit volunteers",
+    "Lot queue",
+    "Set lot winners",
+    "Checkout",
+    "Lot map",
+}
 EVERYWHERE = {
     "Main",
     "Users",
@@ -17,7 +25,6 @@ EVERYWHERE = {
     "Printable lot list",
     "Stats",
     "Chat messages",
-    "Lot map",
     "Feedback",
     "Admin history",
     "Help",
@@ -73,3 +80,36 @@ class AuctionNavTests(StandardTestCase):
         self.assertContains(response, reverse("auction_paddles", kwargs={"slug": self.in_person_auction.slug}))
         self.assertNotContains(response, reverse("auction_delete", kwargs={"slug": self.in_person_auction.slug}))
         self.assertNotContains(response, "Admin history")
+
+    def test_online_club_auction_has_no_card_scanning(self):
+        club = Club.objects.create(name="Online Club")
+        Auction.objects.filter(pk=self.online_auction.pk).update(club=club, manage_users_through_club="all")
+        self.online_auction.refresh_from_db()
+        self.assertNotIn("Scan club cards", _labels(self.online_auction))
+        self.client.force_login(self.user)
+        url = reverse("auction_quick_check_in", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, url)
+        response = self.client.get(reverse("auction_pages", kwargs={"slug": self.online_auction.slug}))
+        self.assertNotContains(response, url)
+        self.assertNotContains(response, "Lot map")
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_online_check_in_mode_auction_keeps_check_in(self):
+        club = Club.objects.create(name="Single Club")
+        Auction.objects.filter(pk=self.online_auction.pk).update(club=club, manage_users_through_club="checkin")
+        self.online_auction.refresh_from_db()
+        self.assertIn("Check in", _labels(self.online_auction))
+        self.client.force_login(self.user)
+        url = reverse("auction_quick_check_in", kwargs={"slug": self.online_auction.slug})
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_in_person_club_auction_keeps_card_scanning(self):
+        club = Club.objects.create(name="In Person Club")
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(club=club, manage_users_through_club="all")
+        self.in_person_auction.refresh_from_db()
+        self.assertIn("Scan club cards", _labels(self.in_person_auction))
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertContains(response, "Scan club cards")

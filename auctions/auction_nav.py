@@ -52,8 +52,8 @@ def _check_in(auction):
     return auction.use_check_in_mode
 
 
-def _club(auction):
-    return bool(auction.club_id)
+def _scans_club_cards(auction):
+    return auction.scans_club_cards
 
 
 def _location_label(auction):
@@ -118,7 +118,7 @@ GROUPS = (
                 "bi-upc-scan",
                 "Scan membership cards",
                 _named("auction_quick_check_in"),
-                gate=_club,
+                gate=_scans_club_cards,
                 people=True,
             ),
             Row(
@@ -172,7 +172,13 @@ GROUPS = (
         (
             Row("Stats", "bi-graph-up", "Views, bids and new lots", _named("auction_stats")),
             Row("Chat messages", "bi-chat-fill", "Every question asked on a lot", _named("auction_chat")),
-            Row("Lot map", "bi-geo-alt", "Where unsold lots are on the tables", _named("auction_lot_map")),
+            Row(
+                "Lot map",
+                "bi-geo-alt",
+                "Where unsold lots are on the tables",
+                _named("auction_lot_map"),
+                gate=_in_person,
+            ),
             Row("Feedback", "bi-emoji-smile", "What people said afterwards", _named("auction_survey_results")),
             Row("Admin history", "bi-clock-history", "Who changed what", _named("auction_history")),
         ),
