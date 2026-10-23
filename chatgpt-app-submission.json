@@ -1184,7 +1184,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Only looks up and returns data (search this site's own help guides, FAQ and blog for how something works, or read the whole FAQ with no query at all).",
+        "read_only_justification": "Only looks up and returns data (search this site's own help guides and FAQ for how something works, or read the whole FAQ with no query at all).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }

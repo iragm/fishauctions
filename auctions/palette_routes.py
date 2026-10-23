@@ -36,7 +36,6 @@ SCOPE_INVOICE = "invoice"
 SCOPE_LOCATION = "location"
 SCOPE_MEMBER = "member"
 SCOPE_USER = "user"
-SCOPE_BLOG = "blog"
 SCOPE_SPEAKER = "speaker"
 
 # Which permission a route needs before it's worth offering.
@@ -128,7 +127,6 @@ ROUTE_LIST: list[Route] = [
     _r("my_last_auction_lots", "Lots in my most recent auction", "Browsing", keywords=["lots near me"]),
     _r("user_lots", "Lots grouped by seller", "Browsing", keywords=["sellers", "who is selling"]),
     _r("userpage", "A seller's public page", "Browsing", scope=SCOPE_USER, keywords=["store", "profile", "user page"]),
-    _r("blog_post", "A blog post", "Browsing", scope=SCOPE_BLOG, keywords=["article", "news"]),
     _r(
         "speaker_list",
         "Speaker directory",
@@ -1231,6 +1229,7 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    "blog_post": "The retired blog. Every old post's address redirects to the help section it moved to.",
     "add_to_calendar": "Needs a pickup location; the Add to calendar button sits next to each one on the auction page.",
     "auction_paddles_pdf": "Downloaded from Print bidder paddles, which first asks for plain paper in the printer.",
     # The library: one document's pages. search_documents and read_document answer with its link.
@@ -1890,15 +1889,6 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             return {"error": f"I couldn't find a user called “{hint}”."}
         kwargs["slug"] = target.username
         about = "" if target.pk == user.pk else target.username
-
-    elif route.scope == SCOPE_BLOG:
-        from .models import BlogPost
-
-        post = BlogPost.objects.filter(title__icontains=hint).first() if hint else None
-        if not post:
-            return {"error": "I couldn't find a blog post like that."}
-        kwargs["slug"] = post.slug
-        about = post.title
 
     elif route.scope == SCOPE_SPEAKER:
         from .models import Speaker
