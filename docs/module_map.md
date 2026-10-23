@@ -49,6 +49,9 @@ this only quotes its opening sentence.
 - **`ads_admin.py`** (122 lines)
   The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
+- **`ai_page.py`** (231 lines)
+  ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
+  `model`, `enabled`, `daily_limit`, `tokens_used`, `usage`, `new_conversation`, `ask`
 - **`announcements.py`** (405 lines)
   Club announcements: one message, sent to the places a club's members look.
 - **`app_crashes.py`** (131 lines)
@@ -111,9 +114,9 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1531 lines)
+- **`command_palette.py`** (1547 lines)
   Shared logic for the command palette, behind the JSON views.
-  `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
+  `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
@@ -155,7 +158,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6581 lines)
+- **`forms.py`** (6584 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -196,7 +199,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14997 lines)
+- **`models.py`** (14995 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -213,11 +216,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16612 lines)
+- **`palette_actions.py`** (16617 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1982 lines)
+- **`palette_routes.py`** (1996 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -294,6 +297,9 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
+- **`test_ai_page.py`** (203 lines)
+  ``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance.
+  `answer`, `lookup`, `AIPageTests`, `LibraryAllowanceTests`
 - **`test_android_testers.py`** (135 lines)
   `AndroidTestersTests`, `AndroidTestersInviteTests`
 - **`test_app_crashes.py`** (132 lines)
@@ -703,7 +709,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (139 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1355 lines)
+- **`urls.py`** (1357 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -722,7 +728,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`extract.py`** (378 lines)
   A file, as Markdown: ``markitdown`` for the formats, the site's vision model for the pictures.
   `parser_version`, `document_model`, `ExtractionError`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
-- **`forms.py`** (431 lines)
+- **`forms.py`** (433 lines)
   The library's forms: upload, adding pages to a batch, edit, and a reader's report. ``update_document``
   `natural_key`, `space_used`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
 - **`index.py`** (578 lines)
@@ -735,7 +741,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`render.py`** (58 lines)
   A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
   `to_html`
-- **`search.py`** (299 lines)
+- **`search.py`** (331 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
 - **`stitch.py`** (416 lines)
   Put a pile of page pictures back together into articles.
@@ -1039,7 +1045,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (632 lines)
+- **`documents.py`** (637 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.
@@ -1062,8 +1068,8 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (520 lines)
-  The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
+- **`palette.py`** (559 lines)
+  The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
 - **`payments.py`** (1075 lines)
   Connecting PayPal and Square accounts and taking payments through them.
 - **`printing.py`** (534 lines)
@@ -1116,12 +1122,12 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1265 lines)
+- **`settings.py`** (1276 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
   `CacheBustedStaticFilesStorage`
-- **`test_runner.py`** (101 lines)
+- **`test_runner.py`** (104 lines)
   The test runner: the cheap password hasher, mail kept in memory, and the timezone reset between tests.
   `test_settings`, `reset_timezone_between_tests`, `apply_test_settings`, `FastParallelTestSuite`, `FastTestRunner`
 - **`urls.py`** (94 lines)

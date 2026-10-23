@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from django import forms
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -31,9 +32,6 @@ from auctions.models import Club
 MAX_UPLOAD_BYTES = 95 * 1024 * 1024
 MAX_REQUEST_BYTES = 100 * 1000 * 1000
 MAX_FILES_PER_UPLOAD = 100
-#: Reading pictures is paid for by the site, so one person's uploads are bounded. An archive is
-#: hundreds of scans, so the daily count is generous; the space is what really bounds it.
-MAX_UPLOADS_PER_DAY = 1000
 MAX_BYTES_PER_PERSON = 5 * 1024 * 1024 * 1024
 #: Pages in one batch. Past this, start another: stitching only ever joins pages within one batch.
 MAX_BATCH_PAGES = 3000
@@ -142,8 +140,12 @@ class _Uploads:
         used = space_used(self.user) + sum(upload.size for upload in uploads)
         if len(uploads) > MAX_FILES_PER_UPLOAD:
             return f"Upload up to {MAX_FILES_PER_UPLOAD} files at a time."
-        if today + len(uploads) > MAX_UPLOADS_PER_DAY:
-            return f"That would be more than {MAX_UPLOADS_PER_DAY} uploads today. Try the rest tomorrow."
+        # Reading pictures is paid for by the site, so one person's uploads are bounded
+        # (LIBRARY_UPLOADS_PER_DAY). An archive is hundreds of scans, so it is generous; the space is
+        # what really bounds it.
+        most = settings.LIBRARY_UPLOADS_PER_DAY
+        if today + len(uploads) > most:
+            return f"That would be more than {most} uploads today. Try the rest tomorrow."
         if used > MAX_BYTES_PER_PERSON:
             return "That's more than your library space. Delete something first."
         return ""

@@ -4533,7 +4533,7 @@ class NavigateOnlyTests(PaletteAssistTestCase):
             == palette_actions.DANGER_CONFIRM
         }
 
-    def test_off_by_default(self):
+    def test_off_when_the_site_allows_writes(self):
         self.assertFalse(palette_assist.navigate_only(self.user))
         self.assertTrue(self._writes_offered(self.user))
 

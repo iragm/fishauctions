@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Ask AI{% endblock %}
+{% block content %}
+{% comment %}The site's own AI (auctions/ai_page.py). ?q= fills the box and stops: the person presses Ask.{% endcomment %}
+<div class="container py-4" style="max-width: 48rem;">
+  <h1 class="h4 mb-3">Ask AI</h1>
+  <div class="help-note help-ai"><i class="bi bi-robot"></i><div><span class="help-ai-label">AI:</span> This one is limited each day. <a href="{% url 'user_api_keys' %}">Connect your own AI agent</a> for unlimited use, and to have it make changes for you.</div></div>
+  {% include "ai/_usage.html" %}
+  <div id="ai-conversation"></div>
+  {% if not enabled %}
+    <p class="text-muted">AI isn't turned on for you here.</p>
+  {% else %}
+  <form id="ai-form" hx-post="{% url 'ai_ask' %}" hx-target="#ai-conversation" hx-swap="beforeend" hx-indicator="#ai-thinking" hx-disabled-elt="find button">
+    {% csrf_token %}
+    <input type="hidden" name="conversation" value="{{ conversation }}">
+    <textarea name="q" class="form-control mb-2" rows="3" maxlength="2000" placeholder="When is my next auction? What did I buy last month? Which clubs near me take new members?" aria-label="Your question" autofocus>{{ prefill }}</textarea>
+    <div class="d-flex align-items-center gap-2">
+      <button type="submit" class="btn btn-primary"{% if usage.over %} disabled{% endif %}><i class="bi bi-send"></i> Ask</button>
+      <span id="ai-thinking" class="htmx-indicator small text-muted"><span class="spinner-border spinner-border-sm" role="status"></span> Thinking...</span>
+    </div>
+  </form>
+  {% endif %}
+</div>
+<script>
+(function () {
+  var form = document.getElementById("ai-form");
+  if (!form) { return; }
+  var box = form.querySelector("textarea");
+  // Enter asks, shift+enter is a new line.
+  box.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.shiftKey && box.value.trim()) {
+      event.preventDefault();
+      htmx.trigger(form, "submit");
+    }
+  });
+  form.addEventListener("htmx:afterRequest", function (event) {
+    if (event.detail.successful) { box.value = ""; box.focus(); }
+  });
+})();
+</script>
+{% endblock %}

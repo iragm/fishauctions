@@ -288,8 +288,9 @@
     // --- Fetching ------------------------------------------------------------
 
     function countItems(groups) {
+      // "Ask AI" is offered for every query, so it isn't a result: a search with only it still bounced.
       return groups.reduce(function (total, group) {
-        return total + group.items.length;
+        return total + group.items.filter(function (item) { return item.type !== "ai"; }).length;
       }, 0);
     }
 

@@ -276,7 +276,12 @@ class DocumentAnswerView(LibraryMixin, View):
     def get(self, request, *args, **kwargs):
         query = request.GET.get("q", "").strip()[:300]
         documents, _chosen = _filtered(request, visible_documents(request.user))
-        hits, _total = search(request.user, query, documents=documents, limit=RESULTS_PER_PAGE) if query else ([], 0)
+        # The page above already counted this search.
+        hits, _total = (
+            search(request.user, query, documents=documents, limit=RESULTS_PER_PAGE, counted=False)
+            if query
+            else ([], 0)
+        )
         result = answer(request.user, query, hits)
         return render(request, "documents/_answer.html", {"result": result, "query": query})
 

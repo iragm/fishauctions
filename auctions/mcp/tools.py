@@ -363,7 +363,7 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
         return _result(
             f"“{action.name}” changes data and this credential is read-only. Only read-only tools "
             "are available to it. To change that, disconnect and reconnect this assistant from "
-            "/ai/ — a credential's read/write ceiling is fixed when it is issued.",
+            "/ai/connect/ — a credential's read/write ceiling is fixed when it is issued.",
             is_error=True,
         )
     repeat_key = _repeat_key(request, action, arguments)
@@ -431,7 +431,7 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
         return _result(
             f"This connection has changed {credential.write_budget} things in the last hour, which "
             "is its limit. Reads still work. If this wasn't you, disconnect it at "
-            "/ai/.",
+            "/ai/connect/.",
             is_error=True,
         )
     # Agents have no page to infer an auction from.
