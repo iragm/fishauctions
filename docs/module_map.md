@@ -597,9 +597,8 @@ this only quotes its opening sentence.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
   `SweepTestCase`, `ClubSweepTestCase`, `KilometrePreferenceTests`, `AwardPointsTrackTests`, `UndoRestoresBlanksTests`, `HistoryLineTests`, `LocalTimeTests`, `FalseIsFalseTests`, `FencingSpotChecks`
-- **`test_payment_views.py`** (894 lines)
+- **`test_payment_views.py`** (915 lines)
   The PayPal and Square connect/callback views, PayPal checkout (order creation and capture), the
-  `PayPalAPIMixinErrorTests`, `PayPalConnectViewTests`, `PayPalCallbackViewTests`, `SquareCallbackViewTests`, `CreatePayPalOrderViewTests`, `PayPalSuccessViewTests`, `PayPalSubscriptionWebhookVerificationTests`, `SquareWebhookRefusalTests`, `FakeChannelLayer`, `LotConsumerChatTests`
 - **`test_paypal.py`** (924 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
@@ -1054,7 +1053,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`help.py`** (100 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (387 lines)
+- **`invoices.py`** (392 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`lot_pages.py`** (1329 lines)

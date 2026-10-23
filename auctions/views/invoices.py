@@ -257,7 +257,12 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             context["show_links"] = True
         context["location"] = invoice.location
         context["print_label_link"] = None
-        if invoice.auction and invoice.auctiontos_user and invoice.auction.is_online:
+        if (
+            invoice.auction
+            and invoice.auctiontos_user
+            and invoice.auction.is_online
+            and invoice.auctiontos_user.print_labels_qs.exists()
+        ):
             context["print_label_link"] = reverse(
                 "print_labels_by_bidder_number",
                 kwargs={
