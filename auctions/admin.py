@@ -18,7 +18,6 @@ from .admin_paginator import EstimatedCountPaginator
 from .admin_performance import FlatInline, use_lookup_widgets
 from .models import (
     FAQ,
-    PRIVACY_POLICY_SLUG,
     AppleDeviceRegistration,
     AssistantSkillRequest,
     Auction,
@@ -27,7 +26,6 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
-    BlogPost,
     Category,
     ChunkedJobState,
     Club,
@@ -161,19 +159,6 @@ class InvoicePaymentInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         # Payments come from payment handlers, not the admin.
         return False
-
-
-class BlogPostAdmin(admin.ModelAdmin):
-    """Only the posts still on the blog: one whose content moved into the help, or the privacy policy,
-    which is now a static page, would be edited here and shown nowhere."""
-
-    model = BlogPost
-
-    def get_queryset(self, request):
-        from auctions import help_guides
-
-        moved = [*help_guides.MOVED_BLOG_POSTS, PRIVACY_POLICY_SLUG]
-        return super().get_queryset(request).exclude(slug__in=moved)
 
 
 class AuctionTOSInline(FlatInline, admin.TabularInline):
@@ -1411,7 +1396,6 @@ admin.site.register(Lot, LotAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)
 admin.site.register(GeneralInterest, GeneralInterestAdmin)
-admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
 admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)

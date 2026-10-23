@@ -3045,28 +3045,15 @@ class SearchHelpTests(RunActionTestCase):
         result = self._run("search_help", {"query": "zorblatt", "source": "twitter"})
         self.assertIn("error", result)
 
-    def test_narrowing_to_the_questions_and_answers_drops_the_posts(self):
+    def test_the_retired_blog_is_never_searched(self):
         from auctions.models import FAQ, BlogPost
 
         FAQ.objects.create(category_text="Bidding", question="What is a zorblatt lot?", answer="A free one.")
         BlogPost.objects.create(title="Zorblatt release notes", body="All about zorblatt lots.", slug="zorblatt-notes")
-        both = self._run("search_help", {"query": "zorblatt"})
-        self.assertTrue(any(row["source"] == "Blog" for row in both["help"]))
-        faq_only = self._run("search_help", {"query": "zorblatt", "source": "faq"})
-        self.assertTrue(faq_only["found"])
-        self.assertFalse(any(row["source"] == "Blog" for row in faq_only["help"]))
-
-    def test_paging_carries_on_into_the_posts_rather_than_starting_them_over(self):
-        from auctions.models import FAQ, BlogPost
-
-        FAQ.objects.create(category_text="A zorblatt", question="Zorblatt one?", answer="x")
-        FAQ.objects.create(category_text="B zorblatt", question="Zorblatt two?", answer="x")
-        BlogPost.objects.create(title="Zorblatt post", body="x", slug="zorblatt-post")
-        first = self._run("search_help", {"query": "zorblatt", "limit": 2, "offset": 0})
-        self.assertTrue(all(row["source"] == "FAQ" for row in first["help"]))
-        page = self._run("search_help", {"query": "zorblatt", "limit": 2, "offset": 2})
-        self.assertEqual(len(page["help"]), 1)
-        self.assertEqual(page["help"][0]["source"], "Blog")
+        for source in ("all", "blog"):
+            result = self._run("search_help", {"query": "zorblatt", "source": source})
+            self.assertFalse(any("blog" in (row.get("url") or "") for row in result["help"]))
+        self.assertTrue(self._run("search_help", {"query": "zorblatt"})["found"])
 
 
 class AgentOnlyFaqPageTests(StandardTestCase):

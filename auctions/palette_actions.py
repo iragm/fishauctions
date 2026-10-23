@@ -5450,16 +5450,16 @@ def clubs_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     return {"found": True, "clubs": rows, "summary": f"{len(rows)} club(s) within {distance} miles of you."}
 
 
-#: Characters of one FAQ answer or blog post sent.
+#: Characters of one FAQ answer sent.
 HELP_ANSWER_CHARS = 600
 
 #: Default help articles returned.
 HELP_LIMIT = 6
 
-#: What ``source`` accepts. The FAQ can be read through with no query; the guides and blog can't.
+#: What ``source`` accepts. The FAQ can be read through with no query; the guides can't.
 _HELP_SOURCES = {
-    "all": ("guides", "faq", "blog"),
-    "everything": ("guides", "faq", "blog"),
+    "all": ("guides", "faq"),
+    "everything": ("guides", "faq"),
     "help": ("guides",),
     "guide": ("guides",),
     "guides": ("guides",),
@@ -5469,10 +5469,11 @@ _HELP_SOURCES = {
     "questions": ("faq",),
     "questions_and_answers": ("faq",),
     "answers": ("faq",),
-    "blog": ("blog",),
-    "blogs": ("blog",),
-    "posts": ("blog",),
-    "news": ("blog",),
+    # The blog's posts moved into the guides.
+    "blog": ("guides",),
+    "blogs": ("guides",),
+    "posts": ("guides",),
+    "news": ("guides",),
 }
 
 
@@ -5501,57 +5502,40 @@ def _guide_row(result) -> dict[str, Any]:
 
 
 def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Search the help guides, FAQ and blog, or read the FAQ through.
+    """Search the help guides and FAQ, or read the FAQ through.
 
     Grounds "how does X work" in text written here. Guides come first: they are step by step and kept
     complete by ``test_help``. ``query`` is optional (whole FAQ in page order, for ``help://faq``);
     ``source`` narrows. Agent-only FAQ entries are included; that flag isn't privacy.
     """
     from . import help_guides
-    from .models import FAQ, PRIVACY_POLICY_SLUG, BlogPost
+    from .models import FAQ
 
     query = _str(params, "query") or _str(params, "question")
     said = _str(params, "source") or "all"
     wanted = said.lower().replace(" ", "_").replace("-", "_")
     if wanted not in _HELP_SOURCES:
         # Refused, not defaulted: a dropped narrowing looks like a real answer.
-        return _error(f"“{said}” isn't something I can search. Say guides, faq, blog, or all.")
+        return _error(f"“{said}” isn't something I can search. Say guides, faq, or all.")
     sources = _HELP_SOURCES[wanted]
     words = re.findall(r"[A-Za-z0-9']{3,}", query.lower())[:6] if query else []
     if query and not words:
         return {"found": False, "help": [], "summary": f"Nothing written down about “{query}”."}
     if not words and "faq" not in sources:
-        return _error("Give me something to look for — the guides and the blog are searched, not read through.")
+        return _error("Give me something to look for — the guides are searched, not read through.")
 
     guide_results = help_guides.search(query, limit=50) if "guides" in sources and words else []
     faq_entries = FAQ.objects.none()
-    posts = BlogPost.objects.none()
     if "faq" in sources:
         faq_q = Q()
         for word in words:
             faq_q |= Q(question__icontains=word) | Q(answer__icontains=word)
         # The page's order; pk breaks ties so pages are stable.
         faq_entries = (FAQ.objects.filter(faq_q) if words else FAQ.objects.all()).order_by("category_text", "pk")
-    if "blog" in sources and words:
-        blog_q = Q()
-        for word in words:
-            blog_q |= Q(title__icontains=word) | Q(body__icontains=word)
-        moved = [*help_guides.MOVED_BLOG_POSTS, PRIVACY_POLICY_SLUG]
-        posts = BlogPost.objects.filter(blog_q).exclude(slug__in=moved).order_by("-date_posted")
-
-    def blog_row(post):
-        return {
-            "source": "Blog",
-            "question": post.title,
-            "answer": plain_text(post.body, limit=HELP_ANSWER_CHARS),
-            "url": reverse("blog_post", kwargs={"slug": post.slug}),
-        }
-
-    # One exact-paged list: guides, then FAQ, then blog. Each part is (total, rows for [start, stop)).
+    # One exact-paged list: guides, then FAQ. Each part is (total, rows for [start, stop)).
     parts = [
         (len(guide_results), lambda start, stop: [_guide_row(r) for r in guide_results[start:stop]]),
         (faq_entries.count(), lambda start, stop: [_faq_row(e) for e in faq_entries[start:stop]]),
-        (posts.count(), lambda start, stop: [blog_row(p) for p in posts[start:stop]]),
     ]
     limit, offset = _slice(params, default=HELP_LIMIT)
     total = sum(count for count, _rows in parts)
@@ -14708,7 +14692,7 @@ register(
     Action(
         name="search_help",
         description=(
-            "Search this site's own help guides, FAQ and blog for how something works, or read the "
+            "Search this site's own help guides and FAQ for how something works, or read the "
             "whole FAQ with no query at all. Each guide result links to the section it came from. "
             "Use this for ANY platform question — 'how does proxy bidding "
             "work?', 'what's a donation lot?', 'how do I print labels?', 'what does buy now "
@@ -14725,7 +14709,7 @@ register(
             ),
             "source": (
                 "string, optional, default all. 'guides' for the step-by-step help guides alone; "
-                "'faq' for the questions and answers; 'blog' for the posts; 'all' for every one."
+                "'faq' for the questions and answers; 'all' for both."
             ),
             "limit": f"integer, optional, default {HELP_LIMIT}. How many articles to return, up to {MAX_LIST_LIMIT}.",
             "offset": PAGING_PARAMS["offset"],
@@ -16230,6 +16214,7 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "BlogPostView": _REDIRECT,
     "OfflineSyncView": (
         "Hands the server entries the emergency page saved in the browser while the site was down. "
         "They are the same sales, people and lots set_lot_winner, add_person and add_lot record, so an "

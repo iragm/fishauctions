@@ -467,7 +467,8 @@ class CloudflareImageMixin(models.Model):
 
 
 class BlogPost(models.Model):
-    """A simple markdown blog."""
+    """The retired blog's posts. Nothing shows them: /blog/<slug>/ redirects to the help section each moved to
+    (``BlogPostView``). The rows are kept, not dropped."""
 
     title = models.CharField(max_length=255)
     slug = AutoSlugField(populate_from="title", unique=True)

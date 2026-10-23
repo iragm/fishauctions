@@ -857,7 +857,6 @@ NOT_IN_HELP: dict[str, str] = {
     "auction_pages": "A list of the auction's other pages, which the guides cover one by one.",
     "auction_survey": "One question, reached from its buttons in an email; the question is the whole page.",
     "print_my_unprinted_labels": "Reached from the buy-now sale email, which says what it prints.",
-    "blog_post": "Posts are announcements, read on their own.",
     "admin_dashboard": "Site operator only.",
     "agent_proposals": "Site operator only.",
     "species_gaps": "Site operator only.",
