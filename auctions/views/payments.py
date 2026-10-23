@@ -329,6 +329,8 @@ class PayPalAPIMixin:
                 order_data = self.get_from_paypal(f"v2/checkout/orders/{order_id}")
             except PayPalRequestError:
                 order_data = {}
+            if order_data.get("status") != "COMPLETED":
+                return ("PayPal didn't take this payment. Please try paying again.", None)
         if order_data.get("status") != "COMPLETED":
             return (
                 "PayPal payment has not yet been completed, please ask the auction administrator to manually confirm payment.",
@@ -437,6 +439,16 @@ class PayPalAPIMixin:
         payment, created = InvoicePayment.objects.update_or_create(
             external_id=external_id,
             defaults={
+                "invoice": invoice,
+                "amount": amt,
+                "currency": currency,
+                "payer_name": payer_name,
+                "payer_email": payer_email,
+                "payer_address": payer_address,
+                "payment_method": "PayPal",
+            },
+            # Refunds already taken off a payment that is processed again stay taken off.
+            create_defaults={
                 "invoice": invoice,
                 "amount": amt,
                 "currency": currency,
@@ -843,8 +855,11 @@ class PayPalSuccessView(PayPalAPIMixin, View):
         else:
             messages.success(request, "Payment completed successfully. Thank you!")
         member_pk = request.GET.get("member_pk") or ""
-        # An unconfirmed payment still lands the buyer back on the invoice they were paying.
-        invoice = invoice or invoice_for_creds
+        if not invoice and invoice_for_creds:
+            # An unconfirmed payment lands the buyer back where they were paying.
+            if invoice_for_creds.club:
+                return redirect(reverse("club_membership_pay", kwargs={"slug": invoice_for_creds.club.slug}))
+            invoice = invoice_for_creds
         if invoice and invoice.club:
             return redirect(_club_membership_success_url(invoice.club, member_pk))
         if invoice:

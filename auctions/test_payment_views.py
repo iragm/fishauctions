@@ -546,9 +546,50 @@ class PayPalSuccessViewTests(StandardTestCase):
             fetch_redirect_response=False,
         )
         self.assertFalse(InvoicePayment.objects.exists())
-        self.assertTrue(any("not yet been completed" in m for m in _messages(response)))
+        self.assertTrue(any("try paying again" in m for m in _messages(response)))
         self.invoiceB.refresh_from_db()
         self.assertEqual(self.invoiceB.status, "UNPAID")
+
+    def test_declined_capture_asks_the_buyer_to_pay_again(self):
+        """A declined card leaves the order APPROVED; the buyer is asked to pay again, not to wait for an admin."""
+        order = self._order(self.invoiceB.pk, "5.00", status="APPROVED")
+        with (
+            patch.object(PayPalSuccessView, "post_to_paypal", side_effect=PayPalRequestError("422")),
+            patch.object(PayPalSuccessView, "get_from_paypal", return_value=order),
+        ):
+            response = self.client.get(self.url, {"token": "ORDER-9", "invoice": str(self.invoiceB.no_login_link)})
+        self.assertFalse(InvoicePayment.objects.exists())
+        self.assertTrue(any("try paying again" in m for m in _messages(response)))
+
+    def test_reprocessing_a_payment_keeps_its_refunds(self):
+        """The return page loaded again after a partial refund doesn't make the refunded part refundable again."""
+        order = self._order(self.invoiceB.pk, "5.00")
+        with (
+            patch.object(PayPalSuccessView, "post_to_paypal", return_value=order),
+            patch("channels.layers.get_channel_layer", return_value=FakeChannelLayer()),
+        ):
+            self.client.get(self.url, {"token": "ORDER-9"})
+        InvoicePayment.objects.filter(external_id="CAPTURE-9").update(amount_available_to_refund=Decimal("2.00"))
+        with (
+            patch.object(PayPalSuccessView, "post_to_paypal", side_effect=PayPalRequestError("422")),
+            patch.object(PayPalSuccessView, "get_from_paypal", return_value=order),
+            patch("channels.layers.get_channel_layer", return_value=FakeChannelLayer()),
+        ):
+            self.client.get(self.url, {"token": "ORDER-9"})
+        payment = InvoicePayment.objects.get(external_id="CAPTURE-9")
+        self.assertEqual(payment.amount_available_to_refund, Decimal("2.00"))
+
+    def test_refused_membership_payment_goes_back_to_the_pay_page(self):
+        club = Club.objects.create(name="Refused Pay Club", membership_annual_fee=Decimal("20.00"))
+        invoice = Invoice.objects.create(club=club, buyer=self.userB, status="UNPAID", renewal_needed=True)
+        with (
+            patch.object(PayPalSuccessView, "post_to_paypal", side_effect=PayPalRequestError("422")),
+            patch.object(PayPalSuccessView, "get_from_paypal", side_effect=PayPalRequestError("404")),
+        ):
+            response = self.client.get(self.url, {"token": "ORDER-9", "invoice": str(invoice.no_login_link)})
+        self.assertRedirects(
+            response, reverse("club_membership_pay", kwargs={"slug": club.slug}), fetch_redirect_response=False
+        )
 
     def test_order_for_unknown_invoice_records_nothing(self):
         with patch.object(PayPalSuccessView, "post_to_paypal", return_value=self._order(999999, "5.00")):
