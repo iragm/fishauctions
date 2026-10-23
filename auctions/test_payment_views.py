@@ -516,6 +516,40 @@ class PayPalSuccessViewTests(StandardTestCase):
         self.invoiceB.refresh_from_db()
         self.assertEqual(self.invoiceB.status, "UNPAID")
 
+    def test_refused_capture_of_an_already_captured_order_records_it(self):
+        """PayPal answers 422 when the order was already captured; the order is read and credited instead of a 500."""
+        order = self._order(self.invoiceB.pk, "5.00")
+        with (
+            patch.object(PayPalSuccessView, "post_to_paypal", side_effect=PayPalRequestError("422")),
+            patch.object(PayPalSuccessView, "get_from_paypal", return_value=order) as mock_get,
+            patch("channels.layers.get_channel_layer", return_value=FakeChannelLayer()),
+        ):
+            response = self.client.get(self.url, {"token": "ORDER-9"})
+        self.assertEqual(mock_get.call_args.args[0], "v2/checkout/orders/ORDER-9")
+        self.assertRedirects(
+            response,
+            reverse("invoice_no_login", kwargs={"uuid": self.invoiceB.no_login_link}),
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(InvoicePayment.objects.filter(external_id="CAPTURE-9").count(), 1)
+
+    def test_refused_capture_of_an_unpaid_order_goes_back_to_the_invoice(self):
+        """A declined capture records nothing and returns the buyer to the invoice they were paying."""
+        with (
+            patch.object(PayPalSuccessView, "post_to_paypal", side_effect=PayPalRequestError("422")),
+            patch.object(PayPalSuccessView, "get_from_paypal", side_effect=PayPalRequestError("404")),
+        ):
+            response = self.client.get(self.url, {"token": "ORDER-9", "invoice": str(self.invoiceB.no_login_link)})
+        self.assertRedirects(
+            response,
+            reverse("invoice_no_login", kwargs={"uuid": self.invoiceB.no_login_link}),
+            fetch_redirect_response=False,
+        )
+        self.assertFalse(InvoicePayment.objects.exists())
+        self.assertTrue(any("not yet been completed" in m for m in _messages(response)))
+        self.invoiceB.refresh_from_db()
+        self.assertEqual(self.invoiceB.status, "UNPAID")
+
     def test_order_for_unknown_invoice_records_nothing(self):
         with patch.object(PayPalSuccessView, "post_to_paypal", return_value=self._order(999999, "5.00")):
             response = self.client.get(self.url, {"token": "ORDER-9"})

@@ -320,7 +320,15 @@ class PayPalAPIMixin:
 
     def handle_order(self, order_id):
         """Capture a PayPal order and process it. Returns (error_str, invoice)."""
-        order_data = self.post_to_paypal(f"v2/checkout/orders/{order_id}/capture", {})
+        try:
+            order_data = self.post_to_paypal(f"v2/checkout/orders/{order_id}/capture", {})
+        except PayPalRequestError:
+            # PayPal refuses the capture (422) when the order was already captured, e.g. the return page
+            # loaded twice, or when the buyer's funding failed; the order itself says which.
+            try:
+                order_data = self.get_from_paypal(f"v2/checkout/orders/{order_id}")
+            except PayPalRequestError:
+                order_data = {}
         if order_data.get("status") != "COMPLETED":
             return (
                 "PayPal payment has not yet been completed, please ask the auction administrator to manually confirm payment.",
@@ -824,6 +832,7 @@ class PayPalSuccessView(PayPalAPIMixin, View):
         # Only the app that created the order can capture it; the return URL carries the invoice uuid.
         # The captured order's reference_id still decides which invoice is credited.
         invoice_uuid = request.GET.get("invoice")
+        invoice_for_creds = None
         if invoice_uuid:
             invoice_for_creds = Invoice.objects.filter(no_login_link=invoice_uuid).first()
             if invoice_for_creds:
@@ -834,6 +843,8 @@ class PayPalSuccessView(PayPalAPIMixin, View):
         else:
             messages.success(request, "Payment completed successfully. Thank you!")
         member_pk = request.GET.get("member_pk") or ""
+        # An unconfirmed payment still lands the buyer back on the invoice they were paying.
+        invoice = invoice or invoice_for_creds
         if invoice and invoice.club:
             return redirect(_club_membership_success_url(invoice.club, member_pk))
         if invoice:
