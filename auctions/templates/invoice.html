@@ -68,6 +68,9 @@ document.body.addEventListener('renewalToggled', function() {
 {% if print_label_link and not invoice.printed and not is_admin %}
 <script>
 $(document).ready(function(){
+  // When the buttons wrap (phones), a tooltip above this button lands on top of Pay now.
+  var pay = document.querySelector('#pay-with-paypal, #pay-with-square, #payment-not-available');
+  if (pay && document.getElementById('printomatic-9000').offsetTop > pay.offsetTop) return;
   $('#printomatic-9000').attr('data-bs-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');
 });
 </script>
@@ -89,6 +92,8 @@ document.addEventListener("DOMContentLoaded", function() {
     });
     // show immediately if invoice has already been opened
     {% if invoice.opened %}
+      // Not on a phone, where the buttons wrap and the popover covers the ones below Pay now.
+      if (window.matchMedia('(max-width: 767.98px)').matches) return;
       pop.show();
       el.focus();
     {% endif %}
