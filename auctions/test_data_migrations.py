@@ -28,3 +28,12 @@ class DoubledRowsTests(TestCase):
         synonyms = CommandPalettePage.objects.filter(**key).values_list("synonyms", flat=True)
         self.assertEqual(len(synonyms), 2)
         self.assertTrue(all("paddle stickers" in row for row in synonyms))
+
+
+class PrintReminderLinkTests(TestCase):
+    def test_print_reminder_links_the_bagging_guide(self):
+        # The test database is migrated, so 0504 has already run on the seeded template.
+        template = EmailTemplate.objects.get(name="auction_print_reminder", language="")
+        for body in (template.content, template.html_content):
+            self.assertIn("/help/bagging-fish/", body)
+            self.assertNotIn("/blog/transporting-fish/", body)

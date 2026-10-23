@@ -272,7 +272,7 @@ document.addEventListener("DOMContentLoaded", function() {
     {% if not is_admin %}
       <a href="{% url 'feedback' %}" class="btn btn-primary">Leave feedback</a>
       {% if website_focus == "fish" %}
-        <a href="/blog/transporting-fish/" class="btn btn-primary">Info on transporting fish</a>
+        <a href="{% url 'help_guide' slug='bagging-fish' %}" class="btn btn-primary">Bagging fish</a>
       {% endif %}
       {% if location_map %}
         <a href="{{location_map}}" class="btn btn-primary">Get directions</a>
