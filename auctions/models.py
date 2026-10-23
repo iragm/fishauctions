@@ -11903,12 +11903,10 @@ def get_default_use_llm_search():
 
 
 def get_default_palette_navigate_only():
-    """Whether the palette only opens pages (ASSISTANT_NAVIGATE_ONLY), site-wide and per user.
-
-    The site-wide setting is also the kill switch: turned on, no palette write can run for anybody,
-    whatever each person has chosen.
+    """Off. ``ASSISTANT_NAVIGATE_ONLY`` is read on every request by ``palette_assist.navigate_only``,
+    so it is not copied into each new account, where it would outlive the setting being turned off.
     """
-    return getattr(settings, "ASSISTANT_NAVIGATE_ONLY", False)
+    return False
 
 
 def get_default_square_enabled():
@@ -12068,9 +12066,9 @@ class UserData(CachedPropertiesMixin, models.Model):
         "palette.  On for everyone by default; uncheck it to take the palette away from this one "
         "user (they abused it, say), or turn it off site-wide with `manage.py change_assistant "
         "off`.  Also needs an LLM configured site-wide (auctions.llm.assist_enabled), because "
-        "every command spends this site's own budget.  This does NOT gate connecting Claude or "
-        "another assistant over MCP (/ai/), which is open to everyone: an agent brings its own "
-        "model and costs this site nothing."
+        "every command spends this site's own budget.  It gates the site's AI page (/ai/) the same "
+        "way.  It does NOT gate connecting Claude or another assistant over MCP (/ai/connect/), "
+        "which is open to everyone: an agent brings its own model and costs this site nothing."
     )
     credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     credit.help_text = "The total balance in your account"

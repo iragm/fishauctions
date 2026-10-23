@@ -910,9 +910,9 @@ class OptInTests(StandardTestCase):
 
 
 class ConnectPageTests(StandardTestCase):
-    """/ai/, which explains how to connect: the AI agents help guide, with the reader's keys on it."""
+    """/ai/connect/, which explains how to connect: the AI agents help guide, with the reader's keys on it."""
 
-    url = "/ai/"
+    url = "/ai/connect/"
 
     def test_the_command_palette_flag_does_not_gate_this_page(self):
         self.user.userdata.use_llm_search = False
@@ -1038,9 +1038,9 @@ class OAuthOptInTests(StandardTestCase):
 
 
 class ConnectedAppsTests(StandardTestCase):
-    """The list of connected apps on /ai/, with a way to disconnect."""
+    """The list of connected apps on /ai/connect/, with a way to disconnect."""
 
-    url = "/ai/"
+    url = "/ai/connect/"
 
     def setUp(self):
         super().setUp()

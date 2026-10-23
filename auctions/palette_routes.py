@@ -90,6 +90,12 @@ def _play_closed_test(user) -> bool:
     return bool(settings.PLAY_TESTERS_GROUP_URL and not settings.PLAY_STORE_URL)
 
 
+def _has_ai_page(user) -> bool:
+    from .palette_assist import assist_enabled_for
+
+    return assist_enabled_for(user)
+
+
 def _has_library(user) -> bool:
     from .documents.search import can_use_library
 
@@ -297,10 +303,17 @@ ROUTE_LIST: list[Route] = [
         gate=_has_library,
     ),
     _r(
+        "ai",
+        "Ask AI a question",
+        "Account",
+        keywords=["ai", "ask ai", "chat", "question", "assistant"],
+        gate=_has_ai_page,
+    ),
+    _r(
         "user_api_keys",
         "Connect Claude or another AI assistant",
         "Account",
-        keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai"],
+        keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai agent"],
     ),
     _r(
         "account_data_export",
@@ -1228,6 +1241,7 @@ EXCLUDED: dict[str, str] = {
     "document_reindex": "A button on one document's page.",
     "document_delete": "A button on one document's page; delete_document for an agent.",
     "document_feedback": "The report form on one document's page.",
+    "ai_ask": "The answer /ai/ loads into itself; not a page on its own.",
     "library_answer": "The written answer the library page loads into itself; not a page on its own.",
     "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
     "batch_page": "One scanned page as a picture, opened from the article it is part of.",

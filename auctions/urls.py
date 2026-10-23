@@ -692,7 +692,9 @@ urlpatterns = [
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
     # Keys for the MCP endpoint: session-authenticated like any preferences page, since this is
     # where a person issues one. /mcp/ itself never accepts a session.
-    path("ai/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
+    path("ai/", views.AIPageView.as_view(), name="ai"),
+    path("ai/ask/", views.AIAskView.as_view(), name="ai_ask"),
+    path("ai/connect/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
     # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
     # these once a second. Session auth -- the phone's half is under /api/mobile/printjobs/.
     path(

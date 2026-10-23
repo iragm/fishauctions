@@ -16558,6 +16558,11 @@ NOT_A_SKILL: dict[str, str] = {
     "CommandPaletteExecuteView": _PALETTE,
     "CommandPaletteLogView": _PALETTE,
     "CommandPaletteReportView": _PALETTE,
+    "AIAskView": (
+        "Asks the site's own model a question with the read tools this registry serves; an agent "
+        "calling those tools already is that model's replacement, so a tool for it would be a model "
+        "asking a smaller model."
+    ),
 }
 
 

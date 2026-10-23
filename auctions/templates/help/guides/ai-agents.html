@@ -1,7 +1,8 @@
 {% load help_tags %}
-{% comment %}See HELP.md for the voice. /ai/ redirects here (#connect). The reader's own connections and keys are help_tags.ai_connections; the forms there still post to /ai/ (UserAPIKeyView).{% endcomment %}
+{% comment %}See HELP.md for the voice. /ai/connect/ redirects here (#connect). The reader's own connections and keys are help_tags.ai_connections; the forms there still post to /ai/connect/ (UserAPIKeyView).{% endcomment %}
 {% mcp_url as mcp_address %}
 <p>An AI assistant, like Claude, ChatGPT or Grok, can use this site the same way you do. You ask in plain English; it finds the pages and does the typing.</p>
+<p>To try it first, {% page "ai" "Ask AI" %} answers questions with this site's own AI, a few a day. Your own assistant has no daily limit and can make changes too.</p>
 <div class="row g-3 mb-3">
   <div class="col-md-6"><div class="card h-100"><div class="card-body">
     <h3 class="h6 card-title"><i class="bi bi-chat-left-text"></i> Ask it things like</h3>

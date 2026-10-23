@@ -1,0 +1,10 @@
+{% comment %}Today's allowance on /ai/. Swapped out of band after every answer (ai/_turn.html), so it is redrawn where it sits.{% endcomment %}
+<div id="ai-usage" class="mb-3"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="d-flex justify-content-between small text-muted mb-1">
+    <span>Today's AI use</span>
+    <span>{{ usage.percent }}%</span>
+  </div>
+  <div class="progress" role="progressbar" aria-label="Today's AI use" aria-valuenow="{{ usage.percent }}" aria-valuemin="0" aria-valuemax="100" style="height: 0.5rem;">
+    <div class="progress-bar{% if usage.percent >= 90 %} bg-warning{% endif %}" style="width: {{ usage.percent }}%"></div>
+  </div>
+</div>
