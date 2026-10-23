@@ -427,7 +427,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1447 lines)
+- **`test_documents.py`** (1488 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -729,13 +729,13 @@ The library: documents people upload, read into text, and searched from ``/libra
   Read a document, cut it into passages, embed them and tag it -- each stage only when it is stale.
 - **`models.py`** (333 lines)
   The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
-- **`pictures.py`** (117 lines)
+- **`pictures.py`** (118 lines)
   Pictures on a document: the photographs and drawings an article printed, cropped out and kept.
   `upload_link`, `signer_of`, `add_pictures`
 - **`render.py`** (58 lines)
   A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
-  `to_html`, `unplaced_pictures`
-- **`search.py`** (294 lines)
+  `to_html`
+- **`search.py`** (299 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
 - **`stitch.py`** (416 lines)
   Put a pile of page pictures back together into articles.
@@ -1039,13 +1039,13 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (615 lines)
+- **`documents.py`** (632 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (973 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
-- **`help.py`** (99 lines)
+- **`help.py`** (100 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
 - **`invoices.py`** (387 lines)

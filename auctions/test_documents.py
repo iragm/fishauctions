@@ -1341,6 +1341,13 @@ class AddPageTests(LibraryTestCase):
             {"visibility": Visibility.CLUB, "club": self.club.pk},
         )
 
+    def test_search_engines_are_never_the_remembered_choice(self):
+        Document.objects.create(owner=self.owner, visibility=Visibility.WEB, original_name="x")
+        self.client.force_login(self.owner)
+        self.assertEqual(
+            self.client.get(reverse("library_add")).context["form"].initial["visibility"], Visibility.PUBLIC
+        )
+
     def test_a_club_you_can_no_longer_file_under_is_not_remembered(self):
         Document.objects.create(owner=self.member, club=self.club, visibility=Visibility.CLUB, original_name="x")
         self.client.force_login(self.member)
@@ -1391,6 +1398,27 @@ class WebVisibilityTests(LibraryTestCase):
         self.client.force_login(self.member)
         self.assertContains(self.client.get(document.get_absolute_url()), 'name="robots" content="noindex"')
 
+    def test_a_scan_shared_with_an_article_not_on_the_web_stays_private(self):
+        from auctions.models import BatchPage, DocumentBatch
+
+        batch = DocumentBatch.objects.create(owner=self.owner, visibility=Visibility.CLUB, club=self.club)
+        shared = BatchPage.objects.create(batch=batch, file=ContentFile(b"x", name="p.png"), original_name="p.png")
+        alone = BatchPage.objects.create(batch=batch, file=ContentFile(b"x", name="q.png"), original_name="q.png")
+        web = self.document(name="w.md", visibility=Visibility.WEB, index_it=False)
+        club_only = self.document(name="c.md", text="# Other\n\nText.", index_it=False)
+        web.pages.add(shared, alone)
+        club_only.pages.add(shared)
+        self.assertRedirects(
+            self.client.get(reverse("batch_page", args=[shared.pk])),
+            f"{reverse('account_login')}?next={reverse('batch_page', args=[shared.pk])}",
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(self.client.get(reverse("batch_page", args=[alone.pk])).status_code, 200)
+
+    def test_where_it_came_from_is_not_shown_to_the_open_web(self):
+        document = self.document(name="IMG_private_name.md", visibility=Visibility.WEB)
+        self.assertNotContains(self.client.get(document.get_absolute_url()), "IMG_private_name")
+
     def test_an_account_without_the_library_reads_only_web_documents(self):
         web = self.document(name="w.md", visibility=Visibility.WEB)
         public = self.document(name="p.md", text="# Other\n\nText.", visibility=Visibility.PUBLIC)
@@ -1417,8 +1445,21 @@ class MarkdownTests(LibraryTestCase):
         self.assertNotIn("<script", html)
         self.assertNotIn("javascript:", html)
         self.assertNotIn("example.com", html)
-        self.assertNotIn("onerror", html)
+        self.assertNotIn("<img", html)
         self.assertIn("tracker", html)
+        # Angle brackets in an old transcription are words, not tags to throw away.
+        self.assertIn("&lt;Betta splendens&gt;", to_html("Keep <Betta splendens> warm", []))
+
+    def test_a_passage_cut_out_of_a_long_table_is_rendered_with_the_rest_of_it(self):
+        rows = "\n".join(f"| {n} | microworms and brine shrimp, fed twice a day |" for n in range(120))
+        document = self.document(text=f"# Feeding log\n\n| Day | Food |\n|---|---|\n{rows}\n")
+        self.assertGreater(document.chunks.count(), 2)
+        self.client.force_login(self.member)
+        response = self.client.get(document.get_absolute_url())
+        self.assertNotContains(response, "| 119 |")
+        self.assertContains(response, "<td>119</td>")
+        for start in document.chunks.values_list("start", flat=True):
+            self.assertContains(response, f'id="at-{start}"')
 
     def test_a_picture_the_text_names_is_shown_there_and_not_again_above(self):
         document = self.document(visibility=Visibility.PUBLIC)

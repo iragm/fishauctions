@@ -13,6 +13,7 @@ a document's page, file, scans and pictures are open to anyone, signed in or not
 
 from pathlib import Path
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import redirect_to_login
@@ -34,7 +35,7 @@ from auctions.documents.forms import (
     add_pages,
 )
 from auctions.documents.models import TOPICS, Document, DocumentBatch, DocumentPicture, Visibility
-from auctions.documents.render import to_html, unplaced_pictures
+from auctions.documents.render import to_html
 from auctions.documents.search import (
     answer,
     can_manage,
@@ -237,11 +238,15 @@ class LibraryAddView(LibraryMixin, TemplateView):
                 club_pk = arriving.pk
             if club_pk and not clubs_to_file_under(user).filter(pk=club_pk).exists():
                 club_pk = None
-            if visibility == Visibility.CLUB and not club_pk:
+            # Search engines are never the starting point: one article shared with the world mustn't
+            # carry the next pile of scans along with it.
+            if visibility == Visibility.WEB or (visibility == Visibility.CLUB and not club_pk):
                 visibility = Visibility.PUBLIC
             form = DocumentUploadForm(user=user, initial={"visibility": visibility, "club": club_pk})
         context["form"] = form
         context["max_request_bytes"] = MAX_REQUEST_BYTES
+        # DATA_UPLOAD_MAX_MEMORY_SIZE bounds the form's text fields, with a little room for the rest.
+        context["max_text_bytes"] = settings.DATA_UPLOAD_MAX_MEMORY_SIZE - 64 * 1024
         return context
 
     def post(self, request, *args, **kwargs):
@@ -305,7 +310,9 @@ class DocumentDetailView(ReadableMixin, TemplateView):
         document = self.document
         manager = can_manage(self.request.user, document)
         pictures_on_it = list(document.pictures.all())
-        passages = _passages(document, pictures_on_it)
+        placed = set()
+        passages = _passages(document, pictures_on_it, placed)
+        text_html = "" if passages else to_html(document.text, pictures_on_it, placed)
         context.update(
             document=document,
             has_library=can_use_library(self.request.user),
@@ -313,10 +320,10 @@ class DocumentDetailView(ReadableMixin, TemplateView):
             can_manage=manager,
             topics=[(slug, label) for slug, label in TOPICS if slug in (document.topics or [])],
             passages=passages,
-            text_html="" if passages else to_html(document.text, pictures_on_it),
+            text_html=text_html,
             scans=document.pages.order_by("position"),
             pictures=pictures_on_it,
-            gallery=unplaced_pictures(document.text, pictures_on_it),
+            gallery=[picture for picture in pictures_on_it if picture.pk not in placed],
             pictures_link=pictures.upload_link(document, self.request.user) if manager else "",
             species=document.species.all().order_by("scientific_name"),
             reports=document.feedback.filter(resolved=False).select_related("user") if manager else [],
@@ -328,26 +335,36 @@ class DocumentDetailView(ReadableMixin, TemplateView):
         return context
 
 
-def _passages(document, pictures_on_it):
+def _passages(document, pictures_on_it, placed):
     """The text as its passages, each anchored at its offset so a search hit can link to it.
 
     Sliced from the text rather than read from ``DocumentChunk.text``, which repeats a split table's
-    header row. Empty while there are no passages; the page then shows the text whole.
+    header row. A passage cut out of the middle of a block (a long table, a long paragraph) is joined to
+    the one before it, so the Markdown is never rendered half a table at a time; its anchor rides along
+    at the top. Empty while there are no passages; the page then shows the text whole.
     """
     scans = dict(document.pages.values_list("position", "pk")) if document.batch_id else {}
     rows = []
     page = None
     for start, end, number in document.chunks.order_by("position").values_list("start", "end", "page"):
+        at_a_block = start == 0 or document.text[:start].endswith("\n\n") or number != page
+        if rows and not at_a_block:
+            rows[-1]["end"] = end
+            rows[-1]["also"].append(start)
+            continue
         rows.append(
             {
                 "start": start,
-                "html": to_html(document.text[start:end], pictures_on_it),
+                "end": end,
+                "also": [],
                 "page": number,
                 "new_page": number != page,
                 "scan": scans.get(number),
             }
         )
         page = number
+    for row in rows:
+        row["html"] = to_html(document.text[row["start"] : row["end"]], pictures_on_it, placed)
     return rows
 
 

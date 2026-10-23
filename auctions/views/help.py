@@ -89,11 +89,12 @@ class SitemapView(View):
     def get(self, request):
         base = request.build_absolute_uri("/").rstrip("/")
         paths = ["/help/", *(guide.url for guide in help_guides.GUIDES.values() if guide.shown)]
-        paths += [
-            document.get_absolute_url()
-            for document in web_documents().filter(status=Document.READY).only("pk", "title", "original_name")
-        ]
         if not settings.ALLOW_SEARCH_INDEXING:
             paths = []
+        else:
+            paths += [
+                document.get_absolute_url()
+                for document in web_documents().filter(status=Document.READY).only("pk", "title", "original_name")
+            ]
         body = render_to_string("sitemap.xml", {"urls": [base + path for path in paths]})
         return HttpResponse(body, content_type="application/xml")

@@ -50,7 +50,8 @@ def signer_of(document_pk: int, token: str):
 
 def _cleaned(data: bytes) -> tuple[bytes, str] | tuple[None, str]:
     """The picture re-encoded, upright, bounded and without its metadata (a phone's GPS position
-    included), and its extension; or ``None`` and why not. Drawings stay PNG so their lines stay sharp.
+    included), and its extension; or ``None`` and why not. ``resize_source`` then stores it as lot
+    images are stored, a JPEG unless it has transparency.
     """
     from PIL import Image, ImageOps
 

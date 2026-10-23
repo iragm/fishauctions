@@ -129,7 +129,12 @@ def readable_pages(user):
 
     if can_use_library(user):
         return visible_pages(user)
-    return BatchPage.objects.filter(documents__in=web_documents()).distinct()
+    # Only a scan whose every article is on the web: a page holding the end of one and the start of a
+    # club-only one would show the club-only one.
+    from auctions.models import Document
+
+    hidden = Document.objects.exclude(pk__in=web_documents().values("pk"))
+    return BatchPage.objects.filter(documents__in=web_documents()).exclude(documents__in=hidden).distinct()
 
 
 def can_manage(user, document) -> bool:

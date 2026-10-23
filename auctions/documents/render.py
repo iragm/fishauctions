@@ -24,13 +24,17 @@ _TAGS = frozenset(
 )  # fmt: skip
 _ATTRIBUTES = {"a": ["href", "title"], "img": ["src", "alt", "title"], "td": ["align"], "th": ["align"]}
 _PICTURE_PATH = re.compile(r"^/library/picture/(\d+)/$")
-_PICTURE_IN_TEXT = re.compile(r"/library/picture/(\d+)/")
 
 
-def to_html(text: str, pictures) -> str:
-    """``text`` as safe HTML, with ``pictures`` (this document's) shown where it names them."""
-    html = markdown.markdown(text or "", extensions=["tables", "sane_lists", "fenced_code"])
-    html = bleach.clean(html, tags=_TAGS, attributes=_ATTRIBUTES, protocols=["http", "https", "mailto"], strip=True)
+def to_html(text: str, pictures, placed: set | None = None) -> str:
+    """``text`` as safe HTML, with ``pictures`` (this document's) shown where it names them, adding the pk
+    of each one shown to ``placed``.
+
+    Tags outside the allowlist are escaped, not stripped: an old transcription's ``<Betta splendens>``
+    is words, and stays on the page as words. A single line break stays one, as a scan's lines were.
+    """
+    html = markdown.markdown(text or "", extensions=["tables", "sane_lists", "fenced_code", "nl2br"])
+    html = bleach.clean(html, tags=_TAGS, attributes=_ATTRIBUTES, protocols=["http", "https", "mailto"])
     soup = BeautifulSoup(html, "html.parser")
     by_pk = {picture.pk: picture for picture in pictures}
     for image in soup.find_all("img"):
@@ -45,14 +49,10 @@ def to_html(text: str, pictures) -> str:
             "class": "library-picture",
             "loading": "lazy",
         }
+        if placed is not None:
+            placed.add(picture.pk)
     for link in soup.find_all("a"):
         link["rel"] = "nofollow noopener"
     for table in soup.find_all("table"):
         table["class"] = "table table-sm"
     return mark_safe(str(soup))  # noqa: S308 -- built from the allowlist above
-
-
-def unplaced_pictures(text: str, pictures) -> list:
-    """The pictures the text doesn't place, which the page shows together above it."""
-    placed = {int(pk) for pk in _PICTURE_IN_TEXT.findall(text or "")}
-    return [picture for picture in pictures if picture.pk not in placed]

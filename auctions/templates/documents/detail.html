@@ -10,18 +10,19 @@
   <p class="text-muted small mb-2">
     {% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %}
     &middot; {{ document.get_visibility_display }}{% if document.club %} &middot; {{ document.club.name }}{% endif %}
-    {% if document.batch %}&middot; from <a href="{% url 'document_batch' document.batch.pk %}">{{ document.batch }}</a>{% endif %}
-    &middot; {{ document.original_name }}
+    {% comment %}Where it came from is for the people who keep the library, not the open web.{% endcomment %}
+    {% if has_library %}{% if document.batch %}&middot; from <a href="{% url 'document_batch' document.batch.pk %}">{{ document.batch }}</a>{% endif %}
+    &middot; {{ document.original_name }}{% endif %}
   </p>
 
-  {% if document.status == "pending" or document.status == "processing" %}
+  {% if not has_library %}{% elif document.status == "pending" or document.status == "processing" %}
     <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> {{ document.get_status_display }}...</div>
   {% elif document.status == "failed" %}
     <div class="alert alert-danger">{{ document.error }}</div>
   {% elif document.error %}
     <div class="alert alert-warning text-dark">Reading it again didn't work: {{ document.error }}</div>
   {% endif %}
-  {% if document.notes %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ document.notes }}</div>{% endif %}
+  {% if document.notes and has_library %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ document.notes }}</div>{% endif %}
 
   <div class="mb-3">
     {% for slug, label in topics %}<a class="badge bg-primary text-decoration-none me-1" href="{% url 'library_search' %}?topic={{ slug }}">{{ label }}</a>{% endfor %}
@@ -86,7 +87,7 @@
   {% if passages %}
     {% for passage in passages %}
       {% if passage.page and passage.new_page %}<div class="text-muted small mt-3">{% if passage.scan %}<a href="{% url 'batch_page' passage.scan %}" class="library-zoom">Page {{ passage.page }}</a>{% else %}Page {{ passage.page }}{% endif %}</div>{% endif %}
-      <div id="at-{{ passage.start }}" class="document-passage">{{ passage.html }}</div>
+      <div id="at-{{ passage.start }}" class="document-passage">{% for at in passage.also %}<span id="at-{{ at }}"></span>{% endfor %}{{ passage.html }}</div>
     {% endfor %}
   {% elif text_html %}
     {{ text_html }}

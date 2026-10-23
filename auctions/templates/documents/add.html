@@ -55,6 +55,15 @@
   }
 
   input.addEventListener("change", show);
+  // Django refuses a form body over its limit with a bare error page, before the form can say why.
+  document.addEventListener("submit", function (event) {
+    if (event.target !== form) { return; }
+    if (new Blob([text.value]).size > {{ max_text_bytes }}) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      alert("That's too much text for one paste. Save it as a file and drop that in instead.");
+    }
+  }, true);
   ["dragenter", "dragover"].forEach(function (name) {
     drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.add("border-info"); });
   });
@@ -71,13 +80,14 @@
   });
   document.addEventListener("paste", function (event) {
     var data = event.clipboardData;
+    var target = event.target;
+    // Into a box it's text, even when Word put a picture of it on the clipboard too.
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) { return; }
     if (data && data.files.length) {
       event.preventDefault();
       add(data.files);
       return;
     }
-    var target = event.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) { return; }
     var pasted = data ? data.getData("text") : "";
     if (pasted) {
       event.preventDefault();
