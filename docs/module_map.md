@@ -415,9 +415,9 @@ this only quotes its opening sentence.
 - **`test_data_leak_penetration.py`** (259 lines)
   Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin.
   `DataLeakPenetrationTests`
-- **`test_data_migrations.py`** (30 lines)
+- **`test_data_migrations.py`** (39 lines)
   Data migrations meet prod's rows, not a fresh database's, and one that raises stops the deploy
-  `DoubledRowsTests`
+  `DoubledRowsTests`, `PrintReminderLinkTests`
 - **`test_deploy.py`** (309 lines)
   Deploys: the poller refusing what it should, update.sh asking first, and the deploy window.
   `PollerVerifyTests`, `PollerPollTests`, `UpdateScriptPromptTests`, `DeployWindowTests`
