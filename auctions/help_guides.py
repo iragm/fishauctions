@@ -220,6 +220,19 @@ GROUPS = (
 
 GUIDES: dict[str, Guide] = {guide.slug: guide for group in GROUPS for guide in group.guides}
 
+#: Blog posts that moved into the help, as slug: (guide, section). /blog/<slug>/ redirects there, and
+#: search_help leaves the old post out. The privacy post became the static /privacy/.
+MOVED_BLOG_POSTS = {
+    "how-much-should-you-bid": ("online-auctions", "how-much"),
+    "online-payments-suck": ("payments", "paypal"),
+    "transporting-fish": ("bagging-fish", ""),
+    "optimal-lot-submission-time": ("online-auctions", "when"),
+    "category-popularity": ("online-auctions", "what-sells"),
+    "whats-a-picture-worth": ("online-auctions", "photos"),
+    "multiple-location-auctions": ("online-auctions", "locations"),
+    "encouraging-participation": ("run-an-online-auction", "invite"),
+}
+
 
 def is_fish_site() -> bool:
     return settings.WEBSITE_FOCUS == "fish"
@@ -342,6 +355,20 @@ class HelpContext:
         from auctions.help_stats import bid_amounts
 
         return bid_amounts()
+
+    @cached_property
+    def lot_timing(self) -> dict:
+        """How lots do by when they were added, at big online auctions (``help_stats.lot_timing``)."""
+        from auctions.help_stats import lot_timing
+
+        return lot_timing()
+
+    @cached_property
+    def categories(self) -> dict:
+        """Each category's share of lots, views, bids and money (``help_stats.categories``)."""
+        from auctions.help_stats import categories
+
+        return categories()
 
     @cached_property
     def bred_species(self) -> dict:

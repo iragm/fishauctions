@@ -2364,21 +2364,8 @@ class PreferencesPushBridgeTests(TestCase):
 # Part L — terms and privacy policy, linked from sign-up
 
 
-def _ensure_privacy_post():
-    """Ensure the privacy post exists; an earlier TransactionTestCase may have truncated the seed row."""
-    from auctions.models import PRIVACY_POLICY_SLUG, BlogPost
-
-    BlogPost.objects.get_or_create(
-        slug=PRIVACY_POLICY_SLUG,
-        defaults={"title": "Privacy", "body_rendered": "<h3>Deleting your account</h3>"},
-    )
-
-
 class MobileConfigLegalUrlsTests(TestCase):
     """The public config carries terms and privacy policy paths for the app's sign-up (Apple requires them)."""
-
-    def setUp(self):
-        _ensure_privacy_post()
 
     def test_config_carries_both(self):
         response = self.client.get(reverse("mobile-config"))
@@ -2387,12 +2374,12 @@ class MobileConfigLegalUrlsTests(TestCase):
         self.assertEqual(data["terms_url"], "/tos/")
         self.assertEqual(data["privacy_policy_url"], "/privacy/")
 
-    def test_privacy_omitted_when_the_page_is_missing(self):
+    def test_privacy_needs_no_blog_post(self):
         from auctions.models import BlogPost
 
         BlogPost.objects.filter(slug="privacy").delete()
         data = self.client.get(reverse("mobile-config")).json()
-        self.assertNotIn("privacy_policy_url", data)
+        self.assertEqual(data["privacy_policy_url"], "/privacy/")
 
     def test_no_secrets_leaked_alongside_them(self):
         data = self.client.get(reverse("mobile-config")).json()
@@ -2401,9 +2388,6 @@ class MobileConfigLegalUrlsTests(TestCase):
 
 
 class PrivacyPolicyPageTests(TestCase):
-    def setUp(self):
-        _ensure_privacy_post()
-
     def test_privacy_page_renders_in_place(self):
         response = self.client.get(reverse("privacy_policy"))
         self.assertEqual(response.status_code, 200)
@@ -2413,14 +2397,14 @@ class PrivacyPolicyPageTests(TestCase):
         # A redirect would leave the app's allow-list.
         self.assertEqual(self.client.get("/privacy/").status_code, 200)
 
-    def test_the_blog_url_still_works(self):
-        self.assertEqual(self.client.get("/blog/privacy/").status_code, 200)
+    def test_the_blog_url_lands_on_the_page(self):
+        self.assertRedirects(self.client.get("/blog/privacy/"), "/privacy/", status_code=301)
 
-    def test_missing_page_is_a_404_not_a_500(self):
+    def test_the_page_needs_no_blog_post(self):
         from auctions.models import BlogPost
 
         BlogPost.objects.filter(slug="privacy").delete()
-        self.assertEqual(self.client.get(reverse("privacy_policy")).status_code, 404)
+        self.assertContains(self.client.get(reverse("privacy_policy")), "Deleting your account")
 
 
 class SignupLegalLinksTests(TestCase):

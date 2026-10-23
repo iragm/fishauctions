@@ -29,9 +29,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from auctions import dmca, voice
 from auctions.models import (
-    PRIVACY_POLICY_SLUG,
     Auction,
-    BlogPost,
     Club,
     ClubMember,
     Lot,
@@ -544,9 +542,7 @@ class MobileConfigView(APIView):
             "apple_sign_in_enabled": bool(settings.APPLE_ALLOWED_AUDIENCES),
             "facebook_app_id": settings.FACEBOOK_APP_ID,
         }
-        # Omitted when unset, rather than linking to a 404.
-        if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
-            data["privacy_policy_url"] = reverse("privacy_policy")
+        data["privacy_policy_url"] = reverse("privacy_policy")
         if dmca.is_configured():
             data["dmca_url"] = reverse("dmca")
         firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)

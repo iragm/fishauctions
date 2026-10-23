@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Privacy{% endblock %}
+{% block content %}
+{% comment %}The privacy policy, at /privacy/ (and /blog/privacy/, which redirects here). Was a BlogPost edited in the admin; a static page now, changed by a commit like any other page. The app's sign-up WebView opens this URL, so it renders here and never redirects.{% endcomment %}
+<div class="container py-4" style="max-width: 48rem;">
+<h1 class="h3 mb-3">Privacy</h1>
+<p>It's pretty important to know who you're sharing your personal information with. This site keeps track of the following pieces of information:</p>
+<ul>
+<li>Your name</li>
+<li>Your email address</li>
+<li>Your phone number</li>
+<li>Your mailing address</li>
+<li>Your location</li>
+<li>Browsing information like pages viewed and your IP address, which we keep so we can see which parts of the site people struggle with and make them easier to use</li>
+</ul>
+<p>We don't collect or store any credit card information. For the most part, your contact information isn't shared with anyone else on the site. Here are the <em>only</em> times your information is shared with other users:</p>
+<ul>
+<li>Your email address is hidden until you choose to show it on <a href="{% url 'account' %}">your contact page</a>, which you can do in <a href="{% url 'preferences' %}">preferences</a>. Only signed in users can see any of your info.</li>
+<li>Your username is visible whenever you place a bid. You can uncheck <em>Username Visible</em> in <a href="{% url 'preferences' %}">preferences</a>, which will hide your username when you bid. Even if this is unchecked, your username will always be shown when you sell a lot or make a chat message. (It's worth mentioning that when your username is hidden, you're still not completely anonymous. Auction admins can still see your username, and, behind the scenes, a unique identifier is used and visible in the page source to other bidders.)</li>
+<li>Usernames can no longer contain an @ symbol, so a new one can't be an email address. If you signed up long enough ago that yours is, it <em>will</em> be visible to non-logged-in users and you'll probably get spam — <a href="{% url 'change_username' %}">change your username</a>.</li>
+<li>When you confirm your pickup location for an auction, all of your contact information is made available to the organizer of the auction. This is visible to them even if you don't sell or buy any lots in the auction.</li>
+<li>When you sell a lot that is part of an auction, your real name is given to the winner of that lot.</li>
+<li>When you win a lot that is part of an auction, your real name is given to the seller of that lot.</li>
+<li>When you sell a lot that is <em>not</em> part of an auction, all your contact information is given to the winner of that lot.</li>
+<li>When you win a lot that is <em>not</em> part of an auction, all your contact information is given to the seller of that lot.</li>
+</ul>
+<h2 class="h5 mt-4">On-site payments</h2>
+<p>When you pay for an invoice using PayPal or Square on this site, we store a record of your payment including:</p>
+<ul>
+<li>Your name</li>
+<li>Your email address</li>
+<li>Your mailing address (as provided by the payment processor)</li>
+<li>The amount paid and currency</li>
+<li>A transaction ID from the payment processor</li>
+</ul>
+<p>We do <em>not</em> store any credit card numbers, bank account details, or other sensitive payment credentials. All payment processing is handled securely by PayPal or Square.</p>
+<p>When auction organizers connect their PayPal or Square accounts to receive payments, we store their merchant IDs and authentication tokens (encrypted at rest for Square). This allows us to process payments on their behalf without storing any buyer payment credentials.</p>
+<h2 class="h5 mt-4">Mobile app and notifications</h2>
+<p>If you use our mobile app, we store some information about your device so the app can work and notify you:</p>
+<ul>
+<li>The device name, platform (iOS or Android), and the app version</li>
+<li>A push notification token, which we send to Google's Firebase Cloud Messaging service so it can deliver notifications to your device</li>
+</ul>
+<p>Push notifications are optional. You choose whether to receive them, and you can turn them off at any time in the app or in your device's settings. When you sign out of the app, the push token for that device is cleared, so a signed-out phone never receives your notifications. We only use these tokens to deliver the notifications you've asked for.</p>
+<p>The app can also take card payments in person using Square's Mobile Payments SDK — for example, when you pay an auction organizer at an in-person event. As with online payments, the card is processed securely by Square and we never store card numbers or other sensitive payment credentials.</p>
+<h2 class="h5 mt-4">Emails we send you</h2>
+<p>We keep a copy of the emails this site sends you — the message and the address it went to — for 30 days, so that we can tell you whether an email was sent and look into it if it bounced. After that the copy is deleted automatically.</p>
+<h2 class="h5 mt-4">Updating your contact information</h2>
+<p>When you <a href="{% url 'contact_info' %}">update your contact information</a>, the changes will also be applied to any auctions you've recently joined and to any clubs you're a member of. This ensures that auction organizers, club admins, sellers, and buyers have your current information. A record of the change is kept in the auction and club history for the organizers' reference.</p>
+<h2 class="h5 mt-4">Club memberships</h2>
+<p>If you join a fish club through this site or are added to a club by a club admin, the club will have access to:</p>
+<ul>
+<li>Your name</li>
+<li>Your email address</li>
+<li>Your phone number</li>
+<li>Your mailing address</li>
+</ul>
+<p>This information is visible to club members with the appropriate admin permissions. You can check and update your contact information at any time through <a href="{% url 'contact_info' %}">your contact info page</a>.</p>
+<p>Club admins may export member lists. If you do not want your contact information shared in these exports, contact the club admin to update your contact preferences.</p>
+<h2 class="h5 mt-4">Deleting your account</h2>
+<p>You can <a href="{% url 'account_delete' %}">delete your account</a> at any time — it's the last item in the <em>Account setup</em> menu, and it works the same way in the app. The page tells you exactly what is removed before you confirm, and nothing happens for 30 days: signing in again during that time cancels the deletion.</p>
+<p>When the deletion goes through, we remove your username, email address, password, any linked Google account, your name, phone number, mailing address, location, preferences, watched lots, search and browsing history, the devices you've used the app on (and their push notification tokens), and any PayPal or Square account you connected.</p>
+<p>Some records stay, because they're other people's records too:</p>
+<ul>
+<li>Auctions you took part in keep your bidder number and the amounts on your invoices, so that sellers' payouts and clubs' past auctions still add up. Your name and contact details are removed from them. The exception is a record an auction admin wrote down when you turned up in person: that's the auction's own note of who was there, taken from what you told them at the door, so it's kept as it is and only the link to your account is removed.</li>
+<li>Auction and club history keeps a record of what happened, without your account attached. Where those notes quote your email address, the address is replaced with <em>[deleted]</em>.</li>
+<li>Lots you sold stay in the auction they were sold in, without a seller name. Lots that weren't part of an auction are taken off the site.</li>
+<li>Club membership records that a club admin created or has edited stay with the club, including dues paid, award points, and your place on the club's mailing list if they use Mailchimp or Brevo. That's the club's own record of a member, collected by the club, so we remove the link to your account and nothing else — if you want the club's record deleted, or you want them to stop emailing you, ask the club. A membership you signed yourself up for, that no admin has edited, is deleted with your account, and so is the mailing list contact that came from it.</li>
+<li>Chat messages and comments stay on the lots they belong to, with no name attached.</li>
+</ul>
+<h2 class="h5 mt-4">Other services we use</h2>
+<p>Running this site means handing small pieces of your information to companies that each do one job with it. None of them are given it for their own purposes:</p>
+<ul>
+<li>Amazon SES sends the site's email, so it handles your email address and the message.</li>
+<li>Mailchimp or Brevo hold a club's mailing list, if that club uses one: your name and email address.</li>
+<li>Google's reCAPTCHA checks that a sign-up isn't a robot, Google Maps turns an address into a location on the map, and Firebase delivers push notifications to the app. Signing in with Google, Apple or Facebook tells us only what their screen says it will.</li>
+<li>Cloudflare stores and resizes the photos on lots.</li>
+<li>Discord receives a club's announcement, if the club has connected a Discord server.</li>
+<li>Apple Wallet and Google Wallet hold a membership card you have chosen to add to your phone, with your name and member number on it.</li>
+<li>A language model provider (currently OpenAI) handles text where the site writes or reads something for you: matching a lot to a species, drafting a club's request for a donation, summarizing a reply, and answering what you type into the command palette or ask on the AI page. It sees only the text involved in that one job, under API terms that say it isn't used to train their models, and nothing is sent unless you use one of those features.</li>
+</ul>
+<h2 class="h5 mt-4">Law enforcement and security</h2>
+<p>We have never had any personal information requests from law enforcement, and we'll remove this message if we receive one.</p>
+<p>We take your privacy and security seriously. If you see something that doesn't seem right, reach out and we'll fix it.</p>
+</div>
+{% endblock %}

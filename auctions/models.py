@@ -107,8 +107,7 @@ CUSTOM_RANDOM_REROLL_CHANCE = 0.25
 # After a roll, whichever way it went, that lot's edits don't roll again for this long (seconds).
 CUSTOM_RANDOM_REROLL_COOLDOWN = 20 * 60
 
-# The privacy policy is a BlogPost so it can be edited without a deploy; /privacy/, /blog/privacy/
-# and the app's sign-up link all use this slug.
+# The privacy policy's old BlogPost slug: /blog/privacy/ redirects to the static /privacy/.
 PRIVACY_POLICY_SLUG = "privacy"
 
 
@@ -4156,7 +4155,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)
     lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
-    first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
+    first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free."
     club_member_discount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     club_member_discount.help_text = "Automatically add a discount in this amount if a paid club member has purchased at least one lot in this auction"
     # Off by default: public listing is a decision, checked by AuctionEditForm.clean.
@@ -6680,7 +6679,7 @@ class PickupLocation(InvalidatesRelatedCache, CachedPropertiesMixin, models.Mode
     )
     pickup_time = models.DateTimeField(blank=True, null=True)
     second_pickup_time = models.DateTimeField(blank=True, null=True)
-    second_pickup_time.help_text = "Only for <a href='/blog/multiple-location-auctions/'>multi-location auctions</a>; people will return to pick up lots from other locations at this time."
+    second_pickup_time.help_text = "Only for <a href='/help/run-an-online-auction/#multi-location'>multi-location auctions</a>; people will return to pick up lots from other locations at this time."
     latitude = models.FloatField(blank=True, default=0)
     longitude = models.FloatField(blank=True, default=0)
     address = models.CharField(max_length=500, blank=True, null=True)
@@ -11941,7 +11940,7 @@ class UserData(CachedPropertiesMixin, models.Model):
     use_list_view = models.BooleanField(default=False)
     use_list_view.help_text = "Show a list of all lots instead of showing pictures"
     email_visible = models.BooleanField(default=False)
-    email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
+    email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/privacy/' target='_blank'>Privacy information</a>"
     last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
     last_club_used = models.ForeignKey(
         Club,

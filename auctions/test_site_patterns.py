@@ -86,6 +86,55 @@ class SiteCountsTests(StandardTestCase):
         self.assertEqual(chart["percents"][9], 40.0)
         self.assertEqual(_bid_amounts(min_bids=6, dollars=20), {})
 
+    def test_lots_are_grouped_by_when_they_were_added(self):
+        from auctions.help_stats import _lot_timing
+
+        ends = ago(days=20)
+        for _ in range(3):
+            auction = self.online(ends, lots=0)
+            seller = AuctionTOS.objects.create(auction=auction, pickup_location=self.location, name="Seller")
+            for hours, price in ((5, 300), (10, None), (30, 400), (60, 500), (200, 600)):
+                lot = Lot.objects.create(lot_name="bag", auction=auction, auctiontos_seller=seller, winning_price=price)
+                Lot.objects.filter(pk=lot.pk).update(date_posted=ends - datetime.timedelta(hours=hours))
+        timing = _lot_timing(min_gross=1000, min_lots=3, min_auctions=3)
+        self.assertEqual(timing["auctions"], 3)
+        self.assertEqual(
+            [(row["label"], row["lots"], row["sold"], row["median"]) for row in timing["rows"]],
+            [
+                ("Last day", 6, 50, 300.0),
+                ("1 to 2 days before", 3, 100, 400.0),
+                ("2 to 4 days before", 3, 100, 500.0),
+                ("A week or more", 3, 100, 600.0),
+            ],
+        )
+        # A small auction isn't counted.
+        self.assertEqual(_lot_timing(min_gross=2000, min_lots=3, min_auctions=3), {})
+
+    def test_categories_are_shares_of_the_whole(self):
+        from auctions.help_stats import _categories
+        from auctions.models import Category, PageView
+
+        auction = self.online(ago(days=30), lots=0)
+        seller = AuctionTOS.objects.create(auction=auction, pickup_location=self.location, name="Seller")
+        plants, fish, snails = (Category.objects.create(name=name) for name in ("Plants", "Fish", "Snails"))
+        for category, count, price in ((plants, 6, 2), (fish, 3, 20), (snails, 1, None)):
+            for _ in range(count):
+                lot = Lot.objects.create(
+                    lot_name="x",
+                    auction=auction,
+                    auctiontos_seller=seller,
+                    species_category=category,
+                    winning_price=price,
+                )
+                Bid.objects.create(user=self.user, lot_number=lot, amount=1)
+                PageView.objects.create(lot_number=lot, user=self.user)
+        rows = {row["name"]: row for row in _categories(min_lots=5)["rows"]}
+        self.assertEqual(rows["Plants"]["lots"], 60.0)
+        self.assertEqual(rows["Fish"]["money"], round(100 * 60 / 72, 1))
+        self.assertEqual(rows["Snails"]["money"], 0.0)
+        self.assertEqual(rows["Snails"]["bids"], 10.0)
+        self.assertEqual(_categories(min_lots=11), {})
+
     def test_bred_species_skip_a_clubs_own(self):
         from auctions.help_stats import _bred_species
 
@@ -184,6 +233,28 @@ class GuidesQuoteTheCountsTests(StandardTestCase):
         BlogPost.objects.create(title="How much should you bid?", body="old")
         response = self.client.get(reverse("blog_post", kwargs={"slug": "how-much-should-you-bid"}))
         self.assertRedirects(response, help_guides.GUIDES["online-auctions"].url + "#how-much", status_code=301)
+
+    def test_every_moved_blog_post_lands_in_its_section(self):
+        for slug, (guide, section) in help_guides.MOVED_BLOG_POSTS.items():
+            response = self.client.get(reverse("blog_post", kwargs={"slug": slug}))
+            url = help_guides.GUIDES[guide].url + (f"#{section}" if section else "")
+            self.assertRedirects(response, url, status_code=301, fetch_redirect_response=False)
+            if section:
+                self.assertContains(self.client.get(help_guides.GUIDES[guide].url), f'id="{section}"')
+
+    def test_the_new_charts_draw_and_fall_back_to_words(self):
+        timing = {"rows": [{"label": "Last day", "lots": 9, "sold": 80, "median": 12.0}] * 3, "auctions": 4}
+        categories = {
+            "rows": [{"name": "Plants", "lots": 30.0, "views": 20.0, "bids": 25.0, "money": 10.0}] * 3,
+            "lots": 900,
+        }
+        response = self.guide("online-auctions", lot_timing=timing, categories=categories)
+        self.assertContains(response, 'id="lot-timing-rows"')
+        self.assertContains(response, 'id="categories-rows"')
+        self.assertContains(response, 'id="locations-carousel"')
+        response = self.guide("online-auctions", lot_timing={}, categories={})
+        self.assertNotContains(response, 'id="lot-timing-rows"')
+        self.assertContains(response, "a lot sells for what it's worth whenever you add it")
 
     def test_the_paypal_blog_post_lands_in_the_help(self):
         BlogPost.objects.create(title="PayPal Integration", slug="online-payments-suck", body="old")

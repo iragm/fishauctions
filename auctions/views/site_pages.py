@@ -28,7 +28,7 @@ from django.db.models.base import Model as Model
 from django.http import (
     Http404,
 )
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
@@ -37,7 +37,7 @@ from django.views.generic.edit import (
     FormView,
 )
 
-from auctions import help_stats
+from auctions import help_guides, help_stats
 from auctions.filters import (
     AuctionFilter,
     LotFilter,
@@ -628,13 +628,6 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
-#: Blog posts that moved into the help, as slug: (guide, section). Their old links go there.
-MOVED_TO_HELP = {
-    "how-much-should-you-bid": ("online-auctions", "how-much"),
-    "online-payments-suck": ("payments", "paypal"),
-}
-
-
 class BlogPostView(DetailView):
     """Render a blog post"""
 
@@ -642,10 +635,14 @@ class BlogPostView(DetailView):
     template_name = "blog_post.html"
 
     def get(self, request, *args, **kwargs):
-        moved = MOVED_TO_HELP.get(kwargs.get("slug"))
+        slug = kwargs.get("slug")
+        if slug == PRIVACY_POLICY_SLUG:
+            return redirect("privacy_policy", permanent=True)
+        moved = help_guides.MOVED_BLOG_POSTS.get(slug)
         if moved:
             guide, section = moved
-            return redirect(f"{reverse('help_guide', kwargs={'slug': guide})}#{section}", permanent=True)
+            url = reverse("help_guide", kwargs={"slug": guide})
+            return redirect(f"{url}#{section}" if section else url, permanent=True)
         return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -656,16 +653,15 @@ class BlogPostView(DetailView):
         return context
 
 
-class PrivacyPolicyView(BlogPostView):
-    """The privacy policy at a stable path.
+class PrivacyPolicyView(TemplateView):
+    """The privacy policy, a static page (``privacy_policy.html``); /blog/privacy/ redirects here.
 
-    The same BlogPost as /blog/privacy/, rendered rather than redirected: the app opens this URL in the
-    signed-out signup WebView against an allow-list, so a redirect would bounce the user to the system
-    browser. Apple requires it, and Google Play's data-deletion policy wants a URL.
+    Rendered here and never redirected: the app opens this URL in the signed-out signup WebView against
+    an allow-list, so a redirect would bounce the user to the system browser. Apple requires it, and
+    Google Play's data-deletion policy wants a URL.
     """
 
-    def get_object(self, queryset=None):
-        return get_object_or_404(BlogPost, slug=PRIVACY_POLICY_SLUG)
+    template_name = "privacy_policy.html"
 
 
 class UnsubscribeView(TemplateView):

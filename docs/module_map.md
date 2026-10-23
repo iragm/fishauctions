@@ -38,7 +38,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (201 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1589 lines)
+- **`admin.py`** (1599 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -174,9 +174,9 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (976 lines)
+- **`help_guides.py`** (1003 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
-- **`help_stats.py`** (907 lines)
+- **`help_stats.py`** (1028 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
 - **`helper_functions.py`** (162 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
@@ -199,7 +199,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14995 lines)
+- **`models.py`** (14994 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -216,7 +216,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16617 lines)
+- **`palette_actions.py`** (16618 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -533,7 +533,7 @@ this only quotes its opening sentence.
 - **`test_merges.py`** (414 lines)
   What a merge carries over: everything that points at the participant, club member or account it closes.
   `relations_to`, `MergeCoverageTests`, `ParticipantMergeTests`, `MemberMergeTests`
-- **`test_mobile_features.py`** (2740 lines)
+- **`test_mobile_features.py`** (2724 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -583,7 +583,7 @@ this only quotes its opening sentence.
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (5259 lines)
   Tests for the command palette's natural-language assist.
-- **`test_palette_core.py`** (1283 lines)
+- **`test_palette_core.py`** (1279 lines)
   The command palette itself, and the mobile surfaces that call into it.
   `CommandPaletteTests`, `MobileCommandPaletteTests`, `MobileMyClubsTests`, `MobileLabelTests`, `MobileConfigTests`, `FirebaseClientConfigParsingTests`, `SingleLotLabelPngTests`, `MobileEmailLoginTests`, `MobileWebSessionTests`, `ExampleSuggestionTests`
 - **`test_palette_mic.py`** (101 lines)
@@ -621,7 +621,7 @@ this only quotes its opening sentence.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
-- **`test_site_patterns.py`** (267 lines)
+- **`test_site_patterns.py`** (338 lines)
   The help's site-wide tables and charts, and the two things collected for the auction stats page: invoice
   `ago`, `SiteCountsTests`, `GuidesQuoteTheCountsTests`, `AbandonedBidTests`, `InvoiceOpenedTests`, `RefreshGuardTests`
 - **`test_source_code.py`** (324 lines)
@@ -919,7 +919,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
 - **`urls.py`** (141 lines)
-- **`views.py`** (1582 lines)
+- **`views.py`** (1578 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -1079,7 +1079,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (706 lines)
+- **`site_pages.py`** (702 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
