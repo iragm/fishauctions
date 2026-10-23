@@ -1,3 +1,3 @@
 {% extends "tables/bootstrap_htmx.html" %}
 {% comment %}The buying dashboard's table. The marker says which page, sort and search this table was rendered for, so the page's live refresh (lot_buying.html) re-requests exactly what is on screen.{% endcomment %}
-{% block pagination %}{{ block.super }}<span id="buying-refresh" data-url="{{ request.get_full_path }}" hidden></span>{% endblock pagination %}
+{% block pagination %}{{ block.super }}<span id="buying-refresh" data-url="{{ table.refresh_url }}" hidden></span>{% endblock pagination %}

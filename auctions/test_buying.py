@@ -3,10 +3,14 @@
 import csv
 import datetime
 import io
+import re
+from collections import Counter
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -308,6 +312,40 @@ class BuyingDashboardBiddingTests(StandardTestCase):
         self.assertEqual(response.context["amount"], self.open_lot.suggested_bid(None))
         self.assertEqual(response.context["amount"], 6)  # $5 minimum, whole dollars
 
+    def test_refresh_marker_pins_the_auction_on_screen(self):
+        Watch.objects.create(user=self.userB, lot_number=self.open_lot)
+        self.userB.userdata.last_auction_used = self.online_auction
+        self.userB.userdata.save()
+        response = self.client.get(reverse("buying"))
+        self.assertContains(response, f'data-url="/buying/?auction={self.online_auction.slug}"')
+        self.assertContains(response, f"/ws/buying/?auction={self.online_auction.pk}")
+
+    def test_queries_do_not_grow_with_rows(self):
+        def count():
+            with CaptureQueriesContext(connection) as queries:
+                self.client.get(self.url)
+            return [re.sub(r"\d+", "N", query["sql"])[:300] for query in queries]
+
+        Bid.objects.create(user=self.userB, lot_number=self.open_lot, amount=8)
+        Bid.objects.create(user=self.user_with_no_lots, lot_number=self.open_lot, amount=9)
+        count()  # the first request also warms per-session caches
+        one = count()
+        for n in range(5):
+            lot = Lot.objects.create(
+                lot_name=f"More {n}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                active=True,
+                date_end=self.open_lot.date_end,
+            )
+            Lot.objects.filter(pk=lot.pk).update(date_posted=self.open_lot.date_posted)
+            Bid.objects.create(user=self.userB, lot_number=lot, amount=8)
+            Bid.objects.create(user=self.user_with_no_lots, lot_number=lot, amount=9)
+        more = count()
+        extra = Counter(more) - Counter(one)
+        self.assertEqual(len(more), len(one), "\n".join(f"{n}x {sql}" for sql, n in extra.items()))
+
     def test_refresh_marker_repeats_the_request_on_screen(self):
         Watch.objects.create(user=self.userB, lot_number=self.open_lot)
         response = self.client.get(
@@ -370,6 +408,41 @@ class BuyingConsumerTests(StandardTestCase):
         consumer = self._consumer(self.userB)
         consumer.connect()
         self.assertEqual(sorted(consumer.channel_layer.groups), sorted([f"lot_{watched.pk}", f"lot_{bid_on.pk}"]))
+        consumer.disconnect(1000)
+        self.assertEqual(consumer.channel_layer.groups, [])
+
+    def test_only_the_auction_on_screen(self):
+        here = self._open_lot("Here")
+        Watch.objects.create(user=self.userB, lot_number=here)
+        elsewhere = Lot.objects.create(
+            lot_name="Elsewhere", auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos, quantity=1
+        )
+        Watch.objects.create(user=self.userB, lot_number=elsewhere)
+        consumer = self._consumer(self.userB)
+        consumer.scope["query_string"] = f"auction={self.online_auction.pk}".encode()
+        consumer.connect()
+        self.assertEqual(consumer.channel_layer.groups, [f"lot_{here.pk}"])
+        everything = self._consumer(self.userB)
+        everything.connect()
+        self.assertEqual(sorted(everything.channel_layer.groups), sorted([f"lot_{here.pk}", f"lot_{elsewhere.pk}"]))
+
+    def test_a_failed_join_still_leaves_what_it_joined(self):
+        for name in ("One", "Two"):
+            Watch.objects.create(user=self.userB, lot_number=self._open_lot(name))
+        consumer = self._consumer(self.userB)
+        calls = []
+
+        async def flaky(group, channel):
+            calls.append(group)
+            if len(calls) == 2:
+                message = "redis went away"
+                raise ConnectionError(message)
+            consumer.channel_layer.groups.append(group)
+
+        consumer.channel_layer.group_add = flaky
+        with self.assertLogs("auctions.consumers", level="ERROR"):
+            consumer.connect()
+        self.assertEqual(consumer.groups_joined, calls[:1])
         consumer.disconnect(1000)
         self.assertEqual(consumer.channel_layer.groups, [])
 

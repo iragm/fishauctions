@@ -667,7 +667,7 @@ class LotHTMxTableForBuyers(tables.Table):
             reverse("lot_bid", kwargs={"pk": record.pk}),
             record.lot_name,
             record.currency_symbol,
-            record.buy_now_price if buy_now else record.suggested_bid(viewer_max_bid(record, self.user)),
+            record.suggested_bid(viewer_max_bid(record, self.user)),
             int(record.only_whole_dollar_bids),
             int(buy_now or not (record.auction and record.auction.allow_deleting_bids)),
             int(buy_now),

@@ -621,10 +621,19 @@ class BuyingDashboard(HTMxTableView):
                 bidding=Exists(Bid.objects.filter(lot_number=OuterRef("pk"), user=user, is_deleted=False)),
             )
             .filter(Q(watching=True) | Q(bidding=True) | Lot.won_by_q(user))
-            .select_related("auction", "auctiontos_winner")
-            .prefetch_related("bid_set")
+            .select_related("auction__created_by__userdata", "user__userdata", "auctiontos_winner", "auctiontos_seller")
+            .prefetch_related("bid_set__user")
             .order_by(*order)
         )
+
+    def get_table(self, **kwargs):
+        table = super().get_table(**kwargs)
+        # The live refresh repeats this request with the auction pinned: without it, /buying/ picks the
+        # last auction used again, which another tab may have changed since.
+        refresh = self.request.GET.copy()
+        refresh["auction"] = ALL_AUCTIONS if self.all_auctions else getattr(self.auction, "slug", "")
+        table.refresh_url = f"{self.request.path}?{refresh.urlencode()}"
+        return table
 
     def get_table_kwargs(self):
         kwargs = {"user": self.request.user}

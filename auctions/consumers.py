@@ -10,20 +10,23 @@ the connection actually interrupted.
 import json
 import logging
 from decimal import Decimal
+from urllib.parse import parse_qs
 
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
 from channels.layers import get_channel_layer
-from django.db.models import Q
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from .models import (
     Auction,
+    Bid,
     ChatSubscription,
     Lot,
     LotHistory,
     User,
     UserBan,
+    Watch,
 )
 
 try:
@@ -398,32 +401,34 @@ class BuyingConsumer(WebsocketConsumer):
     """
 
     #: Each lot is one channel-layer round trip at connect; a dashboard with more than this refreshes
-    #: on its newest lots only.
+    #: on its newest lots only. Lots followed after the page loaded join on the next reconnect.
     MAX_LOTS = 200
 
-    groups_joined = ()
-
     def connect(self):
+        self.groups_joined = []
         try:
             self.user = self.scope["user"]
             if not self.user.is_authenticated:
                 self.close()
                 return
+            lots = Lot.objects.filter(is_deleted=False, banned=False, active=True, winning_price__isnull=True)
+            # The page shows one auction (?auction=<pk> here), or all of them when it's absent.
+            auction = parse_qs(self.scope.get("query_string", b"").decode()).get("auction", [""])[0]
+            if auction.isdigit():
+                lots = lots.filter(auction_id=int(auction))
             lots = (
-                Lot.objects.filter(is_deleted=False, banned=False, active=True, winning_price__isnull=True)
-                .filter(
-                    Q(watch__user=self.user, watch__is_deleted=False) | Q(bid__user=self.user, bid__is_deleted=False)
+                lots.filter(
+                    Exists(Watch.objects.filter(lot_number=OuterRef("pk"), user=self.user))
+                    | Exists(Bid.objects.filter(lot_number=OuterRef("pk"), user=self.user, is_deleted=False))
                 )
-                .values_list("pk", flat=True)
-                .distinct()
-                .order_by("-pk")[: self.MAX_LOTS]
+                .order_by("-pk")
+                .values_list("pk", flat=True)[: self.MAX_LOTS]
             )
             self.accept()
-            joined = []
             for pk in lots:
                 async_to_sync(self.channel_layer.group_add)(f"lot_{pk}", self.channel_name)
-                joined.append(f"lot_{pk}")
-            self.groups_joined = joined
+                # As each one lands, so a failure partway still leaves disconnect() the ones to leave.
+                self.groups_joined.append(f"lot_{pk}")
         except ClientDisconnected:
             logger.info("client went away before the buying websocket finished connecting")
         except Exception as e:
@@ -431,7 +436,7 @@ class BuyingConsumer(WebsocketConsumer):
             self.close()
 
     def disconnect(self, close_code):
-        for group in self.groups_joined:
+        for group in getattr(self, "groups_joined", ()):
             async_to_sync(self.channel_layer.group_discard)(group, self.channel_name)
 
     def receive(self, text_data):

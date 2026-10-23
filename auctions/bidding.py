@@ -15,7 +15,7 @@ from django.utils import timezone
 from post_office import mail
 
 from .consumers import broadcast_bid_result, check_all_permissions
-from .models import Bid, Invoice, Lot, LotHistory, UserInterestCategory
+from .models import Bid, Invoice, Lot, LotHistory, UserInterestCategory, minimum_bid_increment
 
 logger = logging.getLogger(__name__)
 
@@ -296,19 +296,8 @@ def bid_on_lot(lot, user, amount):
                 bid.last_bid_time = timezone.now()
                 bid.save()
                 return result
-            # bid increments - also set in views.py and in view_lot_images.html
-            if lot.auction and not lot.auction.only_whole_dollar_bids:
-                # 5% rounded down to nearest cent, minimum $0.01
-                min_increment = max(
-                    (original_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
-                    Decimal("0.01"),
-                )
-            else:
-                # 5% rounded down to nearest dollar, minimum $1
-                min_increment = max(
-                    (original_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
-                    Decimal(1),
-                )
+            # Lot.suggested_bid starts the bid boxes here; view_lot_images.html's next_bid() mirrors it in JS.
+            min_increment = minimum_bid_increment(original_bid, lot.only_whole_dollar_bids)
             next_allowed_amount = original_bid + min_increment
             if bid.amount < next_allowed_amount:
                 # there's a high bidder already
