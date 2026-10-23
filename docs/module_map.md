@@ -38,7 +38,7 @@ this only quotes its opening sentence.
 - **`account_nav.py`** (201 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1599 lines)
+- **`admin.py`** (1583 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -174,7 +174,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (1003 lines)
+- **`help_guides.py`** (1002 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (1028 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -199,7 +199,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14999 lines)
+- **`models.py`** (15000 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -216,11 +216,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16618 lines)
+- **`palette_actions.py`** (16603 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1996 lines)
+- **`palette_routes.py`** (1986 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -421,9 +421,9 @@ this only quotes its opening sentence.
 - **`test_data_leak_penetration.py`** (259 lines)
   Penetration tests: no data leaks from public endpoints, as an unauthenticated user or a non-admin.
   `DataLeakPenetrationTests`
-- **`test_data_migrations.py`** (39 lines)
+- **`test_data_migrations.py`** (86 lines)
   Data migrations meet prod's rows, not a fresh database's, and one that raises stops the deploy
-  `DoubledRowsTests`, `PrintReminderLinkTests`
+  `DoubledRowsTests`, `PrintReminderLinkTests`, `RetiredBlogEmailTests`, `RetiredBlogEditedTemplateTests`
 - **`test_deploy.py`** (309 lines)
   Deploys: the poller refusing what it should, update.sh asking first, and the deploy window.
   `PollerVerifyTests`, `PollerPollTests`, `UpdateScriptPromptTests`, `DeployWindowTests`
@@ -507,8 +507,8 @@ this only quotes its opening sentence.
 - **`test_lot_views.py`** (1326 lines)
   The lot pages an auction is actually run from: labels, push, set-winner and the queue.
   `LotLabelViewTestCase`, `UpdateLotPushNotificationsViewTestCase`, `LotPushTestNotificationViewTestCase`, `ViewLotSimpleTestCase`, `DynamicSetLotWinnerViewTestCase`, `LotQueueViewTestCase`, `AlternativeSplitLabelTests`
-- **`test_markdown_admin.py`** (44 lines)
-  The markdown editor on the admin's blog post and FAQ pages.
+- **`test_markdown_admin.py`** (37 lines)
+  The markdown editor on the admin's FAQ pages.
   `MarkdownAdminEditorTests`
 - **`test_marketing.py`** (856 lines)
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
@@ -581,7 +581,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (878 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5259 lines)
+- **`test_palette_assist.py`** (5246 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1279 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -589,7 +589,7 @@ this only quotes its opening sentence.
 - **`test_palette_mic.py`** (101 lines)
   Guards for the command palette's microphone, which no other test can reach.
   `mic_branches`, `PaletteMicSourceTests`
-- **`test_palette_routes.py`** (165 lines)
+- **`test_palette_routes.py`** (164 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
 - **`test_palette_skills.py`** (3229 lines)
@@ -621,7 +621,7 @@ this only quotes its opening sentence.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
-- **`test_site_patterns.py`** (338 lines)
+- **`test_site_patterns.py`** (352 lines)
   The help's site-wide tables and charts, and the two things collected for the auction stats page: invoice
   `ago`, `SiteCountsTests`, `GuidesQuoteTheCountsTests`, `AbandonedBidTests`, `InvoiceOpenedTests`, `RefreshGuardTests`
 - **`test_source_code.py`** (324 lines)
@@ -1079,7 +1079,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (702 lines)
+- **`site_pages.py`** (695 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.

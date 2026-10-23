@@ -1,4 +1,4 @@
-"""The markdown editor on the admin's blog post and FAQ pages.
+"""The markdown editor on the admin's FAQ pages.
 
 These pages render django-markdownfield's widget. The site used to override its template, and when
 the package renamed the widget's context (``options_id`` became ``config_id``) the stale override
@@ -11,14 +11,13 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from auctions.models import FAQ, BlogPost
+from auctions.models import FAQ
 
 
 class MarkdownAdminEditorTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser("mdadmin", "mdadmin@example.com", "pw")
-        cls.post = BlogPost.objects.create(title="Multiple locations", body="Some *markdown*.")
         cls.faq = FAQ.objects.create(category_text="Help", question="How?", answer="Like **this**.")
 
     def setUp(self):
@@ -33,12 +32,6 @@ class MarkdownAdminEditorTests(TestCase):
         html = response.content.decode()
         config_id = re.search(r'data-markdownfield="([^"]+)"', html).group(1)
         self.assertIn(f'<script id="{config_id}" type="application/json">', html)
-
-    def test_blog_post_change_page_renders_the_editor(self):
-        self.assert_editor_renders(reverse("admin:auctions_blogpost_change", args=[self.post.pk]))
-
-    def test_blog_post_add_page_renders_the_editor(self):
-        self.assert_editor_renders(reverse("admin:auctions_blogpost_add"))
 
     def test_faq_change_page_renders_the_editor(self):
         self.assert_editor_renders(reverse("admin:auctions_faq_change", args=[self.faq.pk]))

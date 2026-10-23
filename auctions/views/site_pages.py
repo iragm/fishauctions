@@ -1,9 +1,8 @@
 """Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-the privacy policy, the blog, unsubscribe, joining the Android app's test, and the landing redirect.
+the privacy policy, the retired blog's redirects, unsubscribe, joining the Android app's test, and the landing redirect.
 """
 
 import logging
-import re
 from datetime import timedelta
 from random import randint
 from urllib.parse import urlencode
@@ -32,7 +31,7 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
-from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
+from django.views.generic import ListView, RedirectView, TemplateView, View
 from django.views.generic.edit import (
     FormView,
 )
@@ -52,7 +51,6 @@ from auctions.models import (
     AssistantSkillRequest,
     Auction,
     AuctionTOS,
-    BlogPost,
     Invoice,
     Lot,
     LotImage,
@@ -628,29 +626,24 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
-class BlogPostView(DetailView):
-    """Render a blog post"""
+class BlogPostView(RedirectView):
+    """The blog is retired: each old post's address goes to the help section it moved to, the privacy post
+    to /privacy/, and anything else, or a guide this site doesn't show, to the help index.
+    """
 
-    model = BlogPost
-    template_name = "blog_post.html"
+    permanent = True
+    http_method_names = ["get", "head"]
 
-    def get(self, request, *args, **kwargs):
-        slug = kwargs.get("slug")
+    def get_redirect_url(self, *args, **kwargs):
+        slug = (kwargs.get("slug") or "").lower()
         if slug == PRIVACY_POLICY_SLUG:
-            return redirect("privacy_policy", permanent=True)
+            return reverse("privacy_policy")
         moved = help_guides.MOVED_BLOG_POSTS.get(slug)
-        if moved:
-            guide, section = moved
-            url = reverse("help_guide", kwargs={"slug": guide})
-            return redirect(f"{url}#{section}" if section else url, permanent=True)
-        return super().get(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        blogpost = self.get_object()
-        # this is to allow the chart# syntax
-        context["formatted_contents"] = re.sub(r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered)
-        return context
+        if not moved or not help_guides.GUIDES[moved[0]].shown:
+            return reverse("help")
+        guide, section = moved
+        url = reverse("help_guide", kwargs={"slug": guide})
+        return f"{url}#{section}" if section else url
 
 
 class PrivacyPolicyView(TemplateView):

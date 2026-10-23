@@ -234,10 +234,24 @@ class GuidesQuoteTheCountsTests(StandardTestCase):
         response = self.client.get(reverse("blog_post", kwargs={"slug": "how-much-should-you-bid"}))
         self.assertRedirects(response, help_guides.GUIDES["online-auctions"].url + "#how-much", status_code=301)
 
+    def test_a_post_that_never_moved_lands_on_the_help_index(self):
+        response = self.client.get(reverse("blog_post", kwargs={"slug": "no-such-post"}))
+        self.assertRedirects(response, reverse("help"), status_code=301, fetch_redirect_response=False)
+
+    def test_a_fish_only_guide_on_another_site_lands_on_the_help_index(self):
+        with self.settings(WEBSITE_FOCUS="plants"):
+            response = self.client.get(reverse("blog_post", kwargs={"slug": "transporting-fish"}))
+        self.assertRedirects(response, reverse("help"), status_code=301, fetch_redirect_response=False)
+
+    def test_the_blog_only_answers_get(self):
+        self.assertEqual(self.client.post(reverse("blog_post", kwargs={"slug": "privacy"})).status_code, 405)
+
     def test_every_moved_blog_post_lands_in_its_section(self):
         for slug, (guide, section) in help_guides.MOVED_BLOG_POSTS.items():
             response = self.client.get(reverse("blog_post", kwargs={"slug": slug}))
             url = help_guides.GUIDES[guide].url + (f"#{section}" if section else "")
+            if not help_guides.GUIDES[guide].shown:
+                url = reverse("help")
             self.assertRedirects(response, url, status_code=301, fetch_redirect_response=False)
             if section:
                 self.assertContains(self.client.get(help_guides.GUIDES[guide].url), f'id="{section}"')
