@@ -817,3 +817,24 @@ class LotConsumerChatTests(StandardTestCase):
             consumer = self._connect(self.userB)
         mock_close.assert_called_once()
         self.assertIsNone(consumer.room_group_name)
+
+
+class InvoiceLabelButtonTests(StandardTestCase):
+    """The label print button shows only when the invoice's owner has labels to print."""
+
+    def label_url(self, tos):
+        return reverse(
+            "print_labels_by_bidder_number",
+            kwargs={"slug": self.online_auction.slug, "bidder_number": tos.bidder_number},
+        )
+
+    def test_seller_with_sold_lots_gets_the_button(self):
+        response = self.client.get(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+        self.assertContains(response, 'id="printomatic-9000"')
+        self.assertContains(response, self.label_url(self.online_tos))
+
+    def test_buyer_with_nothing_to_print_gets_no_button(self):
+        response = self.client.get(reverse("invoice_no_login", kwargs={"uuid": self.invoiceB.no_login_link}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'id="printomatic-9000"')
+        self.assertNotContains(response, self.label_url(self.tosB))
