@@ -132,7 +132,17 @@ class SpeciesQuickCreateTests(StandardTestCase):
         self.assertFalse(Species.objects.exclude(pk__in=[hidden.pk, self.pleco.pk]).exists())
 
     def test_anything_but_a_scientific_name_is_refused(self):
-        for typed in ["Ancistrus", "Ancistrus 123", "Ancistrus <b>x</b>", "Ancistrus a b c", "Ancistrus sp", ""]:
+        for typed in [
+            "Ancistrus",
+            "Ancistrus 123",
+            "Ancistrus <b>x</b>",
+            "Ancistrus a b c",
+            "Ancistrus sp",
+            "",
+            "Ancístrus cirrhosus",
+            "\u212aryptopterus bicirrhis",
+            "Ancistrus cirrhosu\u00e9",
+        ]:
             self.assertEqual(self.client.post(self.url, {"scientific_name": typed}).status_code, 400, typed)
         self.assertEqual(Species.objects.count(), 1)
 

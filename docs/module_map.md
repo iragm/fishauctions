@@ -625,7 +625,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
 - **`test_species.py`** (5115 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_species_search.py`** (178 lines)
+- **`test_species_search.py`** (188 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.
   `LotSearchBySpeciesTests`, `SpeciesQuickCreateTests`
 - **`test_square.py`** (943 lines)
@@ -1075,7 +1075,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (428 lines)
+- **`species.py`** (441 lines)
   Adding species and common names, and the superuser's cleanup queue.
 - **`usability.py`** (197 lines)
   The usability reports, and linking auctions to clubs.
