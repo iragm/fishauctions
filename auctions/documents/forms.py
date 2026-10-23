@@ -9,10 +9,11 @@ import re
 from pathlib import Path
 
 from django import forms
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Q, Sum
 from django.utils import timezone
 
-from auctions.documents.extract import PICTURE_EXTENSIONS
+from auctions.documents.extract import PICTURE_EXTENSIONS, parser_version
 from auctions.documents.models import (
     TOPICS,
     BatchPage,
@@ -204,6 +205,13 @@ def add_pages(batch, accepted) -> int:
     return added
 
 
+class _TextField(forms.CharField):
+    """A textarea comes back with CRLF line endings; without this every save "changed" the text."""
+
+    def to_python(self, value):
+        return super().to_python(value).replace("\r\n", "\n")
+
+
 class DocumentUploadForm(_Placement, _Uploads, forms.Form):
     """Upload: either pages to put back together into articles (a batch), or one document per file.
 
@@ -211,7 +219,13 @@ class DocumentUploadForm(_Placement, _Uploads, forms.Form):
     the same upload are fine; the form fails only when none is.
     """
 
-    file = _MultipleFileField(label="Files", help_text="Choose as many as you like.")
+    file = _MultipleFileField(label="Files", required=False, help_text="Choose as many as you like.")
+    text = _TextField(
+        required=False,
+        label="Or paste the text",
+        widget=forms.Textarea(attrs={"rows": 6}),
+        help_text="Markdown works: # Heading, **bold**, *italic*, - lists.",
+    )
     mode = forms.ChoiceField(
         required=False,
         label="These are",
@@ -242,6 +256,7 @@ class DocumentUploadForm(_Placement, _Uploads, forms.Form):
         self.user = user
         self.accepted: list[tuple] = []
         self.skipped: list[str] = []
+        self.pasted = None
         self._place(user)
 
     def clean_year(self):
@@ -257,9 +272,26 @@ class DocumentUploadForm(_Placement, _Uploads, forms.Form):
     def clean(self):
         cleaned = super().clean()
         self._check_placement(cleaned)
-        uploads = cleaned.get("file") or []
+        uploads = [upload for upload in cleaned.get("file") or [] if upload]
+        text = (cleaned.get("text") or "").strip()
+        if text:
+            # Pasted text is one whole document of its own, saved as a Markdown file like add_document's.
+            self.pasted = SimpleUploadedFile(
+                (re.sub(r"[^\w\- ]+", "", cleaned.get("title") or "").strip()[:80] or "pasted text") + ".md",
+                text.encode(),
+                content_type="text/markdown",
+            )
+            if not uploads:
+                cleaned["mode"] = WHOLE
+            elif cleaned.get("mode") == PAGES:
+                problem = "Upload pasted text on its own, or choose whole documents."
+                raise forms.ValidationError(problem)
+            uploads.append(self.pasted)
         if not uploads:
+            if "file" not in self.errors:
+                self.add_error("file", "Choose a file, or paste the text.")
             return cleaned
+        cleaned["file"] = uploads
         problem = self._check_quota(uploads)
         if not problem and cleaned.get("mode") == PAGES:
             others = [upload.name for upload in uploads if not _is_page(upload)]
@@ -299,6 +331,10 @@ class DocumentUploadForm(_Placement, _Uploads, forms.Form):
                 sha256=digest,
                 file=upload,
             )
+            if upload is self.pasted:
+                # The file is the text, so there is nothing to read: what was sent is what gets searched.
+                document.text = self.cleaned_data["text"].strip()
+                document.parser_version = parser_version()
             document.save()
             documents.append(document)
         return documents
@@ -332,13 +368,6 @@ class BatchPagesForm(_Uploads, forms.Form):
             raise forms.ValidationError(problem)
         self._sort_out(uploads)
         return cleaned
-
-
-class _TextField(forms.CharField):
-    """A textarea comes back with CRLF line endings; without this every save "changed" the text."""
-
-    def to_python(self, value):
-        return super().to_python(value).replace("\r\n", "\n")
 
 
 #: Past this the text isn't offered for correction: the whole of it is posted back on every save, and

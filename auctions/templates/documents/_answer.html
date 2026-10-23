@@ -5,7 +5,7 @@
 {% if result.sources %}
 <div class="small text-muted">
   {% for number, hit in result.sources %}
-  <div>[{{ number }}] <a href="{% url 'document_detail' hit.document.pk %}{% if hit.chunk.start %}#at-{{ hit.chunk.start }}{% endif %}">{{ hit.document.display_title }}</a>{% if hit.document.year %} ({{ hit.document.year }}){% endif %}</div>
+  <div>[{{ number }}] <a href="{{ hit.document.get_absolute_url }}{% if hit.chunk.start %}#at-{{ hit.chunk.start }}{% endif %}">{{ hit.document.display_title }}</a>{% if hit.document.year %} ({{ hit.document.year }}){% endif %}</div>
   {% endfor %}
 </div>
 {% endif %}

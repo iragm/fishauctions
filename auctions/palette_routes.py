@@ -279,7 +279,21 @@ ROUTE_LIST: list[Route] = [
         "library",
         "The library: club articles, breeder reports and documents",
         "Account",
-        keywords=["documents", "articles", "newsletters", "bap reports", "upload a document", "archive", "scans"],
+        keywords=["documents", "articles", "newsletters", "bap reports", "archive"],
+        gate=_has_library,
+    ),
+    _r(
+        "library_add",
+        "Add articles to the library",
+        "Account",
+        keywords=["upload a document", "add an article", "scan", "newsletter"],
+        gate=_has_library,
+    ),
+    _r(
+        "library_search",
+        "Ask the library a question",
+        "Account",
+        keywords=["search the library", "find an article", "bap report about"],
         gate=_has_library,
     ),
     _r(
@@ -1208,6 +1222,7 @@ EXCLUDED: dict[str, str] = {
     "auction_paddles_pdf": "Downloaded from Print bidder paddles, which first asks for plain paper in the printer.",
     # The library: one document's pages. search_documents and read_document answer with its link.
     "document_detail": "One library document; search_documents and read_document answer with its link.",
+    "document_link": "The short address of one document, before its title was in it; redirects to document_detail.",
     "document_file": "A document's original file, served to someone who can see it; opened from its page.",
     "document_edit": "Editing one document is update_document, or one click from its page.",
     "document_reindex": "A button on one document's page.",

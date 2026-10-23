@@ -49,14 +49,41 @@ def can_use_library(user) -> bool:
 
 
 def visible_documents(user):
-    """Documents ``user`` may search and read: everyone's public ones, their clubs' club-only ones, and
-    their own. Never removed ones, and nothing for somebody not signed in.
+    """Documents ``user`` may search and read: everyone's public and web ones, their clubs' club-only
+    ones, and their own. Never removed ones, and nothing for somebody not signed in.
     """
     from auctions.models import Document
 
     if not getattr(user, "is_authenticated", False):
         return Document.objects.none()
     return Document.objects.filter(removed=False).filter(_readable(user))
+
+
+def web_documents():
+    """Documents anyone may read, signed in or not, and search engines may list: ``web`` visibility.
+    The one part of the library that reaches somebody without it.
+    """
+    from auctions.documents.models import Visibility
+    from auctions.models import Document
+
+    return Document.objects.filter(removed=False, visibility=Visibility.WEB)
+
+
+def readable_documents(user):
+    """What a document's own page, file and pictures may show ``user``: :func:`visible_documents` for
+    somebody with the library, and only :func:`web_documents` for anyone else.
+    """
+    return visible_documents(user) if can_use_library(user) else web_documents()
+
+
+def my_library(user):
+    """The library page's list: what ``user`` uploaded and what is in their clubs' libraries. The rest of
+    the site's public documents are found by searching, not listed.
+    """
+    from auctions.models import ClubMember
+
+    clubs = ClubMember.objects.filter(user=user, is_deleted=False).values("club_id")
+    return visible_documents(user).filter(Q(owner=user) | Q(club_id__in=clubs))
 
 
 def _readable(user):
@@ -67,7 +94,11 @@ def _readable(user):
     from auctions.models import ClubMember
 
     clubs = ClubMember.objects.filter(user=user, is_deleted=False).values("club_id")
-    return Q(visibility=Visibility.PUBLIC) | Q(owner=user) | Q(visibility=Visibility.CLUB, club_id__in=clubs)
+    return (
+        Q(visibility__in=(Visibility.WEB, Visibility.PUBLIC))
+        | Q(owner=user)
+        | Q(visibility=Visibility.CLUB, club_id__in=clubs)
+    )
 
 
 def visible_batches(user):
@@ -88,6 +119,22 @@ def visible_pages(user):
     return BatchPage.objects.filter(
         Q(batch__in=visible_batches(user)) | Q(documents__in=visible_documents(user))
     ).distinct()
+
+
+def readable_pages(user):
+    """Scans a page may show ``user``: :func:`visible_pages`, or for anyone without the library, the
+    scans of :func:`web_documents`.
+    """
+    from auctions.models import BatchPage
+
+    if can_use_library(user):
+        return visible_pages(user)
+    # Only a scan whose every article is on the web: a page holding the end of one and the start of a
+    # club-only one would show the club-only one.
+    from auctions.models import Document
+
+    hidden = Document.objects.exclude(pk__in=web_documents().values("pk"))
+    return BatchPage.objects.filter(documents__in=web_documents()).exclude(documents__in=hidden).distinct()
 
 
 def can_manage(user, document) -> bool:

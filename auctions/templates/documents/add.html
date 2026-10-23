@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Add to the library{% endblock %}
+{% block content %}
+{% comment %}Drop files anywhere on the box, or paste: pictures and files go in with the chosen files, and text goes into the text box. Who can read it and the club start as they were for the last upload (LibraryAddView).{% endcomment %}
+<div class="container py-4" style="max-width: 48rem;">
+  <h1 class="h4 mb-3"><a href="{% url 'library' %}" class="text-decoration-none">Library</a> &middot; Add articles</h1>
+  <form method="post" enctype="multipart/form-data" action="{% url 'library_add' %}" data-max-bytes="{{ max_request_bytes }}" id="library-add">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{% for error in form.non_field_errors %}<div>{{ error }}</div>{% endfor %}</div>{% endif %}
+    <div class="card mb-3" id="library-drop">
+      <div class="card-body text-center">
+        <i class="bi bi-cloud-arrow-up fs-2"></i>
+        <p class="mb-2">Drop or paste scans, photos of pages, PDFs or Word files here.</p>
+        {{ form.file|as_crispy_field }}
+        <ul class="list-unstyled small text-muted mb-0" id="library-chosen"></ul>
+      </div>
+    </div>
+    {{ form.text|as_crispy_field }}
+    {{ form.mode|as_crispy_field }}
+    {{ form.more_coming|as_crispy_field }}
+    {{ form.visibility|as_crispy_field }}
+    {% if form.club %}{{ form.club|as_crispy_field }}{% endif %}
+    {{ form.title|as_crispy_field }}
+    {{ form.author|as_crispy_field }}
+    {{ form.year|as_crispy_field }}
+    <p class="small text-muted">Text and pictures are read by an AI model.</p>
+    <button type="submit" class="btn btn-primary">Upload</button>
+  </form>
+</div>
+{% include "documents/_size_check.html" %}
+<script>
+(function () {
+  var form = document.getElementById("library-add");
+  var input = form.querySelector("input[type=file]");
+  var text = form.querySelector("textarea[name=text]");
+  var drop = document.getElementById("library-drop");
+  var chosen = document.getElementById("library-chosen");
+
+  function show() {
+    chosen.textContent = "";
+    for (var i = 0; i < input.files.length; i++) {
+      var row = document.createElement("li");
+      row.textContent = input.files[i].name;
+      chosen.appendChild(row);
+    }
+  }
+
+  function add(files) {
+    var all = new DataTransfer();
+    for (var i = 0; i < input.files.length; i++) { all.items.add(input.files[i]); }
+    for (var j = 0; j < files.length; j++) { all.items.add(files[j]); }
+    input.files = all.files;
+    show();
+  }
+
+  input.addEventListener("change", show);
+  // Django refuses a form body over its limit with a bare error page, before the form can say why.
+  document.addEventListener("submit", function (event) {
+    if (event.target !== form) { return; }
+    if (new Blob([text.value]).size > {{ max_text_bytes }}) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      alert("That's too much text for one paste. Save it as a file and drop that in instead.");
+    }
+  }, true);
+  ["dragenter", "dragover"].forEach(function (name) {
+    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.add("border-info"); });
+  });
+  ["dragleave", "drop"].forEach(function (name) {
+    drop.addEventListener(name, function () { drop.classList.remove("border-info"); });
+  });
+  drop.addEventListener("drop", function (event) {
+    event.preventDefault();
+    if (event.dataTransfer.files.length) {
+      add(event.dataTransfer.files);
+    } else if (event.dataTransfer.getData("text")) {
+      text.value = (text.value ? text.value + "\n\n" : "") + event.dataTransfer.getData("text");
+    }
+  });
+  document.addEventListener("paste", function (event) {
+    var data = event.clipboardData;
+    var target = event.target;
+    // Into a box it's text, even when Word put a picture of it on the clipboard too.
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) { return; }
+    if (data && data.files.length) {
+      event.preventDefault();
+      add(data.files);
+      return;
+    }
+    var pasted = data ? data.getData("text") : "";
+    if (pasted) {
+      event.preventDefault();
+      text.value = (text.value ? text.value + "\n\n" : "") + pasted;
+      text.focus();
+    }
+  });
+})();
+</script>
+{% endblock %}

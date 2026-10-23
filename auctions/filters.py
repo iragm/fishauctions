@@ -41,6 +41,7 @@ from .models import (
     Club,
     ClubHistory,
     ClubMember,
+    Document,
     DonationVendor,
     GeneralInterest,
     Invoice,
@@ -1947,3 +1948,55 @@ class DonationVendorFilter(django_filters.FilterSet):
         if value.lower() in ("due", "overdue", "followup", "follow up"):
             return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(Q(name__icontains=value) | Q(contact_name__icontains=value) | Q(email__icontains=value))
+
+
+LIBRARY_FILTER_CONTROL_CLASS = "library-filter-control"
+
+
+class DocumentFilter(django_filters.FilterSet):
+    """The library list (``/library/``): words in the title, author, file name or year, and who can read it.
+
+    Plain matching, not the library's search: asking the documents a question is ``/library/search/``.
+    """
+
+    query = django_filters.CharFilter(
+        method="document_search",
+        label="",
+        widget=TextInput(
+            attrs=htmx_filter_attrs(
+                LIBRARY_FILTER_CONTROL_CLASS,
+                "keyup changed delay:300ms",
+                "form-control",
+                placeholder="Filter by title, author or year",
+            )
+        ),
+    )
+    # Rendered by the header's menu as radios, and real query parameters for links.
+    visibility = django_filters.CharFilter(method="filter_by_visibility", widget=HiddenInput())
+    club = django_filters.CharFilter(method="filter_by_club", widget=HiddenInput())
+
+    class Meta:
+        model = Document
+        fields = []
+
+    def __init__(self, data=None, *args, **kwargs):
+        # Keep it bound, as SpeakerFilter.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+
+    def filter_by_visibility(self, queryset, name, value):
+        from .documents.models import Visibility
+
+        return queryset.filter(visibility=value) if value in Visibility.values else queryset
+
+    def filter_by_club(self, queryset, name, value):
+        return queryset.filter(club__slug=value) if value else queryset
+
+    def document_search(self, queryset, name, value):
+        for word in (value or "").split()[:8]:
+            match = Q(title__icontains=word) | Q(author__icontains=word) | Q(original_name__icontains=word)
+            if word.isdigit():
+                match |= Q(year=int(word))
+            queryset = queryset.filter(match)
+        return queryset
