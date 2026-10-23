@@ -5508,7 +5508,7 @@ def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
     ``source`` narrows. Agent-only FAQ entries are included; that flag isn't privacy.
     """
     from . import help_guides
-    from .models import FAQ, BlogPost
+    from .models import FAQ, PRIVACY_POLICY_SLUG, BlogPost
 
     query = _str(params, "query") or _str(params, "question")
     said = _str(params, "source") or "all"
@@ -5536,7 +5536,8 @@ def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
         blog_q = Q()
         for word in words:
             blog_q |= Q(title__icontains=word) | Q(body__icontains=word)
-        posts = BlogPost.objects.filter(blog_q).order_by("-date_posted")
+        moved = [*help_guides.MOVED_BLOG_POSTS, PRIVACY_POLICY_SLUG]
+        posts = BlogPost.objects.filter(blog_q).exclude(slug__in=moved).order_by("-date_posted")
 
     def blog_row(post):
         return {

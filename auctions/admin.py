@@ -18,6 +18,7 @@ from .admin_paginator import EstimatedCountPaginator
 from .admin_performance import FlatInline, use_lookup_widgets
 from .models import (
     FAQ,
+    PRIVACY_POLICY_SLUG,
     AppleDeviceRegistration,
     AssistantSkillRequest,
     Auction,
@@ -163,7 +164,16 @@ class InvoicePaymentInline(admin.TabularInline):
 
 
 class BlogPostAdmin(admin.ModelAdmin):
+    """Only the posts still on the blog: one whose content moved into the help, or the privacy policy,
+    which is now a static page, would be edited here and shown nowhere."""
+
     model = BlogPost
+
+    def get_queryset(self, request):
+        from auctions import help_guides
+
+        moved = [*help_guides.MOVED_BLOG_POSTS, PRIVACY_POLICY_SLUG]
+        return super().get_queryset(request).exclude(slug__in=moved)
 
 
 class AuctionTOSInline(FlatInline, admin.TabularInline):

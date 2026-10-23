@@ -1,0 +1,25 @@
+{% load static %}
+{% comment %}How lots travel between locations in a multi-location online auction, in three pictures. Was the carousel on the blog post "How do multi-location auctions work?".{% endcomment %}
+<div id="locations-carousel" class="carousel carousel-dark slide mb-3 bg-light rounded" style="max-width: 40em;" data-bs-interval="false">
+  <div class="carousel-inner">
+    <div class="carousel-item active">
+      <img src="{% static 'locations_1.svg' %}" class="d-block w-100" alt="Morning: sellers drop off their lots, and buyers pay, at each location.">
+      <p class="text-center small text-dark mb-0 pb-4">Morning: sellers drop off, at every location.</p>
+    </div>
+    <div class="carousel-item">
+      <img src="{% static 'locations_2.svg' %}" class="d-block w-100" alt="Midday: the club sorts every lot by where it's going.">
+      <p class="text-center small text-dark mb-0 pb-4">Midday: the club sorts the lots by where they're going.</p>
+    </div>
+    <div class="carousel-item">
+      <img src="{% static 'locations_3.svg' %}" class="d-block w-100" alt="Afternoon: buyers at each location pick up lots from the other locations.">
+      <p class="text-center small text-dark mb-0 pb-4">Afternoon: you pick up lots from the other locations at yours.</p>
+    </div>
+  </div>
+  <div class="carousel-indicators mb-0">
+    <button type="button" data-bs-target="#locations-carousel" data-bs-slide-to="0" class="active" aria-current="true" aria-label="Morning"></button>
+    <button type="button" data-bs-target="#locations-carousel" data-bs-slide-to="1" aria-label="Midday"></button>
+    <button type="button" data-bs-target="#locations-carousel" data-bs-slide-to="2" aria-label="Afternoon"></button>
+  </div>
+  <button class="carousel-control-prev" type="button" data-bs-target="#locations-carousel" data-bs-slide="prev"><span class="carousel-control-prev-icon" aria-hidden="true"></span><span class="visually-hidden">Previous</span></button>
+  <button class="carousel-control-next" type="button" data-bs-target="#locations-carousel" data-bs-slide="next"><span class="carousel-control-next-icon" aria-hidden="true"></span><span class="visually-hidden">Next</span></button>
+</div>

@@ -28,8 +28,15 @@
 {% helptip %}{% if help.auction.is_online %}The lot form in {{ help.auction.title }} {% if help.lot_fields %}asks for: {% for field in help.lot_fields %}{{ field.label }}{% if field.required %} (required){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.{% else %}asks for nothing else.{% endif %}{% endif %}{% endhelptip %}
 {% if help.auction.is_online %}{% helptip %}{{ help.auction.title }} keeps {{ help.auction.winning_bid_percent_to_club }}% of each sale{% if help.auction.lot_entry_fee %} plus {{ help.auction.currency_symbol }}{{ help.auction.lot_entry_fee }} a lot{% endif %}.{% endhelptip %}{% endif %}
 {% helptip %}{% if help.auction.is_online and help.auction.unsold_lot_fee %}{{ help.auction.title }} charges you {{ help.auction.currency_symbol }}{{ help.auction.unsold_lot_fee }} for every lot of yours that gets no bids. Price your lots to sell.{% endif %}{% endhelptip %}
-<p><strong>Photos sell lots.</strong>{% if help.site.photo_sell_rate %} On this site, {{ help.site.photo_sell_rate }}% of lots with a photo sell, and {{ help.site.no_photo_sell_rate }}% of lots without one.{% else %} People skip lots they can't see.{% endif %} A clear photo of your actual fish beats a perfect one off the internet.</p>
+<p id="photos"><strong>Photos sell lots.</strong>{% if help.site.photo_sell_rate %} On this site, {{ help.site.photo_sell_rate }}% of lots with a photo sell, and {{ help.site.no_photo_sell_rate }}% of lots without one.{% else %} People skip lots they can't see.{% endif %} A clear photo of your actual fish beats a perfect one off the internet.</p>
 {% tip %}Selling the same thing again? Open an old lot and click {% ui "Copy to new lot" %}. It fills in everything, photos included.{% endtip %}
+<h3 class="h6 mt-3" id="when">When to add them</h3>
+<p>It barely matters: a lot sells for what it's worth whenever you add it.{% if help.lot_timing.rows %} Here's how lots did, by how long before the end they went in:{% endif %}</p>
+{% include "help/partials/lot_timing_chart.html" %}
+{% tip %}Running the auction? Add a few really good lots on day one. People who look as soon as you post it and see nothing they want don't come back.{% endtip %}
+<h3 class="h6 mt-3" id="what-sells">What sells</h3>
+<p>A category with more bids than lots is wanted; one with views but no bids is just interesting to look at.</p>
+{% include "help/partials/categories_chart.html" %}
 <h3 class="h6 mt-3">Want to be a better seller?</h3>
 <div class="table-responsive">
 <table class="table table-sm">
@@ -114,7 +121,10 @@
   <li><strong>Most clubs will let somebody else pick up for you.</strong> Contact the people running your auction.</li>
   <li><strong>Didn't win anything?</strong> You don't need to come.</li>
 </ul>
-<p>Two times on your invoice? Lots are being driven between locations. The first time is for lots from sellers at your own location, the second for lots from the others.</p>
+<h3 class="h6 mt-3" id="locations">Lots from other locations</h3>
+<p>Some auctions have several pickup locations, and you can bid on lots at all of them. The club drives each lot to your location.</p>
+{% include "help/partials/locations_carousel.html" %}
+<p>Two times on your invoice? The first is for lots from sellers at your own location, the second for lots from the others.</p>
 <h3 class="h6 mt-3">If you sold lots</h3>
 <ol>
   <li><strong>Label each bag</strong>: lot number, winner, and where it's going. {% ui "Print labels for your lots" %} on your invoice does it. No printer? Sharpie. <a href="{% url 'help_guide' slug='labels' %}#after-bidding-ends">Lot labels</a> has more.</li>
