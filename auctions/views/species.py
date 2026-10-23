@@ -5,7 +5,7 @@ unapproved and scoped to them and their club. The gaps page approves, merges or 
 """
 
 import logging
-import re
+import string
 
 from dal import autocomplete
 from django.contrib import messages
@@ -183,8 +183,21 @@ class SpeciesApproveView(AdminOnlyViewMixin, View):
 #: fill the review with junk.
 MAX_PENDING_PER_USER = 10
 
-#: Genus, epithet and an optional subspecies, letters only.
-_QUICK_NAME = re.compile(r"[A-Za-z]+( [A-Za-z.'-]+){1,2}")
+_GENUS_CHARS = frozenset(string.ascii_letters)
+_EPITHET_CHARS = _GENUS_CHARS | frozenset(".'-")
+
+
+def _is_quick_name(typed):
+    """Genus, then an epithet and an optional subspecies, ASCII letters (the epithets also ``.'-``), one
+    space apart: ``typed`` has its whitespace collapsed already. No regex, which CodeQL flags on input.
+    """
+    words = typed.split(" ")
+    return (
+        2 <= len(words) <= 3
+        and bool(words[0])
+        and set(words[0]) <= _GENUS_CHARS
+        and all(word and set(word) <= _EPITHET_CHARS for word in words[1:])
+    )
 
 
 class SpeciesQuickCreate(LoginRequiredMixin, View):
@@ -198,7 +211,7 @@ class SpeciesQuickCreate(LoginRequiredMixin, View):
 
     def post(self, request, *args, **kwargs):
         typed = " ".join((request.POST.get("scientific_name") or "").split())[:200]
-        if not _QUICK_NAME.fullmatch(typed):
+        if not _is_quick_name(typed):
             return JsonResponse({"error": "Type the genus and species, e.g. Ancistrus cirrhosus."}, status=400)
         genus, epithet = split_scientific_name(typed)
         existing = species_already_named(genus, epithet, user=request.user)
