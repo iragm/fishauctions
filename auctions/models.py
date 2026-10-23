@@ -9678,6 +9678,36 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return self.reserve_price
 
     @property
+    def only_whole_dollar_bids(self):
+        """Bids are whole dollars: the auction's setting, and always for a lot outside an auction."""
+        return self.auction.only_whole_dollar_bids if self.auction else True
+
+    def suggested_bid(self, viewer_bid=None):
+        """What a bid box starts at for someone whose latest bid is *viewer_bid* (an amount, or None): the
+        minimum while nobody has bid, else 5% over the price (at least a cent, or a dollar), and never below
+        their own bid plus one step. Whole-dollar auctions get an integer, rounded up.
+        """
+        whole = self.only_whole_dollar_bids
+        step = Decimal(1) if whole else Decimal("0.01")
+        amount = viewer_bid + step if viewer_bid else 0
+        if self.auction and self.auction.online_bidding == "buy_now_only" and self.buy_now_price:
+            amount = self.buy_now_price
+        if not self.sealed_bid:
+            if not self.high_bidder:
+                amount = self.reserve_price
+            else:
+                increment = self.high_bid * Decimal("0.05")
+                if whole:
+                    increment = max(increment.to_integral_value(rounding="ROUND_DOWN"), Decimal(1))
+                else:
+                    increment = max(increment.quantize(Decimal("0.01"), rounding="ROUND_DOWN"), Decimal("0.01"))
+                amount = max(amount, self.high_bid + increment)
+        if whole:
+            # The box shows ".00" beside it, so an integer, rounded up: it's the minimum next bid.
+            amount = int(Decimal(amount).to_integral_value(rounding="ROUND_CEILING"))
+        return amount
+
+    @property
     def high_bidder(self):
         """Name of the highest bidder"""
         if self.banned:

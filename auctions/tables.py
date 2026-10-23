@@ -609,6 +609,21 @@ def buying_price(lot):
     return f"{lot.currency_symbol}{price}"
 
 
+def viewer_max_bid(lot, user):
+    """*user*'s standing bid on a lot (their latest, as on the lot page), from a prefetched ``bid_set``; or None."""
+    mine = [bid for bid in lot.bid_set.all() if bid.user_id == user.pk and not bid.is_deleted]
+    if not mine:
+        return None
+    return max(mine, key=lambda bid: (bid.bid_time, bid.pk)).amount
+
+
+def can_quick_bid(lot):
+    """Whether the buying dashboard offers a bid button: the lot is open to online bids. Who may bid is
+    still the server's call when the bid arrives.
+    """
+    return not lot.ended and not lot.winning_price and not lot.bidding_error
+
+
 class LotHTMxTableForBuyers(tables.Table):
     """The buying dashboard: one badge per lot for where you stand on it."""
 
@@ -618,6 +633,7 @@ class LotHTMxTableForBuyers(tables.Table):
     lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
     lot_name = tables.Column(verbose_name="Lot", orderable=False)
     price = tables.Column(accessor="pk", verbose_name="Price", orderable=False)
+    bid = tables.Column(accessor="pk", verbose_name="", orderable=False)
 
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
@@ -631,12 +647,37 @@ class LotHTMxTableForBuyers(tables.Table):
         return format_html("<a href='{}?src=buying'>{}</a>", record.lot_link, value)
 
     def render_price(self, value, record):
-        return buying_price(record)
+        price = buying_price(record)
+        mine = viewer_max_bid(record, self.user)
+        if mine is None:
+            return price
+        return format_html(
+            '{} <span class="text-muted small text-nowrap">your max {}{}</span>', price, record.currency_symbol, mine
+        )
+
+    def render_bid(self, value, record):
+        """Quick bid: opens the shared confirm-bid dialog, which the buying page's script fills from these."""
+        if not can_quick_bid(record):
+            return ""
+        buy_now = bool(record.auction and record.auction.online_bidding == "buy_now_only")
+        return format_html(
+            '<button type="button" class="btn btn-sm btn-success text-dark text-nowrap quick-bid" data-bid-url="{}"'
+            ' data-lot-name="{}" data-currency="{}" data-amount="{}" data-whole="{}" data-final="{}"'
+            ' data-buy-now="{}">{}</button>',
+            reverse("lot_bid", kwargs={"pk": record.pk}),
+            record.lot_name,
+            record.currency_symbol,
+            record.buy_now_price if buy_now else record.suggested_bid(viewer_max_bid(record, self.user)),
+            int(record.only_whole_dollar_bids),
+            int(buy_now or not (record.auction and record.auction.allow_deleting_bids)),
+            int(buy_now),
+            "Buy now" if buy_now else "Bid",
+        )
 
     class Meta:
         model = Lot
-        template_name = "tables/bootstrap_htmx.html"
-        fields = ("status", "auction", "lot_number", "lot_name", "price")
+        template_name = "tables/buying_htmx.html"
+        fields = ("status", "auction", "lot_number", "lot_name", "price", "bid")
         row_attrs = {}
 
 

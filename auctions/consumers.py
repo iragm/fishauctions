@@ -14,6 +14,7 @@ from decimal import Decimal
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
 from channels.layers import get_channel_layer
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
@@ -388,6 +389,58 @@ class UserConsumer(WebsocketConsumer):
         message = event["message"]
         bg = event.get("bg", "info")
         self.send(text_data=json.dumps({"type": "toast", "message": message, "bg": bg}))
+
+
+class BuyingConsumer(WebsocketConsumer):
+    """The buying dashboard's live refresh: joins the lot groups of the open lots its user watches or bid
+    on, and says only that one changed. The page then re-renders its own table, so nothing about a bid
+    travels down this socket.
+    """
+
+    #: Each lot is one channel-layer round trip at connect; a dashboard with more than this refreshes
+    #: on its newest lots only.
+    MAX_LOTS = 200
+
+    groups_joined = ()
+
+    def connect(self):
+        try:
+            self.user = self.scope["user"]
+            if not self.user.is_authenticated:
+                self.close()
+                return
+            lots = (
+                Lot.objects.filter(is_deleted=False, banned=False, active=True, winning_price__isnull=True)
+                .filter(
+                    Q(watch__user=self.user, watch__is_deleted=False) | Q(bid__user=self.user, bid__is_deleted=False)
+                )
+                .values_list("pk", flat=True)
+                .distinct()
+                .order_by("-pk")[: self.MAX_LOTS]
+            )
+            self.accept()
+            joined = []
+            for pk in lots:
+                async_to_sync(self.channel_layer.group_add)(f"lot_{pk}", self.channel_name)
+                joined.append(f"lot_{pk}")
+            self.groups_joined = joined
+        except ClientDisconnected:
+            logger.info("client went away before the buying websocket finished connecting")
+        except Exception as e:
+            logger.exception(e)
+            self.close()
+
+    def disconnect(self, close_code):
+        for group in self.groups_joined:
+            async_to_sync(self.channel_layer.group_discard)(group, self.channel_name)
+
+    def receive(self, text_data):
+        """Nothing is sent up this socket."""
+
+    def chat_message(self, event):
+        # Everything on a lot's group is a chat_message; only plain chat leaves the table as it was.
+        if event.get("info") != "CHAT":
+            self.send(text_data=json.dumps({"type": "lot_changed"}))
 
 
 class AuctionConsumer(WebsocketConsumer):

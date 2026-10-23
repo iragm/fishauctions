@@ -14,11 +14,117 @@
   {% if auction or all_auctions %}
     {{ block.super }}
     <a href="{% url 'my_won_lot_csv' %}?auction={{ auction_param }}" data-query-sync-url="{% url 'my_won_lot_csv' %}?auction={{ auction_param }}" class="btn btn-primary"><i class="bi bi-download"></i> Export CSV</a>
+    {% include "auctions/partials/bid_confirm_modal.html" with with_amount=True %}
   {% endif %}
 {% endblock %}
 
 {% block extra_js %}
   {{ block.super }}
+  {% if auction or all_auctions %}
+  <script>
+    {% comment %}Quick bid and the live refresh. A bid elsewhere on any open lot here re-renders the table
+    from the server (BuyingConsumer only says "something changed"), so the badges, prices and max bids
+    are always the server's. Event delegation, since every refresh replaces the rows.{% endcomment %}
+    (function () {
+      var modal = document.getElementById('confirmBid');
+      if (!modal) { return; }
+      var amountBox = document.getElementById('confirmBidAmount');
+      var dialogText = document.getElementById('confirmDialogText');
+      var finalize = document.getElementById('finalize-bid');
+      var current = null, refreshTimer = null, stale = false;
+
+      function refreshTable() {
+        var marker = document.getElementById('buying-refresh');
+        var container = document.getElementById('table-container');
+        if (!marker || !container || !window.htmx) { return; }
+        container.setAttribute('data-hx-announce', 'off');
+        htmx.ajax('GET', marker.dataset.url, {target: '#table-container', swap: 'outerHTML'});
+      }
+      function scheduleRefresh() {
+        if (document.hidden) { stale = true; return; }
+        if (refreshTimer) { return; }
+        refreshTimer = setTimeout(function () { refreshTimer = null; refreshTable(); }, 1000);
+      }
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden && stale) { stale = false; scheduleRefresh(); }
+      });
+
+      var socket = null, delay = 1000, opened = false;
+      function connect() {
+        var protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+        socket = new WebSocket(protocol + window.location.host + '/ws/buying/');
+        socket.onmessage = function () { scheduleRefresh(); };
+        socket.onopen = function () {
+          // Whatever changed while the socket was down was missed, so catch up once.
+          if (opened) { scheduleRefresh(); }
+          opened = true;
+          delay = 1000;
+        };
+        socket.onclose = function () {
+          setTimeout(connect, delay);
+          delay = Math.min(delay * 2, 30000);
+        };
+      }
+      connect();
+      window.buyingWebSocket = function () { return socket; };
+
+      document.addEventListener('click', function (event) {
+        var button = event.target.closest('.quick-bid');
+        if (!button) { return; }
+        current = button.dataset;
+        var buyNow = current.buyNow === '1';
+        document.getElementById('confirmBidCurrency').textContent = current.currency;
+        amountBox.min = amountBox.step = current.whole === '1' ? '1' : '0.01';
+        amountBox.value = current.amount;
+        amountBox.readOnly = buyNow;
+        amountBox.classList.remove('is-invalid');
+        dialogText.textContent = (buyNow ? 'Buy ' : 'Bid on ') + current.lotName + (buyNow ? ' now' : '');
+        if (current.final === '1') {
+          var note = document.createElement('small');
+          note.className = 'd-block mt-2 text-muted';
+          note.textContent = buyNow ? 'All sales are final' : 'All bids are final';
+          dialogText.appendChild(note);
+        }
+        finalize.textContent = buyNow ? 'Buy now' : 'Place bid';
+        bootstrap.Modal.getOrCreateInstance(modal).show();
+      });
+      modal.addEventListener('shown.bs.modal', function () { if (!amountBox.readOnly) { amountBox.select(); } });
+      amountBox.addEventListener('keyup', function (event) { if (event.key === 'Enter') { finalize.click(); } });
+
+      finalize.addEventListener('click', function () {
+        if (!current || finalize.disabled) { return; }
+        var bid = Number(amountBox.value);
+        if (!amountBox.value || isNaN(bid) || bid <= 0) {
+          amountBox.classList.add('is-invalid');
+          return;
+        }
+        finalize.disabled = true;
+        $.post({
+          url: current.bidUrl,
+          data: {bid: amountBox.value},
+          beforeSend: function (request) { request.setRequestHeader('X-CSRFTOKEN', '{{ csrf_token }}'); },
+          success: function (result) {
+            var mine = String(result.high_bidder_pk) === '{{ request.user.pk }}';
+            var title = result.message, type = 'success';
+            if (result.type === 'ERROR') {
+              type = 'danger';
+            } else if (result.type !== 'INFO') {
+              title = mine ? "You're the high bidder" : 'Someone else has a higher max bid';
+              type = mine ? 'success' : 'warning';
+            }
+            $.toast({title: title, type: type, delay: 6000});
+            scheduleRefresh();
+          },
+          error: function () {
+            $.toast({title: 'Could not place your bid -- please check your connection and try again.', type: 'danger', delay: 8000});
+          },
+          complete: function () { finalize.disabled = false; }
+        });
+        bootstrap.Modal.getOrCreateInstance(modal).hide();
+      });
+    })();
+  </script>
+  {% endif %}
   {% if note == "push_offer" %}
   <script>
     {% comment %}The lot page's subscribe wrapper: webpush.js rewrites the button's text once it knows whether this browser is subscribed, and that is the only signal it gives.{% endcomment %}

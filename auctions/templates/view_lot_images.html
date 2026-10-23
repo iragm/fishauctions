@@ -912,22 +912,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
 the chat column below is the second column of that same row, so on xl the lot and the chat sit side by
 side. They are closed after the recommended-lots strip at the bottom of the page.{% endcomment %}
 
-<!-- confirm bid dialog -->
-<div class="modal fade" id="confirmBid" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="label">Confirm bid</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div id='confirmDialogText' class="modal-body">Enter an amount</div>
-            <div class="modal-footer">
-                <button type="button" id='finalize-bid' class="btn btn-success text-dark">Place bid</button>
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-            </div>
-        </div>
-    </div>
-</div>
+{% include "auctions/partials/bid_confirm_modal.html" %}
 <!-- bid error dialog -->
 <div class="modal fade" id="bidError" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog" role="document">

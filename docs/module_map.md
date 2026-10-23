@@ -114,9 +114,9 @@ this only quotes its opening sentence.
 - **`command_palette.py`** (1531 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `log_search`
-- **`consumers.py`** (448 lines)
+- **`consumers.py`** (501 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
-  `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `AuctionConsumer`
+  `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
 - **`context_processors.py`** (368 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
@@ -196,7 +196,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (14962 lines)
+- **`models.py`** (14992 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -264,7 +264,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1223 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1660 lines)
+- **`tables.py`** (1701 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1882 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -348,9 +348,9 @@ this only quotes its opening sentence.
   `BulkAddLotsAutoTests`, `UpdateAuctionStatsCommandTestCase`, `LotsByUserViewTest`, `ImportLotsFromCSVViewTests`
 - **`test_bulk_import_views.py`** (590 lines)
   Gaps in the bulk-import and export views: the per-row lot save (closed submission, bad input), the
-- **`test_buying.py`** (257 lines)
+- **`test_buying.py`** (432 lines)
   The buying dashboard: which lots it lists, the status badge, its keywords, and the one note above it.
-  `BuyingDashboardTests`, `BuyingDashboardPushNoteTests`
+  `BuyingDashboardTests`, `BuyingDashboardBiddingTests`, `FakeLayer`, `BuyingConsumerTests`, `BuyingDashboardPushNoteTests`
 - **`test_cache_hygiene.py`** (132 lines)
   Guards against tests that clear a cache shared with every other parallel worker.
   `find_test_modules`, `check_source`, `CachesAreNotSharedBetweenWorkersTests`, `CacheHygieneCheckerTests`
@@ -1048,7 +1048,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (387 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`lot_pages.py`** (1363 lines)
+- **`lot_pages.py`** (1329 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (234 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -1100,7 +1100,7 @@ This will make sure the app is always imported when
 - **`_env.py`** (74 lines)
   Helpers for parsing environment variables in settings.
   `parse_bool_env`, `require_secure_prod_secrets`, `env_has_real_value`
-- **`asgi.py`** (68 lines)
+- **`asgi.py`** (69 lines)
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
