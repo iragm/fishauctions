@@ -582,7 +582,7 @@ this only quotes its opening sentence.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
   `SweepTestCase`, `ClubSweepTestCase`, `KilometrePreferenceTests`, `AwardPointsTrackTests`, `UndoRestoresBlanksTests`, `HistoryLineTests`, `LocalTimeTests`, `FalseIsFalseTests`, `FencingSpotChecks`
-- **`test_payment_views.py`** (840 lines)
+- **`test_payment_views.py`** (915 lines)
   The PayPal and Square connect/callback views, PayPal checkout (order creation and capture), the
 - **`test_paypal.py`** (924 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
@@ -1048,7 +1048,7 @@ Every view on the site, split by the part of it the view belongs to.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
 - **`palette.py`** (520 lines)
   The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
-- **`payments.py`** (1075 lines)
+- **`payments.py`** (1101 lines)
   Connecting PayPal and Square accounts and taking payments through them.
 - **`printing.py`** (531 lines)
   Labels: what gets drawn on them, and getting them to a printer.
