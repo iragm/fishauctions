@@ -1028,3 +1028,17 @@ body.has-unsaved-changes-bar {
 /* The SOLD stamp across a sold lot's picture: lot tiles, the lot page and the projector view. Above
    the carousel, and click-through so the image underneath still works. */
 .sold-stamp { position: absolute; z-index: 3; transform: rotate(-20deg); color: var(--bs-danger); font-weight: 700; pointer-events: none; }
+
+/* The library's pictures (documents/detail.html): in the text where it places them, and a zoom over
+   the page when clicked. */
+.library-picture {
+    cursor: zoom-in;
+}
+
+.library-text img.library-picture {
+    display: block;
+    max-width: 100%;
+    max-height: 24rem;
+    margin: 0.5rem 0;
+    border-radius: 0.25rem;
+}

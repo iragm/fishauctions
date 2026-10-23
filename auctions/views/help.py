@@ -10,7 +10,8 @@ from django.template.loader import render_to_string
 from django.views.generic import TemplateView, View
 
 from auctions import help_guides
-from auctions.models import Auction
+from auctions.documents.search import web_documents
+from auctions.models import Auction, Document
 
 __all__ = ["AuctionHelp", "HelpGuideView", "HelpIndexView", "SitemapView"]
 
@@ -81,11 +82,17 @@ class AuctionHelp(View):
 
 
 class SitemapView(View):
-    """/sitemap.xml: the pages worth a search engine's time, which today means the help."""
+    """/sitemap.xml: the pages worth a search engine's time: the help, and library documents shared with
+    search engines (``web`` visibility).
+    """
 
     def get(self, request):
         base = request.build_absolute_uri("/").rstrip("/")
         paths = ["/help/", *(guide.url for guide in help_guides.GUIDES.values() if guide.shown)]
+        paths += [
+            document.get_absolute_url()
+            for document in web_documents().filter(status=Document.READY).only("pk", "title", "original_name")
+        ]
         if not settings.ALLOW_SEARCH_INDEXING:
             paths = []
         body = render_to_string("sitemap.xml", {"urls": [base + path for path in paths]})

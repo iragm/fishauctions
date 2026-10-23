@@ -147,7 +147,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (1949 lines)
+- **`filters.py`** (2002 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -213,11 +213,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16608 lines)
+- **`palette_actions.py`** (16612 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (1967 lines)
+- **`palette_routes.py`** (1982 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -264,7 +264,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1223 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1701 lines)
+- **`tables.py`** (1729 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1882 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -427,7 +427,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1226 lines)
+- **`test_documents.py`** (1447 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -703,7 +703,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (139 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1352 lines)
+- **`urls.py`** (1355 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -722,17 +722,20 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`extract.py`** (378 lines)
   A file, as Markdown: ``markitdown`` for the formats, the site's vision model for the pictures.
   `parser_version`, `document_model`, `ExtractionError`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
-- **`forms.py`** (402 lines)
+- **`forms.py`** (431 lines)
   The library's forms: upload, adding pages to a batch, edit, and a reader's report. ``update_document``
   `natural_key`, `space_used`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
 - **`index.py`** (578 lines)
   Read a document, cut it into passages, embed them and tag it -- each stage only when it is stale.
-- **`models.py`** (315 lines)
+- **`models.py`** (333 lines)
   The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
-- **`pictures.py`** (114 lines)
+- **`pictures.py`** (117 lines)
   Pictures on a document: the photographs and drawings an article printed, cropped out and kept.
   `upload_link`, `signer_of`, `add_pictures`
-- **`search.py`** (252 lines)
+- **`render.py`** (58 lines)
+  A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
+  `to_html`, `unplaced_pictures`
+- **`search.py`** (294 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
 - **`stitch.py`** (416 lines)
   Put a pile of page pictures back together into articles.
@@ -899,7 +902,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`authentication.py`** (43 lines)
   Authentication classes for mobile endpoints.
   `OptionalJWTAuthentication`
-- **`menu.py`** (178 lines)
+- **`menu.py`** (181 lines)
   The app's navigation drawer, built here and served in /api/mobile/config/.
   `menu_for`
 - **`permissions.py`** (17 lines)
@@ -1036,13 +1039,13 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (482 lines)
-  The library at ``/library/``: upload, search with a written answer, read, correct, report, delete,
+- **`documents.py`** (615 lines)
+  The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (973 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
-- **`help.py`** (92 lines)
+- **`help.py`** (99 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
 - **`invoices.py`** (387 lines)

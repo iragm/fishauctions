@@ -22,8 +22,9 @@ LINK_DAYS = 7
 MAX_PICTURES_PER_DOCUMENT = 40
 #: Per picture as sent. Under nginx's 20M for the whole request; stored copies are far smaller.
 MAX_PICTURE_BYTES = 15 * 1024 * 1024
-#: Longest side kept. Bigger than a page scan's, since a picture is the one thing a reader zooms into.
-MAX_SIDE = 3000
+#: Longest side kept, the same as ``DocumentPicture.file``'s ``resize_source``, which does the final
+#: encode the way lot images get theirs; this pass only opens, turns upright and strips the picture.
+MAX_SIDE = 1000
 
 _SALT = "library-pictures"
 
@@ -66,7 +67,8 @@ def _cleaned(data: bytes) -> tuple[bytes, str] | tuple[None, str]:
             if lossless:
                 picture.convert("RGBA" if "A" in picture.getbands() else "RGB").save(out, "PNG", optimize=True)
                 return out.getvalue(), ".png"
-            picture.convert("RGB").save(out, "JPEG", quality=88)
+            # High, because resize_source encodes it once more.
+            picture.convert("RGB").save(out, "JPEG", quality=95)
             return out.getvalue(), ".jpg"
     except (OSError, ValueError, Image.DecompressionBombError, SyntaxError):
         return None, "That isn't a picture this site can open. Send a JPEG, PNG, WebP, GIF or HEIC."
@@ -106,6 +108,7 @@ def add_pictures(document, uploads, captions) -> tuple[list[DocumentPicture], li
         caption = str(captions[index] if index < len(captions) else "").strip()[:300]
         picture = DocumentPicture(document=document, caption=caption, position=position, size=len(data), sha256=digest)
         picture.file.save(f"picture{extension}", ContentFile(data), save=False)
+        picture.size = picture.file.size
         picture.save()
         added.append(picture)
         count += 1

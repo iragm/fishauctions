@@ -15391,7 +15391,9 @@ PICTURES_HOW = (
     "Crop each photograph or drawing out of the page and POST it as multipart/form-data to "
     "pictures_upload_url, a field named file per picture, each followed by a caption field, e.g. "
     "curl -F file=@fig1.jpg -F caption='Male in breeding colour' <pictures_upload_url>. If you can't run "
-    "commands that reach this site, give the person the link instead. It works for a week."
+    "commands that reach this site, give the person the link instead. It works for a week. "
+    "![caption](picture_url) in the text, put there on the document's Edit page, shows a picture where "
+    "it was printed."
 )
 
 
@@ -15701,6 +15703,7 @@ def add_document(request, params: dict[str, Any]) -> dict[str, Any]:
     where = f"{club.name}'s library" if club else "the library"
     where += {
         "public": ", where everyone on the site can read it",
+        "web": ", where anyone can read it and search engines may list it",
         "club": ", for its members",
         "private": ", where only you can see it",
     }[visibility]
@@ -15790,7 +15793,7 @@ register(
             "author": "string, optional. Who wrote it, as printed.",
             "year": "integer, optional. The year it was written.",
             "topics": "array of strings, optional. Replaces the topics; read_document lists the current ones. Topic slugs or labels.",
-            "visibility": "string, optional. Who can read it: public (everyone signed in), club (its club's members), or private (only its uploader).",
+            "visibility": "string, optional. Who can read it: public (everyone signed in), web (anyone, and search engines may list it), club (its club's members), or private (only its uploader).",
         },
         danger=DANGER_CONFIRM,
         destructive=True,
@@ -15848,7 +15851,8 @@ register(
             "club": "string, optional. The club whose library it goes in, by slug or name.",
             "visibility": (
                 "string, optional, default public. Who can read it: public (everyone signed in to the "
-                "site), club (members of its club; needs club), or private (only the user)."
+                "site), web (anyone, and search engines may list it), club (members of its club; needs "
+                "club), or private (only the user)."
             ),
             "topics": f"array of strings, optional. Up to four of: {', '.join(slug for slug, _label in TOPICS)}.",
         },
@@ -16062,7 +16066,7 @@ SKILLS: dict[str, str] = {
     # The upload form, with an agent's transcription as the file.
     # Bug reports and feature requests: the form is the same row request_a_skill writes.
     "FeatureRequestsView": "request_a_skill",
-    "LibraryView": "add_document",
+    "LibraryAddView": "add_document",
     "DocumentEditView": "update_document",
     "DocumentDeleteView": "delete_document",
     "AuctionBulkPrinting": "print_labels",

@@ -27,6 +27,7 @@ from .models import (
     ClubBapGenusOverride,
     ClubHistory,
     ClubMember,
+    Document,
     DonationVendor,
     Invoice,
     Lot,
@@ -1699,3 +1700,30 @@ def _stacked(first, second):
     if first and second:
         return format_html("{}<br><small>{}</small>", first, second)
     return first or (format_html("<small>{}</small>", second) if second else "")
+
+
+class DocumentHTMxTable(tables.Table):
+    """The library list: title, author, year and who can read it. Newest first until a header is clicked."""
+
+    hide_string = "d-md-table-cell d-none"
+    title = tables.Column(accessor="pk", verbose_name="Title", order_by=("title", "original_name"))
+    author = tables.Column(verbose_name="Author", attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    year = tables.Column(verbose_name="Year")
+    visibility = tables.Column(verbose_name="Who can read it")
+
+    class Meta:
+        model = Document
+        fields = ("title", "author", "year", "visibility")
+        template_name = "tables/bootstrap_htmx.html"
+        empty_text = "Nothing here yet. Old newsletters, BAP reports, care sheets: scans and photos of pages are fine."
+
+    def render_title(self, record):
+        link = format_html("<a href='{}'>{}</a>", record.get_absolute_url(), record.display_title)
+        if record.status == record.READY:
+            return link
+        return format_html("{} <span class='badge bg-secondary'>{}</span>", link, record.get_status_display())
+
+    def render_visibility(self, record):
+        if record.club_id:
+            return format_html("{} &middot; {}", record.get_visibility_display(), record.club.name)
+        return record.get_visibility_display()
