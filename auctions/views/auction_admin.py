@@ -704,7 +704,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         context["auction"] = self.auction
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
-        context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
+        context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and self.auction.scans_club_cards
         # With no rows, show a "Create user" button prefilled from the search, or a first-run
         # empty state.
         query = (self.request.GET.get("query") or "").strip()
@@ -919,7 +919,7 @@ class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.get("slug", ""))
         _ = self.can_add_edit_people
-        if not self.auction.club_id:
+        if not self.auction.scans_club_cards:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 

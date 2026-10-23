@@ -4861,6 +4861,11 @@ class Auction(CachedPropertiesMixin, models.Model):
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
 
     @property
+    def scans_club_cards(self):
+        """True when the quick check-in page applies: a club auction run in person, or in check-in mode."""
+        return bool(self.club_id) and (not self.is_online or self.use_check_in_mode)
+
+    @property
     def allows_app_self_checkin(self):
         """True when attendees may join and check in from the app's proximity prompt. Only check-in auctions can
         turn it off (``allow_self_checkin``), since there checking in assigns bidder numbers.
