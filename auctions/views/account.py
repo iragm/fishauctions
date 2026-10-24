@@ -267,9 +267,10 @@ REVERIFY_MAX_AGE = 3 * 24 * 60 * 60
 class ReverifyEmailView(LoginRequiredMixin, TemplateView):
     """Where Join sends someone whose mail recently bounced (``services.join_blocked_by_bounce``).
 
-    The button sends allauth's verification email, at allauth's cooldown, with a link to
-    ``ReverifyEmailConfirmView`` in place of allauth's: that one only confirms an unverified address,
-    and unverifying theirs would lock them out (``services.clear_email_bounce``).
+    The button sends ``account/email/reverify_email``, at allauth's cooldown, with a link to
+    ``ReverifyEmailConfirmView``. Not allauth's own link: that one only confirms an unverified address,
+    and unverifying theirs would lock them out (``services.clear_email_bounce``). Not allauth's wording
+    either: "user X has given yours as an email address" reads like phishing to someone who never asked.
     """
 
     template_name = "reverify_email.html"
@@ -301,7 +302,7 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
                 salt=REVERIFY_SALT,
             )
             get_adapter(request).send_mail(
-                "account/email/email_confirmation",
+                "account/email/reverify_email",
                 user.email,
                 {
                     "user": user,

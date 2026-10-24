@@ -6,6 +6,12 @@ and replies to `club-slug-donations-<digits>@yourdomain.com` are recorded agains
 who sent them. Console click-paths aren't recorded here (AWS changes them); this is the wiring that's
 ours — DNS records, env vars, the Lambda source, and the gotchas that cost hours to find.
 
+## Bounces and complaints
+
+List every SNS topic that delivers SES bounce or complaint events (identity notifications and
+configuration-set event destinations alike) in `AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS`. A topic left off
+has its events refused.
+
 ## Inbound routing: SNS topic → Lambda → SES receipt rule
 
 Create a **Standard** SNS topic (`ses-inbound-router`), a Python 3.12 Lambda function of the same

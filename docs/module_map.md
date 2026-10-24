@@ -612,9 +612,9 @@ this only quotes its opening sentence.
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_reverify_email.py`** (238 lines)
+- **`test_reverify_email.py`** (255 lines)
   A recent bounce holds back joining until the address is verified again.
-  `ReverifyEmailTests`, `MobileJoinBounceTests`
+  `ReverifyEmailTests`, `MobileJoinBounceTests`, `TrustedBounceTopicTests`
 - **`test_security.py`** (596 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
@@ -993,9 +993,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (705 lines)
+- **`account.py`** (706 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
-- **`admin_checklist.py`** (1048 lines)
+- **`admin_checklist.py`** (1049 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (841 lines)
@@ -1124,7 +1124,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1276 lines)
+- **`settings.py`** (1282 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
