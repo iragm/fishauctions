@@ -612,7 +612,7 @@ this only quotes its opening sentence.
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_reverify_email.py`** (240 lines)
+- **`test_reverify_email.py`** (241 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`
 - **`test_security.py`** (596 lines)
