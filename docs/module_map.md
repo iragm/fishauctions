@@ -202,7 +202,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15083 lines)
+- **`models.py`** (15162 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -219,7 +219,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16617 lines)
+- **`palette_actions.py`** (16628 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -398,7 +398,7 @@ this only quotes its opening sentence.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_member_history.py`** (72 lines)
   `ClubMemberHistoryTests`
-- **`test_club_money.py`** (761 lines)
+- **`test_club_money.py`** (782 lines)
   Money into and out of a club: PayPal without OAuth, invoices, profit and seller splits.
   `NonOAuthPayPalTests`, `ClubMoneyInvoiceHistoryTests`, `ClubProfitTests`, `TotalToSellersPercentToClubTests`, `AuctionGrossTests`
 - **`test_club_permissions.py`** (960 lines)
@@ -602,9 +602,9 @@ this only quotes its opening sentence.
   `SweepTestCase`, `ClubSweepTestCase`, `KilometrePreferenceTests`, `AwardPointsTrackTests`, `UndoRestoresBlanksTests`, `HistoryLineTests`, `LocalTimeTests`, `FalseIsFalseTests`, `FencingSpotChecks`
 - **`test_payment_views.py`** (915 lines)
   The PayPal and Square connect/callback views, PayPal checkout (order creation and capture), the
-- **`test_paypal.py`** (924 lines)
+- **`test_paypal.py`** (1180 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
-  `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
+  `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`, `PayPalLotRefundTests`
 - **`test_pickup_logistics.py`** (358 lines)
   Online auction pickups: holding lots for the second pickup, the day-before email, the logistics page,
   `PickupTestCase`, `HoldForSecondPickupTests`, `PickupPlanTests`, `PickupTomorrowEmailTests`, `LogisticsPageTests`, `PostAuctionBannerTests`, `UsersFilterTests`, `LocationFilterTests`, `CreatedAheadChartTests`
@@ -1009,7 +1009,7 @@ Every view on the site, split by the part of it the view belongs to.
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1265 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
-- **`auction_extras.py`** (745 lines)
+- **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
 - **`auction_pages.py`** (1114 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
@@ -1022,7 +1022,7 @@ Every view on the site, split by the part of it the view belongs to.
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (956 lines)
   The lot lists people browse, and what they do to a lot without opening it.
-- **`bulk_actions.py`** (508 lines)
+- **`bulk_actions.py`** (510 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
   `GetClubs`, `BulkSetLotsWon`, `InvoiceBulkUpdateStatus`, `MarkInvoicesReady`, `MarkInvoicesPaid`, `EnableBiddingForAllUsers`, `LotRefundDialog`
 - **`bulk_add.py`** (916 lines)
@@ -1082,7 +1082,7 @@ Every view on the site, split by the part of it the view belongs to.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
 - **`palette.py`** (559 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
-- **`payments.py`** (1101 lines)
+- **`payments.py`** (1185 lines)
   Connecting PayPal and Square accounts and taking payments through them.
 - **`printing.py`** (534 lines)
   Labels: what gets drawn on them, and getting them to a printer.

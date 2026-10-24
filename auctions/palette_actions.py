@@ -6452,7 +6452,7 @@ def _club_funded_refund(request, lot, percent: int, label: str) -> dict[str, Any
 def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     """Refund a sold lot the ordinary way or from the club's cut. Admins only.
 
-    ``paid_by="seller"`` is ``LotRefundDialog``'s path (``Lot.refund``, including Square, and
+    ``paid_by="seller"`` is ``LotRefundDialog``'s path (``Lot.refund``, including Square and PayPal, and
     ``Invoice.recalculate``). ``paid_by="club"`` is :func:`_club_funded_refund`. A settled invoice doesn't
     stop the ordinary refund (as the dialog), but it's reported per side; the club refund refuses it.
     """
@@ -6512,17 +6512,19 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             **_lot_echo(lot),
         )
     was = lot.partial_refund_percent or 0
-    # Read first: afterwards nothing says whether Square was refunded.
-    card_refund = bool(lot.square_refund_possible and not lot.no_more_refunds_possible)
     auction.create_history(
         applies_to="LOTS",
         action=f"Removed/refunded lot {lot.lot_number_display} ({percent}%) {via(request)}",
         user=user,
     )
-    lot.refund(percent, user)
+    card_provider, card_error = lot.refund(percent, user)
     settled = []
+    card_refunded = bool(card_provider and not card_error)
     for invoice, role in ((lot.sellers_invoice, "seller"), (lot.winner_invoice, "buyer")):
         if invoice is None:
+            continue
+        if role == "buyer" and card_refunded:
+            # The buyer's money already went back to the card.
             continue
         if invoice.status == "DRAFT":
             invoice.recalculate()
@@ -6535,8 +6537,12 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     if lot.donation:
         summary += " This is a donation, so the seller was never being paid for it — the whole refund is the club's."
-    if card_refund:
-        summary += " The card payment was refunded through Square automatically."
+    if card_provider and card_error:
+        summary += f" The {card_provider} refund didn't go through ({card_error}), so refund the buyer there by hand."
+    elif card_provider:
+        summary += (
+            f" The buyer's payment was refunded through {card_provider} automatically, which can't be undone here."
+        )
     if settled:
         summary += (
             f" {' and '.join(settled).capitalize()} — already settled, so nothing was recalculated "
@@ -6552,7 +6558,12 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         settled_invoices=settled,
         **_lot_echo(lot),
         followups=[{"label": "View this lot", "url": lot.lot_link}],
-        undo={"action": "refund_lot", "params": {"lot_id": lot.pk, "percent": was, "paid_by": "seller"}},
+        # Taking the percent back off wouldn't bring back money already sent to the card.
+        **(
+            {}
+            if card_refunded
+            else {"undo": {"action": "refund_lot", "params": {"lot_id": lot.pk, "percent": was, "paid_by": "seller"}}}
+        ),
     )
 
 
@@ -12886,7 +12897,7 @@ register(
             "refund: a percentage comes off the buyer's invoice and off the seller's payout "
             "together, so the club's commission drops by the same share — the Remove/refund button "
             "on the lot, and it sends the money back to the card where the sale went through "
-            "Square. 'club' is the goodwill refund a club gives when it doesn't want the seller out "
+            "Square or PayPal. 'club' is the goodwill refund a club gives when it doesn't want the seller out "
             "of pocket: the buyer is made whole, the seller's payout is untouched, and the whole "
             "refund comes out of the club's cut as a discount line on the buyer's invoice, in whole "
             "dollars. Both leave the lot sold and neither deletes anything; a lot that should not "

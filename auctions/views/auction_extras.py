@@ -687,20 +687,24 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
             ban_this_user = form.cleaned_data["ban_this_user"]
             # Refunds change both sides of each lot, and nothing else recalculates them.
             touched_invoices = []
+            card_errors = []
             if refund_sold_lots:
                 actions += "refunded sold lots, "
                 for lot in self.tos.lots_qs:
                     touched_invoices += _lot_invoices(lot)
                     if lot.winning_price:
-                        lot.refund(100, request.user)
+                        card_errors.append(lot.refund(100, request.user))
                     else:
                         lot.remove(True, request.user)
             if refund_bought_lots:
                 actions += "refunded bought lots, "
                 for lot in self.tos.bought_lots_qs:
                     touched_invoices += _lot_invoices(lot)
-                    lot.refund(100, request.user)
+                    card_errors.append(lot.refund(100, request.user))
             _recalculate_invoices(touched_invoices)
+            for provider, error in card_errors:
+                if error:
+                    messages.error(request, f"{provider} refund failed: {error}")
             if leave_negative_feedback:
                 actions += "left negative feedback, "
                 for lot in self.tos.bought_lots_qs:

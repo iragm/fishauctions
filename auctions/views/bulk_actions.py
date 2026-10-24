@@ -411,7 +411,9 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
                 user=request.user,
             )
             refund = form.cleaned_data["partial_refund_percent"] or 0
-            self.lot.refund(refund, request.user)
+            provider, error = self.lot.refund(refund, request.user)
+            if error:
+                messages.error(request, f"{provider} refund failed: {error}")
             banned = form.cleaned_data["banned"]
             self.lot.remove(banned, request.user)
             if self.seller_invoice:
