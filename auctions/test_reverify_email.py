@@ -116,6 +116,8 @@ class ReverifyEmailTests(StandardTestCase):
         self.assertTrue(self.address.verified)
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.joiner.email])
+        self.assertEqual(mail.outbox[0].subject, "Confirm your email address")
+        self.assertNotIn("has given yours", mail.outbox[0].body)
         # A second click inside allauth's cooldown sends nothing more.
         self.client.post(url)
         self.assertEqual(len(mail.outbox), 1)

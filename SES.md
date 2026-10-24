@@ -6,6 +6,13 @@ and replies to `club-slug-donations-<digits>@yourdomain.com` are recorded agains
 who sent them. Console click-paths aren't recorded here (AWS changes them); this is the wiring that's
 ours — DNS records, env vars, the Lambda source, and the gotchas that cost hours to find.
 
+## Bounces and complaints
+
+Put the ARN of the SNS topic that delivers SES bounce and complaint events in
+`AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS` (comma-separated). Left empty, the webhook believes any topic, so
+anyone with an AWS account could subscribe it and forge a bounce for any address: a red envelope
+and, for 90 days, the re-verify page before joining.
+
 ## Inbound routing: SNS topic → Lambda → SES receipt rule
 
 Create a **Standard** SNS topic (`ses-inbound-router`), a Python 3.12 Lambda function of the same
