@@ -581,7 +581,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (878 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5259 lines)
+- **`test_palette_assist.py`** (5261 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1279 lines)
   The command palette itself, and the mobile surfaces that call into it.
