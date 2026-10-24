@@ -336,6 +336,13 @@ class HelpContext:
         return rules_chart()
 
     @cached_property
+    def created_ahead(self) -> dict:
+        """Club profit against how far ahead auctions were created (``help_stats.created_ahead``)."""
+        from auctions.help_stats import created_ahead
+
+        return created_ahead()
+
+    @cached_property
     def online_timing(self) -> dict:
         """Lots sold by the weekday an online auction ends, and how long it runs (``help_stats.online_timing``)."""
         from auctions.help_stats import online_timing

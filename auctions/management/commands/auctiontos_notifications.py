@@ -1,3 +1,8 @@
+"""The participant emails that follow joining an auction, run every few minutes by cron: welcome,
+location checks, the day-before pickup email for online auctions, print reminders, and the reminder to
+join an auction someone looked at.
+"""
+
 import datetime
 
 from django.conf import settings
@@ -29,15 +34,17 @@ _TOS_PUSH_TITLES = {
     "in_person_auction_welcome": "You're in — {auction}",
     "auction_print_reminder": "Print your labels for {auction}",
     "reprint_reminder": "Reprint your labels for {auction}",
+    "online_pickup_tomorrow": "Pickup tomorrow — {auction}",
 }
 
 
-def send_tos_notification(template, tos):
+def send_tos_notification(template, tos, **extra):
     current_site = Site.objects.get_current()
     ctx = {
         "domain": current_site.domain,
         "tos": tos,
         "website_focus": settings.WEBSITE_FOCUS,
+        **extra,
     }
     send_kwargs = {
         "sender": tos.auction.sender_email_with_name,
@@ -116,6 +123,26 @@ class Command(BaseCommand):
             tos.save(update_fields=["confirm_email_sent"])
             send_tos_notification("in_person_auction_welcome", tos)
         self.send_location_checks(base_qs)
+        # The day before an online auction's pickup, once bidding is over: which pickup times to come to.
+        # second_confirm_email_sent is this email's flag. Only those who won or sold lots get one.
+        pickup_tomorrow = base_qs.filter(
+            second_confirm_email_sent=False,
+            auction__is_online=True,
+            auction__is_deleted=False,
+            pickup_location__users_must_coordinate_pickup=False,
+            pickup_location__pickup_time__gt=timezone.now(),
+            pickup_location__pickup_time__lte=timezone.now() + datetime.timedelta(hours=24),
+        ).select_related("auction", "pickup_location")
+        for tos in pickup_tomorrow:
+            if not tos.auction.closed:
+                # Lots are still in overtime; the next run sends it.
+                continue
+            tos.second_confirm_email_sent = True
+            # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+            tos.save(update_fields=["second_confirm_email_sent"])
+            plan = tos.pickup_plan
+            if plan:
+                send_tos_notification("online_pickup_tomorrow", tos, plan=plan)
         print_reminder_qs = base_qs.filter(print_reminder_email_sent=False)
         online_auction_print_reminder = print_reminder_qs.filter(
             auction__is_online=True,

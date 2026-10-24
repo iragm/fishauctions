@@ -417,6 +417,14 @@ ROUTE_LIST: list[Route] = [
         keywords=["users", "bidders", "participants", "who is coming"],
     ),
     _r(
+        "auction_logistics",
+        "Pickup logistics for an online auction",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["logistics", "pickup list", "who is picking up", "cross off", "second pickup"],
+    ),
+    _r(
         "auction_invoices",
         "All invoices for an auction",
         "Running an auction",
@@ -1320,6 +1328,8 @@ EXCLUDED: dict[str, str] = {
     "auction_quick_checkout_htmx": _API,
     "auction_lot_queue_fullscreen": _API,
     "auction_lot_map_data": _API,
+    "auction_logistics_mark": "The tap on a name on the logistics page, which crosses it off that pickup.",
+    "auction_post_end_banner": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,

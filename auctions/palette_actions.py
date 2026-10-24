@@ -16252,6 +16252,10 @@ NOT_A_SKILL: dict[str, str] = {
         "Judging that means looking at the original scan beside the text, and a caller with only the "
         "text cannot; the keeper's own fix is update_document."
     ),
+    "AuctionLogisticsMark": (
+        "Crosses a name off a pickup list while that person stands at the table with their lots, and back "
+        "on with a second tap. It records nothing anyone acts on later; the list itself is the record."
+    ),
     "AuctionPageAction": (
         "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "
         "shows one person and nothing else. The other two are site staff trusting an auction's "

@@ -42,6 +42,7 @@ from .embeds import *  # noqa: F403
 from .exports import *  # noqa: F403
 from .help import *  # noqa: F403
 from .invoices import *  # noqa: F403
+from .logistics import *  # noqa: F403
 from .lot_pages import *  # noqa: F403
 from .moderation import *  # noqa: F403
 from .offline import *  # noqa: F403

@@ -283,6 +283,7 @@ document.addEventListener("DOMContentLoaded", function() {
         <a href="{{location_map}}" class="btn btn-primary">Get directions</a>
       {% endif %}
     {% else %}
+{% if invoice.auctiontos_user.holding_for_second_pickup %}<span class="badge bg-warning text-dark align-self-center">Hold for second pickup</span>{% endif %}
       <input type="text" placeholder="Memo" value="{{invoice.auctiontos_user.memo}}" class="form-control " id="memo">
     {% endif %}
   </div>

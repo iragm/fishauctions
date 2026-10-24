@@ -271,6 +271,10 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "exists": {"auctiontos__isnull": False},
             "owes club": {"auctiontos__calculated_total__lt": 0},
             "club owes": {"auctiontos__calculated_total__gt": 0},
+            # An invoice that isn't paid yet, whatever its status.
+            "outstanding": {},
+            # A seller with a sold lot whose label hasn't been printed.
+            "unprinted": {},
             "seen": {"auctiontos__opened": True},
             "unseen": {"auctiontos__opened": False},
             "can bid": {"bidding_allowed": True},
@@ -305,6 +309,20 @@ class AuctionTOSFilter(django_filters.FilterSet):
                         qs = qs.filter(
                             Q(bidding_allowed=False)
                             | Q(auction__manage_users_through_club="checkin", checked_in__isnull=True)
+                        )
+                    elif keyword == "outstanding":
+                        qs = qs.filter(auctiontos__isnull=False).exclude(auctiontos__status="PAID")
+                    elif keyword == "unprinted":
+                        qs = qs.filter(
+                            Exists(
+                                Lot.objects.filter(
+                                    auctiontos_seller=OuterRef("pk"),
+                                    is_deleted=False,
+                                    banned=False,
+                                    auctiontos_winner__isnull=False,
+                                    label_printed=False,
+                                )
+                            )
                         )
                     else:
                         qs = qs.filter(**filter_data)

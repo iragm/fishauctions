@@ -6883,6 +6883,63 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     # catches every path, including the person moved off a number so somebody else could have it.
     paddle_printed_number = models.CharField(max_length=20, blank=True, default="")
     paddle_printed_name = models.CharField(max_length=181, blank=True, default="")
+    hold_for_second_pickup = models.BooleanField(default=False, blank=True)
+    # Offered only where ``can_hold_for_second_pickup``; ``can_sell`` is off while it's set.
+    hold_for_second_pickup.help_text = (
+        "Lots bought at their own location wait for the second pickup time too; they can't sell while it's set."
+    )
+    # The logistics page's check-off, one per pickup time: when an admin crossed this person off.
+    marked_off_first_pickup = models.DateTimeField(blank=True, null=True, default=None)
+    marked_off_second_pickup = models.DateTimeField(blank=True, null=True, default=None)
+
+    @property
+    def can_hold_for_second_pickup(self):
+        """An online, multi-location auction whose location for this person has a second pickup time."""
+        location = self.pickup_location
+        return bool(
+            self.auction.is_online
+            and self.auction.multi_location
+            and location
+            and location.second_pickup_time
+            and not location.pickup_by_mail
+        )
+
+    @property
+    def holding_for_second_pickup(self):
+        """``hold_for_second_pickup``, only where it still applies (the location may have changed since)."""
+        return self.hold_for_second_pickup and self.can_hold_for_second_pickup
+
+    PICKUP_FIRST = "first"
+    PICKUP_SECOND = "second"
+    PICKUP_BOTH = "both"
+
+    @property
+    def pickup_plan(self):
+        """Which pickup times this person needs, once an online auction has ended: ``""`` (nothing won or
+        sold), ``PICKUP_FIRST``, ``PICKUP_SECOND`` or ``PICKUP_BOTH``. Sellers and anyone unpaid come to
+        the first; lots from other locations, and held ones, wait for the second.
+        """
+        won = self.bought_lots_qs.exclude(banned=True)
+        sold = self.lots_qs.exclude(banned=True).filter(auctiontos_winner__isnull=False)
+        if not won.exists() and not sold.exists():
+            return ""
+        if not self.can_hold_for_second_pickup:
+            return self.PICKUP_FIRST
+        holding = self.holding_for_second_pickup
+        from_here = won.filter(auctiontos_seller__pickup_location=self.pickup_location_id).exists()
+        from_elsewhere = won.exclude(auctiontos_seller__pickup_location=self.pickup_location_id).exists()
+        invoice = self.invoice
+        paid = bool(invoice and invoice.status == "PAID")
+        if paid and not sold.exists() and (holding or not from_here):
+            return self.PICKUP_SECOND
+        if not from_elsewhere and not holding:
+            return self.PICKUP_FIRST
+        return self.PICKUP_BOTH
+
+    @property
+    def can_sell(self):
+        """Allowed to sell, and not holding for the second pickup: a seller has to be there at the first."""
+        return self.selling_allowed and not self.holding_for_second_pickup
 
     @property
     def paddle_is_current(self):
@@ -8938,7 +8995,10 @@ class Lot(CachedPropertiesMixin, models.Model):
     def winner_location(self):
         """String of location of the winner for this lot"""
         try:
-            return str(self.auctiontos_winner.pickup_location)
+            winner = self.auctiontos_winner
+            if winner.holding_for_second_pickup:
+                return f"{winner.pickup_location} - hold for second pickup"
+            return str(winner.pickup_location)
         except Exception:
             pass
         tos = AuctionTOS.objects.filter(user=self.winner, auction=self.auction).first()

@@ -1727,3 +1727,47 @@ class DocumentHTMxTable(tables.Table):
         if record.club_id:
             return format_html("{} &middot; {}", record.get_visibility_display(), record.club.name)
         return record.get_visibility_display()
+
+
+def logistics_name_cell(tos, which):
+    """A name on the logistics page: a tap crosses it off that pickup's list, and a second tap brings it back."""
+    marked = tos.marked_off_second_pickup if which == 2 else tos.marked_off_first_pickup
+    return format_html(
+        "<a href='#' role='button' hx-post='{}' hx-target='this' hx-swap='outerHTML' class='{}'>{}</a>",
+        reverse("auction_logistics_mark", kwargs={"slug": tos.auction.slug, "pk": tos.pk, "which": which}),
+        "text-decoration-line-through text-muted" if marked else "",
+        tos.name or "Unknown",
+    )
+
+
+class LogisticsHTMxTable(tables.Table):
+    """One pickup on the logistics page (``auctions.logistics``): who comes, with what, and their invoice."""
+
+    name = tables.Column(accessor="pk", verbose_name="Name", order_by=("name",))
+    sold = tables.Column(verbose_name="Sold lots")
+    bought = tables.Column(verbose_name="Bought lots")
+    pickup_now = tables.Column(verbose_name="To pick up now")
+    invoice = tables.Column(accessor="pk", verbose_name="Invoice", orderable=False)
+    memo = tables.Column(verbose_name="Memo", orderable=False, default="")
+
+    def __init__(self, *args, tab=None, **kwargs):
+        exclude = list(kwargs.pop("exclude", ()))
+        if not tab.multi_location:
+            exclude.append("pickup_now")
+        if tab.which == 2:
+            # Sellers' lots all leave at the first pickup.
+            exclude.append("sold")
+        self.tab = tab
+        super().__init__(*args, exclude=exclude, **kwargs)
+
+    def render_name(self, value, record):
+        return logistics_name_cell(record, self.tab.which)
+
+    def render_invoice(self, value, record):
+        return record.invoice_link_html
+
+    class Meta:
+        model = AuctionTOS
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("name", "sold", "bought", "pickup_now", "invoice", "memo")
+        order_by = "name"

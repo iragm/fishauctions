@@ -337,7 +337,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
                     return JsonResponse({"success": False, "error": "You must join this auction before adding lots"})
 
             # Check if user has permission to add lots
-            if not self.tos.selling_allowed and not self.is_admin:
+            if not self.tos.can_sell and not self.is_admin:
                 return JsonResponse(
                     {"success": False, "error": "You don't have permission to add lots to this auction"}
                 )
@@ -624,7 +624,7 @@ class SaveLotAjax(APIView, AuctionViewMixin):
         if not self.tos:
             return JsonResponse({"success": False, "error": "You must join this auction first"})
 
-        if not self.tos.selling_allowed and not self.is_admin:
+        if not self.tos.can_sell and not self.is_admin:
             return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
 
         if not self.is_admin and not self.auction.can_submit_lots:
