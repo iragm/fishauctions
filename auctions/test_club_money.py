@@ -184,15 +184,36 @@ class NonOAuthPayPalTests(TestCase):
 
     # -- refunds (forced manual for non-OAuth clubs) ---------------------------
 
-    def test_refund_invoice_refuses_for_non_oauth_club(self):
+    @override_settings(
+        PAYPAL_API_BASE="https://api-m.sandbox.paypal.com", PAYPAL_CLIENT_ID="site-id", PAYPAL_SECRET="site"
+    )
+    def test_refund_invoice_uses_the_clubs_own_credentials(self):
+        from unittest.mock import MagicMock, patch
+
+        from auctions.models import InvoicePayment
         from auctions.views import PayPalAPIMixin
 
         self._enable_credentials()
         invoice = self._make_club_invoice()
-        mixin = PayPalAPIMixin()
-        # A manual-refund message, never the PayPal API: without a webhook it would go unrecorded.
-        result = mixin.refund_invoice(invoice, Decimal("5.00"))
-        self.assertIn("manually", result.lower())
+        InvoicePayment.objects.create(
+            invoice=invoice,
+            external_id="CAP-CLUB",
+            amount=Decimal("20.00"),
+            amount_available_to_refund=Decimal("20.00"),
+        )
+        token = MagicMock()
+        token.json.return_value = {"access_token": "t"}
+        refund = MagicMock()
+        refund.headers = {}
+        refund.json.return_value = {"id": "REF-CLUB", "status": "COMPLETED", "amount": {"value": "5.00"}}
+        with (
+            patch("auctions.views.payments.requests.post", return_value=token) as token_post,
+            patch("auctions.views.payments.requests.request", return_value=refund),
+        ):
+            self.assertIsNone(PayPalAPIMixin().refund_invoice(invoice, Decimal("5.00"), request_id="r"))
+        self.assertEqual(token_post.call_args.kwargs["auth"], ("club-client-id", "club-secret"))
+        # No webhook comes from a club's own app, so the refund is recorded from PayPal's answer.
+        self.assertEqual(InvoicePayment.objects.get(external_id="REF-CLUB").amount, Decimal("-5.00"))
 
     # -- in-person quick checkout (PayPal QR disabled for non-OAuth) -----------
 

@@ -6512,14 +6512,12 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
             **_lot_echo(lot),
         )
     was = lot.partial_refund_percent or 0
-    # Read first: afterwards nothing says whether Square was refunded.
-    card_refund = bool(lot.square_refund_possible and not lot.no_more_refunds_possible)
     auction.create_history(
         applies_to="LOTS",
         action=f"Removed/refunded lot {lot.lot_number_display} ({percent}%) {via(request)}",
         user=user,
     )
-    lot.refund(percent, user)
+    card_provider, card_error = lot.refund(percent, user)
     settled = []
     for invoice, role in ((lot.sellers_invoice, "seller"), (lot.winner_invoice, "buyer")):
         if invoice is None:
@@ -6535,8 +6533,10 @@ def refund_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     )
     if lot.donation:
         summary += " This is a donation, so the seller was never being paid for it — the whole refund is the club's."
-    if card_refund:
-        summary += " The card payment was refunded through Square automatically."
+    if card_provider and card_error:
+        summary += f" The {card_provider} refund didn't go through ({card_error}), so refund the buyer there by hand."
+    elif card_provider:
+        summary += f" The payment was refunded through {card_provider} automatically."
     if settled:
         summary += (
             f" {' and '.join(settled).capitalize()} — already settled, so nothing was recalculated "

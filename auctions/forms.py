@@ -1926,10 +1926,10 @@ class LotRefundForm(forms.ModelForm):
         else:
             self.fields["banned"].widget = HiddenInput()
 
-        # Add Square refund info message if applicable
         square_refund_msg = ""
-        if self.lot.square_refund_possible and not self.lot.no_more_refunds_possible:
-            square_refund_msg = '<div class="alert alert-info mt-3"><i class="bi bi-square"></i> <strong>Square refund will be automatically issued</strong> when you save this form.</div>'
+        provider = self.lot.card_refund_provider
+        if provider:
+            square_refund_msg = f'<div class="alert alert-info mt-3"><strong>{provider} refund will be automatically issued</strong> when you save this form.</div>'
 
         save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn btn-success text-dark ms-2">Save</button>'
         self.helper = FormHelper()
