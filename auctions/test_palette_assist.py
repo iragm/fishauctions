@@ -2942,6 +2942,19 @@ class JoinAuctionTests(RunActionTestCase):
         self.assertIsNotNone(tos)
         self.assertEqual(tos.pickup_location, location)
 
+    def test_a_recent_bounce_sends_them_to_verify_their_email_first(self):
+        self.userB.userdata.email_bounced_on = timezone.now()
+        self.userB.userdata.save()
+        location = self.in_person_auction.location_qs.first()
+        result = self._run(
+            "join_auction",
+            {"auction": self.in_person_auction.slug, "agree_to_rules": True, "pickup_location": location.name},
+            user=self.userB,
+            page={},
+        )
+        self.assertIn("/reverify_email/", result["error"])
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.in_person_auction, user=self.userB).exists())
+
     def test_it_says_when_a_pickup_location_has_to_be_chosen(self):
         from auctions.models import PickupLocation
 

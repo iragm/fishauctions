@@ -56,7 +56,7 @@ from auctions.models import (
     UserLabelPrefs,
 )
 from auctions.notifications import push_configured
-from auctions.services import CONTACT_GATE_NEEDS_PHONE
+from auctions.services import CONTACT_GATE_NEEDS_PHONE, needs_email_reverification
 
 from .base import safe_next_url
 
@@ -256,6 +256,37 @@ class AccountDeleteView(TemplateView):
         target = f"{reverse('account_deleted')}?emailed=1" if email else reverse("account_deleted")
         # End at /logout/ so the app does a native sign-out; it passes a signed-out visitor through.
         return redirect(f"{reverse('account_logout')}?next={quote(target)}")
+
+
+class ReverifyEmailView(LoginRequiredMixin, TemplateView):
+    """Where Join sends someone whose mail recently bounced (``services.join_blocked_by_bounce``).
+
+    The button marks their address unverified in allauth and sends allauth's own verification email:
+    that link only confirms an unverified address. Confirming lifts the gate
+    (``signals.clear_email_bounce_on_verify``). allauth's cooldown limits how often it sends.
+    """
+
+    template_name = "reverify_email.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not needs_email_reverification(request.user):
+            return redirect(safe_next_url(request, reverse("home")))
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        from allauth.account.internal.flows.email_verification import (
+            get_address_for_user,
+            send_verification_email_to_address,
+        )
+
+        address = get_address_for_user(request.user)
+        if address is not None:
+            if address.verified:
+                address.verified = False
+                address.save(update_fields=["verified"])
+            send_verification_email_to_address(request, address)
+        # Back here, where allauth's "Confirmation email sent" message shows; ?next= rides along.
+        return redirect(request.get_full_path())
 
 
 class AccountMergeView(TemplateView):

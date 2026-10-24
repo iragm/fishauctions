@@ -3,6 +3,7 @@
 import datetime
 import logging
 
+from allauth.account.models import EmailAddress
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
 from django.contrib.sites.models import Site
@@ -14,9 +15,11 @@ from django_ses.signals import bounce_received, complaint_received
 
 from .services import (
     SHARED_MEMBER_FIELDS,
+    bounce_means_reverify,
     clear_bidder_number_in,
     club_managed_auctions_for,
     club_managed_shadows_for,
+    record_email_bounce,
     set_member_bidder_number,
     shared_member_values,
     sync_member_to_shadows,
@@ -812,6 +815,36 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     AuctionTOS.objects.filter(email=email).update(email_address_status="BAD")
     # No ClubHistory: the actor is the email provider.
     ClubMember.objects.filter(email=email, is_deleted=False).update(email_address_status="BAD")
+    if bounce_means_reverify(bounce_obj):
+        bounced = [row.get("emailAddress") for row in (bounce_obj or {}).get("bouncedRecipients") or []]
+        record_email_bounce(bounced or [email])
+
+
+@receiver(pre_save, sender=EmailAddress)
+def note_email_address_verifying(sender, instance, **kwargs):
+    """Mark an address going from unverified to verified, for ``clear_email_bounce_on_verify``."""
+    instance._becoming_verified = bool(
+        instance.verified and (not instance.pk or not sender.objects.filter(pk=instance.pk, verified=True).exists())
+    )
+
+
+@receiver(post_save, sender=EmailAddress)
+def clear_email_bounce_on_verify(sender, instance, **kwargs):
+    """A freshly verified address lifts the join gate and the red envelopes on it.
+
+    Any route to verified counts: the emailed link, or a social sign-in that vouches for the address.
+    """
+    if not getattr(instance, "_becoming_verified", False) or not instance.user_id:
+        return
+    from auctions.models import AuctionTOS, ClubMember, UserData
+
+    UserData.objects.filter(user_id=instance.user_id).exclude(email_bounced_on=None).update(email_bounced_on=None)
+    AuctionTOS.objects.filter(email__iexact=instance.email, email_address_status="BAD").update(
+        email_address_status="VALID"
+    )
+    ClubMember.objects.filter(email__iexact=instance.email, is_deleted=False, email_address_status="BAD").update(
+        email_address_status="VALID"
+    )
 
 
 @receiver(complaint_received)

@@ -656,6 +656,7 @@ urlpatterns = [
         login_required(views.IgnoreCategoriesView.as_view()),
         name="ignore_categories",
     ),
+    path("reverify_email/", views.ReverifyEmailView.as_view(), name="reverify_email"),
     path(
         "contact_info/",
         login_required(views.UserLocationUpdate.as_view()),

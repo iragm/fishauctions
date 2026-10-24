@@ -3075,6 +3075,12 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         )
 
     joined, _created, problem = join_auction_service(user, auction, location)
+    if problem == "email":
+        return _error(
+            "Recent emails we've sent to you have not gone through. Before you can join another auction, "
+            f"you need to validate your email address again at {request.build_absolute_uri(reverse('reverify_email'))}, "
+            "then ask me again."
+        )
     if problem == "phone_number":
         return _error(
             f"{auction.title} needs a phone number on your account before you can join. "
@@ -16215,6 +16221,10 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
     "BlogPostView": _REDIRECT,
+    "ReverifyEmailView": (
+        "Sends a verification link to the person's own inbox, and clicking that link is the whole point, "
+        "which an assistant can't do for them; join_auction's error links the page."
+    ),
     "OfflineSyncView": (
         "Hands the server entries the emergency page saved in the browser while the site was down. "
         "They are the same sales, people and lots set_lot_winner, add_person and add_lot record, so an "
