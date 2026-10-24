@@ -931,7 +931,8 @@ class PayPalCSVExportTests(StandardTestCase):
     PAYPAL_BN_CODE="",
 )
 class PayPalLotRefundTests(StandardTestCase):
-    """A lot refund goes back to the buyer's PayPal once, for no more than the lot and the capture."""
+    """A lot refund goes back to the buyer's PayPal once, for no more than the lot and the capture.
+    The fixture auction charges 25% tax, so a $10 lot cost the buyer $12.50."""
 
     def setUp(self):
         super().setUp()
@@ -944,7 +945,7 @@ class PayPalLotRefundTests(StandardTestCase):
             payment_method="PayPal",
         )
 
-    def _refund_response(self, refund_id="REFUND-1", value="10.00", status="COMPLETED"):
+    def _refund_response(self, refund_id="REFUND-1", value="12.50", status="COMPLETED"):
         response = MagicMock()
         response.raise_for_status.return_value = None
         response.headers = {"Paypal-Debug-Id": "debug"}
@@ -979,39 +980,46 @@ class PayPalLotRefundTests(StandardTestCase):
         method, url = api.call_args.args
         self.assertEqual(method, "POST")
         self.assertTrue(url.endswith("v2/payments/captures/CAPTURE-1/refund"))
-        self.assertEqual(api.call_args.kwargs["json"]["amount"], {"value": "10.00", "currency_code": "USD"})
+        self.assertEqual(api.call_args.kwargs["json"]["amount"], {"value": "12.50", "currency_code": "USD"})
         headers = api.call_args.kwargs["headers"]
         self.assertEqual(headers["PayPal-Request-Id"], f"auction-fish-lot-{self.lot.pk}-refund")
         # The site account took the payment, so it refunds as itself.
         self.assertNotIn("PayPal-Auth-Assertion", headers)
         refund = InvoicePayment.objects.get(external_id="REFUND-1")
-        self.assertEqual(refund.amount, Decimal("-10.00"))
+        self.assertEqual(refund.amount, Decimal("-12.50"))
         self.assertEqual(refund.invoice, self.invoiceB)
         self.capture.refresh_from_db()
-        self.assertEqual(self.capture.amount_available_to_refund, Decimal("20.00"))
+        self.assertEqual(self.capture.amount_available_to_refund, Decimal("17.50"))
         self.lot.refresh_from_db()
         self.assertTrue(self.lot.no_more_refunds_possible)
         self.assertEqual(self.lot.partial_refund_percent, 100)
         self.assertIn("PayPal refund processed", self.lot.lothistory_set.latest("pk").message)
 
     def test_a_second_refund_on_the_lot_never_reaches_paypal(self):
-        self._refund(self.lot, 50, response=self._refund_response(value="5.00"))
+        self._refund(self.lot, 50, response=self._refund_response(value="6.25"))
         lot = Lot.objects.get(pk=self.lot.pk)
         result, api, _ = self._refund(lot, 100)
         self.assertEqual(result, (None, None))
         api.assert_not_called()
         self.assertEqual(InvoicePayment.objects.filter(payment_method="PayPal Refund").count(), 1)
 
-    def test_a_stale_copy_of_the_lot_cannot_refund_twice(self):
+    def test_a_double_submit_refunds_once_and_reports_no_failure(self):
         stale = Lot.objects.get(pk=self.lot.pk)
         self._refund(self.lot, 100)
-        self.assertEqual(stale.paypal_refund(100), "This lot has already been refunded through PayPal")
+        result, api, _ = self._refund(stale, 100)
+        self.assertEqual(result, (None, None))
+        api.assert_not_called()
+        stale.refresh_from_db()
+        # The stale copy's save doesn't clear the mark the first refund left.
+        self.assertTrue(stale.no_more_refunds_possible)
+        self.assertEqual(stale.lothistory_set.count(), 1)
+        self.assertEqual(self.lot.paypal_refund(100), "This lot has already been refunded through PayPal")
 
     def test_only_the_part_above_an_earlier_refund_goes_back(self):
         Lot.objects.filter(pk=self.lot.pk).update(partial_refund_percent=50)
         lot = Lot.objects.get(pk=self.lot.pk)
-        _, api, _ = self._refund(lot, 100, response=self._refund_response(value="5.00"))
-        self.assertEqual(api.call_args.kwargs["json"]["amount"]["value"], "5.00")
+        _, api, _ = self._refund(lot, 100, response=self._refund_response(value="6.25"))
+        self.assertEqual(api.call_args.kwargs["json"]["amount"]["value"], "6.25")
 
     def test_lowering_a_refund_sends_nothing(self):
         Lot.objects.filter(pk=self.lot.pk).update(partial_refund_percent=100)
@@ -1021,7 +1029,7 @@ class PayPalLotRefundTests(StandardTestCase):
         api.assert_not_called()
 
     def test_a_capture_smaller_than_the_lot_is_left_alone(self):
-        InvoicePayment.objects.filter(pk=self.capture.pk).update(amount_available_to_refund=Decimal("9.99"))
+        InvoicePayment.objects.filter(pk=self.capture.pk).update(amount_available_to_refund=Decimal("12.49"))
         lot = Lot.objects.get(pk=self.lot.pk)
         self.assertFalse(lot.paypal_refund_possible)
         result, api, _ = self._refund(lot, 100)
@@ -1041,14 +1049,7 @@ class PayPalLotRefundTests(StandardTestCase):
             self.assertFalse(Lot.objects.get(pk=self.lot.pk).paypal_refund_possible)
 
     def test_a_refused_refund_records_nothing_and_says_so(self):
-        import requests
-
-        failed = MagicMock()
-        failed.status_code = 422
-        failed.text = "{}"
-        failed.headers = {"Paypal-Debug-Id": "debug"}
-        failed.raise_for_status.side_effect = requests.HTTPError("422")
-        provider, error = self._refund(self.lot, 100, response=failed)[0]
+        provider, error = self._refund(self.lot, 100, response=self._failed(422))[0]
         self.assertEqual(provider, "PayPal")
         self.assertIn("PayPal", error)
         self.assertFalse(InvoicePayment.objects.filter(payment_method="PayPal Refund").exists())
@@ -1060,6 +1061,53 @@ class PayPalLotRefundTests(StandardTestCase):
         self.assertEqual(self.lot.partial_refund_percent, 100)
         self.assertIn("PayPal refund failed", self.lot.lothistory_set.latest("pk").message)
 
+    def _failed(self, status_code):
+        import requests
+
+        failed = MagicMock()
+        failed.status_code = status_code
+        failed.text = "{}"
+        failed.headers = {"Paypal-Debug-Id": "debug"}
+        failed.raise_for_status.side_effect = requests.HTTPError(str(status_code))
+        return failed
+
+    def test_a_lost_answer_is_asked_again_under_the_same_request_id(self):
+        _, api, _ = self._refund(self.lot, 100, side_effect=[self._failed(503), self._refund_response()])
+        self.assertEqual(api.call_count, 2)
+        ids = {call.kwargs["headers"]["PayPal-Request-Id"] for call in api.call_args_list}
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(InvoicePayment.objects.filter(payment_method="PayPal Refund").count(), 1)
+
+    def test_no_answer_marks_the_lot_and_says_to_check_paypal(self):
+        import requests
+
+        result, _, _ = self._refund(self.lot, 100, side_effect=requests.ConnectionError("timeout"))
+        self.assertIn("Check PayPal", result[1])
+        self.lot.refresh_from_db()
+        # It may have gone through, so it's never sent again.
+        self.assertTrue(self.lot.no_more_refunds_possible)
+        self.assertFalse(InvoicePayment.objects.filter(payment_method="PayPal Refund").exists())
+
+    def test_a_pending_refund_marks_the_lot_and_waits_for_the_webhook(self):
+        result, _, _ = self._refund(self.lot, 100, response=self._refund_response(status="PENDING"))
+        self.assertIn("still processing", result[1])
+        self.lot.refresh_from_db()
+        self.assertTrue(self.lot.no_more_refunds_possible)
+        self.assertFalse(InvoicePayment.objects.filter(payment_method="PayPal Refund").exists())
+
+    def test_failing_to_sign_in_sends_nothing(self):
+        import requests
+
+        with (
+            patch("auctions.views.payments.requests.post", side_effect=requests.ConnectionError("down")),
+            patch("auctions.views.payments.requests.request") as api,
+        ):
+            provider, error = self.lot.refund(100, self.admin_user)
+        api.assert_not_called()
+        self.assertIn("nothing was refunded", error)
+        self.lot.refresh_from_db()
+        self.assertFalse(self.lot.no_more_refunds_possible)
+
     def test_the_webhook_that_follows_adds_nothing(self):
         from auctions.views import PayPalAPIMixin
 
@@ -1067,13 +1115,13 @@ class PayPalLotRefundTests(StandardTestCase):
         PayPalAPIMixin().handle_refund(
             {
                 "id": "REFUND-1",
-                "amount": {"value": "10.00", "currency_code": "USD"},
+                "amount": {"value": "12.50", "currency_code": "USD"},
                 "links": [{"rel": "up", "href": "https://api.paypal.com/v2/payments/captures/CAPTURE-1"}],
             }
         )
         self.assertEqual(InvoicePayment.objects.filter(external_id="REFUND-1").count(), 1)
         self.capture.refresh_from_db()
-        self.assertEqual(self.capture.amount_available_to_refund, Decimal("20.00"))
+        self.assertEqual(self.capture.amount_available_to_refund, Decimal("17.50"))
 
     def test_a_connected_seller_is_refunded_on_its_own_account(self):
         PayPalSeller.objects.create(user=self.online_auction.created_by, paypal_merchant_id="SELLER-MERCHANT")
@@ -1113,3 +1161,20 @@ class PayPalLotRefundTests(StandardTestCase):
             )
         self.assertIn(response.status_code, (302, 403))
         api.assert_not_called()
+
+    def test_the_palette_offers_no_undo_once_the_card_was_refunded(self):
+        from django.test import RequestFactory
+
+        from auctions.palette_actions import refund_lot
+
+        request = RequestFactory().post("/")
+        request.user = self.user
+        with (
+            patch("auctions.views.payments.requests.post", return_value=self._token()),
+            patch("auctions.views.payments.requests.request", return_value=self._refund_response()),
+        ):
+            result = refund_lot(request, {"lot_id": self.lot.pk, "percent": 100})
+        self.assertTrue(result["ok"], result)
+        self.assertIn("refunded through PayPal", result["summary"])
+        self.assertNotIn("undo", result)
+        self.assertNotIn("buyer's invoice is", result["summary"])

@@ -8736,26 +8736,38 @@ class Lot(CachedPropertiesMixin, models.Model):
         """Set the refund percent and note it on the lot. The first refund on a lot paid by card goes
         back through Square or PayPal, for the part above any refund already on it. Returns
         ``(provider, error)``: the provider asked to refund, or ``None``, and its error, or ``None``.
+
+        The lot's row is locked and its refund fields re-read first, so a double submit sees the
+        first one's refund and does nothing, rather than refunding or failing a second time.
         """
         provider, error = None, None
-        if amount and amount != self.partial_refund_percent:
-            previous = self.partial_refund_percent or 0
-            if amount > previous and not self.no_more_refunds_possible:
-                if self.square_refund_possible:
-                    provider, error = "Square", self.square_refund(amount, previous)
-                elif self.paypal_refund_possible:
-                    provider, error = "PayPal", self.paypal_refund(amount, previous)
-            if error:
-                logger.error("%s refund failed for lot %s: %s", provider, self.pk, error)
-            if not message:
-                message = f"{user} has issued a {amount}% refund on this lot."
+        with transaction.atomic():
+            fresh = (
+                Lot._base_manager.select_for_update()
+                .values("partial_refund_percent", "no_more_refunds_possible")
+                .get(pk=self.pk)
+            )
+            self.partial_refund_percent = fresh["partial_refund_percent"]
+            self.no_more_refunds_possible = fresh["no_more_refunds_possible"]
+            self.invalidate_cached_properties("square_refund_possible", "paypal_refund_possible")
+            if amount and amount != self.partial_refund_percent:
+                previous = self.partial_refund_percent or 0
+                if amount > previous and not self.no_more_refunds_possible:
+                    if self.square_refund_possible:
+                        provider, error = "Square", self.square_refund(amount, previous)
+                    elif self.paypal_refund_possible:
+                        provider, error = "PayPal", self.paypal_refund(amount, previous)
                 if error:
-                    message += f" {provider} refund failed: {error}"
-                elif provider:
-                    message += f" {provider} refund processed automatically."
-            LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
-        self.partial_refund_percent = amount
-        self.save()
+                    logger.error("%s refund failed for lot %s: %s", provider, self.pk, error)
+                if not message:
+                    message = f"{user} has issued a {amount}% refund on this lot."
+                    if error:
+                        message += f" {provider} refund failed: {error}"
+                    elif provider:
+                        message += f" {provider} refund processed automatically."
+                LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
+            self.partial_refund_percent = amount
+            self.save()
         return provider, error
 
     @property
@@ -8884,6 +8896,13 @@ class Lot(CachedPropertiesMixin, models.Model):
         # Webhook will create the negative InvoicePayment record
         return None
 
+    def paypal_refund_amount(self, percent, previous_percent=0):
+        """What goes back to the buyer for ``percent`` of this lot, less ``previous_percent`` already
+        refunded some other way: that share of the winning price plus the tax charged on it."""
+        rate = Decimal(self.auction.tax or 0) / Decimal(100) if self.auction else Decimal(0)
+        share = Decimal(str(self.winning_price or 0)) * Decimal(percent - previous_percent) / Decimal(100)
+        return (share * (1 + rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
     @cached_property
     def paypal_refund_possible(self):
         """True with a PayPal capture on the winner's invoice that covers the lot and no refund yet."""
@@ -8896,17 +8915,14 @@ class Lot(CachedPropertiesMixin, models.Model):
             return False
         from auctions.views.payments import PayPalAPIMixin
 
-        payment = PayPalAPIMixin.refundable_paypal_payment(invoice)
-        return bool(
-            payment and payment.external_id and payment.amount_available_to_refund >= Decimal(str(self.winning_price))
-        )
+        return PayPalAPIMixin().can_refund_invoice(invoice, self.paypal_refund_amount(100))
 
     def paypal_refund(self, percent, previous_percent=0):
-        """Refund ``percent`` of the winning price, less ``previous_percent`` already refunded some
-        other way, to the buyer's PayPal. Error string or None.
+        """Refund ``percent`` of the lot, less ``previous_percent`` already refunded some other way,
+        to the buyer's PayPal. Error string or None.
 
-        One card refund per lot: the lot's row is locked while it is checked and marked, and the
-        PayPal-Request-Id is the lot's, so even a retry after a lost response can't refund twice.
+        One card refund per lot. The lot is marked whenever the request may have reached PayPal, even
+        if the answer was lost, and the PayPal-Request-Id is the lot's, so nothing can refund it twice.
         """
         from auctions.views.payments import PayPalAPIMixin
 
@@ -8914,29 +8930,27 @@ class Lot(CachedPropertiesMixin, models.Model):
             return "No valid winning price for this lot"
         if not 0 <= previous_percent < percent <= 100:
             return "Refund percent must be between 0 and 100"
-        refund_amount = (
-            Decimal(str(self.winning_price)) * Decimal(percent - previous_percent) / Decimal(100)
-        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        refund_amount = self.paypal_refund_amount(percent, previous_percent)
         if refund_amount <= 0:
             return "Refund amount must be positive"
         invoice = self.winner_invoice
         if not invoice:
             return "No invoice found for winner"
+        client = PayPalAPIMixin()
         with transaction.atomic():
             already = Lot._base_manager.select_for_update().values_list("no_more_refunds_possible", flat=True)
             if already.get(pk=self.pk):
                 return "This lot has already been refunded through PayPal"
-            error = PayPalAPIMixin().refund_invoice(
+            error = client.refund_invoice(
                 invoice,
                 refund_amount,
                 request_id=f"auction-fish-lot-{self.pk}-refund",
                 note=f"Refund for lot {self.lot_number_display}",
             )
-            if error:
-                return error
-            Lot._base_manager.filter(pk=self.pk).update(no_more_refunds_possible=True)
-        self.no_more_refunds_possible = True
-        return None
+            if client.refund_reached_paypal:
+                Lot._base_manager.filter(pk=self.pk).update(no_more_refunds_possible=True)
+                self.no_more_refunds_possible = True
+        return error
 
     def remove(self, banned, user, message=None):
         """Call this to add a message when banning (removing) a lot"""

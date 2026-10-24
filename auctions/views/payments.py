@@ -55,7 +55,14 @@ SQUARE_OAUTH_STATE_SESSION_KEY = "square_oauth_state"
 
 
 class PayPalRequestError(Exception):
-    """Raised when a PayPal API request fails in a recoverable way for the caller."""
+    """Raised when a PayPal API request fails in a recoverable way for the caller. ``status_code`` is
+    PayPal's HTTP status, or ``None`` when no answer came back."""
+
+    def __init__(self, msg, status_code=None, sent=True):
+        super().__init__(msg)
+        self.status_code = status_code
+        #: False when it failed before the request went out (signing in), so PayPal never saw it.
+        self.sent = sent
 
 
 class PayPalAPIMixin:
@@ -92,7 +99,7 @@ class PayPalAPIMixin:
                 resp.text[:500] if resp is not None else "",
             )
             msg = f"PayPal auth token request failed: {exc}"
-            raise PayPalRequestError(msg) from exc
+            raise PayPalRequestError(msg, sent=False) from exc
         return token_resp.json()["access_token"]
 
     def _build_paypal_headers(self, merchant_id="", include_bn_code=True, token=None):
@@ -154,7 +161,7 @@ class PayPalAPIMixin:
                 resp.text[:1000],
             )
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
-            raise PayPalRequestError(msg)
+            raise PayPalRequestError(msg, status_code=resp.status_code)
         except requests.RequestException as exc:
             # No response at all; log it, since callers show a generic message.
             logger.error(
@@ -531,13 +538,19 @@ class PayPalAPIMixin:
         payment = self.refundable_paypal_payment(invoice)
         return bool(payment and payment.external_id and payment.amount_available_to_refund >= amount)
 
+    #: Set by refund_invoice: True when the refund may have reached PayPal, so it must not be retried.
+    refund_reached_paypal = False
+
     def refund_invoice(self, invoice, amount, request_id, note=""):
         """Refund ``amount`` of this invoice's PayPal capture and record it. Error string or None.
 
         ``request_id`` is sent as PayPal-Request-Id, so a repeat of the same refund is the same refund
         at PayPal. The capture's row stays locked from the balance check until the refund is recorded,
         so two refunds at once can't both pass the check, and the webhook that follows adds nothing.
+        Sets :attr:`refund_reached_paypal`; an error with it True means check PayPal before refunding
+        by hand.
         """
+        self.refund_reached_paypal = False
         amount = Decimal(str(amount)).quantize(Decimal("0.01"))
         if amount <= 0:
             return "Refund amount must be positive"
@@ -558,27 +571,45 @@ class PayPalAPIMixin:
             payload = {"amount": {"value": f"{amount:.2f}", "currency_code": str(payment.currency)}}
             if note:
                 payload["note_to_payer"] = note[:255]
-            try:
-                result = self.post_to_paypal(
-                    f"v2/payments/captures/{payment.external_id}/refund",
-                    payload,
-                    merchant_id=merchant_id if merchant_id and merchant_id != "admin" else "",
-                    extra_headers={"PayPal-Request-Id": request_id[:108], "Prefer": "return=representation"},
-                )
-            except PayPalRequestError:
-                return "PayPal refused the refund. Please issue it in PayPal."
-            if result.get("status") not in ("COMPLETED", "PENDING"):
+            endpoint = f"v2/payments/captures/{payment.external_id}/refund"
+            headers = {"PayPal-Request-Id": request_id[:108], "Prefer": "return=representation"}
+            merchant = merchant_id if merchant_id and merchant_id != "admin" else ""
+            result = None
+            # Sent at most twice under the same PayPal-Request-Id: a lost answer is asked for again,
+            # and PayPal answers with the first refund rather than making a second one.
+            for _attempt in range(2):
+                try:
+                    result = self.post_to_paypal(endpoint, payload, merchant_id=merchant, extra_headers=headers)
+                    break
+                except PayPalRequestError as exc:
+                    if not exc.sent and not self.refund_reached_paypal:
+                        return "Couldn't sign in to PayPal, so nothing was refunded. Please issue it in PayPal."
+                    if exc.status_code and exc.status_code < 500:
+                        # PayPal answered no; nothing was refunded.
+                        return "PayPal refused the refund. Please issue it in PayPal."
+                    self.refund_reached_paypal = True
+            if result is None:
+                return "PayPal didn't answer. Check PayPal before refunding by hand: it may have gone through."
+            self.refund_reached_paypal = True
+            status = result.get("status")
+            if status == "PENDING":
+                # Recorded by the webhook once PayPal finishes; a club's own app sends none.
+                return "PayPal is still processing this refund. Check PayPal for whether it completed."
+            if status != "COMPLETED":
                 logger.error("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
+                self.refund_reached_paypal = status not in ("CANCELLED", "FAILED")
                 return "PayPal refund failed. Please issue it in PayPal."
             # Recorded now: a club's own app sends no webhook, and the site's webhook may be late.
             resource = dict(result)
             resource.setdefault("amount", payload["amount"])
             resource["links"] = [{"rel": "up", "href": f"/v2/payments/captures/{payment.external_id}"}]
             try:
-                self.handle_refund(resource)
+                _invoice, recorded = self.handle_refund(resource)
             except Exception:
-                # The money has gone back; the webhook can still record it.
                 logger.exception("Recording PayPal refund %s on invoice %s failed", result.get("id"), invoice.pk)
+                recorded = None
+            if recorded is None:
+                return "PayPal refunded it, but it isn't on the invoice yet. Add it there if it doesn't appear."
         return None
 
     def handle_refund(self, refund_resource):
