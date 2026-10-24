@@ -851,6 +851,8 @@ class NoLotAuctions(APIView):
                 if tos:
                     if not tos.selling_allowed:
                         result = f"You don't have permission to add lots to {auction}"
+                    elif not tos.can_sell:
+                        result = f"You're holding your lots for the second pickup, so you can't sell in {auction}"
             if not result:
                 if auction.max_lots_per_user:
                     lot_list = Lot.objects.filter(

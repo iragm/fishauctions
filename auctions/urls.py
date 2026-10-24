@@ -444,6 +444,21 @@ urlpatterns = [
         name="auction_tos_list",
     ),
     path(
+        "auctions/<slug:slug>/logistics/",
+        login_required(views.AuctionLogistics.as_view()),
+        name="auction_logistics",
+    ),
+    path(
+        "auctions/<slug:slug>/logistics/<int:pk>/<int:which>/",
+        login_required(views.AuctionLogisticsMark.as_view()),
+        name="auction_logistics_mark",
+    ),
+    path(
+        "auctions/<slug:slug>/post-end-banner/",
+        login_required(views.AuctionPostEndBanner.as_view()),
+        name="auction_post_end_banner",
+    ),
+    path(
         "auctions/<slug:slug>/users/disable-bidding/",
         login_required(views.AuctionDisableBidding.as_view()),
         name="auction_disable_bidding",

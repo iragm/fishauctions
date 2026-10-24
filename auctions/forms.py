@@ -1975,6 +1975,9 @@ class LotRefundForm(forms.ModelForm):
 
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required=True)
+    hold_for_second_pickup = forms.BooleanField(
+        required=False, label="Hold lots purchased at my location for the second pickup time"
+    )
 
     def __init__(self, user, auction, next_url=None, *args, joined=False, **kwargs):
         self.user = user
@@ -2008,6 +2011,51 @@ class AuctionJoin(forms.ModelForm):
             )
         self.fields["pickup_location"].queryset = auction.location_qs
         self.fields["time_spent_reading_rules"].widget = HiddenInput()
+        # Offered for the locations with a second pickup time; the script shows it when one is picked.
+        hold_locations = []
+        if auction.is_online and auction.multi_location:
+            hold_locations = [
+                pk
+                for pk, second, by_mail in auction.location_qs.values_list("pk", "second_pickup_time", "pickup_by_mail")
+                if second and not by_mail
+            ]
+        if hold_locations:
+            tos = (
+                AuctionTOS.objects.filter(user=user, auction=auction).first()
+                if user and user.is_authenticated
+                else None
+            )
+            if tos:
+                self.fields["hold_for_second_pickup"].initial = tos.hold_for_second_pickup
+                # A seller has to be there at the first pickup: once they have lots it can only be unchecked.
+                if not tos.hold_for_second_pickup and tos.lots_qs.exists():
+                    self.fields["hold_for_second_pickup"].disabled = True
+            self.helper.layout.insert(
+                3,
+                Div(
+                    "hold_for_second_pickup",
+                    HTML(
+                        '<div class="form-text">I accept the risks of longer transport times for my lots</div>'
+                        '<div class="form-text mb-2">Checking this will prevent you from selling in this auction</div>'
+                    ),
+                    css_id="hold-for-second-pickup",
+                    data_locations=json.dumps(hold_locations),
+                ),
+            )
+            self.helper.layout.append(
+                HTML(
+                    "<script>(function () {"
+                    "var box = document.getElementById('hold-for-second-pickup');"
+                    "var select = document.getElementById('id_pickup_location');"
+                    "if (!box || !select) { return; }"
+                    "var locations = JSON.parse(box.dataset.locations);"
+                    "function show() { box.hidden = locations.indexOf(parseInt(select.value, 10)) === -1; }"
+                    "select.addEventListener('change', show); show();"
+                    "})();</script>"
+                )
+            )
+        else:
+            del self.fields["hold_for_second_pickup"]
         if self.auction.multi_location:
             self.fields["i_agree"].initial = True
             self.fields["i_agree"].widget = HiddenInput()

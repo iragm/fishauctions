@@ -48,6 +48,10 @@ def _in_person(auction):
     return not auction.is_online
 
 
+def _online(auction):
+    return auction.is_online
+
+
 def _check_in(auction):
     return auction.use_check_in_mode
 
@@ -157,6 +161,13 @@ GROUPS = (
                 _named("auction_door_prizes"),
                 gate=_check_in,
                 people=True,
+            ),
+            Row(
+                "Logistics",
+                "bi-truck",
+                "Who comes to each pickup, and crossing them off",
+                _named("auction_logistics"),
+                gate=_online,
             ),
             Row(
                 "Checkout",

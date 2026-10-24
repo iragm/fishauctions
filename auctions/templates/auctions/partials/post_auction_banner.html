@@ -1,0 +1,31 @@
+{% comment %}The admin's banner on an ended online auction (logistics.progress), drawn by auction_ribbon.html and redrawn by itself: every 30 seconds while lots are in overtime, then every few minutes until every step is done, when it renders nothing and stops.{% endcomment %}
+{% if post_end %}
+<div id="post-auction-banner" class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'
+     hx-get="{% url 'auction_post_end_banner' slug=auction.slug %}" hx-trigger="every {% if post_end.lots %}30s{% else %}180s{% endif %}" hx-swap="outerHTML" hx-target="this">
+  {% if post_end.lots %}
+  <div>{{ post_end.lots.done }} of {{ post_end.lots.total }} lots have ended.  {{ post_end.running }} lot{{ post_end.running|pluralize }} {{ post_end.running|pluralize:"is,are" }} in overtime and will end by {{ post_end.ends_by|time:"g:i A" }} at the latest.</div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.lots %}
+  {% else %}
+  {% if post_end.notified %}
+  <div>{{ post_end.notified.done }} of {{ post_end.notified.total }} invoice notifications have been sent.{% if post_end.notified.open_exist %} <a href="{% url 'auction_invoices_ready' auction.slug %}" hx-get="{% url 'auction_invoices_ready' auction.slug %}" hx-target="#modals-here" hx-swap="innerHTML" class="text-white">Set open invoices to ready</a> to send them.{% endif %}</div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.notified %}
+  {% endif %}
+  {% if post_end.opened %}
+  <div>{{ post_end.opened.done }} of {{ post_end.opened.total }} invoices have been opened by their users. <a href="{% url 'auction_tos_list' slug=auction.slug %}?query=unseen" class="text-white">Who hasn't seen their invoice yet</a></div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.opened %}
+  {% endif %}
+  {% if post_end.buyers_paid %}
+  <div>{{ post_end.buyers_paid.done }} of {{ post_end.buyers_paid.total }} buyer's invoices have been paid. <a href="{% url 'auction_tos_list' slug=auction.slug %}?query=owes+club+outstanding" class="text-white">See who owes the club and hasn't paid</a></div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.buyers_paid %}
+  {% endif %}
+  {% if post_end.labels %}
+  <div>{{ post_end.labels.done }} of {{ post_end.labels.total }} sellers have printed their labels. <a href="{% url 'auction_tos_list' slug=auction.slug %}?query=unprinted" class="text-white">See who hasn't printed yet</a></div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.labels %}
+  {% endif %}
+  {% if post_end.sellers_paid %}
+  <div>{{ post_end.sellers_paid.done }} of {{ post_end.sellers_paid.total }} seller's invoices have been paid. <a href="{% url 'auction_tos_list' slug=auction.slug %}?query=club+owes+outstanding" class="text-white">See who the club owes and hasn't paid</a></div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.sellers_paid %}
+  {% endif %}
+  {% endif %}
+</div>
+{% endif %}

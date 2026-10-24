@@ -3,8 +3,8 @@
 ``site_stats`` is a dict of one-line facts counted once a day from real sales, so "a lot with a photo sells
 more often" comes with this site's own percentage. The rest are the tables and charts some guides draw:
 ``in_person_photos``, ``rules_chart`` (rules length against ``AuctionTOS.time_spent_reading_rules``),
-``online_timing``, ``seller_rank``, ``bid_amounts``, ``bred_species``, ``lot_timing`` and ``categories``, plus
-the promo page's
+``online_timing``, ``seller_rank``, ``bid_amounts``, ``bred_species``, ``lot_timing``, ``categories`` and
+``created_ahead`` (club profit against how far ahead an auction was created), plus the promo page's
 ``promo_photos``. All are counted by the
 ``refresh_help_stats`` task (:func:`refresh`), never by a page: the guides are public and crawled, and these
 are scans of the lots table. A page that finds nothing counted asks for a count and reads the words
@@ -142,6 +142,7 @@ def refresh(run=_run):
             ("lot timing", LOT_TIMING_CACHE_KEY, "_lot_timing"),
             ("categories", CATEGORIES_CACHE_KEY, "_categories"),
             ("promo photos", PROMO_PHOTOS_CACHE_KEY, "_promo_photos"),
+            ("created ahead", CREATED_AHEAD_CACHE_KEY, "_created_ahead"),
         ):
             # Looked up when run, so a test can patch the count.
             run_one(label, lambda key=key, name=name: cache.set(key, globals()[name](), SITE_CACHE_SECONDS))
@@ -497,6 +498,7 @@ BRED_CACHE_KEY = "help_bred_species_v1"
 LOT_TIMING_CACHE_KEY = "help_lot_timing_v1"
 CATEGORIES_CACHE_KEY = "help_categories_v1"
 PROMO_PHOTOS_CACHE_KEY = "promo_lot_photos_v1"
+CREATED_AHEAD_CACHE_KEY = "help_created_ahead_v1"
 #: Fewer than this and the promo page leaves its photo strip off: a short strip looks like an empty site.
 PROMO_MIN_PHOTOS = 8
 PROMO_MAX_PHOTOS = 16
@@ -559,6 +561,52 @@ def categories() -> dict:
 def promo_photos() -> dict:
     """``{"photos": [{"image", "url", "name"}]}``, as last counted."""
     return _counted(PROMO_PHOTOS_CACHE_KEY)
+
+
+def created_ahead() -> dict:
+    """``{"online": chart, "in_person": chart}``, chart ``{"points": [[days, profit], ...], "auctions"}``, as last
+    counted. A kind is left out when there aren't enough auctions of it.
+    """
+    return _counted(CREATED_AHEAD_CACHE_KEY)
+
+
+def _created_ahead(min_lots: int = MIN_AUCTION_LOTS, min_auctions: int = MIN_RULES_AUCTIONS) -> dict:
+    """One point per dollar-priced auction with ``min_lots`` sold lots: the days between creating it and its start
+    against what the club made (``Auction.club_profit``). Outliers on either axis are dropped.
+    """
+    from auctions.models import Lot
+
+    auctions = _recent_auctions().filter(date_posted__isnull=False)
+    sold = {
+        row["auction"]
+        for row in Lot.objects.filter(auction__in=auctions, is_deleted=False, banned=False, winning_price__isnull=False)
+        .values("auction")
+        .annotate(n=Count("pk"))
+        .filter(n__gte=min_lots)
+        .order_by()
+    }
+    dollars = _dollar_auctions(auctions.filter(pk__in=sold))
+    points: dict = {"online": [], "in_person": []}
+    for auction in auctions.filter(pk__in=dollars):
+        days = (auction.date_start - auction.date_posted).days
+        if days < 0:
+            continue
+        points["online" if auction.is_online else "in_person"].append((days, float(auction.club_profit)))
+    facts = {}
+    for kind, found in points.items():
+        if len(found) < max(min_auctions, 4):
+            continue
+        days_low, days_high = _inside_fences([days for days, _ in found])
+        profit_low, profit_high = _inside_fences([profit for _, profit in found])
+        # Days to the nearest 5 and profit to the nearest 50, so no point names an auction.
+        kept = sorted(
+            (5 * round(days / 5), 50 * round(profit / 50))
+            for days, profit in found
+            if days_low <= days <= days_high and profit_low <= profit <= profit_high
+        )
+        if len(kept) >= min_auctions:
+            facts[kind] = {"points": [[days, int(profit)] for days, profit in kept], "auctions": len(kept)}
+    return facts
 
 
 def _dollar_auctions(auctions) -> set[int]:

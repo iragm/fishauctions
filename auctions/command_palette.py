@@ -1012,7 +1012,7 @@ def _member_can_add_lots(auction, tos):
     """A non-admin may add lots when joined, allowed to sell, and submission is open (``can_submit_lots``
     can raise without a start date).
     """
-    if not tos or not tos.selling_allowed:
+    if not tos or not tos.can_sell:
         return False
     try:
         return bool(auction.can_submit_lots)

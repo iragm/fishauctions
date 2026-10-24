@@ -15,6 +15,7 @@ IN_PERSON_ONLY = {
     "Checkout",
     "Lot map",
 }
+ONLINE_ONLY = {"Logistics"}
 EVERYWHERE = {
     "Main",
     "Users",
@@ -39,7 +40,7 @@ def _labels(auction):
 
 class AuctionNavTests(StandardTestCase):
     def test_online_auction_has_no_in_person_pages(self):
-        self.assertEqual(_labels(self.online_auction), EVERYWHERE)
+        self.assertEqual(_labels(self.online_auction), EVERYWHERE | ONLINE_ONLY)
 
     def test_in_person_auction_has_everything_but_club_pages(self):
         self.assertEqual(_labels(self.in_person_auction), EVERYWHERE | IN_PERSON_ONLY)

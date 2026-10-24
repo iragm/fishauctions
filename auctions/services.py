@@ -292,12 +292,14 @@ def join_blocked_by_bounce(user, auction):
     return not AuctionTOS.objects.filter(already_in, auction=auction).exists()
 
 
-def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
+def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, hold_for_second_pickup=None):
     """Sign ``user`` up for ``auction``, or update their existing record.
 
     Shared by the Join button and the assistant. Returns ``(tos, created, problem)``; ``problem`` is
     ``""``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller words its own
-    way; ``"email"`` sends them to ``reverify_email``.
+    way; ``"email"`` sends them to ``reverify_email``. ``hold_for_second_pickup`` (None leaves it alone) can
+    always be turned off, but only turned on where the location has a second pickup time and the person
+    has no lots to sell.
     """
     from django.utils import timezone as django_timezone
 
@@ -347,6 +349,14 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
         obj.pickup_location = pickup_location
     if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
         return None, False, "address"
+    if hold_for_second_pickup is not None:
+        obj.hold_for_second_pickup = bool(
+            hold_for_second_pickup
+            and obj.can_hold_for_second_pickup
+            and (obj.hold_for_second_pickup or not obj.lots_qs.exists())
+        )
+    elif obj.hold_for_second_pickup and not obj.can_hold_for_second_pickup:
+        obj.hold_for_second_pickup = False
     obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
     # Joining means not manually added, whoever created the row.
     obj.manually_added = False
@@ -869,6 +879,8 @@ def lot_add_block(auction, tos, is_admin, *, bulk=True):
         return LOT_ADD_BLOCK_NO_TOS, "You can't add lots until you join this auction"
     if not tos.selling_allowed and not is_admin:
         return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You don't have permission to add lots to this auction"
+    if not tos.can_sell and not is_admin:
+        return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You're holding your lots for the second pickup, so you can't sell"
     if not is_admin and not auction.can_submit_lots:
         if timezone.now() < auction.lot_submission_start_date:
             return LOT_ADD_BLOCK_SUBMISSION_ENDED, f"Lot submission hasn't opened yet for {auction}"
@@ -1145,6 +1157,9 @@ PER_RUN_TOS_STATE = {
     "confirm_email_sent": False,
     "second_confirm_email_sent": False,
     "print_reminder_email_sent": False,
+    "hold_for_second_pickup": False,
+    "marked_off_first_pickup": None,
+    "marked_off_second_pickup": None,
     "time_spent_reading_rules": 0,
     "possible_duplicate": None,
     # The copy made the row, not a join.
