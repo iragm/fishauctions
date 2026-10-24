@@ -658,6 +658,11 @@ urlpatterns = [
     ),
     path("reverify_email/", views.ReverifyEmailView.as_view(), name="reverify_email"),
     path(
+        "reverify_email/<str:token>/",
+        views.ReverifyEmailConfirmView.as_view(),
+        name="reverify_email_confirm",
+    ),
+    path(
         "contact_info/",
         login_required(views.UserLocationUpdate.as_view()),
         name="contact_info",

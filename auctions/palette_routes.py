@@ -1291,6 +1291,7 @@ EXCLUDED: dict[str, str] = {
         "Only for someone whose mail recently bounced, who reaches it from Join (and join_auction's error); "
         "anyone else is sent straight back."
     ),
+    "reverify_email_confirm": "The link in the reverify email; it needs the signed token in that email.",
     # JSON / HTMX fragments
     "get_ad": _API,
     "click_ad": _API,

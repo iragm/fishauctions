@@ -13,6 +13,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
+from django.core import signing
 from django.core.exceptions import PermissionDenied
 from django.db.models import (
     Count,
@@ -27,7 +28,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.generic import DetailView, TemplateView
+from django.views.generic import DetailView, TemplateView, View
 from django.views.generic.edit import (
     UpdateView,
 )
@@ -56,7 +57,7 @@ from auctions.models import (
     UserLabelPrefs,
 )
 from auctions.notifications import push_configured
-from auctions.services import CONTACT_GATE_NEEDS_PHONE, needs_email_reverification
+from auctions.services import CONTACT_GATE_NEEDS_PHONE, clear_email_bounce, needs_email_reverification
 
 from .base import safe_next_url
 
@@ -258,12 +259,17 @@ class AccountDeleteView(TemplateView):
         return redirect(f"{reverse('account_logout')}?next={quote(target)}")
 
 
+REVERIFY_SALT = "reverify-email"
+# As long as allauth's own confirmation links last.
+REVERIFY_MAX_AGE = 3 * 24 * 60 * 60
+
+
 class ReverifyEmailView(LoginRequiredMixin, TemplateView):
     """Where Join sends someone whose mail recently bounced (``services.join_blocked_by_bounce``).
 
-    The button marks their address unverified in allauth and sends allauth's own verification email:
-    that link only confirms an unverified address. Confirming lifts the gate
-    (``signals.clear_email_bounce_on_verify``). allauth's cooldown limits how often it sends.
+    The button sends allauth's verification email, at allauth's cooldown, with a link to
+    ``ReverifyEmailConfirmView`` in place of allauth's: that one only confirms an unverified address,
+    and unverifying theirs would lock them out (``services.clear_email_bounce``).
     """
 
     template_name = "reverify_email.html"
@@ -274,19 +280,50 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
+        from allauth.account.adapter import get_adapter
         from allauth.account.internal.flows.email_verification import (
-            get_address_for_user,
-            send_verification_email_to_address,
+            add_email_verification_sent_message,
+            consume_email_verification_rate_limit,
         )
 
-        address = get_address_for_user(request.user)
-        if address is not None:
-            if address.verified:
-                address.verified = False
-                address.save(update_fields=["verified"])
-            send_verification_email_to_address(request, address)
-        # Back here, where allauth's "Confirmation email sent" message shows; ?next= rides along.
+        user = request.user
+        # Within the cooldown the link already sent still works, so a second click is quietly ignored.
+        if user.email and consume_email_verification_rate_limit(request, user.email):
+            token = signing.dumps(
+                {"u": user.pk, "e": user.email.lower(), "n": safe_next_url(request, "")}, salt=REVERIFY_SALT
+            )
+            get_adapter(request).send_mail(
+                "account/email/email_confirmation",
+                user.email,
+                {
+                    "user": user,
+                    "key": token,
+                    "activate_url": request.build_absolute_uri(reverse("reverify_email_confirm", args=[token])),
+                },
+            )
+            add_email_verification_sent_message(request, user.email, signup=False)
+        # Back here, where the "Confirmation email sent" message shows; ?next= rides along.
         return redirect(request.get_full_path())
+
+
+class ReverifyEmailConfirmView(View):
+    """The link in the reverify email. The link is the proof, so it works signed out, and logs nobody in."""
+
+    def get(self, request, token):
+        try:
+            data = signing.loads(token, salt=REVERIFY_SALT, max_age=REVERIFY_MAX_AGE)
+        except signing.BadSignature:
+            data = {}
+        user = User.objects.filter(pk=data.get("u"), is_active=True).first() if data else None
+        if user is None or (user.email or "").lower() != data.get("e"):
+            messages.error(request, "That link has expired.")
+            return redirect(reverse("reverify_email"))
+        clear_email_bounce(user)
+        messages.success(request, f"Confirmed {user.email}.")
+        target = data.get("n") or ""
+        if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+            target = reverse("home")
+        return redirect(target)
 
 
 class AccountMergeView(TemplateView):

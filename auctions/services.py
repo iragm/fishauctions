@@ -248,12 +248,31 @@ def record_email_bounce(emails, when=None):
 def needs_email_reverification(user):
     """True when mail to *user*'s address bounced in the last ``EMAIL_BOUNCE_RECENT_DAYS``.
 
-    Verifying the address again (``signals.clear_email_bounce_on_verify``) is the only way out.
+    The link ``ReverifyEmailView`` emails (``clear_email_bounce``) is the only way out.
     """
     if not getattr(user, "is_authenticated", False):
         return False
     bounced_on = getattr(getattr(user, "userdata", None), "email_bounced_on", None)
     return bool(bounced_on and bounced_on > timezone.now() - timedelta(days=EMAIL_BOUNCE_RECENT_DAYS))
+
+
+def clear_email_bounce(user):
+    """*user* proved their address takes mail again: lift the join gate and their red envelopes.
+
+    Only the reverify link proves it. allauth's own verified flag is never touched: unverifying it would
+    lock them out of signing in, and the app's Google sign-in would take an unverified address for a
+    squatter's and remove the password.
+    """
+    from .models import UserData
+
+    UserData.objects.filter(user=user).exclude(email_bounced_on=None).update(email_bounced_on=None)
+    if user.email:
+        AuctionTOS.objects.filter(email__iexact=user.email, email_address_status="BAD").update(
+            email_address_status="VALID"
+        )
+        ClubMember.objects.filter(email__iexact=user.email, is_deleted=False, email_address_status="BAD").update(
+            email_address_status="VALID"
+        )
 
 
 def join_blocked_by_bounce(user, auction):

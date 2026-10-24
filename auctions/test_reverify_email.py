@@ -1,6 +1,7 @@
 """A recent bounce holds back joining until the address is verified again."""
 
 import datetime
+import re
 
 from allauth.account.models import EmailAddress
 from django.contrib.auth.models import User
@@ -97,46 +98,64 @@ class ReverifyEmailTests(StandardTestCase):
         self._join()
         self.assertTrue(AuctionTOS.objects.filter(auction=self.open_auction, user=self.joiner).exists())
 
-    def test_the_button_unverifies_sends_the_email_and_the_link_lifts_the_gate(self):
+    def _link(self, message):
+        return re.search(r"https?://[^/\s]+(/reverify_email/[^\s\"<]+/)", message.body).group(1)
+
+    def test_the_button_sends_the_email_and_the_link_lifts_the_gate(self):
         _bounce(self.joiner.email)
         self.client.force_login(self.joiner)
         url = f"{reverse('reverify_email')}?next=/auctions/{self.open_auction.slug}/"
         response = self.client.post(url)
         self.assertRedirects(response, url, fetch_redirect_response=False)
         self._refresh()
-        self.assertFalse(self.address.verified)
+        # allauth's flag is never touched: unverified, they couldn't sign in.
+        self.assertTrue(self.address.verified)
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.joiner.email])
         # A second click inside allauth's cooldown sends nothing more.
         self.client.post(url)
         self.assertEqual(len(mail.outbox), 1)
 
-        from allauth.account.models import EmailConfirmationHMAC
-
-        key = EmailConfirmationHMAC(self.address).key
-        self.client.get(reverse("account_confirm_email", args=[key]))
+        self.client.logout()
+        response = self.client.get(self._link(mail.outbox[0]))
+        self.assertRedirects(response, f"/auctions/{self.open_auction.slug}/", fetch_redirect_response=False)
         self._refresh()
-        self.assertTrue(self.address.verified)
         self.assertIsNone(self.joiner.userdata.email_bounced_on)
         self.assertEqual(self.old_tos.email_address_status, "VALID")
-        self.client.force_login(self.joiner)
         self._join()
         self.assertTrue(AuctionTOS.objects.filter(auction=self.open_auction, user=self.joiner).exists())
 
-    def test_a_second_bounce_after_the_button_keeps_them_logged_in_and_gated(self):
+    def test_a_link_for_an_old_address_or_a_forged_one_does_nothing(self):
+        _bounce(self.joiner.email)
+        self.client.force_login(self.joiner)
+        self.client.post(reverse("reverify_email"))
+        link = self._link(mail.outbox[0])
+        self.joiner.email = "changed@example.com"
+        self.joiner.save()
+        self.client.get(link)
+        self.client.get(link[:-3] + "xx/")
+        self._refresh()
+        self.assertIsNotNone(self.joiner.userdata.email_bounced_on)
+
+    def test_a_second_bounce_after_the_button_keeps_them_gated_but_signed_in(self):
         _bounce(self.joiner.email)
         self.client.force_login(self.joiner)
         self.client.post(reverse("reverify_email"))
         _bounce(self.joiner.email)
         self.assertTrue(needs_email_reverification(User.objects.get(pk=self.joiner.pk)))
-        # Still signed in, and still able to resend.
+        self.assertTrue(EmailAddress.objects.get(pk=self.address.pk).verified)
         self.assertEqual(self.client.get(reverse("reverify_email")).status_code, 200)
 
-    def test_saving_an_already_verified_address_does_not_lift_the_gate(self):
+    def test_the_club_join_waits_too_when_it_would_add_them_to_auctions(self):
+        club = Club.objects.create(name="Bounce club", allow_joining=True)
+        self.open_auction.club = club
+        self.open_auction.manage_users_through_club = "all"
+        self.open_auction.save()
         _bounce(self.joiner.email)
-        self.address.primary = True
-        self.address.save()
-        self.assertTrue(needs_email_reverification(User.objects.get(pk=self.joiner.pk)))
+        self.client.force_login(self.joiner)
+        response = self.client.post(reverse("club_detail", kwargs={"slug": club.slug}), {"action": "join"})
+        self.assertTrue(response.url.startswith(reverse("reverify_email")))
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.joiner).exists())
 
     def test_the_page_sends_anyone_without_a_bounce_back(self):
         self.client.force_login(self.joiner)
@@ -146,19 +165,6 @@ class ReverifyEmailTests(StandardTestCase):
         self.assertRedirects(response, reverse("home"), fetch_redirect_response=False)
         self.address.refresh_from_db()
         self.assertTrue(self.address.verified)
-
-    def test_the_club_member_red_envelope_clears_too(self):
-        club = Club.objects.create(name="Bounce club")
-        member = ClubMember.objects.create(club=club, name="Member", email=self.joiner.email)
-        _bounce(self.joiner.email)
-        member.refresh_from_db()
-        self.assertEqual(member.email_address_status, "BAD")
-        self.address.verified = False
-        self.address.save()
-        self.address.verified = True
-        self.address.save()
-        member.refresh_from_db()
-        self.assertEqual(member.email_address_status, "VALID")
 
 
 class MobileJoinBounceTests(ReverifyEmailTests.__base__):
