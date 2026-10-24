@@ -319,6 +319,11 @@ class LocationFilterTests(PickupTestCase):
         self.assertEqual(names('location:"vt"'), {"Vt Seller", "Vt Buyer"})
         self.assertEqual(names("location:VT exists"), {"Vt Buyer"})
         self.assertEqual(names('location:"MA" buyer'), set())
+        # A keyword inside a location's name stays part of the name.
+        PickupLocation.objects.filter(pk=self.ma.pk).update(name="the sus pit")
+        self.assertEqual(names('location:"the sus pit"'), {"Ma Seller"})
+        # Typing a name isn't a filter.
+        self.assertEqual(set(AuctionTOSFilter.generic(None, qs, "location:VT", match_names_only=True)), set())
 
     def test_the_location_button_links_the_filter(self):
         self.client.force_login(self.organizer)

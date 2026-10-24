@@ -497,7 +497,7 @@ function initMap() {
                                     {% if auction.is_online %}
                                     <a href='{% url "auction_logistics" slug=auction.slug %}?tab={{ location.pk }}-1' class="btn btn-sm btn-primary"><i class="bi bi-truck"></i> Logistics</a>
                                     {% endif %}
-                                    <a href="{% url 'auction_tos_list' slug=auction.slug %}?query={{ 'location:"'|add:location.name|add:'"'|urlencode }}" class="btn btn-sm btn-info"><i class="bi bi-people-fill"></i> {{location.number_of_users}} users</a>
+                                    {% if location.name %}<a href="{% url 'auction_tos_list' slug=auction.slug %}?query={{ 'location:"'|add:location.name|add:'"'|urlencode }}" class="btn btn-sm btn-info"><i class="bi bi-people-fill"></i> {{location.number_of_users}} users</a>{% endif %}
                                     {% endif %}
                                 </div>
 
