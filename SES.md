@@ -8,10 +8,9 @@ ours — DNS records, env vars, the Lambda source, and the gotchas that cost hou
 
 ## Bounces and complaints
 
-Put the ARN of the SNS topic that delivers SES bounce and complaint events in
-`AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS` (comma-separated). Left empty, the webhook believes any topic, so
-anyone with an AWS account could subscribe it and forge a bounce for any address: a red envelope
-and, for 90 days, the re-verify page before joining.
+List every SNS topic that delivers SES bounce or complaint events (identity notifications and
+configuration-set event destinations alike) in `AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS`. A topic left off
+has its events refused.
 
 ## Inbound routing: SNS topic → Lambda → SES receipt rule
 

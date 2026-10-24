@@ -1,2 +1,2 @@
 {% extends "account/email/base_message.txt" %}
-{% block content %}{% autoescape off %}Recent emails we've sent to you have not gone through. Confirm this address to join auctions again: {{ activate_url }}{% endautoescape %}{% endblock content %}
+{% block content %}Recent emails we've sent to you have not gone through. Confirm this address to join auctions again: {{ activate_url }}{% endblock content %}

@@ -2,6 +2,7 @@
 
 import datetime
 import os
+import re
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -494,10 +495,10 @@ AWS_SES_REGION_NAME = os.environ.get("AWS_SES_REGION_NAME", "us-east-1")
 AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", "email.us-east-1.amazonaws.com")
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
-# The SNS topics whose bounce and complaint events are believed. Empty, django-ses believes any topic,
-# so anyone with an AWS account could subscribe the webhook and forge bounces for any address.
+# Every SNS topic that delivers SES bounces or complaints, comma- or space-separated. Empty, django-ses
+# believes any topic, so anyone with an AWS account could subscribe the webhook and forge a bounce.
 AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS = [
-    arn.strip() for arn in os.environ.get("AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS", "").split(",") if arn.strip()
+    arn for arn in re.split(r"[\s,]+", os.environ.get("AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS", "")) if arn
 ]
 # AWS_SES_FROM_EMAIL is deliberately NOT set: SES uses it to override every message's From header,
 # which discarded all the auctions.email_routing aliases. Unset, the message's own from_email is used.

@@ -118,7 +118,10 @@ class ReverifyEmailTests(StandardTestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.joiner.email])
         self.assertEqual(mail.outbox[0].subject, "Confirm your email address")
-        self.assertNotIn("has given yours", mail.outbox[0].body)
+        html = mail.outbox[0].alternatives[0][0]
+        for part in (mail.outbox[0].body, html):
+            self.assertNotIn("has given yours", part)
+            self.assertIn("/reverify_email/", part)
         # A second click inside allauth's cooldown sends nothing more.
         self.client.post(url)
         self.assertEqual(len(mail.outbox), 1)
@@ -239,3 +242,14 @@ class MobileJoinBounceTests(ReverifyEmailTests.__base__):
         self.assertEqual(response.status_code, 403)
         self.assertIn("/reverify_email/", response.json()["reverify_url"])
         self.assertFalse(AuctionTOS.objects.filter(auction=venue, user=joiner).exists())
+
+
+class TrustedBounceTopicTests(ReverifyEmailTests.__base__):
+    def test_only_the_listed_topic_is_believed(self):
+        from django.test import override_settings
+        from django_ses.utils import verify_event_topic
+
+        ours = "arn:aws:sns:us-east-1:111111111111:bounces"
+        with override_settings(AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS=[ours]):
+            self.assertTrue(verify_event_topic({"TopicArn": ours}))
+            self.assertFalse(verify_event_topic({"TopicArn": "arn:aws:sns:us-east-1:999999999999:forged"}))
