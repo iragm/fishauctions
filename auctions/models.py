@@ -4988,6 +4988,17 @@ class Auction(CachedPropertiesMixin, models.Model):
         minutes = seconds // 60
         return minutes
 
+    #: How long after an online auction's bidding ends its admins see the post-auction banner.
+    POST_END_BANNER_DAYS = 30
+
+    @property
+    def shows_post_end_banner(self):
+        """An online auction whose bidding ended in the last ``POST_END_BANNER_DAYS`` (``logistics.progress``)."""
+        if not self.is_online or not self.date_end:
+            return False
+        now = timezone.now()
+        return self.date_end <= now < self.date_end + datetime.timedelta(days=self.POST_END_BANNER_DAYS)
+
     @property
     def ending_soon(self):
         """Used to send notifications"""
@@ -6916,8 +6927,9 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     @property
     def pickup_plan(self):
         """Which pickup times this person needs, once an online auction has ended: ``""`` (nothing won or
-        sold), ``PICKUP_FIRST``, ``PICKUP_SECOND`` or ``PICKUP_BOTH``. Sellers and anyone unpaid come to
-        the first; lots from other locations, and held ones, wait for the second.
+        sold), ``PICKUP_FIRST``, ``PICKUP_SECOND`` or ``PICKUP_BOTH``. Sellers come to the first, and so
+        does anyone unpaid who isn't holding; lots from other locations, and held ones, wait for the second.
+        ``logistics.people`` lists the same people on each tab.
         """
         won = self.bought_lots_qs.exclude(banned=True)
         sold = self.lots_qs.exclude(banned=True).filter(auctiontos_winner__isnull=False)
@@ -6928,9 +6940,12 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         holding = self.holding_for_second_pickup
         from_here = won.filter(auctiontos_seller__pickup_location=self.pickup_location_id).exists()
         from_elsewhere = won.exclude(auctiontos_seller__pickup_location=self.pickup_location_id).exists()
+        if holding and not sold.exists():
+            # Everything they bought waits for the second pickup, and they pay then.
+            return self.PICKUP_SECOND
         invoice = self.invoice
         paid = bool(invoice and invoice.status == "PAID")
-        if paid and not sold.exists() and (holding or not from_here):
+        if paid and not sold.exists() and not from_here:
             return self.PICKUP_SECOND
         if not from_elsewhere and not holding:
             return self.PICKUP_FIRST
@@ -12245,7 +12260,10 @@ class UserData(CachedPropertiesMixin, models.Model):
             Auction.objects.exclude(is_deleted=True)
             .filter(lot_submission_end_date__gte=timezone.now())
             .filter(lot_submission_start_date__lte=timezone.now())
-            .filter(auctiontos__user=self.user, auctiontos__selling_allowed=True)
+            # Holding for the second pickup means not selling (AuctionTOS.can_sell).
+            .filter(
+                auctiontos__user=self.user, auctiontos__selling_allowed=True, auctiontos__hold_for_second_pickup=False
+            )
             .order_by("date_end")
         )
 

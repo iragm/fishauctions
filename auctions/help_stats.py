@@ -572,8 +572,7 @@ def created_ahead() -> dict:
 
 def _created_ahead(min_lots: int = MIN_AUCTION_LOTS, min_auctions: int = MIN_RULES_AUCTIONS) -> dict:
     """One point per dollar-priced auction with ``min_lots`` sold lots: the days between creating it and its start
-    against what the club made (``Auction.club_profit``, to the nearest 10 so no point names an auction). Outliers
-    on either axis are dropped.
+    against what the club made (``Auction.club_profit``). Outliers on either axis are dropped.
     """
     from auctions.models import Lot
 
@@ -599,8 +598,9 @@ def _created_ahead(min_lots: int = MIN_AUCTION_LOTS, min_auctions: int = MIN_RUL
             continue
         days_low, days_high = _inside_fences([days for days, _ in found])
         profit_low, profit_high = _inside_fences([profit for _, profit in found])
+        # Days to the nearest 5 and profit to the nearest 50, so no point names an auction.
         kept = sorted(
-            (days, round(profit, -1))
+            (5 * round(days / 5), 50 * round(profit / 50))
             for days, profit in found
             if days_low <= days <= days_high and profit_low <= profit <= profit_high
         )

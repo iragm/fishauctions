@@ -62,7 +62,7 @@ class AuctionLogisticsMark(LoginRequiredMixin, AuctionViewMixin, View):
         if which not in (logistics.FIRST, logistics.SECOND):
             raise Http404
         tos = get_object_or_404(AuctionTOS, pk=pk, auction=self.auction)
-        logistics.mark_off(tos, which, request.user)
+        logistics.mark_off(tos, which, request.user, marked=request.POST.get("marked") == "1")
         return HttpResponse(logistics_name_cell(tos, which))
 
 

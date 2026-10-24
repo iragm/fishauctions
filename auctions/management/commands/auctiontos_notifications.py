@@ -12,6 +12,7 @@ from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
 
+from auctions import logistics
 from auctions.email_routing import email_routing_enabled
 from auctions.models import (
     Auction,
@@ -134,7 +135,7 @@ class Command(BaseCommand):
             pickup_location__pickup_time__lte=timezone.now() + datetime.timedelta(hours=24),
         ).select_related("auction", "pickup_location")
         for tos in pickup_tomorrow:
-            if not tos.auction.closed:
+            if not logistics.bidding_over(tos.auction):
                 # Lots are still in overtime; the next run sends it.
                 continue
             tos.second_confirm_email_sent = True

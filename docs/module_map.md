@@ -191,9 +191,9 @@ this only quotes its opening sentence.
   Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
 - **`llm.py`** (422 lines)
   Provider abstraction for everything on this site that talks to a language model.
-- **`logistics.py`** (168 lines)
+- **`logistics.py`** (182 lines)
   After an online auction: who comes to which pickup, and how far along the club is.
-  `Tab`, `tabs`, `people`, `mark_off`, `progress`
+  `Tab`, `tabs`, `people`, `mark_off`, `running_lots`, `bidding_over`, `progress`
 - **`mailchimp.py`** (656 lines)
   One-way Django -> Mailchimp sync for clubs.
 - **`middleware.py`** (184 lines)
@@ -202,7 +202,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15065 lines)
+- **`models.py`** (15083 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -270,7 +270,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1223 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1773 lines)
+- **`tables.py`** (1777 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1882 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -325,7 +325,7 @@ this only quotes its opening sentence.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
   Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images.
-- **`test_auction_nav.py`** (115 lines)
+- **`test_auction_nav.py`** (116 lines)
   `AuctionNavTests`
 - **`test_auction_promos.py`** (493 lines)
   ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.
@@ -605,7 +605,7 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (924 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_pickup_logistics.py`** (305 lines)
+- **`test_pickup_logistics.py`** (332 lines)
   Online auction pickups: holding lots for the second pickup, the day-before email, the logistics page,
   `PickupTestCase`, `HoldForSecondPickupTests`, `PickupPlanTests`, `PickupTomorrowEmailTests`, `LogisticsPageTests`, `PostAuctionBannerTests`, `UsersFilterTests`, `CreatedAheadChartTests`
 - **`test_printable_lot_list.py`** (148 lines)
@@ -769,7 +769,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`auction_promos.py`** (334 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
-- **`auctiontos_notifications.py`** (307 lines)
+- **`auctiontos_notifications.py`** (308 lines)
   The participant emails that follow joining an auction, run every few minutes by cron: welcome,
   `send_tos_notification`, `Command`
 - **`backfill_lot_species.py`** (384 lines)

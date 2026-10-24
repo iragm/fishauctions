@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils.html import format_html, format_html_join, strip_tags
 from django.utils.safestring import mark_safe
 
-from . import donations
+from . import donations, logistics
 from .filters import buying_status
 from .helper_functions import static_html
 from .models import (
@@ -1730,11 +1730,15 @@ class DocumentHTMxTable(tables.Table):
 
 
 def logistics_name_cell(tos, which):
-    """A name on the logistics page: a tap crosses it off that pickup's list, and a second tap brings it back."""
-    marked = tos.marked_off_second_pickup if which == 2 else tos.marked_off_first_pickup
+    """A name on the logistics page: a tap crosses it off that pickup's list, and a second tap brings it back.
+    The tap posts the state it wants, so a stale page can't undo another volunteer's tap.
+    """
+    marked = tos.marked_off_second_pickup if which == logistics.SECOND else tos.marked_off_first_pickup
     return format_html(
-        "<a href='#' role='button' hx-post='{}' hx-target='this' hx-swap='outerHTML' class='{}'>{}</a>",
+        "<a href='#' role='button' hx-post='{}' hx-vals='{{\"marked\": \"{}\"}}' hx-target='this' "
+        "hx-swap='outerHTML' class='{}'>{}</a>",
         reverse("auction_logistics_mark", kwargs={"slug": tos.auction.slug, "pk": tos.pk, "which": which}),
+        "" if marked else "1",
         "text-decoration-line-through text-muted" if marked else "",
         tos.name or "Unknown",
     )
@@ -1754,7 +1758,7 @@ class LogisticsHTMxTable(tables.Table):
         exclude = list(kwargs.pop("exclude", ()))
         if not tab.multi_location:
             exclude.append("pickup_now")
-        if tab.which == 2:
+        if tab.which == logistics.SECOND:
             # Sellers' lots all leave at the first pickup.
             exclude.append("sold")
         self.tab = tab

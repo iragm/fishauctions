@@ -7,17 +7,14 @@ the second, so a person holding everything is left off the first tab. ``mark_off
 ``progress`` is the post-auction banner's numbers.
 """
 
-import datetime
 from dataclasses import dataclass
 
-from django.db.models import Case, Count, F, IntegerField, OuterRef, Prefetch, Q, Subquery, Value, When
+from django.db.models import Case, Count, Exists, F, IntegerField, OuterRef, Prefetch, Q, Subquery, Value, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 FIRST = 1
 SECOND = 2
-#: How long after bidding ends the banner keeps showing whatever is left undone.
-BANNER_DAYS = datetime.timedelta(days=30)
 
 
 @dataclass(frozen=True)
@@ -29,10 +26,6 @@ class Tab:
     which: int
     #: Whether this auction has a second pickup anywhere, which adds the "to pick up now" column.
     multi_location: bool
-
-    @property
-    def field(self):
-        return "marked_off_second_pickup" if self.which == SECOND else "marked_off_first_pickup"
 
 
 def tabs(auction):
@@ -70,10 +63,15 @@ def people(auction, tab):
     from auctions.models import AuctionTOS, Invoice
 
     location = tab.location
-    qs = AuctionTOS.objects.filter(auction=auction, pickup_location=location).annotate(
-        sold=_lot_count("auctiontos_seller", auctiontos_winner__isnull=False),
-        bought=_lot_count("auctiontos_winner"),
-        from_here=_lot_count("auctiontos_winner", auctiontos_seller__pickup_location=location),
+    paid = Invoice.objects.filter(auctiontos_user=OuterRef("pk"), status="PAID")
+    qs = (
+        AuctionTOS.objects.filter(auction=auction, pickup_location=location)
+        .select_related("auction")
+        .annotate(
+            sold=_lot_count("auctiontos_seller", auctiontos_winner__isnull=False),
+            bought=_lot_count("auctiontos_winner"),
+            from_here=_lot_count("auctiontos_winner", auctiontos_seller__pickup_location=location),
+        )
     )
     if not (tab.multi_location and location.second_pickup_time):
         # One pickup for this location: everything changes hands then.
@@ -84,7 +82,12 @@ def people(auction, tab):
             pickup_now=Case(
                 When(hold_for_second_pickup=True, then=Value(0)), default=F("from_here"), output_field=IntegerField()
             )
-        ).filter(Q(sold__gt=0) | Q(pickup_now__gt=0))
+        ).filter(
+            Q(sold__gt=0)
+            | Q(pickup_now__gt=0)
+            # Bought only from elsewhere but not paid yet: they come to the first pickup to pay.
+            | Q(bought__gt=0, hold_for_second_pickup=False) & ~Exists(paid)
+        )
     else:
         qs = qs.annotate(
             pickup_now=Case(
@@ -96,12 +99,15 @@ def people(auction, tab):
     return qs.prefetch_related(Prefetch("auctiontos", queryset=Invoice.objects.order_by("-date"))).order_by("name")
 
 
-def mark_off(tos, which, user):
-    """Cross ``tos`` off the ``which`` pickup list, or back on if they were already; returns the new state."""
+def mark_off(tos, which, user, marked):
+    """Cross ``tos`` off the ``which`` pickup list (``marked``), or back on. The tap says which, rather than
+    toggling, so two volunteers with the same list open can't undo each other.
+    """
     field = "marked_off_second_pickup" if which == SECOND else "marked_off_first_pickup"
-    marked = getattr(tos, field) is None
+    if bool(getattr(tos, field)) == marked:
+        return
     setattr(tos, field, timezone.now() if marked else None)
-    # Only the flag: a full save pushes this row's contact fields up to its ClubMember.
+    # Only the field: a full save pushes this row's contact fields up to its ClubMember.
     tos.save(update_fields=[field])
     label = "second" if which == SECOND else "first"
     tos.auction.create_history(
@@ -109,7 +115,16 @@ def mark_off(tos, which, user):
         action=f"{'Marked off' if marked else 'Cleared'} {tos.name} for the {label} pickup",
         user=user,
     )
-    return marked
+
+
+def running_lots(auction):
+    """Lots of an online auction still taking bids: unsold, with an end still ahead (overtime included)."""
+    return auction.lots_qs.exclude(banned=True).filter(winning_price__isnull=True, date_end__gt=timezone.now())
+
+
+def bidding_over(auction):
+    """Whether every lot of an online auction has stopped taking bids."""
+    return bool(auction.date_end and auction.date_end <= timezone.now() and not running_lots(auction).exists())
 
 
 def _step(done, total):
@@ -125,12 +140,11 @@ def progress(auction):
     """
     from auctions.models import Invoice, Lot
 
-    now = timezone.now()
-    if not auction.is_online or not auction.date_end or not auction.date_end <= now < auction.date_end + BANNER_DAYS:
+    if not auction.shows_post_end_banner:
         return None
     lots = auction.lots_qs.exclude(banned=True)
     total = lots.count()
-    running = lots.filter(winning_price__isnull=True, date_end__gt=now)
+    running = running_lots(auction)
     still_running = running.count()
     if still_running:
         latest = max(

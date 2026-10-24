@@ -96,6 +96,16 @@ class HoldForSecondPickupTests(PickupTestCase):
         tos, _, _ = join_auction(self.buyer_user, self.multi, self.vt, hold_for_second_pickup=True)
         self.assertFalse(tos.hold_for_second_pickup)
 
+    def test_the_lot_form_leaves_out_an_auction_they_hold_in(self):
+        Auction.objects.filter(pk=self.multi.pk).update(
+            lot_submission_end_date=timezone.now() + datetime.timedelta(days=1),
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=1),
+        )
+        join_auction(self.buyer_user, self.multi, self.vt)
+        self.assertIn(self.multi, self.buyer_user.userdata.available_auctions_to_submit_lots)
+        join_auction(self.buyer_user, self.multi, self.vt, hold_for_second_pickup=True)
+        self.assertNotIn(self.multi, User.objects.get(pk=self.buyer_user.pk).userdata.available_auctions_to_submit_lots)
+
     def test_moving_to_a_location_without_a_second_pickup_drops_the_hold(self):
         join_auction(self.buyer_user, self.multi, self.vt, hold_for_second_pickup=True)
         tos, _, _ = join_auction(self.buyer_user, self.multi, self.ma)
@@ -133,9 +143,10 @@ class PickupPlanTests(PickupTestCase):
         # And from elsewhere, unpaid: both.
         self.sell(self.ma_seller, self.vt_buyer)
         self.assertEqual(self.plan(self.vt_buyer), AuctionTOS.PICKUP_BOTH)
-        # Paid and holding: only the second.
-        self.pay(self.vt_buyer)
+        # Holding: only the second, paid or not.
         AuctionTOS.objects.filter(pk=self.vt_buyer.pk).update(hold_for_second_pickup=True)
+        self.assertEqual(self.plan(self.vt_buyer), AuctionTOS.PICKUP_SECOND)
+        self.pay(self.vt_buyer)
         self.assertEqual(self.plan(self.vt_buyer), AuctionTOS.PICKUP_SECOND)
         # A seller always comes to the first.
         self.sell(self.vt_buyer, self.ma_seller)
@@ -168,9 +179,13 @@ class PickupTomorrowEmailTests(PickupTestCase):
     def test_waits_for_overtime(self):
         AuctionTOS.objects.filter(auction=self.multi).update(confirm_email_sent=True, print_reminder_email_sent=True)
         self.sell(self.ma_seller, self.vt_buyer)
-        Auction.objects.filter(pk=self.multi.pk).update(date_end=timezone.now() - datetime.timedelta(minutes=10))
+        running = self.sell(self.ma_seller, None, price=None)
+        Lot.objects.filter(pk=running.pk).update(date_end=timezone.now() + datetime.timedelta(minutes=10))
         self.run_command()
         self.assertFalse(AuctionTOS.objects.get(pk=self.vt_buyer.pk).second_confirm_email_sent)
+        Lot.objects.filter(pk=running.pk).update(date_end=timezone.now() - datetime.timedelta(minutes=1))
+        self.run_command()
+        self.assertTrue(AuctionTOS.objects.get(pk=self.vt_buyer.pk).second_confirm_email_sent)
 
     def test_nothing_won_or_sold_gets_nothing(self):
         AuctionTOS.objects.filter(auction=self.multi).update(confirm_email_sent=True, print_reminder_email_sent=True)
@@ -198,6 +213,14 @@ class LogisticsPageTests(PickupTestCase):
         self.assertEqual(self.names(f"{vt}-2"), {"Vt Buyer": 2})
         self.assertEqual(self.names(f"{self.ma.pk}-1"), {"Ma Seller": 0})
 
+    def test_unpaid_buyers_come_to_the_first_to_pay(self):
+        self.sell(self.ma_seller, self.vt_buyer)
+        vt = self.vt.pk
+        self.assertEqual(self.names(f"{vt}-1"), {"Vt Buyer": 0})
+        self.pay(self.vt_buyer)
+        self.assertEqual(self.names(f"{vt}-1"), {})
+        self.assertEqual(self.names(f"{vt}-2"), {"Vt Buyer": 1})
+
     def test_page_and_marking_off(self):
         self.sell(self.vt_seller, self.vt_buyer)
         url = reverse("auction_logistics", kwargs={"slug": self.multi.slug})
@@ -211,13 +234,17 @@ class LogisticsPageTests(PickupTestCase):
         response = self.client.get(f"{url}?tab={self.vt.pk}-2")
         self.assertNotContains(response, "Sold lots")
         mark = reverse("auction_logistics_mark", kwargs={"slug": self.multi.slug, "pk": self.vt_buyer.pk, "which": 1})
-        response = self.client.post(mark)
+        response = self.client.post(mark, {"marked": "1"})
         self.assertContains(response, "text-decoration-line-through")
+        # A second volunteer's stale tap doesn't undo it.
+        self.client.post(mark, {"marked": "1"})
         tos = AuctionTOS.objects.get(pk=self.vt_buyer.pk)
         self.assertIsNotNone(tos.marked_off_first_pickup)
         self.assertIsNone(tos.marked_off_second_pickup)
-        self.client.post(mark)
+        self.assertIsNotNone(AuctionTOS.objects.get(pk=self.vt_buyer.pk).marked_off_first_pickup)
+        self.client.post(mark, {"marked": ""})
         self.assertIsNone(AuctionTOS.objects.get(pk=self.vt_buyer.pk).marked_off_first_pickup)
+        self.assertEqual(AuctionHistory.objects.filter(auction=self.multi, action__contains="Vt Buyer").count(), 2)
         actions = list(AuctionHistory.objects.filter(auction=self.multi).values_list("action", flat=True))
         self.assertTrue(any("Marked off Vt Buyer" in action for action in actions))
         self.assertTrue(any("Cleared Vt Buyer" in action for action in actions))
@@ -225,7 +252,7 @@ class LogisticsPageTests(PickupTestCase):
         other = reverse(
             "auction_logistics_mark", kwargs={"slug": self.multi.slug, "pk": self.online_tos.pk, "which": 1}
         )
-        self.assertEqual(self.client.post(other).status_code, 404)
+        self.assertEqual(self.client.post(other, {"marked": "1"}).status_code, 404)
 
     def test_in_person_auctions_have_none(self):
         self.client.force_login(self.user)
