@@ -6,6 +6,7 @@ in only one of them. Permission checks are the caller's job.
 
 import logging
 import re
+from datetime import timedelta
 
 from django.db.models import Q
 from django.utils import timezone
@@ -216,14 +217,92 @@ def ensure_club_member(
     return member, created
 
 
+# How long a bounce holds back joining, unless the address is verified again sooner.
+EMAIL_BOUNCE_RECENT_DAYS = 90
+# SES bounces that are the address's fault. A full inbox is a soft (Transient) bounce, and the reason
+# for the gate; a message too large or content rejected says nothing about the inbox.
+# SES's Transient "General" also covers outages and greylisting, so a whole batch would be gated at once.
+REVERIFY_TRANSIENT_SUBTYPES = frozenset({"MailboxFull"})
+# Hide My Email: bounces when forwarding is off, and then no verification email can reach them either.
+PRIVATE_RELAY_SUFFIX = "@privaterelay.appleid.com"
+
+
+def bounce_means_reverify(bounce_obj):
+    """Whether an SES bounce notification should make its recipients verify their address again."""
+    bounce_type = (bounce_obj or {}).get("bounceType")
+    if bounce_type == "Permanent":
+        return True
+    return bounce_type == "Transient" and (bounce_obj or {}).get("bounceSubType") in REVERIFY_TRANSIENT_SUBTYPES
+
+
+def record_email_bounce(emails, when=None):
+    """Date the bounce on every account whose address is one of *emails*."""
+    from .models import UserData
+
+    emails = [email for email in emails if email and not email.lower().endswith(PRIVATE_RELAY_SUFFIX)]
+    if not emails:
+        return 0
+    query = Q()
+    for email in emails:
+        query |= Q(user__email__iexact=email)
+    return UserData.objects.filter(query).update(email_bounced_on=when or timezone.now())
+
+
+def needs_email_reverification(user):
+    """True when mail to *user*'s address bounced in the last ``EMAIL_BOUNCE_RECENT_DAYS``.
+
+    The way out is the link ``ReverifyEmailView`` emails, or confirming a new address through allauth
+    (``signals.clear_email_bounce_on_new_address``); both call ``clear_email_bounce``.
+    """
+    if not getattr(user, "is_authenticated", False) or not user.email:
+        return False
+    bounced_on = getattr(getattr(user, "userdata", None), "email_bounced_on", None)
+    return bool(bounced_on and bounced_on > timezone.now() - timedelta(days=EMAIL_BOUNCE_RECENT_DAYS))
+
+
+def clear_email_bounce(user):
+    """*user* proved their address takes mail again: lift the join gate and their red envelopes.
+
+    allauth's own verified flag is never touched: unverifying it would
+    lock them out of signing in, and the app's Google sign-in would take an unverified address for a
+    squatter's and remove the password.
+    """
+    from .models import UserData
+
+    UserData.objects.filter(user=user).exclude(email_bounced_on=None).update(email_bounced_on=None)
+    if user.email:
+        AuctionTOS.objects.filter(email__iexact=user.email, email_address_status="BAD").update(
+            email_address_status="VALID"
+        )
+        ClubMember.objects.filter(email__iexact=user.email, is_deleted=False, email_address_status="BAD").update(
+            email_address_status="VALID"
+        )
+
+
+def join_blocked_by_bounce(user, auction):
+    """Whether joining *auction* must wait for *user* to verify their email again.
+
+    Never for someone already in it: an organizer who added them sees the red envelope instead.
+    """
+    if not needs_email_reverification(user):
+        return False
+    already_in = Q(user=user)
+    if user.email:
+        already_in |= Q(email__iexact=user.email)
+    return not AuctionTOS.objects.filter(already_in, auction=auction).exists()
+
+
 def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
     """Sign ``user`` up for ``auction``, or update their existing record.
 
     Shared by the Join button and the assistant. Returns ``(tos, created, problem)``; ``problem`` is
-    ``""``, ``"phone_number"`` or ``"address"``: a missing detail the caller words its own way.
+    ``""``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller words its own
+    way; ``"email"`` sends them to ``reverify_email``.
     """
     from django.utils import timezone as django_timezone
 
+    if join_blocked_by_bounce(user, auction):
+        return None, False, "email"
     userdata = user.userdata
     if auction.require_phone_number and not userdata.phone_number:
         return None, False, "phone_number"

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Re-verify your email address{% endblock %}
+{% block content %}
+<div class="row">
+  <div class="col-lg-8">
+    <h5>Re-verify your email address</h5>
+    <p>Recent emails we've sent to you have not gone through.  Before you can join another auction, you need to validate your email address again</p>
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary">Send verification email</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

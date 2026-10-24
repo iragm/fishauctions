@@ -41,6 +41,7 @@ from auctions.models import (
     Watch,
 )
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
+from auctions.services import join_blocked_by_bounce
 from auctions.signals import on_sign_in
 
 from .authentication import OptionalJWTAuthentication
@@ -1481,6 +1482,15 @@ class MobileCheckinJoinView(APIView):
         if not auction.in_welcome_window():
             return Response(
                 {"detail": "This auction isn't open for check-in right now."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if join_blocked_by_bounce(request.user, auction):
+            # The app falls back to the auction page, whose Join button leads to reverify_email.
+            return Response(
+                {
+                    "detail": "Recent emails we've sent to you have not gone through.",
+                    "reverify_url": request.build_absolute_uri(reverse("reverify_email")),
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
         tos, checked_in = checkin_service.join_auction(request.user, auction)
         if tos is None:

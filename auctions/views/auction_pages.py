@@ -1037,6 +1037,8 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 form.cleaned_data["pickup_location"],
                 time_spent_reading_rules=form.cleaned_data["time_spent_reading_rules"],
             )
+            if problem == "email":
+                return redirect(f"{reverse('reverify_email')}?{urlencode({'next': auction.get_absolute_url()})}")
             if problem == "phone_number":
                 messages.error(self.request, "This auction requires a phone number before you can join")
                 return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")

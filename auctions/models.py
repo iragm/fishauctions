@@ -11967,6 +11967,11 @@ class UserData(CachedPropertiesMixin, models.Model):
     )
     location_confirmed = models.BooleanField(default=False, blank=True, verbose_name="Yes, my location is accurate")
     last_ip_address = models.CharField(max_length=100, blank=True, null=True)
+    email_bounced_on = models.DateTimeField(null=True, blank=True)
+    email_bounced_on.help_text = (
+        "When mail to this account's address last bounced. Joining an auction waits for the address to be "
+        "verified again, which clears it (services.needs_email_reverification)."
+    )
     email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
     email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen.  If you'd like to get a notification right away, <a href='https://github.com/iragm/fishauctions/issues/224'>leave a comment here</a>"
     email_me_about_new_auctions = models.BooleanField(
