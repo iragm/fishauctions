@@ -263,6 +263,14 @@ class AuctionTOSFilter(django_filters.FilterSet):
             qs = add_tos_info(qs)
             qs = qs.order_by("trust")
 
+        # by pickup location: location:"Name with spaces" or location:Name
+        location_pattern = re.compile(r'(?:^|\s)location:(?:"([^"]*)"|(\S+))', re.IGNORECASE)
+        for match in list(location_pattern.finditer(value)):
+            qs = qs.filter(
+                pickup_location__name__iexact=(match.group(1) if match.group(1) is not None else match.group(2))
+            )
+        value = location_pattern.sub(" ", value)
+
         # search by invoice status
         invoice_patterns = {
             "open": {"auctiontos__status": "DRAFT"},

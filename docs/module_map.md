@@ -150,7 +150,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (2020 lines)
+- **`filters.py`** (2028 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -605,9 +605,9 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (924 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`
-- **`test_pickup_logistics.py`** (332 lines)
+- **`test_pickup_logistics.py`** (353 lines)
   Online auction pickups: holding lots for the second pickup, the day-before email, the logistics page,
-  `PickupTestCase`, `HoldForSecondPickupTests`, `PickupPlanTests`, `PickupTomorrowEmailTests`, `LogisticsPageTests`, `PostAuctionBannerTests`, `UsersFilterTests`, `CreatedAheadChartTests`
+  `PickupTestCase`, `HoldForSecondPickupTests`, `PickupPlanTests`, `PickupTomorrowEmailTests`, `LogisticsPageTests`, `PostAuctionBannerTests`, `UsersFilterTests`, `LocationFilterTests`, `CreatedAheadChartTests`
 - **`test_printable_lot_list.py`** (148 lines)
   The printable lot list: every lot on one page, with the columns its labels print.
   `PrintableLotListTests`, `NaturalSortKeyTests`

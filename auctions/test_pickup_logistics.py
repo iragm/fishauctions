@@ -305,6 +305,27 @@ class UsersFilterTests(PickupTestCase):
         self.assertNotIn("Vt Buyer", outstanding)
 
 
+class LocationFilterTests(PickupTestCase):
+    def test_location_stacks_with_other_filters(self):
+        from auctions.filters import AuctionTOSFilter
+
+        self.sell(self.ma_seller, self.vt_buyer)
+        self.invoice_for(self.vt_buyer)
+        qs = AuctionTOS.objects.filter(auction=self.multi)
+
+        def names(query):
+            return {tos.name for tos in AuctionTOSFilter.generic(None, qs, query)}
+
+        self.assertEqual(names('location:"vt"'), {"Vt Seller", "Vt Buyer"})
+        self.assertEqual(names("location:VT exists"), {"Vt Buyer"})
+        self.assertEqual(names('location:"MA" buyer'), set())
+
+    def test_the_location_button_links_the_filter(self):
+        self.client.force_login(self.organizer)
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.multi.slug}))
+        self.assertContains(response, "?query=location%3A%22VT%22")
+
+
 class CreatedAheadChartTests(StandardTestCase):
     def test_points_by_kind(self):
         from auctions.help_stats import _created_ahead
