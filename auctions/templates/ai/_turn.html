@@ -1,0 +1,10 @@
+{% comment %}One question and its answer, appended to the conversation on /ai/.{% endcomment %}
+<div class="ai-turn mb-3">
+  <div class="ai-question text-end mb-2"><span class="d-inline-block bg-primary-subtle rounded px-3 py-2 text-start" style="white-space: pre-wrap;">{{ question }}</span></div>
+  {% if error %}
+    <div class="alert alert-secondary mb-0">{{ error }}</div>
+  {% else %}
+    <div class="ai-answer library-text">{{ reply }}</div>
+  {% endif %}
+</div>
+{% include "ai/_usage.html" with oob=True %}

@@ -29,9 +29,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from auctions import dmca, voice
 from auctions.models import (
-    PRIVACY_POLICY_SLUG,
     Auction,
-    BlogPost,
     Club,
     ClubMember,
     Lot,
@@ -43,6 +41,7 @@ from auctions.models import (
     Watch,
 )
 from auctions.printer_programs import PROGRAM_SCHEMA_VERSION, serialize_profile
+from auctions.services import join_blocked_by_bounce
 from auctions.signals import on_sign_in
 
 from .authentication import OptionalJWTAuthentication
@@ -544,9 +543,7 @@ class MobileConfigView(APIView):
             "apple_sign_in_enabled": bool(settings.APPLE_ALLOWED_AUDIENCES),
             "facebook_app_id": settings.FACEBOOK_APP_ID,
         }
-        # Omitted when unset, rather than linking to a 404.
-        if BlogPost.objects.filter(slug=PRIVACY_POLICY_SLUG).exists():
-            data["privacy_policy_url"] = reverse("privacy_policy")
+        data["privacy_policy_url"] = reverse("privacy_policy")
         if dmca.is_configured():
             data["dmca_url"] = reverse("dmca")
         firebase = getattr(settings, "FIREBASE_CLIENT_CONFIG", None)
@@ -776,6 +773,8 @@ class MobileLotLabelView(APIView):
                 {"detail": "You do not have permission to print this lot's label."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if not lot.label_can_be_printed:
+            return Response({"detail": Lot.LABEL_NOT_SOLD_REASON}, status=status.HTTP_400_BAD_REQUEST)
 
         # Same WeasyPrint pipeline as web SingleLotLabelView.
         fmt = (request.GET.get("fmt") or "").lower()
@@ -850,6 +849,8 @@ class MobileLotLabelBatchView(APIView):
                 skipped.append({"lot": pk, "detail": "Lot not found."})
             elif not MobileLotLabelView._can_access(request.user, lot):
                 skipped.append({"lot": pk, "detail": "You do not have permission to print this lot's label."})
+            elif not lot.label_can_be_printed:
+                skipped.append({"lot": pk, "detail": Lot.LABEL_NOT_SOLD_REASON})
             else:
                 wanted.append(lot)
 
@@ -1429,10 +1430,7 @@ class MobileLotWatchView(APIView):
             return Response({"detail": "Lot not found."}, status=status.HTTP_404_NOT_FOUND)
 
         watch = serializer.validated_data["watch"]
-        if watch:
-            Watch.objects.get_or_create(lot_number=lot, user=request.user)
-        else:
-            Watch.objects.filter(lot_number=lot, user=request.user).delete()
+        Watch.set_watching(request.user, lot, watch)
         return Response({"watched": watch})
 
 
@@ -1484,6 +1482,15 @@ class MobileCheckinJoinView(APIView):
         if not auction.in_welcome_window():
             return Response(
                 {"detail": "This auction isn't open for check-in right now."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if join_blocked_by_bounce(request.user, auction):
+            # The app falls back to the auction page, whose Join button leads to reverify_email.
+            return Response(
+                {
+                    "detail": "Recent emails we've sent to you have not gone through.",
+                    "reverify_url": request.build_absolute_uri(reverse("reverify_email")),
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
         tos, checked_in = checkin_service.join_auction(request.user, auction)
         if tos is None:

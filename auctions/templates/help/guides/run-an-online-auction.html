@@ -41,6 +41,7 @@
 <p>The {% ui "Finish setting up" %} box at the top of your auction page lists what's left, and ticks things off as you go.</p>
 {% tip %}First auction? We have to OK you before you can promote it, take card payments, or have invoices emailed. Click {% ui "Contact us and request access" %} on your auction page and send your club's website.{% endtip %}
 {% aitip %}Ask "make a copy of last year's auction for March 14th".{% endaitip %}
+{% include "help/partials/created_ahead_chart.html" with chart=help.created_ahead.online label="online" %}
 
 <h2 class="h5 mt-4" id="pickup">2. Set where lots change hands</h2>
 <p>Under {% ui "More" %}, click {% page "auction_pickup_location" "Location" %}, then {% page "create_auction_pickup_location" "Add pickup location" %}.</p>
@@ -95,7 +96,7 @@
   <li><strong>Reminders happen by themselves.</strong> People who look at your auction without joining get a nudge a day later.</li>
   <li><strong>Facebook.</strong> Post it on your club's page and in local groups. Advertising an auction is fine; selling fish on Facebook is what gets posts taken down. A few dollars of local ads brings in real new members.</li>
 </ul>
-<p>A lot sells for what it's worth when at least two people really want it. One interested bidder means a $2 sale, and a few of those drag down the whole auction. So you want more people, and more lots worth fighting over:</p>
+<p>Most of your bidders come because you told them, not because the site found them. A lot sells for what it's worth when at least two people really want it. One interested bidder means a $2 sale, and a few of those drag down the whole auction. So you want more people, and more lots worth fighting over:</p>
 <ul>
   <li>Ask every vendor you know for a donation, and list those first.</li>
   <li>Get three or four serious breeders to list on day one.</li>
@@ -169,6 +170,7 @@
   <li><strong>Remind sellers to label their bags</strong>: lot number, winner, and where it's going. No printer? Marker on the bag.</li>
   <li><strong>Bring coolers labelled by lot number</strong>: 1&ndash;99, 100&ndash;199 and so on. Sellers drop bags in, buyers take theirs out. Twenty minutes, and nobody hunts for bag 347.</li>
   <li><strong>Mark people paid</strong> as they settle up.</li>
+  <li><strong>Cross people off</strong> on {% page "auction_logistics" "Logistics" %}, under {% ui "More" %}, as they leave. Tap a name again to undo it.</li>
 </ol>
 <p>A bag with only a lot number on it? Open the lot on your phone to see who won it. Someone else can pick up for a buyer; they need the name on the invoice.</p>
 

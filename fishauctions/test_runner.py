@@ -23,6 +23,9 @@ def test_settings():
     Django swaps ``EMAIL_BACKEND`` for locmem but not post_office's own ``POST_OFFICE["BACKENDS"]``, which is
     whatever the environment configured, so a test that built a queued email's message logged in to the
     real SMTP server.
+
+    ``ASSISTANT_NAVIGATE_ONLY`` is on in production, which takes every write out of the palette; the
+    suite turns it off so the palette's write path stays tested, and tests the switch by overriding it.
     """
     from django.conf import settings
 
@@ -30,7 +33,7 @@ def test_settings():
         **getattr(settings, "POST_OFFICE", {}),
         "BACKENDS": {"default": "django.core.mail.backends.locmem.EmailBackend"},
     }
-    return override_settings(PASSWORD_HASHERS=FAST_HASHERS, POST_OFFICE=post_office)
+    return override_settings(PASSWORD_HASHERS=FAST_HASHERS, POST_OFFICE=post_office, ASSISTANT_NAVIGATE_ONLY=False)
 
 
 def reset_timezone_between_tests():

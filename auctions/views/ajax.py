@@ -485,7 +485,7 @@ class PageViewCreate(APIView):
                 if campaign and campaign.result == "NONE":
                     campaign.result = "VIEWED"
                     campaign.save()
-                if campaign and campaign.user is not None and campaign.auction is not None:
+                if campaign and campaign.result != "ERR" and campaign.user is not None and campaign.auction is not None:
                     tos = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
                     if tos:
                         campaign.result = "JOINED"

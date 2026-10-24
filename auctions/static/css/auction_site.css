@@ -188,6 +188,12 @@ body .select2-container--default .select2-search--dropdown .select2-search__fiel
     color: #303030;
 }
 
+/* The dropdown's box sets no background, so under data-bs-theme="dark" (color-scheme: dark) the
+   browser paints the native input dark, and the text above was dark on dark. */
+body .select2-container--default .select2-search--dropdown .select2-search__field {
+    background-color: #fff;
+}
+
 body .select2-container--default .select2-search--inline .select2-search__field::placeholder,
 body .select2-container--default .select2-search--dropdown .select2-search__field::placeholder {
     color: #6c757d;
@@ -1018,3 +1024,21 @@ body.has-unsaved-changes-bar {
 /* The contact form's honeypot (ContactForm.website): off screen rather than display:none, which some
    bots check for. A person never sees it, so only a bot fills it in. */
 #div_id_website { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+/* The SOLD stamp across a sold lot's picture: lot tiles, the lot page and the projector view. Above
+   the carousel, and click-through so the image underneath still works. */
+.sold-stamp { position: absolute; z-index: 3; transform: rotate(-20deg); color: var(--bs-danger); font-weight: 700; pointer-events: none; }
+
+/* The library's pictures (documents/detail.html): in the text where it places them, and a zoom over
+   the page when clicked. */
+.library-picture {
+    cursor: zoom-in;
+}
+
+.library-text img.library-picture {
+    display: block;
+    max-width: 100%;
+    max-height: 24rem;
+    margin: 0.5rem 0;
+    border-radius: 0.25rem;
+}

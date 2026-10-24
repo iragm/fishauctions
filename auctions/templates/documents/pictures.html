@@ -2,7 +2,7 @@
 {% block title %}Pictures for {{ document.display_title }}{% endblock %}
 {% block content %}
 <div class="container py-4">
-  <h1 class="h4 mb-3">Pictures for <a href="{% url 'document_detail' document.pk %}">{{ document.display_title }}</a></h1>
+  <h1 class="h4 mb-3">Pictures for <a href="{{ document.get_absolute_url }}">{{ document.display_title }}</a></h1>
   <form method="post" enctype="multipart/form-data" class="mb-4">
     <input type="hidden" name="from_page" value="1">
     <input class="form-control mb-2" type="file" name="file" accept="image/*" multiple required>

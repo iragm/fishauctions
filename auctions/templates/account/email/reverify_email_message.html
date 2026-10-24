@@ -1,0 +1,4 @@
+{% extends "account/email/base_message.html" %}
+{% load email_tags %}
+{% block message %}<p>Recent emails we've sent to you have not gone through. Confirm this address to join auctions again.</p>
+{% email_button %}<a href="{{ activate_url }}">Confirm your email address</a>{% endemail_button %}{% endblock message %}

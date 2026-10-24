@@ -3,7 +3,8 @@
 ``site_stats`` is a dict of one-line facts counted once a day from real sales, so "a lot with a photo sells
 more often" comes with this site's own percentage. The rest are the tables and charts some guides draw:
 ``in_person_photos``, ``rules_chart`` (rules length against ``AuctionTOS.time_spent_reading_rules``),
-``online_timing``, ``seller_rank``, ``bid_amounts`` and ``bred_species``, plus the promo page's
+``online_timing``, ``seller_rank``, ``bid_amounts``, ``bred_species``, ``lot_timing``, ``categories`` and
+``created_ahead`` (club profit against how far ahead an auction was created), plus the promo page's
 ``promo_photos``. All are counted by the
 ``refresh_help_stats`` task (:func:`refresh`), never by a page: the guides are public and crawled, and these
 are scans of the lots table. A page that finds nothing counted asks for a count and reads the words
@@ -138,7 +139,10 @@ def refresh(run=_run):
             ("seller rank", SELLER_RANK_CACHE_KEY, "_seller_rank"),
             ("bid amounts", BID_AMOUNTS_CACHE_KEY, "_bid_amounts"),
             ("bred species", BRED_CACHE_KEY, "_bred_species"),
+            ("lot timing", LOT_TIMING_CACHE_KEY, "_lot_timing"),
+            ("categories", CATEGORIES_CACHE_KEY, "_categories"),
             ("promo photos", PROMO_PHOTOS_CACHE_KEY, "_promo_photos"),
+            ("created ahead", CREATED_AHEAD_CACHE_KEY, "_created_ahead"),
         ):
             # Looked up when run, so a test can patch the count.
             run_one(label, lambda key=key, name=name: cache.set(key, globals()[name](), SITE_CACHE_SECONDS))
@@ -318,7 +322,7 @@ def _watchers(min_people) -> dict:
     people = AuctionTOS.objects.filter(
         user__isnull=False, auction__in=_recent_auctions().filter(is_online=True, promote_this_auction=True)
     )
-    watched = Watch.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
+    watched = Watch.all_objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
     counts = people.aggregate(n=Count("pk"), watching=Count("pk", filter=Exists(watched)))
     return {"online_watchers": _pct(counts["watching"], counts["n"])} if counts["n"] >= min_people else {}
 
@@ -491,7 +495,10 @@ TIMING_CACHE_KEY = "help_online_timing_v1"
 SELLER_RANK_CACHE_KEY = "help_seller_rank_v1"
 BID_AMOUNTS_CACHE_KEY = "help_bid_amounts_v1"
 BRED_CACHE_KEY = "help_bred_species_v1"
+LOT_TIMING_CACHE_KEY = "help_lot_timing_v1"
+CATEGORIES_CACHE_KEY = "help_categories_v1"
 PROMO_PHOTOS_CACHE_KEY = "promo_lot_photos_v1"
+CREATED_AHEAD_CACHE_KEY = "help_created_ahead_v1"
 #: Fewer than this and the promo page leaves its photo strip off: a short strip looks like an empty site.
 PROMO_MIN_PHOTOS = 8
 PROMO_MAX_PHOTOS = 16
@@ -502,6 +509,16 @@ BID_CHART_DOLLARS = 60
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 #: (label, most days) for the length table, shortest first.
 LENGTHS = (("3 days or less", 3), ("4 to 7 days", 7), ("8 to 14 days", 14), ("More than 2 weeks", None))
+#: An online auction's gross, in dollars, before ``lot_timing`` counts it: a small one is a few friends.
+LOT_TIMING_MIN_GROSS = 1000
+#: (label, under this many days) before the auction ended that a lot was added, latest first.
+ADDED_BEFORE_END = (
+    ("Last day", 1),
+    ("1 to 2 days before", 2),
+    ("2 to 4 days before", 4),
+    ("4 to 7 days before", 7),
+    ("A week or more", None),
+)
 #: (label, first, last) for a seller's lots in one auction, in the order they added them.
 SELLER_RANKS = (
     ("1st to 10th", 1, 10),
@@ -531,9 +548,65 @@ def bred_species() -> dict:
     return _counted(BRED_CACHE_KEY)
 
 
+def lot_timing() -> dict:
+    """``{"rows": [{"label", "lots", "sold", "median"}], "auctions"}``, as last counted."""
+    return _counted(LOT_TIMING_CACHE_KEY)
+
+
+def categories() -> dict:
+    """``{"rows": [{"name", "lots", "views", "bids", "money"}], "lots"}``, shares in percent, as last counted."""
+    return _counted(CATEGORIES_CACHE_KEY)
+
+
 def promo_photos() -> dict:
     """``{"photos": [{"image", "url", "name"}]}``, as last counted."""
     return _counted(PROMO_PHOTOS_CACHE_KEY)
+
+
+def created_ahead() -> dict:
+    """``{"online": chart, "in_person": chart}``, chart ``{"points": [[days, profit], ...], "auctions"}``, as last
+    counted. A kind is left out when there aren't enough auctions of it.
+    """
+    return _counted(CREATED_AHEAD_CACHE_KEY)
+
+
+def _created_ahead(min_lots: int = MIN_AUCTION_LOTS, min_auctions: int = MIN_RULES_AUCTIONS) -> dict:
+    """One point per dollar-priced auction with ``min_lots`` sold lots: the days between creating it and its start
+    against what the club made (``Auction.club_profit``). Outliers on either axis are dropped.
+    """
+    from auctions.models import Lot
+
+    auctions = _recent_auctions().filter(date_posted__isnull=False)
+    sold = {
+        row["auction"]
+        for row in Lot.objects.filter(auction__in=auctions, is_deleted=False, banned=False, winning_price__isnull=False)
+        .values("auction")
+        .annotate(n=Count("pk"))
+        .filter(n__gte=min_lots)
+        .order_by()
+    }
+    dollars = _dollar_auctions(auctions.filter(pk__in=sold))
+    points: dict = {"online": [], "in_person": []}
+    for auction in auctions.filter(pk__in=dollars):
+        days = (auction.date_start - auction.date_posted).days
+        if days < 0:
+            continue
+        points["online" if auction.is_online else "in_person"].append((days, float(auction.club_profit)))
+    facts = {}
+    for kind, found in points.items():
+        if len(found) < max(min_auctions, 4):
+            continue
+        days_low, days_high = _inside_fences([days for days, _ in found])
+        profit_low, profit_high = _inside_fences([profit for _, profit in found])
+        # Days to the nearest 5 and profit to the nearest 50, so no point names an auction.
+        kept = sorted(
+            (5 * round(days / 5), 50 * round(profit / 50))
+            for days, profit in found
+            if days_low <= days <= days_high and profit_low <= profit <= profit_high
+        )
+        if len(kept) >= min_auctions:
+            facts[kind] = {"points": [[days, int(profit)] for days, profit in kept], "auctions": len(kept)}
+    return facts
 
 
 def _dollar_auctions(auctions) -> set[int]:
@@ -643,9 +716,17 @@ def _seller_rank(min_lots: int = MIN_LOTS, min_seller_lots: int = 20) -> dict:
                 label for label, first, last in SELLER_RANKS if rank >= first and (last is None or rank <= last)
             )
             groups[label].append(price)
+    rows = _sold_rows(groups, [label for label, _first, _last in SELLER_RANKS], min_lots)
+    return {"rows": rows} if len(rows) >= 2 else {}
+
+
+def _sold_rows(groups: dict, labels: list, min_lots: int) -> list[dict]:
+    """``{"label", "lots", "sold", "median"}`` for each label whose prices (``None`` unsold) number
+    ``min_lots`` or more and include a sale: the share sold, and the median price of those sold.
+    """
     rows = []
-    for label, _first, _last in SELLER_RANKS:
-        prices = groups[label]
+    for label in labels:
+        prices = groups.get(label, [])
         sold = sorted(float(price) for price in prices if price is not None)
         if len(prices) < min_lots or not sold:
             continue
@@ -657,7 +738,7 @@ def _seller_rank(min_lots: int = MIN_LOTS, min_seller_lots: int = 20) -> dict:
                 "median": statistics.median(sold),
             }
         )
-    return {"rows": rows} if len(rows) >= 2 else {}
+    return rows
 
 
 def _bid_amounts(min_bids: int = MIN_LOTS * 5, dollars: int = BID_CHART_DOLLARS) -> dict:
@@ -714,6 +795,94 @@ def _bred_species(top: int = 10, min_lots: int = 3) -> dict:
         {"name": row["species__common_name"] or row["species__scientific_name"], "lots": row["lots"]} for row in rows
     ]
     return {"rows": picked} if len(picked) >= 3 else {}
+
+
+def _big_online_auctions(min_gross: int) -> list[int]:
+    """Recent online dollar auctions that sold ``min_gross`` dollars or more."""
+    from auctions.models import Lot
+
+    online = _dollar_auctions(_recent_auctions().filter(is_online=True, date_end__isnull=False))
+    return list(
+        Lot.objects.filter(auction__in=online, is_deleted=False, banned=False)
+        .values("auction")
+        .annotate(gross=Sum("winning_price"))
+        .filter(gross__gte=min_gross)
+        .order_by()
+        .values_list("auction", flat=True)
+    )
+
+
+def _lot_timing(min_gross: int = LOT_TIMING_MIN_GROSS, min_lots: int = MIN_LOTS, min_auctions: int = 3) -> dict:
+    """Does adding a lot early help? At online auctions that grossed ``min_gross`` or more: lots by how long
+    before the auction's end they were added, the share sold and the median price. Was the blog post "What's
+    the best time to add lots to an auction?", which found it made no difference.
+    """
+    from auctions.models import Lot
+
+    auctions = _big_online_auctions(min_gross)
+    if len(auctions) < min_auctions:
+        return {}
+    groups: dict = {label: [] for label, _most in ADDED_BEFORE_END}
+    for added, ends, price in Lot.objects.filter(
+        auction__in=auctions, is_deleted=False, banned=False, date_posted__isnull=False
+    ).values_list("date_posted", "auction__date_end", "winning_price"):
+        days = (ends - added).total_seconds() / 86400
+        if days < 0:
+            continue  # added after the end: an in-person style addition, not a bid window
+        label = next(label for label, most in ADDED_BEFORE_END if most is None or days < most)
+        groups[label].append(price)
+    rows = _sold_rows(groups, [label for label, _most in ADDED_BEFORE_END], min_lots)
+    return {"rows": rows, "auctions": len(auctions), "min_gross": min_gross} if len(rows) >= 3 else {}
+
+
+def _categories(top: int = 12, min_lots: int = MIN_LOTS) -> dict:
+    """Which categories people look at, bid on and pay for, against how many lots there are of each, at
+    online auctions: each a share of the whole. Was the blog post "Category popularity".
+    """
+    from auctions.models import Bid, Lot, PageView
+
+    # Dollar auctions only, so the money adds up in one currency.
+    auctions = list(_dollar_auctions(_recent_auctions().filter(is_online=True)))
+    lots = Lot.objects.filter(auction__in=auctions, is_deleted=False, banned=False, species_category__isnull=False)
+    per_category = list(
+        lots.values("species_category", "species_category__name")
+        .annotate(n=Count("pk"), money=Sum("winning_price"))
+        .order_by("-n")
+    )
+    total_lots = sum(row["n"] for row in per_category)
+    if total_lots < min_lots:
+        return {}
+
+    def by_category(rows):
+        return {row["category"]: row["n"] for row in rows}
+
+    views = by_category(
+        PageView.objects.filter(lot_number__in=lots)
+        .values(category=F("lot_number__species_category"))
+        .annotate(n=Count("pk"))
+        .order_by()
+    )
+    bids = by_category(
+        Bid.objects.filter(lot_number__in=lots, is_deleted=False)
+        .values(category=F("lot_number__species_category"))
+        .annotate(n=Count("pk"))
+        .order_by()
+    )
+    total_views, total_bids = sum(views.values()), sum(bids.values())
+    total_money = sum(float(row["money"] or 0) for row in per_category)
+    if not total_views or not total_bids or not total_money:
+        return {}
+    rows = [
+        {
+            "name": row["species_category__name"],
+            "lots": round(100 * row["n"] / total_lots, 1),
+            "views": round(100 * views.get(row["species_category"], 0) / total_views, 1),
+            "bids": round(100 * bids.get(row["species_category"], 0) / total_bids, 1),
+            "money": round(100 * float(row["money"] or 0) / total_money, 1),
+        }
+        for row in per_category[:top]
+    ]
+    return {"rows": rows, "lots": total_lots} if len(rows) >= 3 else {}
 
 
 # --- one auction ---------------------------------------------------------------

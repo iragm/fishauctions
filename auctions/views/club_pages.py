@@ -38,6 +38,7 @@ from auctions.models import (
     ClubMember,
     Invoice,
 )
+from auctions.services import club_managed_auctions_for, needs_email_reverification
 from auctions.tables import (
     ClubMemberHTMxTable,
 )
@@ -285,6 +286,15 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         existing = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
         if existing:
             messages.info(request, "You are already a member of this club.")
+        elif (
+            needs_email_reverification(request.user)
+            and club_managed_auctions_for(self.club)
+            .filter(Q(date_end__isnull=True) | Q(date_end__gte=timezone.now()))
+            .exists()
+        ):
+            # A new member gets a row in every club-managed auction, so this is joining the live ones too.
+            club_url = reverse("club_detail", kwargs={"slug": self.club.slug})
+            return redirect(f"{reverse('reverify_email')}?next={quote_plus(club_url)}")
         else:
             member = ClubMember.objects.create(
                 club=self.club,

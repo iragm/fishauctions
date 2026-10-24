@@ -216,6 +216,7 @@ urlpatterns = [
     path("admin-dashboard/proposals/", views.AgentProposalsView.as_view(), name="agent_proposals"),
     path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
     path("species/name/", views.SpeciesCommonNameCreateView.as_view(), name="species_name_create"),
+    path("api/species/quick-add/", views.SpeciesQuickCreate.as_view(), name="species_quick_create"),
     path(
         "admin-dashboard/species-gaps/forget/<int:pk>/",
         views.SpeciesSearchCacheForgetView.as_view(),
@@ -269,6 +270,7 @@ urlpatterns = [
     path("site.webmanifest", views.site_webmanifest, name="site_webmanifest"),
     path("offline-worker.js", views.OfflineWorkerView.as_view(), name="offline_worker"),
     path("offline/", views.OfflinePageView.as_view(), name="offline"),
+    path("offline/cloudflare/", views.OfflineCloudflarePageView.as_view(), name="offline_cloudflare"),
     path("offline/snapshot/", views.OfflineSnapshotView.as_view(), name="offline_snapshot"),
     path("offline/sync/", views.OfflineSyncView.as_view(), name="offline_sync"),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
@@ -329,6 +331,7 @@ urlpatterns = [
     re_path(r"^mcp/admin/?$", AdminMCPEndpointView.as_view(), name="mcp_admin"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
+    path("upload-too-large/", views.UploadTooLarge.as_view(), name="upload_too_large"),
     path("account/", views.MyAccount.as_view(), name="account"),
     path("account/setup/", views.AccountSetupRedirect.as_view(), name="account_setup"),
     path("invoices/", login_required(views.Invoices.as_view()), name="my_invoices"),
@@ -439,6 +442,21 @@ urlpatterns = [
         "auctions/<slug:slug>/users/",
         login_required(views.AuctionUsers.as_view()),
         name="auction_tos_list",
+    ),
+    path(
+        "auctions/<slug:slug>/logistics/",
+        login_required(views.AuctionLogistics.as_view()),
+        name="auction_logistics",
+    ),
+    path(
+        "auctions/<slug:slug>/logistics/<int:pk>/<int:which>/",
+        login_required(views.AuctionLogisticsMark.as_view()),
+        name="auction_logistics_mark",
+    ),
+    path(
+        "auctions/<slug:slug>/post-end-banner/",
+        login_required(views.AuctionPostEndBanner.as_view()),
+        name="auction_post_end_banner",
     ),
     path(
         "auctions/<slug:slug>/users/disable-bidding/",
@@ -653,6 +671,12 @@ urlpatterns = [
         login_required(views.IgnoreCategoriesView.as_view()),
         name="ignore_categories",
     ),
+    path("reverify_email/", views.ReverifyEmailView.as_view(), name="reverify_email"),
+    path(
+        "reverify_email/<str:token>/",
+        views.ReverifyEmailConfirmView.as_view(),
+        name="reverify_email_confirm",
+    ),
     path(
         "contact_info/",
         login_required(views.UserLocationUpdate.as_view()),
@@ -689,7 +713,9 @@ urlpatterns = [
     path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
     # Keys for the MCP endpoint: session-authenticated like any preferences page, since this is
     # where a person issues one. /mcp/ itself never accepts a session.
-    path("ai/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
+    path("ai/", views.AIPageView.as_view(), name="ai"),
+    path("ai/ask/", views.AIAskView.as_view(), name="ai_ask"),
+    path("ai/connect/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
     # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
     # these once a second. Session auth -- the phone's half is under /api/mobile/printjobs/.
     path(
@@ -753,10 +779,13 @@ urlpatterns = [
     path("dmca/notice/", views.CopyrightNoticeCreate.as_view(), name="dmca_notice"),
     # The library (auctions/documents/).
     path("library/", views.LibraryView.as_view(), name="library"),
+    path("library/add/", views.LibraryAddView.as_view(), name="library_add"),
+    path("library/search/", views.LibrarySearchView.as_view(), name="library_search"),
     path("library/answer/", views.DocumentAnswerView.as_view(), name="library_answer"),
     path("library/batch/<int:pk>/", views.DocumentBatchView.as_view(), name="document_batch"),
     path("library/page/<int:pk>/", views.BatchPageView.as_view(), name="batch_page"),
-    path("library/<int:pk>/", views.DocumentDetailView.as_view(), name="document_detail"),
+    path("library/<int:pk>-<slug:slug>/", views.DocumentDetailView.as_view(), name="document_detail"),
+    path("library/<int:pk>/", views.DocumentShortLinkView.as_view(), name="document_link"),
     path("library/<int:pk>/file/", views.DocumentFileView.as_view(), name="document_file"),
     path("library/<int:pk>/pictures/<str:token>/", views.DocumentPicturesView.as_view(), name="document_pictures"),
     path("library/picture/<int:pk>/", views.DocumentPictureView.as_view(), name="document_picture"),

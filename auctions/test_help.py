@@ -687,7 +687,7 @@ class PaymentPagesAreHelpTests(StandardTestCase):
         self.assertContains(self.client.get(help_guides.GUIDES["payments"].url), reverse("square_connect"))
 
     def test_ai_redirects_into_the_guide(self):
-        self.assertRedirects(self.client.get("/ai/"), "/help/ai-agents/#connect", fetch_redirect_response=False)
+        self.assertRedirects(self.client.get("/ai/connect/"), "/help/ai-agents/#connect", fetch_redirect_response=False)
 
 
 class HelpKnowsYourClubTests(StandardTestCase):
@@ -868,7 +868,7 @@ class HelpKnowsYourAiAgentsTests(StandardTestCase):
         application = self.connect("Claude")
         self.connect("Claude", resource=["https://auction.fish/mcp/admin"])
         self.client.force_login(self.user)
-        self.client.post("/ai/", {"disconnect": application.pk})
+        self.client.post("/ai/connect/", {"disconnect": application.pk})
         (left,) = get_refresh_token_model().objects.filter(user=self.user)
         self.assertEqual(left.resource, ["https://auction.fish/mcp/admin"])
 

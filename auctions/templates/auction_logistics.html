@@ -1,0 +1,14 @@
+{% extends "auctions/htmx_table_view.html" %}
+
+{% block title %}Logistics for {{ auction }}{% endblock %}
+
+{% block htmx_table_ribbon %}
+  {% include "auction_ribbon.html" %}
+  {% if tabs|length > 1 %}
+  <ul class="nav nav-tabs mt-3">
+    {% for item in tabs %}
+    <li class="nav-item"><a class="nav-link {% if item.key == tab.key %}active{% endif %}" href="?tab={{ item.key }}">{{ item.label }}</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% endblock %}

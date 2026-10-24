@@ -415,6 +415,51 @@ def exact_matches(text, user=None, club=None):
     return list(found.values())[:MAX_SUGGESTIONS]
 
 
+#: Names one search may expand to: each is part of one ``REGEXP`` over ``lot_name``.
+MAX_SEARCH_NAMES = 30
+
+
+def lots_of_species_q(text, user=None):
+    """A ``Q`` for the lot filters: lots of the species *text* names exactly. Matches nothing otherwise.
+
+    Typing "Neocaridina davidi" finds the lots tagged with it or its strains, and the untagged ones
+    called "cherry shrimp"; typing a common name finds the ones called by its scientific name. Only an
+    exact name expands (:func:`exact_matches`: indexed lookups, at most :data:`MAX_SUGGESTIONS`
+    species), so half-typed text costs a few small queries and adds nothing.
+    """
+    nothing = Q(pk__in=[])
+    if len(text or "") < 3 or not re.search(r"[A-Za-z]", text):
+        return nothing
+    if user is not None and not getattr(user, "is_authenticated", False):
+        user = None
+    species = exact_matches(text, user=user)
+    if not species:
+        return nothing
+    ids = [each.pk for each in species]
+    # Scientific names first: the slice below keeps them.
+    names = [each.scientific_name for each in species] + [each.common_name for each in species]
+    names += (
+        visible_common_names(user)
+        .filter(species_id__in=ids)
+        .order_by("-is_preferred", "name")
+        .values_list("name", flat=True)[: MAX_SEARCH_NAMES * 3]
+    )
+    # Short names ("Ram") match inside other words.
+    names = list(dict.fromkeys(name.strip() for name in names if len(name.strip()) >= 4))
+    # A name other species share ("Pleco") would find every lot of those too.
+    shared = set(
+        SpeciesCommonName.objects.filter(name_normalized__in=[normalize(name) for name in names])
+        .exclude(species_id__in=ids)
+        .values_list("name_normalized", flat=True)
+    )
+    names = [name for name in names if normalize(name) not in shared][:MAX_SEARCH_NAMES]
+    q = Q(species_id__in=ids) | Q(species__parent_id__in=ids)
+    if names:
+        # One pass over lot_name, not one LIKE per name. Whole words; the collation ignores case.
+        q |= Q(lot_name__iregex=r"\b(" + "|".join(re.escape(name) for name in names) + r")\b")
+    return q
+
+
 def _named_after_the_same_thing(normalized, candidates):
     """Narrow a shared synonym to the species really called that, by its designated name.
 

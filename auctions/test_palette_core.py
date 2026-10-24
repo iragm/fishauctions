@@ -14,10 +14,8 @@ from django.utils import timezone
 
 from auctions import command_palette
 from auctions.models import (
-    PRIVACY_POLICY_SLUG,
     Auction,
     AuctionTOS,
-    BlogPost,
     Club,
     ClubMember,
     CommandPalettePage,
@@ -830,8 +828,6 @@ class MobileConfigTests(TestCase):
 
     def setUp(self):
         self.url = reverse("mobile-config")
-        # Seeded by migration, but a TransactionTestCase can truncate it.
-        BlogPost.objects.get_or_create(slug=PRIVACY_POLICY_SLUG, defaults={"title": "Privacy"})
 
     @override_settings(
         SQUARE_APPLICATION_ID="sq0idp-test",

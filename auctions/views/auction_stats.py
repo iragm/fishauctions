@@ -27,7 +27,7 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
-from django.utils import timezone
+from django.utils.functional import cached_property
 from django.views.generic import View
 from webpush.models import PushInformation
 
@@ -209,11 +209,6 @@ class AuctionCategoriesChartData(AuctionChartView):
 
 
 class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMixin):
-    bins = 21
-    days_before = 16
-    days_after = bins - days_before
-    dates_messed_with = False
-
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
@@ -234,34 +229,19 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
             except Auction.DoesNotExist:
                 pass
 
-        if self.auction.is_online:
-            self.date_start = self.auction.date_end - timezone.timedelta(days=self.days_before)
-            self.date_end = self.auction.date_end + timezone.timedelta(days=self.days_after)
-        else:  # in person
-            self.date_start = self.auction.date_start - timezone.timedelta(days=self.days_before)
-            self.date_end = self.auction.date_start + timezone.timedelta(days=self.days_after)
-        # If date_end is in the future, show the same range ending now.
-        if self.date_end > timezone.now():
-            time_difference = self.date_end - self.date_start
-            self.date_end = timezone.now()
-            self.date_start = self.date_end - time_difference
-            self.dates_messed_with = True
         return super().dispatch(request, *args, **kwargs)
+
+    @cached_property
+    def fresh_activity(self):
+        """No cached stats yet: worked out once for both the labels and the data."""
+        return self.auction.set_stat_activity()
 
     def get_labels(self):
         # Check if we have cached stats
         if self.auction.cached_stats and "activity" in self.auction.cached_stats:
             return self.auction.cached_stats["activity"]["labels"]
 
-        # Fallback to original calculation
-        if self.dates_messed_with:
-            return [(f"{i - 1} days ago") for i in range(self.bins, 0, -1)]
-        before = [(f"{i} days before") for i in range(self.days_before, 0, -1)]
-        after = [(f"{i} days after") for i in range(1, self.days_after)]
-        midpoint = "start"
-        if self.auction.is_online:
-            midpoint = "end"
-        return before + [midpoint] + after
+        return self.fresh_activity["labels"]
 
     def get_providers(self):
         # Check if we have cached stats
@@ -292,22 +272,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         if self.auction.cached_stats and "activity" in self.auction.cached_stats:
             data = self.auction.cached_stats["activity"]["data"]
         else:
-            # Fallback to original calculation if cache is not available
-            views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
-            joins = AuctionTOS.objects.filter(auction=self.auction)
-            new_lots = Lot.objects.filter(auction=self.auction)
-            searches = SearchHistory.objects.filter(auction=self.auction)
-            bids = LotHistory.objects.filter(lot__auction=self.auction, changed_price=True)
-            watches = Watch.objects.filter(lot_number__auction=self.auction)
-
-            data = [
-                bin_data(views, "date_start", self.bins, self.date_start, self.date_end),
-                bin_data(joins, "createdon", self.bins, self.date_start, self.date_end),
-                bin_data(new_lots, "date_posted", self.bins, self.date_start, self.date_end),
-                bin_data(searches, "createdon", self.bins, self.date_start, self.date_end),
-                bin_data(bids, "timestamp", self.bins, self.date_start, self.date_end),
-                bin_data(watches, "createdon", self.bins, self.date_start, self.date_end),
-            ]
+            data = self.fresh_activity["data"]
 
         # Add comparison auction data if available
         if (
@@ -972,7 +937,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             # Every percent below is of this; an auction nobody with an account has joined has none.
             with_account = auctiontos_with_account.count() or 1
             seach_percent = int(searches / with_account * 100)
-            watch_qs = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct()
+            watch_qs = Watch.all_objects.filter(lot_number__auction=self.auction).values("user").distinct()
             watches = watch_qs.count()
             watch_percent = int(watches / with_account * 100)
             notifications = (

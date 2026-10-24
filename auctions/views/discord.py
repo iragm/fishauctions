@@ -35,6 +35,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from auctions.discord_events import discord_link
 from auctions.models import (
     BapAward,
     Club,
@@ -636,7 +637,7 @@ class DiscordInteractionsView(View):
             else:
                 lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D>{renew_hint}")
 
-        lines.append(f"\n[View your membership]({member.simple_membership_link})")
+        lines.append(f"\n[View your membership]({discord_link(member.simple_membership_link)})")
 
         return _discord_ephemeral("\n".join(lines))
 

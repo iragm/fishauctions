@@ -498,7 +498,7 @@ class PageTests(LibraryTestCase):
         self.client.force_login(self.owner)
         upload = SimpleUploadedFile("care.txt", b"Feed daphnia twice a day.")
         with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            response = self.client.post(reverse("library"), {"file": upload, "club": self.club.pk})
+            response = self.client.post(reverse("library_add"), {"file": upload, "club": self.club.pk})
         document = Document.objects.get()
         self.assertRedirects(response, document.get_absolute_url())
         self.assertEqual((document.original_name, document.club, document.owner), ("care.txt", self.club, self.owner))
@@ -507,14 +507,14 @@ class PageTests(LibraryTestCase):
 
     def test_several_files_make_several_documents_and_a_duplicate_is_skipped(self):
         self.client.force_login(self.owner)
-        self.client.post(reverse("library"), {"file": SimpleUploadedFile("old.txt", b"already here")})
+        self.client.post(reverse("library_add"), {"file": SimpleUploadedFile("old.txt", b"already here")})
         files = [
             SimpleUploadedFile("one.txt", b"first"),
             SimpleUploadedFile("two.txt", b"second"),
             SimpleUploadedFile("again.txt", b"already here"),
         ]
         response = self.client.post(
-            reverse("library"), {"file": files, "title": "Ignored", "author": "Ed."}, follow=True
+            reverse("library_add"), {"file": files, "title": "Ignored", "author": "Ed."}, follow=True
         )
         self.assertEqual(Document.objects.count(), 3)
         self.assertEqual(set(Document.objects.filter(author="Ed.").values_list("title", flat=True)), {""})
@@ -522,19 +522,19 @@ class PageTests(LibraryTestCase):
 
     def test_arriving_from_a_club_preselects_it(self):
         self.client.force_login(self.owner)
-        response = self.client.get(reverse("library"), {"club": self.club.slug})
-        self.assertEqual(response.context["form"].initial, {"club": self.club.pk})
+        response = self.client.get(reverse("library_add"), {"club": self.club.slug})
+        self.assertEqual(response.context["form"].initial, {"visibility": Visibility.PUBLIC, "club": self.club.pk})
 
     def test_the_same_file_twice_is_refused(self):
         self.client.force_login(self.owner)
         for _ in range(2):
-            response = self.client.post(reverse("library"), {"file": SimpleUploadedFile("a.txt", b"same bytes")})
+            response = self.client.post(reverse("library_add"), {"file": SimpleUploadedFile("a.txt", b"same bytes")})
         self.assertEqual(Document.objects.count(), 1)
         self.assertContains(response, "already in the library")
 
     def test_a_club_needs_permission_to_file_under(self):
         self.client.force_login(self.member)
-        self.client.post(reverse("library"), {"file": SimpleUploadedFile("a.txt", b"x"), "club": self.club.pk})
+        self.client.post(reverse("library_add"), {"file": SimpleUploadedFile("a.txt", b"x"), "club": self.club.pk})
         self.assertEqual(Document.objects.get().club, None, "no club they may file under, so it is theirs alone")
 
     def test_pages_and_the_file_are_for_members_only(self):
@@ -552,7 +552,7 @@ class PageTests(LibraryTestCase):
     def test_search_page_and_answer(self):
         self.document()
         self.client.force_login(self.member)
-        self.assertContains(self.client.get(reverse("library"), {"q": "microworms"}), "Spawning dwarf cichlids")
+        self.assertContains(self.client.get(reverse("library_search"), {"q": "microworms"}), "Spawning dwarf cichlids")
         self.assertContains(self.client.get(reverse("library_answer"), {"q": "microworms"}), "On microworms.")
 
     def test_only_managers_edit_or_delete(self):
@@ -586,7 +586,7 @@ class PageTests(LibraryTestCase):
         document = self.document(index_it=False)
         Document.objects.filter(pk=document.pk).update(removed=True, sha256=hashlib.sha256(b"x").hexdigest())
         self.client.force_login(self.member)
-        response = self.client.post(reverse("library"), {"file": SimpleUploadedFile("again.txt", b"x")})
+        response = self.client.post(reverse("library_add"), {"file": SimpleUploadedFile("again.txt", b"x")})
         self.assertContains(response, "taken down")
         self.assertEqual(Document.objects.count(), 1)
 
@@ -773,7 +773,7 @@ class ChunkRowTests(LibraryTestCase):
 class PublicByDefaultTests(LibraryTestCase):
     def test_an_upload_is_public_unless_said_otherwise(self):
         self.client.force_login(self.owner)
-        self.client.post(reverse("library"), {"file": SimpleUploadedFile("care.txt", b"Feed daphnia.")})
+        self.client.post(reverse("library_add"), {"file": SimpleUploadedFile("care.txt", b"Feed daphnia.")})
         document = Document.objects.get()
         self.assertEqual(document.visibility, Visibility.PUBLIC)
         self.assertIn(document, visible_documents(self.outsider))
@@ -781,11 +781,11 @@ class PublicByDefaultTests(LibraryTestCase):
     def test_club_only_needs_a_club_and_hides_it_from_outsiders(self):
         self.client.force_login(self.owner)
         response = self.client.post(
-            reverse("library"), {"file": SimpleUploadedFile("a.txt", b"a"), "visibility": Visibility.CLUB}
+            reverse("library_add"), {"file": SimpleUploadedFile("a.txt", b"a"), "visibility": Visibility.CLUB}
         )
         self.assertContains(response, "Choose the club")
         self.client.post(
-            reverse("library"),
+            reverse("library_add"),
             {"file": SimpleUploadedFile("a.txt", b"a"), "visibility": Visibility.CLUB, "club": self.club.pk},
         )
         document = Document.objects.get()
@@ -911,7 +911,7 @@ class BatchTests(LibraryTestCase):
         self.client.force_login(self.owner)
         files = [SimpleUploadedFile("issue.pdf", out.getvalue()), SimpleUploadedFile("loose.png", picture())]
         with self.captureOnCommitCallbacks(execute=False):
-            response = self.client.post(reverse("library"), {"file": files, "mode": "pages", "more_coming": "on"})
+            response = self.client.post(reverse("library_add"), {"file": files, "mode": "pages", "more_coming": "on"})
         batch = self.owner.document_batches.get()
         self.assertRedirects(response, batch.get_absolute_url())
         self.assertEqual(batch.status, batch.WAITING)
@@ -922,7 +922,7 @@ class BatchTests(LibraryTestCase):
     def test_word_files_are_not_pages(self):
         self.client.force_login(self.owner)
         response = self.client.post(
-            reverse("library"), {"file": SimpleUploadedFile("talk.docx", b"x"), "mode": "pages"}
+            reverse("library_add"), {"file": SimpleUploadedFile("talk.docx", b"x"), "mode": "pages"}
         )
         self.assertContains(response, "Only pictures and PDFs can be pages")
 
@@ -1048,7 +1048,7 @@ class AccessTests(LibraryTestCase):
         for url in (reverse("library"), document.get_absolute_url(), reverse("document_file", args=[document.pk])):
             self.assertEqual(self.client.get(url).status_code, 404, url)
         upload = SimpleUploadedFile("care.txt", b"Feed daphnia twice a day.")
-        self.assertEqual(self.client.post(reverse("library"), {"file": upload}).status_code, 404)
+        self.assertEqual(self.client.post(reverse("library_add"), {"file": upload}).status_code, 404)
         self.assertFalse(Document.objects.filter(owner=self.member).exists())
 
     def test_nothing_links_to_it(self):
@@ -1144,7 +1144,8 @@ class PictureTests(LibraryTestCase):
         body = response.json()
         self.assertEqual([each["caption"] for each in body["added"]], ["Male in colour", "Eggs in peat"])
         document = Document.objects.get()
-        self.assertEqual([p.file.name[-4:] for p in document.pictures.all()], [".jpg", ".png"])
+        # Converted as lot images are, by resize_source.
+        self.assertEqual([p.file.name[-4:] for p in document.pictures.all()], [".jpg", ".jpg"])
 
     def test_the_cameras_metadata_is_gone(self):
         exif = Image.Exif()
@@ -1224,3 +1225,264 @@ class PictureTests(LibraryTestCase):
         with mock.patch("auctions.documents.forms.MAX_BYTES_PER_PERSON", document.size + 10):
             body = self.post(self.link(document), ("a.jpg", _picture_bytes())).json()
         self.assertIn("library space", body["problems"][0])
+
+
+def _picture_on(document, size=(300, 200)):
+    added, problems = pictures.add_pictures(
+        document, [SimpleUploadedFile("fish.jpg", _picture_bytes(size=size))], ["A male"]
+    )
+    assert added, problems
+    return added[0]
+
+
+class AddressTests(LibraryTestCase):
+    """A document's address carries its title; the old one by number still works, for its readers only."""
+
+    def test_the_title_is_in_the_address_and_a_stale_one_redirects(self):
+        document = self.document()
+        self.assertEqual(document.get_absolute_url(), f"/library/{document.pk}-dwarf-cichlids/")
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(document.get_absolute_url()).status_code, 200)
+        stale = reverse("document_detail", kwargs={"pk": document.pk, "slug": "old-title"})
+        self.assertRedirects(self.client.get(stale), document.get_absolute_url())
+        self.assertRedirects(self.client.get(f"/library/{document.pk}/"), document.get_absolute_url())
+
+    def test_the_short_link_never_spells_out_a_title_to_somebody_who_cannot_read_it(self):
+        document = self.document()
+        self.client.force_login(self.outsider)
+        self.assertEqual(self.client.get(f"/library/{document.pk}/").status_code, 404)
+        self.client.logout()
+        response = self.client.get(f"/library/{document.pk}/")
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn("dwarf", response["Location"])
+
+
+class ListTests(LibraryTestCase):
+    """``/library/``: your own and your clubs' documents, filtered by words and by who can read them."""
+
+    def test_it_lists_mine_and_my_clubs_but_not_everyone_elses(self):
+        made = []
+        for title, kwargs in (
+            ("Club notes", {}),
+            ("Personal notes", {"club": None, "owner": self.member}),
+            ("Elsewhere", {"club": None, "owner": self.outsider, "visibility": Visibility.PUBLIC}),
+        ):
+            self.provider.details = {"topics": [], "title": title, "author": "", "year": None}
+            made.append(self.document(name=f"{title}.md", text=f"# {title}\n\nText.", **kwargs))
+        club_one, mine, elsewhere = made
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("library"))
+        self.assertContains(response, club_one.display_title)
+        self.assertContains(response, mine.display_title)
+        self.assertNotContains(response, elsewhere.display_title)
+        self.assertContains(response, reverse("library_add"))
+        self.assertContains(response, reverse("library_search"))
+
+    def test_words_and_visibility_filter_over_htmx(self):
+        self.provider.details = {"topics": [], "title": "Killifish", "author": "Ann Example", "year": 1977}
+        killies = self.document(name="k.md", text="# Killies\n\nPeat.")
+        self.provider.details = {"topics": [], "title": "Plants", "author": "Bob", "year": 1990}
+        plants = self.document(name="p.md", text="# Plants\n\nJava fern.", club=None, visibility=Visibility.WEB)
+        self.client.force_login(self.owner)
+        htmx = {"HTTP_HX_REQUEST": "true"}
+        response = self.client.get(reverse("library"), {"query": "example 1977"}, **htmx)
+        self.assertContains(response, killies.display_title)
+        self.assertNotContains(response, plants.display_title)
+        self.assertNotContains(response, "<html")
+        response = self.client.get(reverse("library"), {"visibility": Visibility.WEB}, **htmx)
+        self.assertContains(response, plants.display_title)
+        self.assertNotContains(response, killies.display_title)
+
+    def test_old_search_links_land_on_the_search_page_which_still_filters_by_species(self):
+        document = self.document()
+        document.species.add(self.species)
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("library"), {"species": self.species.pk, "q": "fry"})
+        self.assertRedirects(
+            response, reverse("library_search") + f"?species={self.species.pk}&q=fry", fetch_redirect_response=False
+        )
+        response = self.client.get(reverse("library_search"), {"species": self.species.pk, "q": "fry"})
+        self.assertContains(response, document.display_title)
+        self.assertContains(response, "Apistogramma agassizii")
+
+    def test_its_own_menu_entry_and_app_drawer_row(self):
+        from auctions.mobile.menu import menu_for
+
+        def drawer(user):
+            return [row["title"] for section in menu_for(user)["sections"] for row in section["items"]]
+
+        self.client.force_login(self.member)
+        self.assertContains(
+            self.client.get(reverse("help")), f'<a class="nav-link" href="{reverse("library")}">Library</a>'
+        )
+        self.assertIn("Library", drawer(self.member))
+        self.member.userdata.library_enabled = False
+        self.member.userdata.save(update_fields=["library_enabled"])
+        self.assertNotContains(self.client.get(reverse("help")), f'href="{reverse("library")}"')
+        self.assertNotIn("Library", drawer(self.member))
+
+
+class AddPageTests(LibraryTestCase):
+    """``/library/add/``: files or pasted text, starting from the visibility and club used last."""
+
+    def test_it_starts_public_then_remembers_the_last_choice(self):
+        self.client.force_login(self.owner)
+        self.assertEqual(
+            self.client.get(reverse("library_add")).context["form"].initial,
+            {"visibility": Visibility.PUBLIC, "club": None},
+        )
+        with mock.patch("auctions.tasks.index_document.delay"):
+            self.client.post(
+                reverse("library_add"),
+                {"file": SimpleUploadedFile("a.txt", b"a"), "visibility": Visibility.CLUB, "club": self.club.pk},
+            )
+        self.assertEqual(
+            self.client.get(reverse("library_add")).context["form"].initial,
+            {"visibility": Visibility.CLUB, "club": self.club.pk},
+        )
+
+    def test_search_engines_are_never_the_remembered_choice(self):
+        Document.objects.create(owner=self.owner, visibility=Visibility.WEB, original_name="x")
+        self.client.force_login(self.owner)
+        self.assertEqual(
+            self.client.get(reverse("library_add")).context["form"].initial["visibility"], Visibility.PUBLIC
+        )
+
+    def test_a_club_you_can_no_longer_file_under_is_not_remembered(self):
+        Document.objects.create(owner=self.member, club=self.club, visibility=Visibility.CLUB, original_name="x")
+        self.client.force_login(self.member)
+        self.assertEqual(
+            self.client.get(reverse("library_add")).context["form"].initial,
+            {"visibility": Visibility.PUBLIC, "club": None},
+        )
+
+    def test_pasted_text_is_a_document_as_it_was_written(self):
+        self.client.force_login(self.owner)
+        with mock.patch("auctions.tasks.index_document.delay"):
+            response = self.client.post(
+                reverse("library_add"), {"text": "# Feeding\r\n\r\nDaphnia, **twice** a day.", "mode": "pages"}
+            )
+        document = Document.objects.get()
+        self.assertRedirects(response, document.get_absolute_url(), fetch_redirect_response=False)
+        self.assertEqual(document.text, "# Feeding\n\nDaphnia, **twice** a day.")
+        self.assertTrue(document.parser_version)
+        self.assertEqual(document.original_name, "pasted text.md")
+
+    def test_nothing_chosen_says_so(self):
+        self.client.force_login(self.owner)
+        self.assertContains(self.client.post(reverse("library_add"), {}), "Choose a file, or paste the text.")
+
+
+class WebVisibilityTests(LibraryTestCase):
+    """``web``: readable signed out, listed in the sitemap, and the only kind not marked noindex."""
+
+    def test_anyone_reads_a_web_document_and_its_pictures(self):
+        document = self.document(visibility=Visibility.WEB)
+        picture = _picture_on(document)
+        response = self.client.get(document.get_absolute_url())
+        self.assertContains(response, "fifth day")
+        self.assertContains(response, 'rel="canonical"')
+        self.assertNotContains(response, 'name="robots" content="noindex"')
+        self.assertNotContains(response, reverse("document_edit", args=[document.pk]))
+        self.assertEqual(self.client.get(reverse("document_picture", args=[picture.pk])).status_code, 200)
+        self.assertIn(document.get_absolute_url(), self.client.get("/sitemap.xml").content.decode())
+
+    def test_other_documents_still_send_the_signed_out_to_sign_in(self):
+        document = self.document(visibility=Visibility.PUBLIC)
+        picture = _picture_on(document)
+        for url in (document.get_absolute_url(), reverse("document_picture", args=[picture.pk])):
+            self.assertRedirects(
+                self.client.get(url), f"{reverse('account_login')}?next={url}", fetch_redirect_response=False
+            )
+        self.assertNotIn(document.get_absolute_url(), self.client.get("/sitemap.xml").content.decode())
+        self.client.force_login(self.member)
+        self.assertContains(self.client.get(document.get_absolute_url()), 'name="robots" content="noindex"')
+
+    def test_a_scan_shared_with_an_article_not_on_the_web_stays_private(self):
+        from auctions.models import BatchPage, DocumentBatch
+
+        batch = DocumentBatch.objects.create(owner=self.owner, visibility=Visibility.CLUB, club=self.club)
+        shared = BatchPage.objects.create(batch=batch, file=ContentFile(b"x", name="p.png"), original_name="p.png")
+        alone = BatchPage.objects.create(batch=batch, file=ContentFile(b"x", name="q.png"), original_name="q.png")
+        web = self.document(name="w.md", visibility=Visibility.WEB, index_it=False)
+        club_only = self.document(name="c.md", text="# Other\n\nText.", index_it=False)
+        web.pages.add(shared, alone)
+        club_only.pages.add(shared)
+        self.assertRedirects(
+            self.client.get(reverse("batch_page", args=[shared.pk])),
+            f"{reverse('account_login')}?next={reverse('batch_page', args=[shared.pk])}",
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(self.client.get(reverse("batch_page", args=[alone.pk])).status_code, 200)
+
+    def test_where_it_came_from_is_not_shown_to_the_open_web(self):
+        document = self.document(name="IMG_private_name.md", visibility=Visibility.WEB)
+        self.assertNotContains(self.client.get(document.get_absolute_url()), "IMG_private_name")
+
+    def test_an_account_without_the_library_reads_only_web_documents(self):
+        web = self.document(name="w.md", visibility=Visibility.WEB)
+        public = self.document(name="p.md", text="# Other\n\nText.", visibility=Visibility.PUBLIC)
+        self.member.userdata.library_enabled = False
+        self.member.userdata.save(update_fields=["library_enabled"])
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(web.get_absolute_url()).status_code, 200)
+        self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 404)
+
+
+class MarkdownTests(LibraryTestCase):
+    """The text is Markdown, cut down to safe HTML, with the document's own pictures placed in it."""
+
+    def test_markdown_renders_and_scripts_and_other_sites_pictures_do_not(self):
+        from auctions.documents.render import to_html
+
+        html = to_html(
+            "## Fry\n\n**Daphnia** <script>alert(1)</script> [link](javascript:alert(1)) "
+            "![tracker](https://example.com/x.png) <img src=x onerror=alert(1)>",
+            [],
+        )
+        self.assertIn("<h2>Fry</h2>", html)
+        self.assertIn("<strong>Daphnia</strong>", html)
+        self.assertNotIn("<script", html)
+        self.assertNotIn("javascript:", html)
+        self.assertNotIn("example.com", html)
+        self.assertNotIn("<img", html)
+        self.assertIn("tracker", html)
+        # Angle brackets in an old transcription are words, not tags to throw away.
+        self.assertIn("&lt;Betta splendens&gt;", to_html("Keep <Betta splendens> warm", []))
+
+    def test_a_passage_cut_out_of_a_long_table_is_rendered_with_the_rest_of_it(self):
+        rows = "\n".join(f"| {n} | microworms and brine shrimp, fed twice a day |" for n in range(120))
+        document = self.document(text=f"# Feeding log\n\n| Day | Food |\n|---|---|\n{rows}\n")
+        self.assertGreater(document.chunks.count(), 2)
+        self.client.force_login(self.member)
+        response = self.client.get(document.get_absolute_url())
+        self.assertNotContains(response, "| 119 |")
+        self.assertContains(response, "<td>119</td>")
+        for start in document.chunks.values_list("start", flat=True):
+            self.assertContains(response, f'id="at-{start}"')
+
+    def test_a_picture_the_text_names_is_shown_there_and_not_again_above(self):
+        document = self.document(visibility=Visibility.PUBLIC)
+        placed = _picture_on(document)
+        other_document = self.document(name="o.md", text="# Other\n\nText.")
+        foreign = _picture_on(other_document)
+        url = reverse("document_picture", args=[placed.pk])
+        foreign_url = reverse("document_picture", args=[foreign.pk])
+        document.text += f"\n\n![The male]({url})\n\n![Not ours]({foreign_url})\n"
+        document.chunker_version = ""
+        document.save()
+        index.index_document(document.pk)
+        document.refresh_from_db()
+        self.client.force_login(self.member)
+        response = self.client.get(document.get_absolute_url())
+        self.assertEqual(response.context["gallery"], [])
+        self.assertContains(response, f'src="{url}"', count=1)
+        self.assertNotContains(response, f'src="{foreign_url}"')
+        self.assertContains(response, 'id="picture-zoom"')
+        self.assertNotContains(response, 'target="_blank" rel="noopener"><img')
+
+    def test_pictures_are_capped_at_a_thousand_pixels(self):
+        document = self.document()
+        picture = _picture_on(document, size=(2400, 1200))
+        with picture.file.open("rb") as handle, Image.open(handle) as image:
+            self.assertEqual(image.size, (1000, 500))

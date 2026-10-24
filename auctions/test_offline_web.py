@@ -15,7 +15,7 @@ from django.utils import timezone
 from auctions.context_processors import offline_auction
 from auctions.models import AuctionTOS, Lot, MobileOfflineOp
 from auctions.tests import StandardTestCase
-from auctions.views.offline import OFFLINE_STATIC_FILES
+from auctions.views.offline import OFFLINE_STATIC_FILES, worker_version
 
 
 class OfflinePageTests(StandardTestCase):
@@ -32,6 +32,23 @@ class OfflinePageTests(StandardTestCase):
         for name in OFFLINE_STATIC_FILES:
             if name.endswith((".css", ".js")):
                 self.assertIn(name.rsplit(".", 1)[0].rsplit("/", 1)[-1], html)
+
+    def test_the_cloudflare_copy_loads_nothing_from_the_site(self):
+        response = self.client.get(reverse("offline_cloudflare"))
+        html = response.content.decode()
+        # Cloudflare requires its token, and shows this page only when it can't reach us.
+        self.assertIn("::CLOUDFLARE_ERROR_500S_BOX::", html)
+        self.assertNotIn("<script src", html)
+        self.assertNotIn('rel="stylesheet"', html)
+        self.assertNotIn('href="/static/', html)
+        self.assertNotIn("@import", html)
+        self.assertNotIn("sourceMappingURL", html)
+        self.assertIn(f'<meta name="offline-version" content="{worker_version()}">', html)
+        self.assertIn("window.OfflineStore", html)
+        self.assertIn('id="winner-form"', html)
+        # One <script> and one <style>: nothing in the files written in ends either early.
+        self.assertEqual(html.count("</script>"), 1)
+        self.assertEqual(html.count("</style>"), 2)
 
     def test_worker_is_served_from_the_root_and_caches_the_page(self):
         response = self.client.get(reverse("offline_worker"))

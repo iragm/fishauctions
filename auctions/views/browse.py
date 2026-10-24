@@ -621,10 +621,19 @@ class BuyingDashboard(HTMxTableView):
                 bidding=Exists(Bid.objects.filter(lot_number=OuterRef("pk"), user=user, is_deleted=False)),
             )
             .filter(Q(watching=True) | Q(bidding=True) | Lot.won_by_q(user))
-            .select_related("auction", "auctiontos_winner")
-            .prefetch_related("bid_set")
+            .select_related("auction__created_by__userdata", "user__userdata", "auctiontos_winner", "auctiontos_seller")
+            .prefetch_related("bid_set__user")
             .order_by(*order)
         )
+
+    def get_table(self, **kwargs):
+        table = super().get_table(**kwargs)
+        # The live refresh repeats this request with the auction pinned: without it, /buying/ picks the
+        # last auction used again, which another tab may have changed since.
+        refresh = self.request.GET.copy()
+        refresh["auction"] = ALL_AUCTIONS if self.all_auctions else getattr(self.auction, "slug", "")
+        table.refresh_url = f"{self.request.path}?{refresh.urlencode()}"
+        return table
 
     def get_table_kwargs(self):
         kwargs = {"user": self.request.user}
@@ -741,15 +750,8 @@ class WatchOrUnwatch(APIView):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
             return HttpResponse("Failure")
-        obj = Watch.objects.filter(lot_number=lot, user=user).first()
-        if not obj:
-            obj = Watch.objects.create(lot_number=lot, user=user)
-        if watch == "false":  # string not bool...
-            obj.delete()
-        if obj:
-            return HttpResponse("Success")
-        else:
-            return HttpResponse("Failure")
+        Watch.set_watching(user, lot, watch != "false")  # string not bool...
+        return HttpResponse("Success")
 
 
 class PlaceBid(APIView):
@@ -849,6 +851,8 @@ class NoLotAuctions(APIView):
                 if tos:
                     if not tos.selling_allowed:
                         result = f"You don't have permission to add lots to {auction}"
+                    elif not tos.can_sell:
+                        result = f"You're holding your lots for the second pickup, so you can't sell in {auction}"
             if not result:
                 if auction.max_lots_per_user:
                     lot_list = Lot.objects.filter(

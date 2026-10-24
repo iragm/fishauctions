@@ -15,6 +15,8 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <h6 class="px-3 text-muted text-truncate mb-1" title="{{ sidebar_auction.title }}">{{ sidebar_auction.title }}</h6>
   {% if members_through_auction %}
   <a class="nav-link {% if active_tab == 'users' %}active{% endif %}" href="{% url 'auction_tos_list' slug=sidebar_auction.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
+  {% elif not sidebar_auction.is_club_managed %}
+  <a class="nav-link {% if active_tab == 'users' %}active{% endif %}" href="{% url 'auction_tos_list' slug=sidebar_auction.slug %}"><i class="bi bi-people-fill me-1"></i> Users</a>
   {% endif %}
   {% comment %} Add user opens the same modal the auction users table uses: a club member form for
   club-managed auctions (with the auction pre-linked in check-in mode), or the AuctionTOS form otherwise.

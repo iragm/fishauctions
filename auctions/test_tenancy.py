@@ -46,13 +46,13 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "won_lots", "my_lot_report", "my_won_lot_csv", "my_lots_page_view_history", "user_api_keys",
         "chat_subscriptions", "auction_confirm", "all_my_users", "paypal_seller", "square_seller",
         "account_data_export", "account_merge", "library", "library_answer",
-        "command_palette", "unsubscribe", "auction_join",
+        "command_palette", "ai", "unsubscribe", "auction_join",
         # Beacons, health and static documents.
         "pageview", "form_abandoned", "check_username", "get_ad", "click_ad", "service_worker",
         "site_webmanifest", "javascript-catalog", "assetlinks", "apple_app_site_association",
         # The emergency page and its worker are the same for everyone; the snapshot is only an auction the
         # caller runs (null for a stranger), so it is their own.
-        "offline", "offline_worker", "offline_snapshot",
+        "offline", "offline_worker", "offline_snapshot", "offline_cloudflare",
         # Barcodes render bars for a number; they hold no membership lookup (see ClubBarcodeView).
         "club_barcode", "club_barcode_png",
         # Autocompletes scope their own querysets to what the caller may see.

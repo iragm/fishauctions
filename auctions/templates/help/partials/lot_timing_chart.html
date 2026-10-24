@@ -1,0 +1,39 @@
+{% load static %}
+{% comment %}Lots by how long before the end they were added, from help_stats.lot_timing: the share sold (bars) and the median price (line). Was the blog post "What's the best time to add lots to an auction?".{% endcomment %}
+{% with chart=help.lot_timing %}{% if chart.rows %}
+<figure class="mb-3" style="max-width: 40em;">
+  <figcaption class="small text-muted mb-1">Lots at {{ chart.auctions }} online auctions here that sold ${{ chart.min_gross|floatformat:"0g" }} or more, by when they were added.</figcaption>
+  <div style="position: relative; height: 240px;"><canvas id="lot-timing-chart" role="img" aria-label="{% for row in chart.rows %}{{ row.label }}: {{ row.sold }}% sold, median ${{ row.median|floatformat:0 }}. {% endfor %}"></canvas></div>
+</figure>
+{{ chart.rows|json_script:"lot-timing-rows" }}
+<script src="{% static 'js/Chart.min.js' %}"></script>
+<script>
+(function () {
+  var rows = JSON.parse(document.getElementById('lot-timing-rows').textContent);
+  var ink = '#adb5bd', grid = 'rgba(255, 255, 255, 0.08)';
+  Chart.defaults.global.defaultFontFamily = getComputedStyle(document.body).fontFamily;
+  new Chart(document.getElementById('lot-timing-chart').getContext('2d'), {
+    type: 'bar',
+    data: {labels: rows.map(function (r) { return r.label; }), datasets: [
+      {type: 'line', label: 'Median price', yAxisID: 'price', data: rows.map(function (r) { return r.median; }), borderColor: '#00bc8c', borderWidth: 2, fill: false},
+      {label: 'Sold', yAxisID: 'sold', data: rows.map(function (r) { return r.sold; }), backgroundColor: 'rgba(47, 164, 231, 0.7)'}
+    ]},
+    options: {
+      maintainAspectRatio: false,
+      legend: {labels: {fontColor: ink, boxWidth: 12}},
+      scales: {
+        xAxes: [{ticks: {fontColor: ink}, gridLines: {display: false}}],
+        yAxes: [
+          {id: 'sold', position: 'left', ticks: {fontColor: ink, beginAtZero: true, max: 100, callback: function (v) { return v + '%'; }}, gridLines: {color: grid, zeroLineColor: grid}},
+          {id: 'price', position: 'right', ticks: {fontColor: ink, beginAtZero: true, callback: function (v) { return '$' + v; }}, gridLines: {display: false}}
+        ]
+      },
+      tooltips: {mode: 'index', intersect: false, callbacks: {label: function (item, data) {
+        var set = data.datasets[item.datasetIndex];
+        return set.label + ': ' + (set.yAxisID === 'price' ? '$' + item.yLabel : item.yLabel + '%');
+      }}}
+    }
+  });
+})();
+</script>
+{% endif %}{% endwith %}

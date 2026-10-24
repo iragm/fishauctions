@@ -41,6 +41,7 @@ from .models import (
     Club,
     ClubHistory,
     ClubMember,
+    Document,
     DonationVendor,
     GeneralInterest,
     Invoice,
@@ -56,6 +57,7 @@ from .models import (
     distance_to,
 )
 from .queryset_annotations import add_tos_info
+from .species_matching import lots_of_species_q
 
 #: LotFilter's search box: at most this many characters and this many " or " alternatives.
 TEXT_FILTER_MAX_LENGTH = 200
@@ -222,6 +224,10 @@ def rhyming_name_q(value, name_field="name"):
     return q
 
 
+#: ``location:"Name with spaces"`` or ``location:Name`` in the users list search; stacks with the keywords.
+LOCATION_FILTER = re.compile(r'(?:^|\s)location:(?:"([^"]*)"|([^"\s]\S*))', re.IGNORECASE)
+
+
 class AuctionTOSFilter(django_filters.FilterSet):
     """For admin views that add users to an auction, and lot creation and winner screens."""
 
@@ -254,6 +260,14 @@ class AuctionTOSFilter(django_filters.FilterSet):
         Reused as ``AuctionTOSFilter.generic(qs, value)``.
         """
 
+        # By pickup location, first so no keyword below is taken out of a location's name. Not when matching
+        # names only: there the text is a person's name.
+        if not match_names_only:
+            for match in list(LOCATION_FILTER.finditer(value)):
+                name = match.group(1) if match.group(1) is not None else match.group(2)
+                qs = qs.filter(pickup_location__name__iexact=name)
+            value = LOCATION_FILTER.sub(" ", value)
+
         # sketchy users. Whole words only: a bare ^sus took "susan" for "sus" + "an".
         pattern = re.compile(r"(?:^|\s)sus(?=\s|$)")
         if pattern.search(value):
@@ -269,6 +283,10 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "exists": {"auctiontos__isnull": False},
             "owes club": {"auctiontos__calculated_total__lt": 0},
             "club owes": {"auctiontos__calculated_total__gt": 0},
+            # An invoice that isn't paid yet, whatever its status.
+            "outstanding": {},
+            # A seller with a sold lot whose label hasn't been printed.
+            "unprinted": {},
             "seen": {"auctiontos__opened": True},
             "unseen": {"auctiontos__opened": False},
             "can bid": {"bidding_allowed": True},
@@ -303,6 +321,20 @@ class AuctionTOSFilter(django_filters.FilterSet):
                         qs = qs.filter(
                             Q(bidding_allowed=False)
                             | Q(auction__manage_users_through_club="checkin", checked_in__isnull=True)
+                        )
+                    elif keyword == "outstanding":
+                        qs = qs.filter(auctiontos__isnull=False).exclude(auctiontos__status="PAID")
+                    elif keyword == "unprinted":
+                        qs = qs.filter(
+                            Exists(
+                                Lot.objects.filter(
+                                    auctiontos_seller=OuterRef("pk"),
+                                    is_deleted=False,
+                                    banned=False,
+                                    auctiontos_winner__isnull=False,
+                                    label_printed=False,
+                                )
+                            )
                         )
                     else:
                         qs = qs.filter(**filter_data)
@@ -458,6 +490,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_dropdown__icontains=value)
                 | Q(custom_random__iexact=value)
                 | Q(auction__title__icontains=value)
+                | lots_of_species_q(value, getattr(getattr(self, "request", None), "user", None))
             )
         return queryset
 
@@ -1066,6 +1099,7 @@ class LotFilter(django_filters.FilterSet):
                     # branch above, where a number means a lot number.
                     | Q(custom_random__iexact=fragment)
                     | Q(auctiontos_seller__bidder_number=fragment)
+                    | lots_of_species_q(fragment, self.user)
                 )
             return queryset.filter(qList)
 
@@ -1164,6 +1198,7 @@ class BuyingLotFilter(django_filters.FilterSet):
                 | Q(species__scientific_name__icontains=value)
                 | Q(species__common_name__icontains=value)
                 | Q(custom_lot_number=value)
+                | lots_of_species_q(value, self.request.user)
             )
             if value.isdecimal():
                 q |= Q(lot_number_int=value)
@@ -1943,3 +1978,55 @@ class DonationVendorFilter(django_filters.FilterSet):
         if value.lower() in ("due", "overdue", "followup", "follow up"):
             return queryset.filter(followup_due__lte=timezone.now())
         return queryset.filter(Q(name__icontains=value) | Q(contact_name__icontains=value) | Q(email__icontains=value))
+
+
+LIBRARY_FILTER_CONTROL_CLASS = "library-filter-control"
+
+
+class DocumentFilter(django_filters.FilterSet):
+    """The library list (``/library/``): words in the title, author, file name or year, and who can read it.
+
+    Plain matching, not the library's search: asking the documents a question is ``/library/search/``.
+    """
+
+    query = django_filters.CharFilter(
+        method="document_search",
+        label="",
+        widget=TextInput(
+            attrs=htmx_filter_attrs(
+                LIBRARY_FILTER_CONTROL_CLASS,
+                "keyup changed delay:300ms",
+                "form-control",
+                placeholder="Filter by title, author or year",
+            )
+        ),
+    )
+    # Rendered by the header's menu as radios, and real query parameters for links.
+    visibility = django_filters.CharFilter(method="filter_by_visibility", widget=HiddenInput())
+    club = django_filters.CharFilter(method="filter_by_club", widget=HiddenInput())
+
+    class Meta:
+        model = Document
+        fields = []
+
+    def __init__(self, data=None, *args, **kwargs):
+        # Keep it bound, as SpeakerFilter.
+        if not data:
+            data = {"query": ""}
+        super().__init__(data, *args, **kwargs)
+
+    def filter_by_visibility(self, queryset, name, value):
+        from .documents.models import Visibility
+
+        return queryset.filter(visibility=value) if value in Visibility.values else queryset
+
+    def filter_by_club(self, queryset, name, value):
+        return queryset.filter(club__slug=value) if value else queryset
+
+    def document_search(self, queryset, name, value):
+        for word in (value or "").split()[:8]:
+            match = Q(title__icontains=word) | Q(author__icontains=word) | Q(original_name__icontains=word)
+            if word.isdigit():
+                match |= Q(year=int(word))
+            queryset = queryset.filter(match)
+        return queryset

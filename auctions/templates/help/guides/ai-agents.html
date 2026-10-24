@@ -1,7 +1,8 @@
 {% load help_tags %}
-{% comment %}See HELP.md for the voice. /ai/ redirects here (#connect). The reader's own connections and keys are help_tags.ai_connections; the forms there still post to /ai/ (UserAPIKeyView).{% endcomment %}
+{% comment %}See HELP.md for the voice. /ai/connect/ redirects here (#connect). The reader's own connections and keys are help_tags.ai_connections; the forms there still post to /ai/connect/ (UserAPIKeyView).{% endcomment %}
 {% mcp_url as mcp_address %}
 <p>An AI assistant, like Claude, ChatGPT or Grok, can use this site the same way you do. You ask in plain English; it finds the pages and does the typing.</p>
+<p>To try it first, {% page "ai" "Ask AI" %} answers questions with this site's own AI, a few a day. Your own assistant has no daily limit and can make changes too.</p>
 <div class="row g-3 mb-3">
   <div class="col-md-6"><div class="card h-100"><div class="card-body">
     <h3 class="h6 card-title"><i class="bi bi-chat-left-text"></i> Ask it things like</h3>
@@ -59,6 +60,7 @@
     </ol>
   </div></div></div>
 </div>
+{% mike %}In testing, Claude seems to be by far the best at using tools from the site. Claude Opus 5.5 at Medium effort outperforms all ChatGPT models settings I have tried. If you're already paying for ChatGPT, it's probably not worth switching, but if you're planning to sign up for a service to use with auction.fish, the obvious choice right now is Claude.{% endmike %}
 {% if help.ai_duplicates %}{% helptip "robot" %}{% for agent in help.ai_duplicates %}{{ agent.name }} is connected {{ agent.count }} times, so everything it does happens {{ agent.count }} times. {% endfor %}{% ui "Disconnect" %} it <a href="#connected">below</a>, then connect it once.{% endhelptip %}{% endif %}
 
 <h2 class="h5 mt-4" id="connected">What's connected</h2>

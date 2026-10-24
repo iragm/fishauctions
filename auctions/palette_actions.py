@@ -915,7 +915,7 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
     # A previous listing supplies photos, description, and (on an exact match) capitalisation.
     previous, name_was_exact = find_lot_to_copy(tos.user, lot_name, exclude_auction=auction)
     if previous:
-        data = clone_lot_values(previous)
+        data = clone_lot_values(previous, auction)
         # Form data, so foreign keys as pks.
         data["species_category"] = previous.species_category_id
         data["species"] = previous.species_id
@@ -1005,7 +1005,7 @@ def _create_one_lot(request, auction, tos, for_self, params: dict[str, Any]) -> 
         **({"reused_a_previous_lot": reused} if reused else {}),
         followups=[
             {"label": "View this lot", "url": lot.lot_link},
-            _lot_label_followup(lot),
+            *([_lot_label_followup(lot)] if lot.label_can_be_printed else []),
             *([{"label": "Edit this lot", "url": reverse("edit_lot", kwargs={"pk": lot.pk})}] if previous else []),
         ],
     )
@@ -2251,6 +2251,8 @@ def print_labels(request, params: dict[str, Any]) -> dict[str, Any]:
             allowed = False
         if not allowed:
             return _error("You can only print labels for your own lots, unless you run that auction.")
+        if not lot.label_can_be_printed:
+            return _error(Lot.LABEL_NOT_SOLD_REASON)
         # ``url`` is the label page; the lot link rides as ``lot_url`` (made absolute over MCP).
         echo = _lot_echo(lot)
         echo["lot_url"] = echo.pop("url")
@@ -3073,6 +3075,12 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         )
 
     joined, _created, problem = join_auction_service(user, auction, location)
+    if problem == "email":
+        return _error(
+            "Recent emails we've sent to you have not gone through. Before you can join another auction, "
+            f"you need to validate your email address again at {request.build_absolute_uri(reverse('reverify_email'))}, "
+            "then ask me again."
+        )
     if problem == "phone_number":
         return _error(
             f"{auction.title} needs a phone number on your account before you can join. "
@@ -4369,10 +4377,13 @@ def list_lots(request, params: dict[str, Any]) -> dict[str, Any]:
     query = _str(params, "query") or _str(params, "filter") or _str(params, "name")
     if query:
         # ``query`` matches lot name and species names, so "which daphnia is left" is one call.
+        from .species_matching import lots_of_species_q
+
         lots = lots.filter(
             Q(lot_name__icontains=query)
             | Q(species__common_name__icontains=query)
             | Q(species__scientific_name__icontains=query)
+            | lots_of_species_q(query, user=request.user)
         )
         label += f" and match “{query}”"
     # Participants can browse every lot anyway; only seller names are admin-only.
@@ -5445,16 +5456,16 @@ def clubs_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     return {"found": True, "clubs": rows, "summary": f"{len(rows)} club(s) within {distance} miles of you."}
 
 
-#: Characters of one FAQ answer or blog post sent.
+#: Characters of one FAQ answer sent.
 HELP_ANSWER_CHARS = 600
 
 #: Default help articles returned.
 HELP_LIMIT = 6
 
-#: What ``source`` accepts. The FAQ can be read through with no query; the guides and blog can't.
+#: What ``source`` accepts. The FAQ can be read through with no query; the guides can't.
 _HELP_SOURCES = {
-    "all": ("guides", "faq", "blog"),
-    "everything": ("guides", "faq", "blog"),
+    "all": ("guides", "faq"),
+    "everything": ("guides", "faq"),
     "help": ("guides",),
     "guide": ("guides",),
     "guides": ("guides",),
@@ -5464,10 +5475,11 @@ _HELP_SOURCES = {
     "questions": ("faq",),
     "questions_and_answers": ("faq",),
     "answers": ("faq",),
-    "blog": ("blog",),
-    "blogs": ("blog",),
-    "posts": ("blog",),
-    "news": ("blog",),
+    # The blog's posts moved into the guides.
+    "blog": ("guides",),
+    "blogs": ("guides",),
+    "posts": ("guides",),
+    "news": ("guides",),
 }
 
 
@@ -5496,56 +5508,40 @@ def _guide_row(result) -> dict[str, Any]:
 
 
 def search_help(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Search the help guides, FAQ and blog, or read the FAQ through.
+    """Search the help guides and FAQ, or read the FAQ through.
 
     Grounds "how does X work" in text written here. Guides come first: they are step by step and kept
     complete by ``test_help``. ``query`` is optional (whole FAQ in page order, for ``help://faq``);
     ``source`` narrows. Agent-only FAQ entries are included; that flag isn't privacy.
     """
     from . import help_guides
-    from .models import FAQ, BlogPost
+    from .models import FAQ
 
     query = _str(params, "query") or _str(params, "question")
     said = _str(params, "source") or "all"
     wanted = said.lower().replace(" ", "_").replace("-", "_")
     if wanted not in _HELP_SOURCES:
         # Refused, not defaulted: a dropped narrowing looks like a real answer.
-        return _error(f"“{said}” isn't something I can search. Say guides, faq, blog, or all.")
+        return _error(f"“{said}” isn't something I can search. Say guides, faq, or all.")
     sources = _HELP_SOURCES[wanted]
     words = re.findall(r"[A-Za-z0-9']{3,}", query.lower())[:6] if query else []
     if query and not words:
         return {"found": False, "help": [], "summary": f"Nothing written down about “{query}”."}
     if not words and "faq" not in sources:
-        return _error("Give me something to look for — the guides and the blog are searched, not read through.")
+        return _error("Give me something to look for — the guides are searched, not read through.")
 
     guide_results = help_guides.search(query, limit=50) if "guides" in sources and words else []
     faq_entries = FAQ.objects.none()
-    posts = BlogPost.objects.none()
     if "faq" in sources:
         faq_q = Q()
         for word in words:
             faq_q |= Q(question__icontains=word) | Q(answer__icontains=word)
         # The page's order; pk breaks ties so pages are stable.
         faq_entries = (FAQ.objects.filter(faq_q) if words else FAQ.objects.all()).order_by("category_text", "pk")
-    if "blog" in sources and words:
-        blog_q = Q()
-        for word in words:
-            blog_q |= Q(title__icontains=word) | Q(body__icontains=word)
-        posts = BlogPost.objects.filter(blog_q).order_by("-date_posted")
-
-    def blog_row(post):
-        return {
-            "source": "Blog",
-            "question": post.title,
-            "answer": plain_text(post.body, limit=HELP_ANSWER_CHARS),
-            "url": reverse("blog_post", kwargs={"slug": post.slug}),
-        }
-
-    # One exact-paged list: guides, then FAQ, then blog. Each part is (total, rows for [start, stop)).
+    # One exact-paged list: guides, then FAQ. Each part is (total, rows for [start, stop)).
     parts = [
         (len(guide_results), lambda start, stop: [_guide_row(r) for r in guide_results[start:stop]]),
         (faq_entries.count(), lambda start, stop: [_faq_row(e) for e in faq_entries[start:stop]]),
-        (posts.count(), lambda start, stop: [blog_row(p) for p in posts[start:stop]]),
     ]
     limit, offset = _slice(params, default=HELP_LIMIT)
     total = sum(count for count, _rows in parts)
@@ -5905,10 +5901,8 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
     watching = _flag(params, "watching")
     if watching is None:
         watching = not (_str(params, "action").lower() in {"unwatch", "remove", "stop"} or params.get("unwatch"))
-    existing = Watch.objects.filter(lot_number=lot, user=user).first()
+    Watch.set_watching(user, lot, watching)
     if watching:
-        if not existing:
-            Watch.objects.create(lot_number=lot, user=user)
         summary = f"Lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, is on your watch list."
         followups = [
             {"label": "View this lot", "url": lot.lot_link},
@@ -5930,8 +5924,6 @@ def watch_lot(request, params: dict[str, Any]) -> dict[str, Any]:
                 "describes": f"watching {untrusted_short(lot.lot_name)}",
             },
         )
-    if existing:
-        existing.delete()
     return _ok(
         f"Took lot {lot.lot_number_display}, {untrusted_short(lot.lot_name)}, off your watch list.",
         lot_id=lot.pk,
@@ -6178,7 +6170,7 @@ def edit_lot(request, params: dict[str, Any]) -> dict[str, Any]:
         **_lot_echo(lot),
         followups=[
             {"label": "View this lot", "url": lot.lot_link},
-            _lot_label_followup(lot),
+            *([_lot_label_followup(lot)] if lot.label_can_be_printed else []),
         ],
         undo={"action": "edit_lot", "params": undo_params, "describes": f"the change to {lot.lot_name}"},
     )
@@ -14706,7 +14698,7 @@ register(
     Action(
         name="search_help",
         description=(
-            "Search this site's own help guides, FAQ and blog for how something works, or read the "
+            "Search this site's own help guides and FAQ for how something works, or read the "
             "whole FAQ with no query at all. Each guide result links to the section it came from. "
             "Use this for ANY platform question — 'how does proxy bidding "
             "work?', 'what's a donation lot?', 'how do I print labels?', 'what does buy now "
@@ -14723,7 +14715,7 @@ register(
             ),
             "source": (
                 "string, optional, default all. 'guides' for the step-by-step help guides alone; "
-                "'faq' for the questions and answers; 'blog' for the posts; 'all' for every one."
+                "'faq' for the questions and answers; 'all' for both."
             ),
             "limit": f"integer, optional, default {HELP_LIMIT}. How many articles to return, up to {MAX_LIST_LIMIT}.",
             "offset": PAGING_PARAMS["offset"],
@@ -15390,7 +15382,9 @@ PICTURES_HOW = (
     "Crop each photograph or drawing out of the page and POST it as multipart/form-data to "
     "pictures_upload_url, a field named file per picture, each followed by a caption field, e.g. "
     "curl -F file=@fig1.jpg -F caption='Male in breeding colour' <pictures_upload_url>. If you can't run "
-    "commands that reach this site, give the person the link instead. It works for a week."
+    "commands that reach this site, give the person the link instead. It works for a week. "
+    "![caption](picture_url) in the text, put there on the document's Edit page, shows a picture where "
+    "it was printed."
 )
 
 
@@ -15700,6 +15694,7 @@ def add_document(request, params: dict[str, Any]) -> dict[str, Any]:
     where = f"{club.name}'s library" if club else "the library"
     where += {
         "public": ", where everyone on the site can read it",
+        "web": ", where anyone can read it and search engines may list it",
         "club": ", for its members",
         "private": ", where only you can see it",
     }[visibility]
@@ -15789,7 +15784,7 @@ register(
             "author": "string, optional. Who wrote it, as printed.",
             "year": "integer, optional. The year it was written.",
             "topics": "array of strings, optional. Replaces the topics; read_document lists the current ones. Topic slugs or labels.",
-            "visibility": "string, optional. Who can read it: public (everyone signed in), club (its club's members), or private (only its uploader).",
+            "visibility": "string, optional. Who can read it: public (everyone signed in), web (anyone, and search engines may list it), club (its club's members), or private (only its uploader).",
         },
         danger=DANGER_CONFIRM,
         destructive=True,
@@ -15847,7 +15842,8 @@ register(
             "club": "string, optional. The club whose library it goes in, by slug or name.",
             "visibility": (
                 "string, optional, default public. Who can read it: public (everyone signed in to the "
-                "site), club (members of its club; needs club), or private (only the user)."
+                "site), web (anyone, and search engines may list it), club (members of its club; needs "
+                "club), or private (only the user)."
             ),
             "topics": f"array of strings, optional. Up to four of: {', '.join(slug for slug, _label in TOPICS)}.",
         },
@@ -16061,7 +16057,7 @@ SKILLS: dict[str, str] = {
     # The upload form, with an agent's transcription as the file.
     # Bug reports and feature requests: the form is the same row request_a_skill writes.
     "FeatureRequestsView": "request_a_skill",
-    "LibraryView": "add_document",
+    "LibraryAddView": "add_document",
     "DocumentEditView": "update_document",
     "DocumentDeleteView": "delete_document",
     "AuctionBulkPrinting": "print_labels",
@@ -16224,6 +16220,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "BlogPostView": _REDIRECT,
+    "ReverifyEmailView": (
+        "Sends a verification link to the person's own inbox, and clicking that link is the whole point, "
+        "which an assistant can't do for them; join_auction's error links the page."
+    ),
     "OfflineSyncView": (
         "Hands the server entries the emergency page saved in the browser while the site was down. "
         "They are the same sales, people and lots set_lot_winner, add_person and add_lot record, so an "
@@ -16250,6 +16251,10 @@ NOT_A_SKILL: dict[str, str] = {
         "A reader telling a document's keeper that its transcription is garbled or its tags are wrong. "
         "Judging that means looking at the original scan beside the text, and a caller with only the "
         "text cannot; the keeper's own fix is update_document."
+    ),
+    "AuctionLogisticsMark": (
+        "Crosses a name off a pickup list while that person stands at the table with their lots, and back "
+        "on with a second tap. It records nothing anyone acts on later; the list itself is the record."
     ),
     "AuctionPageAction": (
         "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "
@@ -16500,6 +16505,7 @@ NOT_A_SKILL: dict[str, str] = {
     "PageViewCreate": _MACHINE,
     "SetCoordinates": _MACHINE,
     "SpeciesSuggestions": _MACHINE,
+    "SpeciesQuickCreate": _MACHINE,
     "VoiceCommandLogView": _MACHINE,
     "VoiceInterpretView": _MACHINE,
     "VoiceCloudSessionView": _MACHINE,
@@ -16552,6 +16558,11 @@ NOT_A_SKILL: dict[str, str] = {
     "CommandPaletteExecuteView": _PALETTE,
     "CommandPaletteLogView": _PALETTE,
     "CommandPaletteReportView": _PALETTE,
+    "AIAskView": (
+        "Asks the site's own model a question with the read tools this registry serves; an agent "
+        "calling those tools already is that model's replacement, so a tool for it would be a model "
+        "asking a smaller model."
+    ),
 }
 
 

@@ -97,6 +97,7 @@ from .services import (
     auction_to_copy,
     bidder_number_conflict,
     bidder_number_taken_message,
+    clone_lot_hints,
     clone_lot_values,
     member_holding_bidder_number,
     user_can_clone_lot,
@@ -174,6 +175,22 @@ if (!window.speciesSearchWired) {
   (function () {
     var timer = null;
     function results(box) { return box.querySelector('[data-species-search-results]'); }
+    function choose(box, id, text) {
+      var select = document.getElementById(box.dataset.speciesSearch);
+      if (!select) { return; }
+      if (!select.querySelector('option[value="' + id + '"]')) {
+        var option = document.createElement('option');
+        option.value = id;
+        option.textContent = text;
+        select.appendChild(option);
+      }
+      select.value = id;
+      // Marks it as a person's choice, so a later lot-name edit can't quietly replace it.
+      select.dataset.userChosen = '1';
+      $(select).trigger('change');
+      results(box).innerHTML = '';
+      box.querySelector('input').value = '';
+    }
     function run(box) {
       var query = box.querySelector('input').value.trim();
       var list = results(box);
@@ -188,7 +205,16 @@ if (!window.speciesSearchWired) {
           var empty = document.createElement('div');
           empty.className = 'list-group-item text-muted small';
           empty.textContent = 'No species found. ';
-          if (box.dataset.speciesAdd) {
+          var words = query.split(/\\s+/).length;
+          if (box.dataset.speciesCreate && words >= 2 && words <= 3) {
+            // A scientific name the list lacks: one click adds it, for this seller only until reviewed.
+            var create = document.createElement('button');
+            create.type = 'button';
+            create.className = 'btn btn-link btn-sm p-0 align-baseline';
+            create.dataset.speciesCreate = query;
+            create.textContent = 'Add ' + query;
+            empty.appendChild(create);
+          } else if (box.dataset.speciesAdd) {
             var add = document.createElement('a');
             add.href = '/species/new/?lot_name=' + encodeURIComponent(query)
                      + '&next=' + encodeURIComponent(window.location.pathname);
@@ -215,22 +241,25 @@ if (!window.speciesSearchWired) {
       clearTimeout(timer);
       timer = setTimeout(function () { run(box); }, 250);
     });
-    $(document).on('click', '[data-species-search-results] button', function () {
-      var box = this.closest('[data-species-search]');
-      var select = document.getElementById(box.dataset.speciesSearch);
-      if (!select) { return; }
-      if (!select.querySelector('option[value="' + this.dataset.speciesId + '"]')) {
-        var option = document.createElement('option');
-        option.value = this.dataset.speciesId;
-        option.textContent = this.textContent;
-        select.appendChild(option);
-      }
-      select.value = this.dataset.speciesId;
-      // Marks it as a person's choice, so a later lot-name edit can't quietly replace it.
-      select.dataset.userChosen = '1';
-      $(select).trigger('change');
-      results(box).innerHTML = '';
-      box.querySelector('input').value = '';
+    $(document).on('click', '[data-species-search-results] button[data-species-id]', function () {
+      choose(this.closest('[data-species-search]'), this.dataset.speciesId, this.textContent);
+    });
+    $(document).on('click', '[data-species-search-results] button[data-species-create]', function () {
+      var button = this;
+      var box = button.closest('[data-species-search]');
+      var form = box.closest('form');
+      var token = form && form.querySelector('[name=csrfmiddlewaretoken]');
+      button.disabled = true;
+      function refused(message) { button.replaceWith(document.createTextNode(message || 'Could not add it.')); }
+      $.post(box.dataset.speciesCreate, {
+        scientific_name: button.dataset.speciesCreate,
+        csrfmiddlewaretoken: token ? token.value : ''
+      }).done(function (data) {
+        // A signed-out session answers with the login page, not JSON.
+        if (data && data.id) { choose(box, data.id, data.text); } else { refused(); }
+      }).fail(function (xhr) {
+        refused(xhr.responseJSON && xhr.responseJSON.error);
+      });
     });
   })();
 }
@@ -245,10 +274,11 @@ class SpeciesSelect(forms.Select):
     ``searchable`` adds a search box for species the matcher can't reach from the name. Off by default.
     """
 
-    def __init__(self, attrs=None, choices=(), *, searchable=False, can_add=False):
+    def __init__(self, attrs=None, choices=(), *, searchable=False, can_add=False, can_create=False):
         super().__init__(attrs, choices)
         self.searchable = searchable
         self.can_add = can_add
+        self.can_create = can_create
 
     def optgroups(self, name, value, attrs=None):
         chosen = [str(item) for item in value if item not in ("", None)]
@@ -266,6 +296,8 @@ class SpeciesSelect(forms.Select):
             return html
         select_id = (attrs or {}).get("id") or f"id_{name}"
         add = ' data-species-add="1"' if self.can_add else ""
+        if self.can_create:
+            add += f' data-species-create="{escape(reverse("species_quick_create"))}"'
         return mark_safe(  # noqa: S308 - the only interpolation is an id Django built
             html
             + f'<div class="species-search mt-1" data-species-search="{escape(select_id)}"{add}>'
@@ -299,6 +331,7 @@ def configure_species_field(
     always_render=False,
     searchable=False,
     can_add=False,
+    can_create=False,
     picker=True,
     dal_for=None,
 ):
@@ -306,7 +339,8 @@ def configure_species_field(
 
     Hidden (not removed) when the auction has the field off; ``clean_species_for_auction`` ignores
     posted values. ``always_render`` is for the form where the auction is chosen in the form.
-    ``can_add`` offers "add to the list" and assumes an auction-admin audience. ``picker=False`` is the
+    ``can_add`` offers "add to the list" and assumes an auction-admin audience. ``can_create`` offers a
+    one-click add of a typed scientific name the search can't find (``SpeciesQuickCreate``). ``picker=False`` is the
     quick-add pages: a hidden input filled from one certain match, still validated.
     """
     field = fields.get(field_name)
@@ -343,6 +377,7 @@ def configure_species_field(
         attrs={"class": "form-select species-select", "data-species-select": "1"},
         searchable=searchable,
         can_add=can_add,
+        can_create=can_create,
     )
     field.help_text = "Suggested from the lot name.  Pick No species for equipment and mixed lots."
     if searchable:
@@ -493,6 +528,16 @@ def jpeg_safe_upload(uploaded_image):
             pass
     name = f"{Path(uploaded_image.name or 'image').stem}.jpg"
     return ContentFile(converted.getvalue(), name=name)
+
+
+def clean_new_image_upload(image):
+    """A form's ``clean_<image field>``: a fresh upload fully decoded, so a broken file is a field error
+    rather than a 500 (ImageField only checks headers), and made JPEG-safe. Anything else as it was.
+    """
+    if isinstance(image, UploadedFile):
+        validate_uploaded_image(image)
+        image = jpeg_safe_upload(image)
+    return image
 
 
 def clean_summernote(html, max_length=16383):
@@ -1397,6 +1442,8 @@ class EditLot(forms.ModelForm):
             Div(
                 HTML(
                     f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'
+                    if self.lot.label_can_be_printed
+                    else ""
                 ),
                 HTML(
                     '<button type="button" class="btn btn-secondary me-auto" onmousedown="event.preventDefault()" onclick="closeModal()">Cancel</button>'
@@ -1928,6 +1975,9 @@ class LotRefundForm(forms.ModelForm):
 
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required=True)
+    hold_for_second_pickup = forms.BooleanField(
+        required=False, label="Hold lots purchased at my location for the second pickup time"
+    )
 
     def __init__(self, user, auction, next_url=None, *args, joined=False, **kwargs):
         self.user = user
@@ -1961,6 +2011,51 @@ class AuctionJoin(forms.ModelForm):
             )
         self.fields["pickup_location"].queryset = auction.location_qs
         self.fields["time_spent_reading_rules"].widget = HiddenInput()
+        # Offered for the locations with a second pickup time; the script shows it when one is picked.
+        hold_locations = []
+        if auction.is_online and auction.multi_location:
+            hold_locations = [
+                pk
+                for pk, second, by_mail in auction.location_qs.values_list("pk", "second_pickup_time", "pickup_by_mail")
+                if second and not by_mail
+            ]
+        if hold_locations:
+            tos = (
+                AuctionTOS.objects.filter(user=user, auction=auction).first()
+                if user and user.is_authenticated
+                else None
+            )
+            if tos:
+                self.fields["hold_for_second_pickup"].initial = tos.hold_for_second_pickup
+                # A seller has to be there at the first pickup: once they have lots it can only be unchecked.
+                if not tos.hold_for_second_pickup and tos.lots_qs.exists():
+                    self.fields["hold_for_second_pickup"].disabled = True
+            self.helper.layout.insert(
+                3,
+                Div(
+                    "hold_for_second_pickup",
+                    HTML(
+                        '<div class="form-text">I accept the risks of longer transport times for my lots</div>'
+                        '<div class="form-text mb-2">Checking this will prevent you from selling in this auction</div>'
+                    ),
+                    css_id="hold-for-second-pickup",
+                    data_locations=json.dumps(hold_locations),
+                ),
+            )
+            self.helper.layout.append(
+                HTML(
+                    "<script>(function () {"
+                    "var box = document.getElementById('hold-for-second-pickup');"
+                    "var select = document.getElementById('id_pickup_location');"
+                    "if (!box || !select) { return; }"
+                    "var locations = JSON.parse(box.dataset.locations);"
+                    "function show() { box.hidden = locations.indexOf(parseInt(select.value, 10)) === -1; }"
+                    "select.addEventListener('change', show); show();"
+                    "})();</script>"
+                )
+            )
+        else:
+            del self.fields["hold_for_second_pickup"]
         if self.auction.multi_location:
             self.fields["i_agree"].initial = True
             self.fields["i_agree"].widget = HiddenInput()
@@ -2184,12 +2279,7 @@ class CreateImageForm(forms.ModelForm):
         """Fully decode a new upload so a broken image is a field error rather than a 500 (ImageField only
         checks headers).
         """
-        image = self.cleaned_data.get("image")
-        # Only a newly uploaded file.
-        if isinstance(image, UploadedFile):
-            validate_uploaded_image(image)
-            image = jpeg_safe_upload(image)
-        return image
+        return clean_new_image_upload(self.cleaned_data.get("image"))
 
     def clean(self):
         cleaned_data = super().clean()
@@ -2994,6 +3084,8 @@ class CreateLotForm(forms.ModelForm):
     #: Set by refreshSpeciesUI() in lot_form.html when the category picker is on screen. While closed,
     #: its posted value is a leftover and gets derived; once opened, it's the user's answer.
     category_shown = forms.BooleanField(required=False, widget=forms.HiddenInput())
+    #: Filled by pasting a picture onto the page (lot_form.html); added to the lot once it is saved.
+    pasted_image = forms.ImageField(required=False, label="", widget=forms.FileInput(attrs={"accept": "image/*"}))
 
     show_payment_pickup_info = forms.BooleanField(required=False, label="Show payment/pickup info")
     AUCTION_CHOICES = [
@@ -3060,6 +3152,9 @@ class CreateLotForm(forms.ModelForm):
         self.cloned_from = kwargs.pop("cloned_from")
         self.auction = kwargs.pop("auction")
         super().__init__(*args, **kwargs)
+        self.clone_source = None
+        #: For lot_form.html to redo the copy's minimum bid and custom fields when the auction changes.
+        self.clone_hints = None
         self.fields["auction"].queryset = self.user.userdata.available_auctions_to_submit_lots
         if self.auction:
             if self.fields["auction"].queryset.filter(pk=self.auction.pk).exists():
@@ -3080,8 +3175,8 @@ class CreateLotForm(forms.ModelForm):
                 clone_from_lot = Lot.objects.filter(pk=self.cloned_from, is_deleted=False).first()
                 # you can only clone your lots
                 if user_can_clone_lot(self.user, clone_from_lot):
-                    for field, value in clone_lot_values(clone_from_lot).items():
-                        self.fields[field].initial = value
+                    # Its values go in once the auction the copy goes into is known, below.
+                    self.clone_source = clone_from_lot
                     self.fields["cloned_from"].initial = int(self.cloned_from)
             # default to making new lots part of a club auction
             self.fields["part_of_auction"].initial = "True"
@@ -3130,11 +3225,15 @@ class CreateLotForm(forms.ModelForm):
             initial_auction = self.fields["auction"].initial
             if initial_auction and isinstance(initial_auction, Auction):
                 selected_auction = initial_auction
+        if self.clone_source:
+            for field, value in clone_lot_values(self.clone_source, selected_auction).items():
+                self.fields[field].initial = value
+            self.clone_hints = clone_lot_hints(self.clone_source)
         self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
         self.fields["custom_dropdown"].required = False
         self.fields["custom_dropdown"].help_text = ""
         # Always rendered, shown and hidden by JS with the chosen auction.
-        configure_species_field(self.fields, selected_auction, always_render=True, searchable=True)
+        configure_species_field(self.fields, selected_auction, always_render=True, searchable=True, can_create=True)
         narrow_categories(
             self.fields["species_category"],
             selected_auction,
@@ -3178,6 +3277,7 @@ class CreateLotForm(forms.ModelForm):
             "cloned_from",
             "species_offered",
             "image_url",
+            Div("pasted_image", css_class="d-none"),
             Div(
                 Div(
                     "part_of_auction",
@@ -3211,6 +3311,11 @@ class CreateLotForm(forms.ModelForm):
                         "<span id='species-summary-text'></span>"
                         "<button type='button' id='species-edit' class='btn btn-link btn-sm p-0 ms-1 align-baseline'>"
                         "Change</button></div>"
+                    ),
+                    HTML(
+                        "<div id='pasted-image-preview' class='d-none mb-3'>"
+                        "<img src='' alt='Pasted image' class='img-thumbnail' style='max-height: 150px;'>"
+                        "<div class='text-muted small'>This image is added to the lot when you save</div></div>"
                     ),
                     css_class="col-md-12",
                 ),
@@ -3307,8 +3412,14 @@ class CreateLotForm(forms.ModelForm):
             HTML("</span>"),
         )
 
+    def clean_pasted_image(self):
+        return clean_new_image_upload(self.cleaned_data.get("pasted_image"))
+
     def clean(self):
         cleaned_data = super().clean()
+        if self.errors.get("pasted_image"):
+            # The field itself is hidden, so its error would be too.
+            self.add_error(None, f"The pasted image: {self.errors['pasted_image'][0]}")
 
         # Client-side validation bypass just leaves the lot unavailable.
         auction = cleaned_data.get("auction")
@@ -3588,6 +3699,7 @@ class UserLocation(forms.ModelForm):
             "location_coordinates",
             "address",
             "club",
+            "location_confirmed",
         )
 
     def __init__(self, *args, **kwargs):
@@ -3615,6 +3727,10 @@ class UserLocation(forms.ModelForm):
         self.fields["club"].widget = HiddenInput()
         if self.instance.club:
             self.fields["club_affiliation"].initial = self.instance.club.name
+        # Only once a location is saved: the visit that first sets it has nothing to confirm yet.
+        has_location = bool(self.instance.pk and (self.instance.latitude or self.instance.longitude))
+        if not has_location:
+            del self.fields["location_confirmed"]
         self.helper.layout = Layout(
             "club",
             Div(
@@ -3643,6 +3759,7 @@ class UserLocation(forms.ModelForm):
             Div(
                 Div("address"),
                 Div("location_coordinates"),
+                *([Div("location_confirmed")] if has_location else []),
             ),
             Submit("submit", "Save", css_class="btn-success"),
         )
@@ -3873,6 +3990,9 @@ class ChangeUserPreferencesForm(forms.ModelForm):
     def __init__(self, user, *args, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
+        if getattr(settings, "ASSISTANT_NAVIGATE_ONLY", False):
+            # The whole site's palette only opens pages, so the choice would do nothing.
+            self.fields["palette_navigate_only"].widget = forms.HiddenInput()
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"
@@ -6112,12 +6232,7 @@ class SpeakerForm(forms.ModelForm):
 
     def clean_image(self):
         """Reject corrupt uploads as a field error (see CreateImageForm.clean_image)."""
-        image = self.cleaned_data.get("image")
-        # Only fresh uploads.
-        if isinstance(image, UploadedFile):
-            validate_uploaded_image(image)
-            image = jpeg_safe_upload(image)
-        return image
+        return clean_new_image_upload(self.cleaned_data.get("image"))
 
 
 class SpeakerCommentForm(forms.ModelForm):

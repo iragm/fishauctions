@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils.html import format_html, format_html_join, strip_tags
 from django.utils.safestring import mark_safe
 
-from . import donations
+from . import donations, logistics
 from .filters import buying_status
 from .helper_functions import static_html
 from .models import (
@@ -27,6 +27,7 @@ from .models import (
     ClubBapGenusOverride,
     ClubHistory,
     ClubMember,
+    Document,
     DonationVendor,
     Invoice,
     Lot,
@@ -308,12 +309,20 @@ class LotHTMxTable(tables.Table):
         result += format_html(
             '<div><a href=\'#\' hx-get="{}" hx-target="#modals-here" hx-trigger="click"'
             ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
-            '<i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>'
-            '<div><a href="{}"><i class="bi bi-tag ms-1 me-1"></i>{}</a></div>'
-            '<div><a href="{}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller\'s invoice</a></div>',
+            '<i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>',
             reverse("lot_refund", kwargs={"pk": record.pk}),
-            reverse("single_lot_label", kwargs={"pk": record.pk}),
-            "Reprint label" if record.label_printed else "Print label",
+        )
+        # Lot.label_can_be_printed, read off the table's auction rather than a query per row.
+        if not (self.auction and self.auction.is_online) or (
+            record.auctiontos_winner_id and record.winning_price is not None
+        ):
+            result += format_html(
+                '<div><a href="{}"><i class="bi bi-tag ms-1 me-1"></i>{}</a></div>',
+                reverse("single_lot_label", kwargs={"pk": record.pk}),
+                "Reprint label" if record.label_printed else "Print label",
+            )
+        result += format_html(
+            '<div><a href="{}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller\'s invoice</a></div>',
             record.seller_invoice_link,
         )
         if self.auction and not self.auction.is_online:
@@ -601,6 +610,21 @@ def buying_price(lot):
     return f"{lot.currency_symbol}{price}"
 
 
+def viewer_max_bid(lot, user):
+    """*user*'s standing bid on a lot (their latest, as on the lot page), from a prefetched ``bid_set``; or None."""
+    mine = [bid for bid in lot.bid_set.all() if bid.user_id == user.pk and not bid.is_deleted]
+    if not mine:
+        return None
+    return max(mine, key=lambda bid: (bid.bid_time, bid.pk)).amount
+
+
+def can_quick_bid(lot):
+    """Whether the buying dashboard offers a bid button: the lot is open to online bids. Who may bid is
+    still the server's call when the bid arrives.
+    """
+    return not lot.ended and not lot.winning_price and not lot.bidding_error
+
+
 class LotHTMxTableForBuyers(tables.Table):
     """The buying dashboard: one badge per lot for where you stand on it."""
 
@@ -610,6 +634,7 @@ class LotHTMxTableForBuyers(tables.Table):
     lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
     lot_name = tables.Column(verbose_name="Lot", orderable=False)
     price = tables.Column(accessor="pk", verbose_name="Price", orderable=False)
+    bid = tables.Column(accessor="pk", verbose_name="", orderable=False)
 
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
@@ -623,12 +648,37 @@ class LotHTMxTableForBuyers(tables.Table):
         return format_html("<a href='{}?src=buying'>{}</a>", record.lot_link, value)
 
     def render_price(self, value, record):
-        return buying_price(record)
+        price = buying_price(record)
+        mine = viewer_max_bid(record, self.user)
+        if mine is None:
+            return price
+        return format_html(
+            '{} <span class="text-muted small text-nowrap">your max {}{}</span>', price, record.currency_symbol, mine
+        )
+
+    def render_bid(self, value, record):
+        """Quick bid: opens the shared confirm-bid dialog, which the buying page's script fills from these."""
+        if not can_quick_bid(record):
+            return ""
+        buy_now = bool(record.auction and record.auction.online_bidding == "buy_now_only")
+        return format_html(
+            '<button type="button" class="btn btn-sm btn-success text-dark text-nowrap quick-bid" data-bid-url="{}"'
+            ' data-lot-name="{}" data-currency="{}" data-amount="{}" data-whole="{}" data-final="{}"'
+            ' data-buy-now="{}">{}</button>',
+            reverse("lot_bid", kwargs={"pk": record.pk}),
+            record.lot_name,
+            record.currency_symbol,
+            record.suggested_bid(viewer_max_bid(record, self.user)),
+            int(record.only_whole_dollar_bids),
+            int(buy_now or not (record.auction and record.auction.allow_deleting_bids)),
+            int(buy_now),
+            "Buy now" if buy_now else "Bid",
+        )
 
     class Meta:
         model = Lot
-        template_name = "tables/bootstrap_htmx.html"
-        fields = ("status", "auction", "lot_number", "lot_name", "price")
+        template_name = "tables/buying_htmx.html"
+        fields = ("status", "auction", "lot_number", "lot_name", "price", "bid")
         row_attrs = {}
 
 
@@ -1650,3 +1700,78 @@ def _stacked(first, second):
     if first and second:
         return format_html("{}<br><small>{}</small>", first, second)
     return first or (format_html("<small>{}</small>", second) if second else "")
+
+
+class DocumentHTMxTable(tables.Table):
+    """The library list: title, author, year and who can read it. Newest first until a header is clicked."""
+
+    hide_string = "d-md-table-cell d-none"
+    title = tables.Column(accessor="pk", verbose_name="Title", order_by=("title", "original_name"))
+    author = tables.Column(verbose_name="Author", attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    year = tables.Column(verbose_name="Year")
+    visibility = tables.Column(verbose_name="Who can read it")
+
+    class Meta:
+        model = Document
+        fields = ("title", "author", "year", "visibility")
+        template_name = "tables/bootstrap_htmx.html"
+        empty_text = "Nothing here yet. Old newsletters, BAP reports, care sheets: scans and photos of pages are fine."
+
+    def render_title(self, record):
+        link = format_html("<a href='{}'>{}</a>", record.get_absolute_url(), record.display_title)
+        if record.status == record.READY:
+            return link
+        return format_html("{} <span class='badge bg-secondary'>{}</span>", link, record.get_status_display())
+
+    def render_visibility(self, record):
+        if record.club_id:
+            return format_html("{} &middot; {}", record.get_visibility_display(), record.club.name)
+        return record.get_visibility_display()
+
+
+def logistics_name_cell(tos, which):
+    """A name on the logistics page: a tap crosses it off that pickup's list, and a second tap brings it back.
+    The tap posts the state it wants, so a stale page can't undo another volunteer's tap.
+    """
+    marked = tos.marked_off_second_pickup if which == logistics.SECOND else tos.marked_off_first_pickup
+    return format_html(
+        "<a href='#' role='button' hx-post='{}' hx-vals='{{\"marked\": \"{}\"}}' hx-target='this' "
+        "hx-swap='outerHTML' class='{}'>{}</a>",
+        reverse("auction_logistics_mark", kwargs={"slug": tos.auction.slug, "pk": tos.pk, "which": which}),
+        "" if marked else "1",
+        "text-decoration-line-through text-muted" if marked else "",
+        tos.name or "Unknown",
+    )
+
+
+class LogisticsHTMxTable(tables.Table):
+    """One pickup on the logistics page (``auctions.logistics``): who comes, with what, and their invoice."""
+
+    name = tables.Column(accessor="pk", verbose_name="Name", order_by=("name",))
+    sold = tables.Column(verbose_name="Sold lots")
+    bought = tables.Column(verbose_name="Bought lots")
+    pickup_now = tables.Column(verbose_name="To pick up now")
+    invoice = tables.Column(accessor="pk", verbose_name="Invoice", orderable=False)
+    memo = tables.Column(verbose_name="Memo", orderable=False, default="")
+
+    def __init__(self, *args, tab=None, **kwargs):
+        exclude = list(kwargs.pop("exclude", ()))
+        if not tab.multi_location:
+            exclude.append("pickup_now")
+        if tab.which == logistics.SECOND:
+            # Sellers' lots all leave at the first pickup.
+            exclude.append("sold")
+        self.tab = tab
+        super().__init__(*args, exclude=exclude, **kwargs)
+
+    def render_name(self, value, record):
+        return logistics_name_cell(record, self.tab.which)
+
+    def render_invoice(self, value, record):
+        return record.invoice_link_html
+
+    class Meta:
+        model = AuctionTOS
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("name", "sold", "bought", "pickup_now", "invoice", "memo")
+        order_by = "name"

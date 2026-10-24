@@ -1,5 +1,6 @@
-"""The command palette's views (ask, execute, cancel, report) and ``/ai/``, the API keys and OAuth
-connections page. The action catalogue is :mod:`auctions.palette_actions`.
+"""The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
+:mod:`auctions.ai_page`) and ``/ai/connect/``, the API keys and OAuth connections behind it. The action
+catalogue is :mod:`auctions.palette_actions`.
 """
 
 import asyncio
@@ -9,6 +10,7 @@ from datetime import timedelta
 
 from asgiref.sync import sync_to_async
 from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import redirect_to_login
 from django.db.models import (
     Count,
@@ -22,7 +24,7 @@ from django.http import (
     JsonResponse,
     StreamingHttpResponse,
 )
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import TemplateView, View
@@ -39,8 +41,44 @@ from .base import AdminOnlyViewMixin
 logger = logging.getLogger(__name__)
 
 
+class AIPageView(LoginRequiredMixin, TemplateView):
+    """``/ai/``: a question box, prefilled from ``?q=`` but never sent on its own, the conversation so
+    far, and today's allowance as a bar. The palette's searches link here with what was typed.
+    """
+
+    template_name = "ai/page.html"
+
+    def get_context_data(self, **kwargs):
+        from auctions import ai_page
+
+        context = super().get_context_data(**kwargs)
+        context["prefill"] = self.request.GET.get("q", "")[: ai_page.MAX_QUESTION_CHARS]
+        context["conversation"] = ai_page.new_conversation()
+        context["usage"] = ai_page.usage(self.request.user)
+        context["enabled"] = ai_page.enabled(self.request.user)
+        return context
+
+
+class AIAskView(LoginRequiredMixin, View):
+    """One question from ``/ai/``, answered into the page by htmx, with the bar redrawn beside it."""
+
+    def post(self, request, *args, **kwargs):
+        from auctions import ai_page
+        from auctions.documents.render import to_html
+
+        question = request.POST.get("q", "").strip()[: ai_page.MAX_QUESTION_CHARS]
+        outcome = ai_page.ask(request, request.POST.get("conversation", ""), question)
+        context = {
+            "question": question,
+            "reply": to_html(outcome["reply"], []) if "reply" in outcome else "",
+            "error": outcome.get("error", ""),
+            "usage": ai_page.usage(request.user),
+        }
+        return render(request, "ai/_turn.html", context)
+
+
 class UserAPIKeyView(View):
-    """/ai/: how to connect an AI agent, and the keys for doing it. The page itself is the AI agents help
+    """/ai/connect/: how to connect an AI agent, and the keys for doing it. The page itself is the AI agents help
     guide now (``help_tags.ai_connections`` draws this person's connections and keys there), so a GET
     redirects to it. The forms there still post here.
 
@@ -103,7 +141,8 @@ class CommandPaletteView(View):
     def get(self, request, *args, **kwargs):
         from auctions import command_palette
 
-        groups = command_palette.search(request, request.GET.get("q", ""))
+        q = request.GET.get("q", "")
+        groups = command_palette.with_ask_ai(command_palette.search(request, q), q, request.user)
         response = JsonResponse({"groups": groups})
         response["Cache-Control"] = "private, no-store"
         response["Pragma"] = "no-cache"

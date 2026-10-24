@@ -1,0 +1,38 @@
+{% comment %}
+The library list's search and menus, rendered by HTMxTableView via htmx_table_header_template. The
+same shape as the club finder's: the box on its own line, then one row of buttons. Visibility is a
+radio menu with htmx on the menu itself, as the club finder's interests are.
+{% endcomment %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+  <h1 class="h4 mb-0">Library</h1>
+</div>
+
+<div class="help-note help-ai"><i class="bi bi-robot"></i><div><span class="help-ai-label">AI:</span> <a href="{% url 'library_search' %}">Ask the library a question</a> to search every article you can read, or <a href="{% url 'help_guide' slug='ai-agents' %}">connect an AI agent</a> and have it search for you.</div></div>
+
+<div class="input-group mb-2">
+  <span class="input-group-text"><i class="bi bi-search"></i></span>
+  {{ filter.form.query }}
+</div>
+{% if club %}<input type="hidden" name="club" value="{{ club.slug }}" class="library-filter-control">{% endif %}
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+  <a class="btn btn-sm btn-info" href="{% url 'library_add' %}{% if club %}?club={{ club.slug }}{% endif %}"><i class="bi bi-file-earmark-plus"></i> Add articles</a>
+  <span class="dropdown">
+    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-eye"></i> <span>{{ selected_visibility_label|default:"Who can read it" }}</span>
+    </button>
+    {% comment %}Keep these attributes in step with htmx_filter_attrs() in filters.py.{% endcomment %}
+    <div class="dropdown-menu dropdown-menu-scroll" hx-get="" hx-target="div.table-container" hx-trigger="change" hx-swap="outerHTML" hx-indicator=".progress" hx-include=".library-filter-control" onchange="this.previousElementSibling.querySelector('span').textContent = event.target.parentElement.textContent.trim();">
+      {% for value, label in visibility_choices %}
+      <label class="dropdown-item">
+        <input type="radio" name="visibility" value="{{ value }}" class="library-filter-control" {% if value == selected_visibility %}checked{% endif %}> {{ label }}
+      </label>
+      {% endfor %}
+    </div>
+  </span>
+  {% if club %}<a class="btn btn-sm btn-secondary" href="{% url 'library' %}"><i class="bi bi-x"></i> {{ club.name }}</a>{% endif %}
+</div>
+
+{% for batch in batches %}
+  <div class="mb-2"><a href="{% url 'document_batch' batch.pk %}">{{ batch }}</a> <span class="badge bg-secondary">{{ batch.get_status_display }}</span></div>
+{% endfor %}
