@@ -10,7 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auctions.models import Auction, AuctionTOS, Club, ClubMember, PickupLocation
+from auctions.models import Auction, AuctionTOS, Club, ClubMember, PickupLocation, UserData
 from auctions.services import join_blocked_by_bounce, needs_email_reverification
 from auctions.signals import bounce_handler
 from auctions.tests import StandardTestCase
@@ -136,6 +136,34 @@ class ReverifyEmailTests(StandardTestCase):
         self.client.get(link[:-3] + "xx/")
         self._refresh()
         self.assertIsNotNone(self.joiner.userdata.email_bounced_on)
+
+    def test_a_link_sent_before_a_newer_bounce_no_longer_works(self):
+        _bounce(self.joiner.email)
+        self.client.force_login(self.joiner)
+        self.client.post(reverse("reverify_email"))
+        UserData.objects.filter(user=self.joiner).update(
+            email_bounced_on=timezone.now() + datetime.timedelta(seconds=5)
+        )
+        self.client.get(self._link(mail.outbox[0]))
+        self.assertTrue(needs_email_reverification(User.objects.get(pk=self.joiner.pk)))
+
+    def test_confirming_a_new_address_through_allauth_lifts_it_too(self):
+        _bounce(self.joiner.email)
+        self.client.force_login(self.joiner)
+        new_address = EmailAddress.objects.create(user=self.joiner, email="working@example.com", verified=False)
+        from allauth.account.models import EmailConfirmationHMAC
+
+        self.client.get(reverse("account_confirm_email", args=[EmailConfirmationHMAC(new_address).key]))
+        joiner = User.objects.get(pk=self.joiner.pk)
+        self.assertEqual(joiner.email, "working@example.com")
+        self.assertFalse(needs_email_reverification(joiner))
+
+    def test_hide_my_email_and_general_soft_bounces_never_gate(self):
+        relay = User.objects.create_user(username="relay", password="x", email="abc@privaterelay.appleid.com")
+        _bounce(relay.email, bounce_type="Permanent", subtype="General")
+        _bounce(self.joiner.email, subtype="General")
+        self.assertFalse(needs_email_reverification(User.objects.get(pk=relay.pk)))
+        self.assertFalse(needs_email_reverification(User.objects.get(pk=self.joiner.pk)))
 
     def test_a_second_bounce_after_the_button_keeps_them_gated_but_signed_in(self):
         _bounce(self.joiner.email)

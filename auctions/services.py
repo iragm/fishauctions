@@ -221,7 +221,10 @@ def ensure_club_member(
 EMAIL_BOUNCE_RECENT_DAYS = 90
 # SES bounces that are the address's fault. A full inbox is a soft (Transient) bounce, and the reason
 # for the gate; a message too large or content rejected says nothing about the inbox.
-REVERIFY_TRANSIENT_SUBTYPES = frozenset({"MailboxFull", "General"})
+# SES's Transient "General" also covers outages and greylisting, so a whole batch would be gated at once.
+REVERIFY_TRANSIENT_SUBTYPES = frozenset({"MailboxFull"})
+# Hide My Email: bounces when forwarding is off, and then no verification email can reach them either.
+PRIVATE_RELAY_SUFFIX = "@privaterelay.appleid.com"
 
 
 def bounce_means_reverify(bounce_obj):
@@ -236,7 +239,7 @@ def record_email_bounce(emails, when=None):
     """Date the bounce on every account whose address is one of *emails*."""
     from .models import UserData
 
-    emails = [email for email in emails if email]
+    emails = [email for email in emails if email and not email.lower().endswith(PRIVATE_RELAY_SUFFIX)]
     if not emails:
         return 0
     query = Q()
@@ -248,9 +251,10 @@ def record_email_bounce(emails, when=None):
 def needs_email_reverification(user):
     """True when mail to *user*'s address bounced in the last ``EMAIL_BOUNCE_RECENT_DAYS``.
 
-    The link ``ReverifyEmailView`` emails (``clear_email_bounce``) is the only way out.
+    The way out is the link ``ReverifyEmailView`` emails, or confirming a new address through allauth
+    (``signals.clear_email_bounce_on_new_address``); both call ``clear_email_bounce``.
     """
-    if not getattr(user, "is_authenticated", False):
+    if not getattr(user, "is_authenticated", False) or not user.email:
         return False
     bounced_on = getattr(getattr(user, "userdata", None), "email_bounced_on", None)
     return bool(bounced_on and bounced_on > timezone.now() - timedelta(days=EMAIL_BOUNCE_RECENT_DAYS))
@@ -259,7 +263,7 @@ def needs_email_reverification(user):
 def clear_email_bounce(user):
     """*user* proved their address takes mail again: lift the join gate and their red envelopes.
 
-    Only the reverify link proves it. allauth's own verified flag is never touched: unverifying it would
+    allauth's own verified flag is never touched: unverifying it would
     lock them out of signing in, and the app's Google sign-in would take an unverified address for a
     squatter's and remove the password.
     """

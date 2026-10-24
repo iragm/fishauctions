@@ -243,12 +243,12 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (854 lines)
   DRF serializers for the club API.
-- **`services.py`** (1624 lines)
+- **`services.py`** (1628 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
   `SessionStore`
-- **`signals.py`** (1093 lines)
+- **`signals.py`** (1104 lines)
   Signal handlers for the auctions app.
 - **`site_setup.py`** (146 lines)
   `single_club_mode_enabled`, `single_club_name`, `site_paypal_configured`, `get_server_public_ip`, `get_single_club`, `ensure_single_club_membership_for_user`
@@ -612,7 +612,7 @@ this only quotes its opening sentence.
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_reverify_email.py`** (192 lines)
+- **`test_reverify_email.py`** (220 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`
 - **`test_security.py`** (596 lines)
@@ -993,7 +993,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (689 lines)
+- **`account.py`** (704 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
 - **`admin_checklist.py`** (1048 lines)
   The admin setup checklist: the one page that says what a new site still needs.
@@ -1038,7 +1038,7 @@ Every view on the site, split by the part of it the view belongs to.
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1121 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (607 lines)
+- **`club_pages.py`** (612 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
 - **`club_reports.py`** (829 lines)

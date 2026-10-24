@@ -287,10 +287,17 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
         )
 
         user = request.user
-        # Within the cooldown the link already sent still works, so a second click is quietly ignored.
-        if user.email and consume_email_verification_rate_limit(request, user.email):
+        # Within the cooldown the link already sent still works, so a second click sends nothing.
+        if consume_email_verification_rate_limit(request, user.email):
             token = signing.dumps(
-                {"u": user.pk, "e": user.email.lower(), "n": safe_next_url(request, "")}, salt=REVERIFY_SALT
+                {
+                    "u": user.pk,
+                    "e": user.email.lower(),
+                    # A newer bounce makes this link stale: it answers this one only.
+                    "b": user.userdata.email_bounced_on.isoformat(),
+                    "n": safe_next_url(request, ""),
+                },
+                salt=REVERIFY_SALT,
             )
             get_adapter(request).send_mail(
                 "account/email/email_confirmation",
@@ -301,7 +308,7 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
                     "activate_url": request.build_absolute_uri(reverse("reverify_email_confirm", args=[token])),
                 },
             )
-            add_email_verification_sent_message(request, user.email, signup=False)
+        add_email_verification_sent_message(request, user.email, signup=False)
         # Back here, where the "Confirmation email sent" message shows; ?next= rides along.
         return redirect(request.get_full_path())
 
@@ -314,8 +321,16 @@ class ReverifyEmailConfirmView(View):
             data = signing.loads(token, salt=REVERIFY_SALT, max_age=REVERIFY_MAX_AGE)
         except signing.BadSignature:
             data = {}
-        user = User.objects.filter(pk=data.get("u"), is_active=True).first() if data else None
-        if user is None or (user.email or "").lower() != data.get("e"):
+        user = (
+            User.objects.filter(pk=data.get("u"), is_active=True).select_related("userdata").first() if data else None
+        )
+        bounced_on = getattr(getattr(user, "userdata", None), "email_bounced_on", None)
+        if (
+            user is None
+            or (user.email or "").lower() != data.get("e")
+            # Bounced again since this was sent: a newer link is needed.
+            or (bounced_on and bounced_on.isoformat() != data.get("b"))
+        ):
             messages.error(request, "That link has expired.")
             return redirect(reverse("reverify_email"))
         clear_email_bounce(user)

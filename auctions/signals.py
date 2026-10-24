@@ -3,6 +3,7 @@
 import datetime
 import logging
 
+from allauth.account.signals import email_confirmed
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
 from django.contrib.sites.models import Site
@@ -16,6 +17,7 @@ from .services import (
     SHARED_MEMBER_FIELDS,
     bounce_means_reverify,
     clear_bidder_number_in,
+    clear_email_bounce,
     club_managed_auctions_for,
     club_managed_shadows_for,
     record_email_bounce,
@@ -817,6 +819,15 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     if bounce_means_reverify(bounce_obj):
         bounced = [row.get("emailAddress") for row in (bounce_obj or {}).get("bouncedRecipients") or []]
         record_email_bounce(bounced or [email])
+
+
+@receiver(email_confirmed)
+def clear_email_bounce_on_new_address(sender, request, email_address, **kwargs):
+    """Confirming an address through allauth is a way out of the reverify gate too, as long as it is the
+    one their mail now goes to: with ``ACCOUNT_CHANGE_EMAIL`` a confirmed address is already primary.
+    """
+    if email_address.primary and email_address.user_id:
+        clear_email_bounce(email_address.user)
 
 
 @receiver(complaint_received)

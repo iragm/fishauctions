@@ -2943,6 +2943,8 @@ class JoinAuctionTests(RunActionTestCase):
         self.assertEqual(tos.pickup_location, location)
 
     def test_a_recent_bounce_sends_them_to_verify_their_email_first(self):
+        self.userB.email = "full_inbox@example.com"
+        self.userB.save()
         self.userB.userdata.email_bounced_on = timezone.now()
         self.userB.userdata.save()
         location = self.in_person_auction.location_qs.first()
