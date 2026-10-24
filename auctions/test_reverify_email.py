@@ -106,7 +106,11 @@ class ReverifyEmailTests(StandardTestCase):
         self.client.force_login(self.joiner)
         url = f"{reverse('reverify_email')}?next=/auctions/{self.open_auction.slug}/"
         response = self.client.post(url)
-        self.assertRedirects(response, url, fetch_redirect_response=False)
+        self.assertRedirects(
+            response,
+            f"{reverse('reverify_email')}?next=%2Fauctions%2F{self.open_auction.slug}%2F",
+            fetch_redirect_response=False,
+        )
         self._refresh()
         # allauth's flag is never touched: unverified, they couldn't sign in.
         self.assertTrue(self.address.verified)
@@ -124,6 +128,20 @@ class ReverifyEmailTests(StandardTestCase):
         self.assertEqual(self.old_tos.email_address_status, "VALID")
         self._join()
         self.assertTrue(AuctionTOS.objects.filter(auction=self.open_auction, user=self.joiner).exists())
+
+    def test_the_button_drops_a_next_that_points_off_site(self):
+        _bounce(self.joiner.email)
+        self.client.force_login(self.joiner)
+        for next_url in ("https://evil.example.com/", "//evil.example.com/"):
+            response = self.client.post(f"{reverse('reverify_email')}?next={next_url}&x=1")
+            self.assertRedirects(response, reverse("reverify_email"), fetch_redirect_response=False)
+        # One of ours keeps its own query string.
+        response = self.client.post(f"{reverse('reverify_email')}?next=%2Fauctions%2F%3Ftab%3Drules%26x%3D1")
+        self.assertRedirects(
+            response,
+            f"{reverse('reverify_email')}?next=%2Fauctions%2F%3Ftab%3Drules%26x%3D1",
+            fetch_redirect_response=False,
+        )
 
     def test_a_link_for_an_old_address_or_a_forged_one_does_nothing(self):
         _bounce(self.joiner.email)

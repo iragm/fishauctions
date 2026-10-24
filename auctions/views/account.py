@@ -27,7 +27,7 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.views.generic import DetailView, TemplateView, View
 from django.views.generic.edit import (
     UpdateView,
@@ -287,6 +287,7 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
         )
 
         user = request.user
+        next_url = safe_next_url(request, "")
         # Within the cooldown the link already sent still works, so a second click sends nothing.
         if consume_email_verification_rate_limit(request, user.email):
             token = signing.dumps(
@@ -295,7 +296,7 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
                     "e": user.email.lower(),
                     # A newer bounce makes this link stale: it answers this one only.
                     "b": user.userdata.email_bounced_on.isoformat(),
-                    "n": safe_next_url(request, ""),
+                    "n": next_url,
                 },
                 salt=REVERIFY_SALT,
             )
@@ -309,8 +310,8 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
                 },
             )
         add_email_verification_sent_message(request, user.email, signup=False)
-        # Back here, where the "Confirmation email sent" message shows; ?next= rides along.
-        return redirect(request.get_full_path())
+        # Back here, where the "Confirmation email sent" message shows; ?next= rides along if it's ours.
+        return redirect(reverse("reverify_email") + (f"?{urlencode({'next': next_url})}" if next_url else ""))
 
 
 class ReverifyEmailConfirmView(View):

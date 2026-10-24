@@ -612,7 +612,7 @@ this only quotes its opening sentence.
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
-- **`test_reverify_email.py`** (220 lines)
+- **`test_reverify_email.py`** (238 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`
 - **`test_security.py`** (596 lines)
@@ -993,7 +993,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (704 lines)
+- **`account.py`** (705 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
 - **`admin_checklist.py`** (1048 lines)
   The admin setup checklist: the one page that says what a new site still needs.
