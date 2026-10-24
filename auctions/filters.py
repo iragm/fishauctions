@@ -224,6 +224,10 @@ def rhyming_name_q(value, name_field="name"):
     return q
 
 
+#: ``location:"Name with spaces"`` or ``location:Name`` in the users list search; stacks with the keywords.
+LOCATION_FILTER = re.compile(r'(?:^|\s)location:(?:"([^"]*)"|([^"\s]\S*))', re.IGNORECASE)
+
+
 class AuctionTOSFilter(django_filters.FilterSet):
     """For admin views that add users to an auction, and lot creation and winner screens."""
 
@@ -255,6 +259,14 @@ class AuctionTOSFilter(django_filters.FilterSet):
         """Filter *qs* by *value*. ``match_names_only=True`` matches names only, exactly or by nickname.
         Reused as ``AuctionTOSFilter.generic(qs, value)``.
         """
+
+        # By pickup location, first so no keyword below is taken out of a location's name. Not when matching
+        # names only: there the text is a person's name.
+        if not match_names_only:
+            for match in list(LOCATION_FILTER.finditer(value)):
+                name = match.group(1) if match.group(1) is not None else match.group(2)
+                qs = qs.filter(pickup_location__name__iexact=name)
+            value = LOCATION_FILTER.sub(" ", value)
 
         # sketchy users. Whole words only: a bare ^sus took "susan" for "sus" + "an".
         pattern = re.compile(r"(?:^|\s)sus(?=\s|$)")
