@@ -77,6 +77,7 @@ class ReverifyEmailTests(StandardTestCase):
         page = self.client.get(response.url)
         self.assertContains(page, "Re-verify your email address")
         self.assertContains(page, "Send verification email")
+        self.assertContains(page, reverse("account_email"))
 
     def test_a_bounce_that_is_not_the_inboxes_fault_does_not_block(self):
         _bounce(self.joiner.email, subtype="MessageTooLarge")
