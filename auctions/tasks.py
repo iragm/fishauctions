@@ -808,11 +808,7 @@ def send_invoice_notification(self, invoice_pk):
         _cleanup_invoice_notification_task(invoice_pk)
         return
 
-    should_send_email = (
-        invoice.auction.created_by.userdata.is_trusted
-        and invoice.auction.email_users_when_invoices_ready
-        and invoice.auctiontos_user.email
-    )
+    should_send_email = invoice.auction_sends_ready_email and invoice.auctiontos_user.email
 
     if should_send_email:
         from auctions.email_routing import email_routing_enabled

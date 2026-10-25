@@ -11160,6 +11160,18 @@ class Invoice(CachedPropertiesMixin, models.Model):
             return self.auctiontos_user.pickup_location
         return None
 
+    @property
+    def auction_sends_ready_email(self):
+        """Whether marking this invoice ready or paid emails anyone at all: the invoice page's note and
+        ``tasks.send_invoice_notification`` both ask this."""
+        auction = self.auction
+        return bool(
+            auction
+            and auction.email_users_when_invoices_ready
+            and auction.created_by_id
+            and auction.created_by.userdata.is_trusted
+        )
+
     @cached_property
     def contact_email(self):
         if self.location:
