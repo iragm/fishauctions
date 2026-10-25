@@ -90,6 +90,24 @@ class SessionCacheOutageTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(Session.objects.exists())
 
+    def _page_view(self):
+        return self.client.post(reverse("pageview"), {"first_view": "true", "url": "/lots/"}, HTTP_USER_AGENT=BROWSER)
+
+    def test_the_page_view_beacon_records_the_view(self):
+        """The beacon's per-address budget lives in the cache; a stall there skips the budget, not the view."""
+        has_key, get, set_ = self._redis_down()
+        with has_key, get, set_:
+            response = self._page_view()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PageView.objects.count(), 1)
+
+    def test_a_stall_after_the_read_records_the_view_too(self):
+        backend = type(caches["default"])
+        with patch.object(backend, "incr", side_effect=RedisTimeoutError("Timeout reading from socket")):
+            response = self._page_view()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PageView.objects.count(), 1)
+
     def test_an_existing_session_is_read_from_the_row(self):
         session = SessionStore()
         session["status"] = "started"

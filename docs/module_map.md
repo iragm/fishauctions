@@ -413,7 +413,7 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1379 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_crawler_sessions.py`** (122 lines)
+- **`test_crawler_sessions.py`** (140 lines)
   `IsCrawlerTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
@@ -1005,7 +1005,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`admin_checklist.py`** (1049 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (841 lines)
+- **`ajax.py`** (849 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1265 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
