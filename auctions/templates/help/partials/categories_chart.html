@@ -1,0 +1,38 @@
+{% load static %}
+{% comment %}Each category's share of lots, views, bids and money at online auctions, from help_stats.categories. Was the blog post "Category popularity". Click a legend label to hide it.{% endcomment %}
+{% with chart=help.categories %}{% if chart.rows %}
+<figure class="mb-3" style="max-width: 40em;">
+  <figcaption class="small text-muted mb-1">Each category's share of {{ chart.lots|floatformat:"0g" }} lots at online auctions here, and of the views, bids and money they got.</figcaption>
+  <div style="position: relative; height: {% widthratio chart.rows|length 1 44 %}px; min-height: 240px;"><canvas id="categories-chart" role="img" aria-label="{% for row in chart.rows %}{{ row.name }}: {{ row.lots }}% of lots, {{ row.bids }}% of bids, {{ row.money }}% of money. {% endfor %}"></canvas></div>
+</figure>
+{{ chart.rows|json_script:"categories-rows" }}
+<script src="{% static 'js/Chart.min.js' %}"></script>
+<script>
+(function () {
+  var rows = JSON.parse(document.getElementById('categories-rows').textContent);
+  var ink = '#adb5bd', grid = 'rgba(255, 255, 255, 0.08)';
+  function set(label, key, colour) {
+    return {label: label, data: rows.map(function (r) { return r[key]; }), backgroundColor: colour};
+  }
+  Chart.defaults.global.defaultFontFamily = getComputedStyle(document.body).fontFamily;
+  new Chart(document.getElementById('categories-chart').getContext('2d'), {
+    type: 'horizontalBar',
+    data: {labels: rows.map(function (r) { return r.name; }), datasets: [
+      set('Lots', 'lots', 'rgba(47, 164, 231, 0.75)'),
+      set('Views', 'views', 'rgba(243, 156, 18, 0.75)'),
+      set('Bids', 'bids', 'rgba(0, 188, 140, 0.75)'),
+      set('Money', 'money', 'rgba(231, 76, 60, 0.75)')
+    ]},
+    options: {
+      maintainAspectRatio: false,
+      legend: {labels: {fontColor: ink, boxWidth: 12}},
+      scales: {
+        xAxes: [{ticks: {fontColor: ink, beginAtZero: true, callback: function (v) { return v + '%'; }}, gridLines: {color: grid, zeroLineColor: grid}}],
+        yAxes: [{ticks: {fontColor: ink}, gridLines: {display: false}}]
+      },
+      tooltips: {callbacks: {label: function (item, data) { return data.datasets[item.datasetIndex].label + ': ' + item.xLabel + '%'; }}}
+    }
+  });
+})();
+</script>
+{% endif %}{% endwith %}

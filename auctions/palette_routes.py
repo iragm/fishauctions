@@ -36,7 +36,6 @@ SCOPE_INVOICE = "invoice"
 SCOPE_LOCATION = "location"
 SCOPE_MEMBER = "member"
 SCOPE_USER = "user"
-SCOPE_BLOG = "blog"
 SCOPE_SPEAKER = "speaker"
 
 # Which permission a route needs before it's worth offering.
@@ -90,6 +89,12 @@ def _play_closed_test(user) -> bool:
     return bool(settings.PLAY_TESTERS_GROUP_URL and not settings.PLAY_STORE_URL)
 
 
+def _has_ai_page(user) -> bool:
+    from .palette_assist import assist_enabled_for
+
+    return assist_enabled_for(user)
+
+
 def _has_library(user) -> bool:
     from .documents.search import can_use_library
 
@@ -122,7 +127,6 @@ ROUTE_LIST: list[Route] = [
     _r("my_last_auction_lots", "Lots in my most recent auction", "Browsing", keywords=["lots near me"]),
     _r("user_lots", "Lots grouped by seller", "Browsing", keywords=["sellers", "who is selling"]),
     _r("userpage", "A seller's public page", "Browsing", scope=SCOPE_USER, keywords=["store", "profile", "user page"]),
-    _r("blog_post", "A blog post", "Browsing", scope=SCOPE_BLOG, keywords=["article", "news"]),
     _r(
         "speaker_list",
         "Speaker directory",
@@ -279,14 +283,35 @@ ROUTE_LIST: list[Route] = [
         "library",
         "The library: club articles, breeder reports and documents",
         "Account",
-        keywords=["documents", "articles", "newsletters", "bap reports", "upload a document", "archive", "scans"],
+        keywords=["documents", "articles", "newsletters", "bap reports", "archive"],
         gate=_has_library,
+    ),
+    _r(
+        "library_add",
+        "Add articles to the library",
+        "Account",
+        keywords=["upload a document", "add an article", "scan", "newsletter"],
+        gate=_has_library,
+    ),
+    _r(
+        "library_search",
+        "Ask the library a question",
+        "Account",
+        keywords=["search the library", "find an article", "bap report about"],
+        gate=_has_library,
+    ),
+    _r(
+        "ai",
+        "Ask AI a question",
+        "Account",
+        keywords=["ai", "ask ai", "chat", "question", "assistant"],
+        gate=_has_ai_page,
     ),
     _r(
         "user_api_keys",
         "Connect Claude or another AI assistant",
         "Account",
-        keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai"],
+        keywords=["api key", "mcp", "claude", "connect an assistant", "token", "ai agent"],
     ),
     _r(
         "account_data_export",
@@ -390,6 +415,14 @@ ROUTE_LIST: list[Route] = [
         scope=SCOPE_AUCTION,
         admin=ADMIN_AUCTION,
         keywords=["users", "bidders", "participants", "who is coming"],
+    ),
+    _r(
+        "auction_logistics",
+        "Pickup logistics for an online auction",
+        "Running an auction",
+        scope=SCOPE_AUCTION,
+        admin=ADMIN_AUCTION,
+        keywords=["logistics", "pickup list", "who is picking up", "cross off", "second pickup"],
     ),
     _r(
         "auction_invoices",
@@ -1204,15 +1237,18 @@ _DUPLICATE = "Same page as another entry in the catalog."
 _ACTION_ONLY = "POST-only action; the palette has a real skill for this instead of navigating."
 
 EXCLUDED: dict[str, str] = {
+    "blog_post": "The retired blog. Every old post's address redirects to the help section it moved to.",
     "add_to_calendar": "Needs a pickup location; the Add to calendar button sits next to each one on the auction page.",
     "auction_paddles_pdf": "Downloaded from Print bidder paddles, which first asks for plain paper in the printer.",
     # The library: one document's pages. search_documents and read_document answer with its link.
     "document_detail": "One library document; search_documents and read_document answer with its link.",
+    "document_link": "The short address of one document, before its title was in it; redirects to document_detail.",
     "document_file": "A document's original file, served to someone who can see it; opened from its page.",
     "document_edit": "Editing one document is update_document, or one click from its page.",
     "document_reindex": "A button on one document's page.",
     "document_delete": "A button on one document's page; delete_document for an agent.",
     "document_feedback": "The report form on one document's page.",
+    "ai_ask": "The answer /ai/ loads into itself; not a page on its own.",
     "library_answer": "The written answer the library page loads into itself; not a page on its own.",
     "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
     "batch_page": "One scanned page as a picture, opened from the article it is part of.",
@@ -1259,6 +1295,11 @@ EXCLUDED: dict[str, str] = {
     "get_auction_info": _API,
     "auction_page_action": "POST-only: the auction page's banner buttons. Nothing to look at.",
     "auction_leave": "POST-only: the X next to Join on the auction page. Nothing to look at.",
+    "reverify_email": (
+        "Only for someone whose mail recently bounced, who reaches it from Join (and join_auction's error); "
+        "anyone else is sent straight back."
+    ),
+    "reverify_email_confirm": "The link in the reverify email; it needs the signed token in that email.",
     # JSON / HTMX fragments
     "get_ad": _API,
     "click_ad": _API,
@@ -1287,9 +1328,12 @@ EXCLUDED: dict[str, str] = {
     "auction_quick_checkout_htmx": _API,
     "auction_lot_queue_fullscreen": _API,
     "auction_lot_map_data": _API,
+    "auction_logistics_mark": "The tap on a name on the logistics page, which crosses it off that pickup.",
+    "auction_post_end_banner": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,
+    "species_quick_create": _API,
     # Species gaps page buttons and the club API endpoint; the palette sends people to species_gaps.
     "species_cache_forget": _API,
     "species_approve": _API,
@@ -1429,6 +1473,7 @@ EXCLUDED: dict[str, str] = {
     "club_member_apple_wallet": _TOKEN,
     "club_member_apple_wallet_by_uuid": _TOKEN,
     "account_deleted": "Shown once, after the account is already gone and the user is signed out.",
+    "upload_too_large": "Shown by nginx in place of its own page when an upload is over its size limit.",
     # Infrastructure
     "site_webmanifest": _INFRA,
     "command_palette": _INFRA,
@@ -1456,6 +1501,7 @@ EXCLUDED: dict[str, str] = {
     "buying": "The page behind watched, won_lots and my_bids, which land on it filtered.",
     "service_worker": _INFRA,
     "offline_worker": _INFRA,
+    "offline_cloudflare": _INFRA,
     "offline_snapshot": _API,
     "offline_sync": _API,
 }
@@ -1858,15 +1904,6 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
             return {"error": f"I couldn't find a user called “{hint}”."}
         kwargs["slug"] = target.username
         about = "" if target.pk == user.pk else target.username
-
-    elif route.scope == SCOPE_BLOG:
-        from .models import BlogPost
-
-        post = BlogPost.objects.filter(title__icontains=hint).first() if hint else None
-        if not post:
-            return {"error": "I couldn't find a blog post like that."}
-        kwargs["slug"] = post.slug
-        about = post.title
 
     elif route.scope == SCOPE_SPEAKER:
         from .models import Speaker

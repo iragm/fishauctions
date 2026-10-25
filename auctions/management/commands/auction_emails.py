@@ -193,7 +193,7 @@ class Command(BaseCommand):
                 continue
 
             channel_id = club.auction_channel_id
-            auction_url = f"https://{domain}/?{auction.slug}"
+            auction_url = discord_events.discord_link(f"https://{domain}/?{auction.slug}")
 
             if not auction.is_online:
                 self._notify_inperson(auction, channel_id, auction_url, now)
@@ -317,7 +317,8 @@ class Command(BaseCommand):
                 auction.save(update_fields=["discord_event_created"])
                 continue
 
-            auction_url = f"https://{domain}/?{auction.slug}"
+            # The location sync_auction_events patches it to later.
+            auction_url = discord_events.auction_location(auction)
 
             # The same window the club calendar uses, so an update later can't disagree with
             # what was created here.

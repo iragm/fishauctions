@@ -2,6 +2,7 @@
 
 import datetime
 import os
+import re
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -494,6 +495,11 @@ AWS_SES_REGION_NAME = os.environ.get("AWS_SES_REGION_NAME", "us-east-1")
 AWS_SES_REGION_ENDPOINT = os.environ.get("AWS_SES_REGION_ENDPOINT", "email.us-east-1.amazonaws.com")
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
+# Every SNS topic that delivers SES bounces or complaints, comma- or space-separated. Empty, django-ses
+# believes any topic, so anyone with an AWS account could subscribe the webhook and forge a bounce.
+AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS = [
+    arn for arn in re.split(r"[\s,]+", os.environ.get("AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS", "")) if arn
+]
 # AWS_SES_FROM_EMAIL is deliberately NOT set: SES uses it to override every message's From header,
 # which discarded all the auctions.email_routing aliases. Unset, the message's own from_email is used.
 
@@ -714,8 +720,19 @@ PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USE
 # Still requires a configured model.
 ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=True)
 # On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
-# The kill switch for a write that misfires during somebody's auction, and the default for new users.
-ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=False)
+# The kill switch for a write that misfires during somebody's auction, read on every request.
+# Default on since 2026-10: answering and doing things moved to /ai/, and the palette only opens pages.
+ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=True)
+# /ai/ (auctions/ai_page.py): the model it runs on, and what one person may spend on it in a day, in
+# tokens with cached prompt tokens counted at a tenth. About twenty ordinary questions; connecting your
+# own agent at /ai/connect/ has no limit here.
+AI_PAGE_MODEL = os.environ.get("AI_PAGE_MODEL", "")
+AI_PAGE_TOKENS_PER_DAY = int(os.environ.get("AI_PAGE_TOKENS_PER_DAY") or 300000)
+# The library's own limits, per person per day and higher than /ai/'s: written answers on
+# /library/search/, vector searches (past it, keyword search still works), and files uploaded.
+LIBRARY_ANSWERS_PER_DAY = int(os.environ.get("LIBRARY_ANSWERS_PER_DAY") or 100)
+LIBRARY_SEARCHES_PER_DAY = int(os.environ.get("LIBRARY_SEARCHES_PER_DAY") or 1000)
+LIBRARY_UPLOADS_PER_DAY = int(os.environ.get("LIBRARY_UPLOADS_PER_DAY") or 1000)
 # Tokens a minute the command palette will spend before it starts making everybody wait a little.
 # Deliberately under the provider's own per-minute limit: the point is never to reach theirs, because
 # past it every user is refused at once instead of each waiting a second.

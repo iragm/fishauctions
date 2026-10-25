@@ -14,6 +14,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage
 from django.db import models
+from easy_thumbnails.fields import ThumbnailerImageField
 
 #: The fixed topics a document can be filed under. Code, not a table: changing the list is a decision
 #: about the whole site, and the model is told the list on every call.
@@ -70,6 +71,7 @@ class Visibility(models.TextChoices):
     """Who can read a document, or what a batch's documents will be."""
 
     PUBLIC = "public", "Everyone on the site"
+    WEB = "web", "Anyone, signed in or not, and search engines"
     CLUB = "club", "Members of its club"
     PRIVATE = "private", "Only me"
 
@@ -211,13 +213,23 @@ class Document(models.Model):
         return self.title or self.original_name
 
     @property
+    def slug(self):
+        """The title for the URL, worked out each time rather than stored, so a title the model fills in
+        later is in the link at once. Only for reading: the pk finds the document, and a stale slug
+        redirects to this one.
+        """
+        from django.utils.text import slugify
+
+        return slugify(self.display_title)[:80].strip("-") or "document"
+
+    @property
     def topic_labels(self):
         return [TOPIC_LABELS[slug] for slug in self.topics or [] if slug in TOPIC_LABELS]
 
     def get_absolute_url(self):
         from django.urls import reverse
 
-        return reverse("document_detail", kwargs={"pk": self.pk})
+        return reverse("document_detail", kwargs={"pk": self.pk, "slug": self.slug})
 
 
 class DocumentChunk(models.Model):
@@ -272,11 +284,17 @@ class DocumentPicture(models.Model):
     """A photograph or drawing from a document, cropped out by whoever transcribed it.
 
     Uploaded through the signed link :mod:`.pictures` hands out, so an agent can send the bytes with a
-    script rather than through its own tool call. Stored re-encoded, with the camera's metadata gone.
+    script rather than through its own tool call. Stored re-encoded, with the camera's metadata gone, and
+    capped at 1000 pixels a side by the same ``resize_source`` lot images use.
     """
 
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="pictures")
-    file = models.FileField(storage=document_storage, upload_to=document_upload_to, max_length=255)
+    file = ThumbnailerImageField(
+        storage=document_storage,
+        upload_to=document_upload_to,
+        max_length=255,
+        resize_source={"size": (1000, 1000), "quality": 85},
+    )
     caption = models.CharField(max_length=300, blank=True)
     position = models.PositiveSmallIntegerField(default=0)
     size = models.PositiveBigIntegerField(default=0)

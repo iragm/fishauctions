@@ -1012,7 +1012,7 @@ def _member_can_add_lots(auction, tos):
     """A non-admin may add lots when joined, allowed to sell, and submission is open (``can_submit_lots``
     can raise without a start date).
     """
-    if not tos or not tos.selling_allowed:
+    if not tos or not tos.can_sell:
         return False
     try:
         return bool(auction.can_submit_lots)
@@ -1503,6 +1503,22 @@ def search(request, q, *, app_deep_links=True):
         groups.append({"label": "Auction users", "items": tos_items})
 
     return groups
+
+
+def with_ask_ai(groups, q, user):
+    """``groups`` with the typed search offered as a question on ``/ai/``, filled in but not sent.
+
+    Only the web palette's search-as-you-type adds it: inside :func:`search` it would match every
+    query, so the assist's "obvious match" and fallbacks would always find something, and the app
+    would get an item type it doesn't draw.
+    """
+    from .palette_assist import assist_enabled_for
+
+    q = (q or "").strip()
+    if not q or not assist_enabled_for(user):
+        return groups
+    url = reverse("ai") + "?" + urlencode({"q": q})
+    return [*groups, {"label": "Ask AI", "items": [_item("ai", q, url, "bi-robot", "Ask the site's AI")]}]
 
 
 def log_search(user, *, search_id=None, search="", result=None, result_type="", result_url="", result_object_id=None):

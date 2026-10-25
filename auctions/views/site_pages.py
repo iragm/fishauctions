@@ -1,11 +1,11 @@
 """Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-the privacy policy, the blog, unsubscribe, joining the Android app's test, and the landing redirect.
+the privacy policy, the retired blog's redirects, unsubscribe, joining the Android app's test, and the landing redirect.
 """
 
 import logging
-import re
 from datetime import timedelta
 from random import randint
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -27,16 +27,16 @@ from django.db.models.base import Model as Model
 from django.http import (
     Http404,
 )
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
-from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
+from django.views.generic import ListView, RedirectView, TemplateView, View
 from django.views.generic.edit import (
     FormView,
 )
 
-from auctions import help_stats
+from auctions import help_guides, help_stats
 from auctions.filters import (
     AuctionFilter,
     LotFilter,
@@ -51,7 +51,6 @@ from auctions.models import (
     AssistantSkillRequest,
     Auction,
     AuctionTOS,
-    BlogPost,
     Invoice,
     Lot,
     LotImage,
@@ -263,13 +262,27 @@ class PromoSite(TemplateView):
         return context
 
 
+class UploadTooLarge(TemplateView):
+    """The page nginx shows when a request is over ``client_max_body_size`` (``error_page 413`` in
+    nginx_fishauctions.conf), instead of its own bare one. The status stays 413.
+    """
+
+    template_name = "upload_too_large.html"
+
+    def get(self, request, *args, **kwargs):
+        response = super().get(request, *args, **kwargs)
+        response.status_code = 413
+        return response
+
+
 class ToDefaultLandingPage(View):
     """Send the user back to where they left off."""
 
     def tos_check(self, request, auction, routeByLastAuction):
+        # Each page gets its own address back in the browser (base_page_view.html), so it can be copied.
         if not auction:
             if request.user.is_authenticated:
-                return AllLots.as_view()(request)
+                return AllLots.as_view(rewrite_url=reverse("allLots"))(request)
             else:
                 if settings.ENABLE_PROMO_PAGE:
                     # A redirect, not the page drawn here, so its address is the one signed-in users see.
@@ -277,16 +290,16 @@ class ToDefaultLandingPage(View):
                     query = request.META.get("QUERY_STRING")
                     return redirect(reverse("promo") + (f"?{query}" if query else ""))
                 else:
-                    return AllAuctions.as_view()(request)
+                    return AllAuctions.as_view(rewrite_url=reverse("auctions"))(request)
         # Only check TOS if authenticated
         if request.user.is_authenticated and AuctionTOS.objects.filter(user=request.user, auction=auction).exists():
             return AllLots.as_view(
-                rewrite_url=f"/?{auction.slug}",
+                rewrite_url=f"{reverse('allLots')}?{urlencode({'auction': auction.slug})}",
                 auction=auction,
                 routeByLastAuction=routeByLastAuction,
             )(request)
         # Anonymous or not joined – send to auction info page
-        return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
+        return AuctionInfo.as_view(rewrite_url=auction.get_absolute_url(), auction=auction)(request)
 
     def get(self, request, *args, **kwargs):
         data = request.GET.copy()
@@ -384,6 +397,8 @@ class AllAuctions(LocationMixin, HTMxTableView):
     filterset_class = AuctionFilter
     template_name = "all_auctions.html"
     htmx_table_header_template = "auctions/partials/all_auctions_table_header.html"
+    # The address shown when "/" draws this page.
+    rewrite_url = None
     # paginate_by = 100
 
     def get_queryset(self):
@@ -480,6 +495,7 @@ class AllAuctions(LocationMixin, HTMxTableView):
         if self.request.user.is_superuser:
             context["show_new_auction_button"] = True
         context["nearby_filter_active"] = getattr(self, "nearby_filter_active", False)
+        context["rewrite_url"] = self.rewrite_url
         user_has_location = getattr(self, "_user_has_location", False)
         context["user_has_location"] = user_has_location
         if user_has_location and self.request.user.is_authenticated:
@@ -610,44 +626,35 @@ class AllLots(LotListView, AuctionViewMixin):
         return context
 
 
-#: Blog posts that moved into the help, as slug: (guide, section). Their old links go there.
-MOVED_TO_HELP = {
-    "how-much-should-you-bid": ("online-auctions", "how-much"),
-    "online-payments-suck": ("payments", "paypal"),
-}
-
-
-class BlogPostView(DetailView):
-    """Render a blog post"""
-
-    model = BlogPost
-    template_name = "blog_post.html"
-
-    def get(self, request, *args, **kwargs):
-        moved = MOVED_TO_HELP.get(kwargs.get("slug"))
-        if moved:
-            guide, section = moved
-            return redirect(f"{reverse('help_guide', kwargs={'slug': guide})}#{section}", permanent=True)
-        return super().get(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        blogpost = self.get_object()
-        # this is to allow the chart# syntax
-        context["formatted_contents"] = re.sub(r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered)
-        return context
-
-
-class PrivacyPolicyView(BlogPostView):
-    """The privacy policy at a stable path.
-
-    The same BlogPost as /blog/privacy/, rendered rather than redirected: the app opens this URL in the
-    signed-out signup WebView against an allow-list, so a redirect would bounce the user to the system
-    browser. Apple requires it, and Google Play's data-deletion policy wants a URL.
+class BlogPostView(RedirectView):
+    """The blog is retired: each old post's address goes to the help section it moved to, the privacy post
+    to /privacy/, and anything else, or a guide this site doesn't show, to the help index.
     """
 
-    def get_object(self, queryset=None):
-        return get_object_or_404(BlogPost, slug=PRIVACY_POLICY_SLUG)
+    permanent = True
+    http_method_names = ["get", "head"]
+
+    def get_redirect_url(self, *args, **kwargs):
+        slug = (kwargs.get("slug") or "").lower()
+        if slug == PRIVACY_POLICY_SLUG:
+            return reverse("privacy_policy")
+        moved = help_guides.MOVED_BLOG_POSTS.get(slug)
+        if not moved or not help_guides.GUIDES[moved[0]].shown:
+            return reverse("help")
+        guide, section = moved
+        url = reverse("help_guide", kwargs={"slug": guide})
+        return f"{url}#{section}" if section else url
+
+
+class PrivacyPolicyView(TemplateView):
+    """The privacy policy, a static page (``privacy_policy.html``); /blog/privacy/ redirects here.
+
+    Rendered here and never redirected: the app opens this URL in the signed-out signup WebView against
+    an allow-list, so a redirect would bounce the user to the system browser. Apple requires it, and
+    Google Play's data-deletion policy wants a URL.
+    """
+
+    template_name = "privacy_policy.html"
 
 
 class UnsubscribeView(TemplateView):

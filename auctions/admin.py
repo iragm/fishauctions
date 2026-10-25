@@ -26,7 +26,6 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
-    BlogPost,
     Category,
     ChunkedJobState,
     Club,
@@ -160,10 +159,6 @@ class InvoicePaymentInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         # Payments come from payment handlers, not the admin.
         return False
-
-
-class BlogPostAdmin(admin.ModelAdmin):
-    model = BlogPost
 
 
 class AuctionTOSInline(FlatInline, admin.TabularInline):
@@ -1401,7 +1396,6 @@ admin.site.register(Lot, LotAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)
 admin.site.register(GeneralInterest, GeneralInterestAdmin)
-admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(CommandPalettePage, CommandPalettePageAdmin)
 admin.site.register(CommandPaletteSearch, CommandPaletteSearchAdmin)

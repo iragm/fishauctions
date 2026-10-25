@@ -221,7 +221,38 @@ function deactivate_lot() {
         });
     }
 
-</script> {% endblock %}
+</script>
+{% if show_image_add_button %}
+<script src="{% static 'js/image_paste.js' %}"></script>
+<script type="text/javascript">
+    {% comment %}Paste a picture anywhere on the page and it is added to the lot, through the same view as the Add image button.{% endcomment %}
+    document.addEventListener('paste', function (e) {
+        var file = lotImages.fromPaste(e, true);
+        if (!file) return;
+        e.preventDefault();
+        lotImages.fitForUpload(file).then(function (small) {
+            var data = new FormData();
+            data.append('image', small);
+            data.append('image_source', 'RANDOM');
+            return fetch("{% url 'add_image' lot=lot.pk %}", {
+                method: 'POST',
+                headers: {'X-CSRFToken': '{{ csrf_token }}', 'X-Requested-With': 'XMLHttpRequest'},
+                body: data,
+            }).then(function (response) {
+                return response.json().catch(function () {
+                    throw new Error(response.status === 413 ? 'That image is too large to upload.' : "That image couldn't be added.");
+                });
+            }).then(function (result) {
+                if (result.error) throw new Error(result.error);
+                window.location.reload();
+            });
+        }).catch(function (error) {
+            window.alert(error.message);
+        });
+    });
+</script>
+{% endif %}
+{% endblock %}
 {% block body_top %}
 {% comment %} Opened from the app's lot scanning (?src=ar): a sticky "Back to scanning" bar so the user
 can return to it — and re-beacon this very lot — instead of relying on the WebView back button.
@@ -267,7 +298,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                     only for a seller printing their own lot, who has no such menu.  In the app with the
                     Bluetooth print method, print natively via a deep link; otherwise use the web label
                     PDF -- both branches appear in both places.{% endcomment %}
-                    {% if lot.user.pk == request.user.pk and not is_auction_admin %}
+                    {% if lot.user.pk == request.user.pk and not is_auction_admin and lot.label_can_be_printed %}
                         {% if request.is_mobile_app and user_print_method == 'bluetooth' %}
                         <a class="btn btn-sm btn-primary" href="fishauctions://print/{{ lot.pk }}"><i class="bi bi-tag"></i> {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}</a>
                         {% else %}
@@ -320,6 +351,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                     <i class="bi bi-calendar-x me-1"></i>Remove or refund
                                 </button>
                             </li>
+                            {% if lot.label_can_be_printed %}
                             <li>
                                 {% if request.is_mobile_app and user_print_method == 'bluetooth' %}
                                 <a class="dropdown-item" href="fishauctions://print/{{ lot.pk }}"><i class="bi bi-tag me-1"></i>{% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}</a>
@@ -327,6 +359,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                 <a class="dropdown-item" href="{% url 'single_lot_label' pk=lot.pk %}"><i class="bi bi-tag me-1"></i>{% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}</a>
                                 {% endif %}
                             </li>
+                            {% endif %}
                             <li><a class="dropdown-item" href="{% url 'auction_lot_list' slug=auction.slug %}"><i class="bi bi-calendar me-1"></i>All lots in this auction</a></li>
                             {% endif %}
                             {% if bids %}
@@ -355,9 +388,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 {% if request.user.is_authenticated %}
                 {% comment %}The "you're being watched" follow-up. Which of the two lines below is on
                 screen is decided by the watch button, not by the page: see refreshWatchState().{% endcomment %}
-                {% if not lot.auction or lot.auction.is_online %}
-                <div id="watch-note" class="help-note{% if not watched %} d-none{% endif %}"><i class="bi bi-envelope"></i><div>You'll get an email 2 hours before bidding ends on this lot.</div></div>
-                {% endif %}
+                <div id="watch-note" class="help-note{% if not watched %} d-none{% endif %}"><i class="bi bi-star-fill"></i><div>{% if not lot.auction or lot.auction.is_online %}You'll get an email 2 hours before bidding ends on this lot.  {% endif %}You can view your watched lots from the <a href="{% url 'buying' %}">buying page</a>.</div></div>
                 {% comment %}The three-way guard is what stops an empty tinted box: each of the spans
                 below is conditional, and inside the app's WebView with no push device and the
                 preference off, all three are empty.{% endcomment %}
@@ -421,8 +452,10 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 </div>
                 {% endif %}
 
+                {% comment %}The same SOLD stamp as the lot tiles, so a sold lot reads the same in both places.{% endcomment %}
                 {% if lot.image_count or lot.video_link %}
-                <div class="mb-3">
+                <div class="mb-3 position-relative">
+                    {% if lot.sold %}<h1 class="sold-stamp">SOLD</h1>{% endif %}
                     <div id="image_carousel" class="carousel slide">
                         <div class="carousel-inner">
                             {% if lot.video_link %}
@@ -483,7 +516,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 </div>
                 {% else %}
                     {% if lot.auto_image %}
-                        <img src="{{ lot.auto_image.display_url }}" alt="A {{ lot.lot_name }} from another lot" class="img-fluid rounded mb-1">
+                        <div class="position-relative">{% if lot.sold %}<h1 class="sold-stamp">SOLD</h1>{% endif %}<img src="{{ lot.auto_image.display_url }}" alt="A {{ lot.lot_name }} from another lot" class="img-fluid rounded mb-1"></div>
                         <div class="text-muted small">This image was automatically added from another lot with the same name and may not be representative of this lot</div>
                         {% if is_lot_creator %}
                         <div class="text-muted small mb-2">This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
@@ -879,22 +912,7 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
 the chat column below is the second column of that same row, so on xl the lot and the chat sit side by
 side. They are closed after the recommended-lots strip at the bottom of the page.{% endcomment %}
 
-<!-- confirm bid dialog -->
-<div class="modal fade" id="confirmBid" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="label">Confirm bid</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div id='confirmDialogText' class="modal-body">Enter an amount</div>
-            <div class="modal-footer">
-                <button type="button" id='finalize-bid' class="btn btn-success text-dark">Place bid</button>
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-            </div>
-        </div>
-    </div>
-</div>
+{% include "auctions/partials/bid_confirm_modal.html" %}
 <!-- bid error dialog -->
 <div class="modal fade" id="bidError" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog" role="document">

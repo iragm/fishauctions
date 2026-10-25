@@ -17,9 +17,12 @@ and what's left. Delete sections once they're done.
   every club setting is in a guide or excused, so all three backlogs are empty.
 - **About page:** `/about/` redirects to `/help/`. `PromoSite` is still the signed-out landing page
   when `ENABLE_PROMO_PAGE` is on.
-- **Pages that became guides:** `/square/`, `/paypal/` and `/ai/` redirect into `payments` and
+- **Pages that became guides:** `/square/`, `/paypal/` and `/ai/connect/` redirect into `payments` and
   `ai-agents`, keeping their URLs. The reader's own connections are drawn there by `square_account`,
-  `paypal_account` and `ai_connections` in `help_tags`; `/ai/` still takes the key and disconnect POSTs.
+  `paypal_account` and `ai_connections` in `help_tags`; `/ai/connect/` still takes the key and disconnect
+  POSTs. `/ai/` itself is the site's own AI page (`auctions/ai_page.py`).
+- **Blog posts that became guides:** all of them, listed in `help_guides.MOVED_BLOG_POSTS`; their
+  `/blog/<slug>/` redirects to the section. The privacy post is the static `/privacy/`.
 - **Dynamic:** `HelpContext` quotes the reader back to themselves: their auction's fees in a worked
   example (`{% fee_example %}`), a "Yours:" badge on every rule for its admins, what their labels
   print, whether their in-person auction takes online bids, an account checklist, and numbers from

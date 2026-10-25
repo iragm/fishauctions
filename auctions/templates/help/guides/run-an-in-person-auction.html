@@ -61,6 +61,7 @@
 <p>The {% ui "Finish setting up" %} box on your auction page ticks off what's done. First auction? Click {% ui "Contact us and request access" %} there before you can promote it or have invoices emailed.</p>
 {% tip %}Put the auction's link on your flyer as a QR code. Check it scans before you print.{% endtip %}
 {% aitip %}Ask "set up the spring auction". It copies last year's.{% endaitip %}
+{% include "help/partials/created_ahead_chart.html" with chart=help.created_ahead.in_person label="in-person" %}
 
 <h2 class="h5 mt-4" id="rules">2. Set the rules</h2>
 <p>Click {% page "edit_auction" "Rules" %} under {% ui "More" %}. <a href="{% url 'help_guide' slug='auction-rules' %}">What the auction rules do</a> covers every setting. The ones that matter most in person:</p>

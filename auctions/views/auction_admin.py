@@ -704,7 +704,7 @@ class AuctionUsers(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
         context["auction"] = self.auction
         context["active_tab"] = "users"
         context["can_manage_check_in"] = bool(self.can_add_edit_people) and self.auction.use_check_in_mode
-        context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and bool(self.auction.club_id)
+        context["can_scan_club_barcodes"] = bool(self.can_add_edit_people) and self.auction.scans_club_cards
         # With no rows, show a "Create user" button prefilled from the search, or a first-run
         # empty state.
         query = (self.request.GET.get("query") or "").strip()
@@ -919,7 +919,7 @@ class QuickCheckInUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     def dispatch(self, request, *args, **kwargs):
         self.get_auction(kwargs.get("slug", ""))
         _ = self.can_add_edit_people
-        if not self.auction.club_id:
+        if not self.auction.scans_club_cards:
             raise Http404
         return super().dispatch(request, *args, **kwargs)
 
@@ -1240,6 +1240,7 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
         context["stats_auctioneer_speed_json"] = _chart_json(auction.get_stat_auctioneer_speed)
         context["stats_lot_sell_prices_json"] = _chart_json(auction.get_stat_lot_sell_prices)
         context["stats_referrers_json"] = _chart_json(auction.get_stat_referrers)
+        context["stats_join_sources_json"] = _chart_json(auction.get_stat_join_sources)
         context["stats_travel_distance_json"] = _chart_json(auction.get_stat_travel_distance)
         context["stats_previous_auctions_json"] = _chart_json(auction.get_stat_previous_auctions)
         context["stats_lots_submitted_json"] = _chart_json(auction.get_stat_lots_submitted)
@@ -1254,6 +1255,7 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             context["compare_stats_auctioneer_speed_json"] = _chart_json(compare_auction.get_stat_auctioneer_speed)
             context["compare_stats_lot_sell_prices_json"] = _chart_json(compare_auction.get_stat_lot_sell_prices)
             context["compare_stats_referrers_json"] = _chart_json(compare_auction.get_stat_referrers)
+            context["compare_stats_join_sources_json"] = _chart_json(compare_auction.get_stat_join_sources)
             context["compare_stats_travel_distance_json"] = _chart_json(compare_auction.get_stat_travel_distance)
             context["compare_stats_previous_auctions_json"] = _chart_json(compare_auction.get_stat_previous_auctions)
             context["compare_stats_lots_submitted_json"] = _chart_json(compare_auction.get_stat_lots_submitted)

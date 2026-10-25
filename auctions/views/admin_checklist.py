@@ -505,6 +505,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                             'AWS_SES_REGION_NAME="us-east-1"\n'
                             'AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"\n'
                             'AWS_SES_CONFIGURATION_SET="your-configuration-set"\n'
+                            'AWS_SNS_EVENT_TRUSTED_TOPIC_ARNS="arn:aws:sns:us-east-1:123456789012:your-bounce-topic"\n'
                             'INBOUND_ROUTING_SECRET="a-long-random-secret"'
                         ),
                     },

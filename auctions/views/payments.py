@@ -17,6 +17,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import transaction
 from django.db.models.base import Model as Model
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -54,7 +55,14 @@ SQUARE_OAUTH_STATE_SESSION_KEY = "square_oauth_state"
 
 
 class PayPalRequestError(Exception):
-    """Raised when a PayPal API request fails in a recoverable way for the caller."""
+    """Raised when a PayPal API request fails in a recoverable way for the caller. ``status_code`` is
+    PayPal's HTTP status, or ``None`` when no answer came back."""
+
+    def __init__(self, msg, status_code=None, sent=True):
+        super().__init__(msg)
+        self.status_code = status_code
+        #: False when it failed before the request went out (signing in), so PayPal never saw it.
+        self.sent = sent
 
 
 class PayPalAPIMixin:
@@ -91,7 +99,7 @@ class PayPalAPIMixin:
                 resp.text[:500] if resp is not None else "",
             )
             msg = f"PayPal auth token request failed: {exc}"
-            raise PayPalRequestError(msg) from exc
+            raise PayPalRequestError(msg, sent=False) from exc
         return token_resp.json()["access_token"]
 
     def _build_paypal_headers(self, merchant_id="", include_bn_code=True, token=None):
@@ -122,10 +130,13 @@ class PayPalAPIMixin:
         unsigned_jwt = f"{b64(header)}.{b64(payload)}."
         return unsigned_jwt
 
-    def _paypal_request(self, method, endpoint, *, json=None, params=None, merchant_id="", include_bn_code=True):
+    def _paypal_request(
+        self, method, endpoint, *, json=None, params=None, merchant_id="", include_bn_code=True, extra_headers=None
+    ):
         """Single request helper used by get_from_paypal and post_to_paypal."""
         url = f"{settings.PAYPAL_API_BASE}/{str(endpoint).lstrip('/')}"
         headers = self._build_paypal_headers(merchant_id=merchant_id, include_bn_code=include_bn_code)
+        headers.update(extra_headers or {})
         self.paypal_debug = ""
         try:
             resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=10)
@@ -150,7 +161,7 @@ class PayPalAPIMixin:
                 resp.text[:1000],
             )
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
-            raise PayPalRequestError(msg)
+            raise PayPalRequestError(msg, status_code=resp.status_code)
         except requests.RequestException as exc:
             # No response at all; log it, since callers show a generic message.
             logger.error(
@@ -164,13 +175,36 @@ class PayPalAPIMixin:
             msg = f"PayPal API call failed (no response): {method} {url} error={exc}"
             raise PayPalRequestError(msg) from exc
 
-    def post_to_paypal(self, endpoint, payload, include_bn_code=True):
+    def post_to_paypal(self, endpoint, payload, include_bn_code=True, merchant_id="", extra_headers=None):
         """POST JSON to a PayPal API endpoint and return parsed JSON."""
-        return self._paypal_request("POST", endpoint, json=payload, include_bn_code=include_bn_code)
+        return self._paypal_request(
+            "POST",
+            endpoint,
+            json=payload,
+            include_bn_code=include_bn_code,
+            merchant_id=merchant_id,
+            extra_headers=extra_headers,
+        )
 
     def get_from_paypal(self, endpoint, include_bn_code=True, params=None):
         """GET from a PayPal API endpoint and return parsed JSON."""
         return self._paypal_request("GET", endpoint, params=params, include_bn_code=include_bn_code)
+
+    @staticmethod
+    def paypal_merchant_for(invoice):
+        """Who an invoice's PayPal payment goes to: a seller's merchant id, ``"admin"`` for the site
+        account, or ``None`` (the site app, or a club's own app)."""
+        if invoice.club:
+            if invoice.club.uses_own_paypal_credentials:
+                # A club's own app is paid directly: no payee override, no platform fee.
+                return None
+            if invoice.club.uses_site_paypal:
+                return "admin"
+            club_seller = invoice.club.effective_paypal_seller
+            return club_seller.paypal_merchant_id if club_seller and club_seller.paypal_merchant_id else None
+        if invoice.auction:
+            return invoice.auction.paypal_information
+        return None
 
     def create_order(self, invoice, member_pk=""):
         """Create a PayPal order for an invoice. Returns an approval URL or None."""
@@ -250,21 +284,7 @@ class PayPalAPIMixin:
         }
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
-        if invoice.club:
-            if invoice.club.uses_own_paypal_credentials:
-                # A club's own app is paid directly: no payee override, no platform fee.
-                paypal_merchant_id = None
-            elif invoice.club.uses_site_paypal:
-                paypal_merchant_id = "admin"
-            else:
-                club_seller = invoice.club.effective_paypal_seller
-                paypal_merchant_id = (
-                    club_seller.paypal_merchant_id if club_seller and club_seller.paypal_merchant_id else None
-                )
-        elif invoice.auction:
-            paypal_merchant_id = invoice.auction.paypal_information
-        else:
-            paypal_merchant_id = None
+        paypal_merchant_id = self.paypal_merchant_for(invoice)
         if paypal_merchant_id and paypal_merchant_id != "admin":
             # Without a payee, payment goes to the platform account in .env.
             purchase_unit["payee"] = {"merchant_id": paypal_merchant_id}
@@ -503,43 +523,93 @@ class PayPalAPIMixin:
 
         return None, invoice
 
+    @staticmethod
+    def refundable_paypal_payment(invoice):
+        """The invoice's PayPal capture with the most left to refund, or None. Refunds come off one
+        capture; splitting one across captures isn't implemented."""
+        return (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method="PayPal", amount__gt=0)
+            .order_by("-amount_available_to_refund", "pk")
+            .first()
+        )
+
     def can_refund_invoice(self, invoice, amount):
         """Check if we can refund the given amount on this invoice via PayPal."""
-        payment = (
-            InvoicePayment.objects.filter(invoice=invoice, payment_method="PayPal")
-            .exclude(amount__lt=0)
-            .order_by("-amount_available_to_refund")
-            .first()
-        )
-        # Refunds only the largest payment; partial refunds across payments aren't implemented.
-        total_available = payment.amount_available_to_refund if payment else Decimal("0.00")
-        if total_available >= amount:
-            return True
-        return False
+        payment = self.refundable_paypal_payment(invoice)
+        return bool(payment and payment.external_id and payment.amount_available_to_refund >= amount)
 
-    def refund_invoice(self, invoice, amount):
-        """Refund an amount on this invoice through PayPal. Returns an error or None."""
-        # Clubs on their own credentials have no webhook, so the refund would never be recorded.
-        # They refund by hand in PayPal.
-        if invoice.paypal_credentials:
-            return (
-                "Automatic refunds aren't available for this club's PayPal account. "
-                "Please issue the refund manually in PayPal."
-            )
-        if not self.can_refund_invoice(invoice, amount):
-            return "Unable to automatically refund payment"
-        payment = (
-            InvoicePayment.objects.filter(invoice=invoice, payment_method="PayPal")
-            .exclude(amount__lt=0)
-            .order_by("-amount_available_to_refund")
-            .first()
-        )
-        payload = {"amount": {"value": str(amount), "currency_code": str(payment.currency)}}
-        result = self.post_to_paypal(f"v2/payments/captures/{payment.external_id}/refund", payload)
-        if result.get("status") != "COMPLETED":
-            logger.error("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
-            return "PayPal refund failed"
-        # Recorded by the webhook (handle_refund).
+    #: Set by refund_invoice: True when the refund may have reached PayPal, so it must not be retried.
+    refund_reached_paypal = False
+
+    def refund_invoice(self, invoice, amount, request_id, note=""):
+        """Refund ``amount`` of this invoice's PayPal capture and record it. Error string or None.
+
+        ``request_id`` is sent as PayPal-Request-Id, so a repeat of the same refund is the same refund
+        at PayPal. The capture's row stays locked from the balance check until the refund is recorded,
+        so two refunds at once can't both pass the check, and the webhook that follows adds nothing.
+        Sets :attr:`refund_reached_paypal`; an error with it True means check PayPal before refunding
+        by hand.
+        """
+        self.refund_reached_paypal = False
+        amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+        if amount <= 0:
+            return "Refund amount must be positive"
+        # A club's own app took the payment, so its credentials refund it.
+        self.club_paypal_credentials = invoice.paypal_credentials
+        merchant_id = self.paypal_merchant_for(invoice)
+        with transaction.atomic():
+            payment = self.refundable_paypal_payment(invoice)
+            if payment:
+                payment = InvoicePayment.objects.select_for_update().get(pk=payment.pk)
+            if not payment or not payment.external_id:
+                return "No PayPal payment found for this invoice"
+            if payment.amount_available_to_refund < amount:
+                return (
+                    f"Not enough of the PayPal payment left to refund. Available: "
+                    f"{payment.amount_available_to_refund}, requested: {amount}"
+                )
+            payload = {"amount": {"value": f"{amount:.2f}", "currency_code": str(payment.currency)}}
+            if note:
+                payload["note_to_payer"] = note[:255]
+            endpoint = f"v2/payments/captures/{payment.external_id}/refund"
+            headers = {"PayPal-Request-Id": request_id[:108], "Prefer": "return=representation"}
+            merchant = merchant_id if merchant_id and merchant_id != "admin" else ""
+            result = None
+            # Sent at most twice under the same PayPal-Request-Id: a lost answer is asked for again,
+            # and PayPal answers with the first refund rather than making a second one.
+            for _attempt in range(2):
+                try:
+                    result = self.post_to_paypal(endpoint, payload, merchant_id=merchant, extra_headers=headers)
+                    break
+                except PayPalRequestError as exc:
+                    if not exc.sent and not self.refund_reached_paypal:
+                        return "Couldn't sign in to PayPal, so nothing was refunded. Please issue it in PayPal."
+                    if exc.status_code and exc.status_code < 500:
+                        # PayPal answered no; nothing was refunded.
+                        return "PayPal refused the refund. Please issue it in PayPal."
+                    self.refund_reached_paypal = True
+            if result is None:
+                return "PayPal didn't answer. Check PayPal before refunding by hand: it may have gone through."
+            self.refund_reached_paypal = True
+            status = result.get("status")
+            if status == "PENDING":
+                # Recorded by the webhook once PayPal finishes; a club's own app sends none.
+                return "PayPal is still processing this refund. Check PayPal for whether it completed."
+            if status != "COMPLETED":
+                logger.error("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
+                self.refund_reached_paypal = status not in ("CANCELLED", "FAILED")
+                return "PayPal refund failed. Please issue it in PayPal."
+            # Recorded now: a club's own app sends no webhook, and the site's webhook may be late.
+            resource = dict(result)
+            resource.setdefault("amount", payload["amount"])
+            resource["links"] = [{"rel": "up", "href": f"/v2/payments/captures/{payment.external_id}"}]
+            try:
+                _invoice, recorded = self.handle_refund(resource)
+            except Exception:
+                logger.exception("Recording PayPal refund %s on invoice %s failed", result.get("id"), invoice.pk)
+                recorded = None
+            if recorded is None:
+                return "PayPal refunded it, but it isn't on the invoice yet. Add it there if it doesn't appear."
         return None
 
     def handle_refund(self, refund_resource):
@@ -567,7 +637,7 @@ class PayPalAPIMixin:
             return None, None
 
         # Find the original InvoicePayment by external_id == capture_id
-        original_payment = InvoicePayment.objects.filter(external_id=capture_id).first()
+        original_payment = InvoicePayment.objects.filter(external_id=capture_id, amount__gt=0).first()
         if not original_payment:
             logger.warning("No InvoicePayment found for capture id %s (refund %s)", capture_id, refund_id)
             return None, None
@@ -584,8 +654,22 @@ class PayPalAPIMixin:
             logger.warning("Refund amount missing or invalid in refund resource %s", refund_id)
             return invoice, None
 
-        refund_amt_signed = -abs(refund_amt)  # ensure negative
+        if not refund_id:
+            logger.warning("Refund resource has no id; resource=%s", refund_resource)
+            return invoice, None
 
+        with transaction.atomic():
+            return self._record_refund(
+                refund_resource, refund_id, original_payment, refund_amt, currency, note_to_payer, capture_id
+            )
+
+    def _record_refund(
+        self, refund_resource, refund_id, original_payment, refund_amt, currency, note_to_payer, capture_id
+    ):
+        """The write half of :meth:`handle_refund`, under a lock on the capture's row."""
+        original_payment = InvoicePayment.objects.select_for_update().get(pk=original_payment.pk)
+        invoice = original_payment.invoice
+        refund_amt_signed = -abs(refund_amt)
         # PayPal redelivers until 2xx: adjust the refundable balance only by the change, so repeats no-op.
         existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
         previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
@@ -610,7 +694,7 @@ class PayPalAPIMixin:
             original_payment.save()
 
         invoice.recalculate()
-        if created:
+        if created and invoice.auction:
             action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
             invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
         return invoice, refund_payment

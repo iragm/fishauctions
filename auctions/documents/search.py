@@ -49,14 +49,41 @@ def can_use_library(user) -> bool:
 
 
 def visible_documents(user):
-    """Documents ``user`` may search and read: everyone's public ones, their clubs' club-only ones, and
-    their own. Never removed ones, and nothing for somebody not signed in.
+    """Documents ``user`` may search and read: everyone's public and web ones, their clubs' club-only
+    ones, and their own. Never removed ones, and nothing for somebody not signed in.
     """
     from auctions.models import Document
 
     if not getattr(user, "is_authenticated", False):
         return Document.objects.none()
     return Document.objects.filter(removed=False).filter(_readable(user))
+
+
+def web_documents():
+    """Documents anyone may read, signed in or not, and search engines may list: ``web`` visibility.
+    The one part of the library that reaches somebody without it.
+    """
+    from auctions.documents.models import Visibility
+    from auctions.models import Document
+
+    return Document.objects.filter(removed=False, visibility=Visibility.WEB)
+
+
+def readable_documents(user):
+    """What a document's own page, file and pictures may show ``user``: :func:`visible_documents` for
+    somebody with the library, and only :func:`web_documents` for anyone else.
+    """
+    return visible_documents(user) if can_use_library(user) else web_documents()
+
+
+def my_library(user):
+    """The library page's list: what ``user`` uploaded and what is in their clubs' libraries. The rest of
+    the site's public documents are found by searching, not listed.
+    """
+    from auctions.models import ClubMember
+
+    clubs = ClubMember.objects.filter(user=user, is_deleted=False).values("club_id")
+    return visible_documents(user).filter(Q(owner=user) | Q(club_id__in=clubs))
 
 
 def _readable(user):
@@ -67,7 +94,11 @@ def _readable(user):
     from auctions.models import ClubMember
 
     clubs = ClubMember.objects.filter(user=user, is_deleted=False).values("club_id")
-    return Q(visibility=Visibility.PUBLIC) | Q(owner=user) | Q(visibility=Visibility.CLUB, club_id__in=clubs)
+    return (
+        Q(visibility__in=(Visibility.WEB, Visibility.PUBLIC))
+        | Q(owner=user)
+        | Q(visibility=Visibility.CLUB, club_id__in=clubs)
+    )
 
 
 def visible_batches(user):
@@ -88,6 +119,22 @@ def visible_pages(user):
     return BatchPage.objects.filter(
         Q(batch__in=visible_batches(user)) | Q(documents__in=visible_documents(user))
     ).distinct()
+
+
+def readable_pages(user):
+    """Scans a page may show ``user``: :func:`visible_pages`, or for anyone without the library, the
+    scans of :func:`web_documents`.
+    """
+    from auctions.models import BatchPage
+
+    if can_use_library(user):
+        return visible_pages(user)
+    # Only a scan whose every article is on the web: a page holding the end of one and the start of a
+    # club-only one would show the club-only one.
+    from auctions.models import Document
+
+    hidden = Document.objects.exclude(pk__in=web_documents().values("pk"))
+    return BatchPage.objects.filter(documents__in=web_documents()).exclude(documents__in=hidden).distinct()
 
 
 def can_manage(user, document) -> bool:
@@ -135,18 +182,45 @@ def query_words(query: str) -> list[str]:
     return list(dict.fromkeys(words))[:MAX_QUERY_WORDS]
 
 
-def search(user, query: str, *, documents=None, limit: int = 10, offset: int = 0) -> tuple[list[Hit], int]:
+def used_today(user, what: str, *, add: int = 0) -> int:
+    """How many of ``what`` ("searches", "answers") ``user`` has used today, after adding ``add``.
+
+    In the cache, keyed by the date: a lost count only ever lets somebody do a little more.
+    """
+    from django.core.cache import cache
+    from django.utils import timezone
+
+    key = f"library-{what}-{getattr(user, 'pk', None)}-{timezone.localdate().isoformat()}"
+    try:
+        cache.add(key, 0, timeout=2 * 24 * 60 * 60)
+        return int(cache.incr(key, add) if add else cache.get(key) or 0)
+    except ValueError:
+        cache.set(key, add, timeout=2 * 24 * 60 * 60)
+        return add
+    except Exception:
+        logger.warning("Couldn't count the library's %s", what, exc_info=True)
+        return 0
+
+
+def search(
+    user, query: str, *, documents=None, limit: int = 10, offset: int = 0, counted: bool = True
+) -> tuple[list[Hit], int]:
     """Passages answering ``query`` in ``documents`` (default: everything ``user`` can see), best first.
 
-    Returns one page of hits and how many there were in all (capped by the candidate lists).
+    Returns one page of hits and how many there were in all (capped by the candidate lists). Past
+    ``LIBRARY_SEARCHES_PER_DAY`` for this person, by words only: the query's vector is the paid part.
+    ``counted=False`` for the same query asked again (the written answer under a search).
     """
+    from django.conf import settings
+
     from auctions.models import DocumentChunk
 
     # Any status: a document being read again keeps its last passages searchable until the new ones land.
     scope = documents if documents is not None else visible_documents(user)
     chunks = DocumentChunk.objects.filter(document__in=scope)
     fused: dict[int, float] = {}
-    for ranking in (_keyword_ranked(chunks, query), _nearest(chunks, query)):
+    by_meaning = used_today(user, "searches", add=1 if counted else 0) <= settings.LIBRARY_SEARCHES_PER_DAY
+    for ranking in (_keyword_ranked(chunks, query), _nearest(chunks, query) if by_meaning else []):
         for rank, pk in enumerate(ranking):
             fused[pk] = fused.get(pk, 0.0) + 1.0 / (RRF_K + rank + 1)
     ordered = sorted(fused, key=lambda pk: -fused[pk])
@@ -213,9 +287,12 @@ ANSWER_PROMPT = (
 def answer(user, query: str, hits: list[Hit]) -> dict:
     """The page's written answer: ``{"answer", "sources"}`` with sources as hits, or ``{"error"}``.
 
-    Shares the palette's per-person window and the site's per-minute budget, since it spends the same
-    model on the same account.
+    Its own per-person allowance, ``LIBRARY_ANSWERS_PER_DAY``, separate from the palette's and
+    ``/ai/``'s; the palette's per-person backstop on model calls against a burst; and the site's
+    per-minute budget, since it spends the same account.
     """
+    from django.conf import settings
+
     from auctions import palette_assist
     from auctions.palette_actions import untrusted, untrusted_short
 
@@ -227,9 +304,11 @@ def answer(user, query: str, hits: list[Hit]) -> dict:
     provider = get_provider(model=document_model(), timeout=30.0)
     if not provider.is_configured():
         return {"error": "Written answers aren't turned on for this site."}
-    over = palette_assist.check_request_budget(user)
+    over = palette_assist.check_call_budget(user)
     if over:
         return {"error": over}
+    if used_today(user, "answers", add=1) > settings.LIBRARY_ANSWERS_PER_DAY:
+        return {"error": "That's as many written answers as one person gets in a day. The passages below still match."}
     passages = []
     for number, hit in enumerate(hits, 1):
         document = hit.document

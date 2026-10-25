@@ -98,10 +98,6 @@ Your lots{% else %}
       paginateOnScroll: true,
       paginateOnScrollMargin: 2000
       });
-      // {% if rewrite_url %}
-      // console.log('{{rewrite_url}}');
-      // $("#id_auction").val('{{rewrite_url}}'.replace("/?auction=", "")).change();
-      // {% endif %}
       {% if search_button_tooltip %}
       $(document).ready(function(){
           $('#search-form-toggle').attr('data-bs-title', "{{ search_button_tooltip }}").tooltip('show');

@@ -6,6 +6,7 @@ in only one of them. Permission checks are the caller's job.
 
 import logging
 import re
+from datetime import timedelta
 
 from django.db.models import Q
 from django.utils import timezone
@@ -216,14 +217,94 @@ def ensure_club_member(
     return member, created
 
 
-def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
+# How long a bounce holds back joining, unless the address is verified again sooner.
+EMAIL_BOUNCE_RECENT_DAYS = 90
+# SES bounces that are the address's fault. A full inbox is a soft (Transient) bounce, and the reason
+# for the gate; a message too large or content rejected says nothing about the inbox.
+# SES's Transient "General" also covers outages and greylisting, so a whole batch would be gated at once.
+REVERIFY_TRANSIENT_SUBTYPES = frozenset({"MailboxFull"})
+# Hide My Email: bounces when forwarding is off, and then no verification email can reach them either.
+PRIVATE_RELAY_SUFFIX = "@privaterelay.appleid.com"
+
+
+def bounce_means_reverify(bounce_obj):
+    """Whether an SES bounce notification should make its recipients verify their address again."""
+    bounce_type = (bounce_obj or {}).get("bounceType")
+    if bounce_type == "Permanent":
+        return True
+    return bounce_type == "Transient" and (bounce_obj or {}).get("bounceSubType") in REVERIFY_TRANSIENT_SUBTYPES
+
+
+def record_email_bounce(emails, when=None):
+    """Date the bounce on every account whose address is one of *emails*."""
+    from .models import UserData
+
+    emails = [email for email in emails if email and not email.lower().endswith(PRIVATE_RELAY_SUFFIX)]
+    if not emails:
+        return 0
+    query = Q()
+    for email in emails:
+        query |= Q(user__email__iexact=email)
+    return UserData.objects.filter(query).update(email_bounced_on=when or timezone.now())
+
+
+def needs_email_reverification(user):
+    """True when mail to *user*'s address bounced in the last ``EMAIL_BOUNCE_RECENT_DAYS``.
+
+    The way out is the link ``ReverifyEmailView`` emails, or confirming a new address through allauth
+    (``signals.clear_email_bounce_on_new_address``); both call ``clear_email_bounce``.
+    """
+    if not getattr(user, "is_authenticated", False) or not user.email:
+        return False
+    bounced_on = getattr(getattr(user, "userdata", None), "email_bounced_on", None)
+    return bool(bounced_on and bounced_on > timezone.now() - timedelta(days=EMAIL_BOUNCE_RECENT_DAYS))
+
+
+def clear_email_bounce(user):
+    """*user* proved their address takes mail again: lift the join gate and their red envelopes.
+
+    allauth's own verified flag is never touched: unverifying it would
+    lock them out of signing in, and the app's Google sign-in would take an unverified address for a
+    squatter's and remove the password.
+    """
+    from .models import UserData
+
+    UserData.objects.filter(user=user).exclude(email_bounced_on=None).update(email_bounced_on=None)
+    if user.email:
+        AuctionTOS.objects.filter(email__iexact=user.email, email_address_status="BAD").update(
+            email_address_status="VALID"
+        )
+        ClubMember.objects.filter(email__iexact=user.email, is_deleted=False, email_address_status="BAD").update(
+            email_address_status="VALID"
+        )
+
+
+def join_blocked_by_bounce(user, auction):
+    """Whether joining *auction* must wait for *user* to verify their email again.
+
+    Never for someone already in it: an organizer who added them sees the red envelope instead.
+    """
+    if not needs_email_reverification(user):
+        return False
+    already_in = Q(user=user)
+    if user.email:
+        already_in |= Q(email__iexact=user.email)
+    return not AuctionTOS.objects.filter(already_in, auction=auction).exists()
+
+
+def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, hold_for_second_pickup=None):
     """Sign ``user`` up for ``auction``, or update their existing record.
 
     Shared by the Join button and the assistant. Returns ``(tos, created, problem)``; ``problem`` is
-    ``""``, ``"phone_number"`` or ``"address"``: a missing detail the caller words its own way.
+    ``""``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller words its own
+    way; ``"email"`` sends them to ``reverify_email``. ``hold_for_second_pickup`` (None leaves it alone) can
+    always be turned off, but only turned on where the location has a second pickup time and the person
+    has no lots to sell.
     """
     from django.utils import timezone as django_timezone
 
+    if join_blocked_by_bounce(user, auction):
+        return None, False, "email"
     userdata = user.userdata
     if auction.require_phone_number and not userdata.phone_number:
         return None, False, "phone_number"
@@ -268,6 +349,14 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0):
         obj.pickup_location = pickup_location
     if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
         return None, False, "address"
+    if hold_for_second_pickup is not None:
+        obj.hold_for_second_pickup = bool(
+            hold_for_second_pickup
+            and obj.can_hold_for_second_pickup
+            and (obj.hold_for_second_pickup or not obj.lots_qs.exists())
+        )
+    elif obj.hold_for_second_pickup and not obj.can_hold_for_second_pickup:
+        obj.hold_for_second_pickup = False
     obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
     # Joining means not manually added, whoever created the row.
     obj.manually_added = False
@@ -790,6 +879,8 @@ def lot_add_block(auction, tos, is_admin, *, bulk=True):
         return LOT_ADD_BLOCK_NO_TOS, "You can't add lots until you join this auction"
     if not tos.selling_allowed and not is_admin:
         return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You don't have permission to add lots to this auction"
+    if not tos.can_sell and not is_admin:
+        return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You're holding your lots for the second pickup, so you can't sell"
     if not is_admin and not auction.can_submit_lots:
         if timezone.now() < auction.lot_submission_start_date:
             return LOT_ADD_BLOCK_SUBMISSION_ENDED, f"Lot submission hasn't opened yet for {auction}"
@@ -860,12 +951,58 @@ def user_can_clone_lot(user, lot) -> bool:
     return bool(lot.user_id and lot.user_id == user.pk)
 
 
-def clone_lot_values(lot) -> dict:
+#: Each custom field, with the auction setting that names it. A value only means something under its
+#: name, so a copy keeps it only where the new auction calls the field the same thing.
+CLONE_CUSTOM_FIELD_NAMES = {
+    "custom_checkbox": "custom_checkbox_name",
+    "custom_field_1": "custom_field_1_name",
+    "custom_dropdown": "custom_dropdown_name",
+}
+_CUSTOM_FIELD_BLANK = {"custom_checkbox": False, "custom_field_1": "", "custom_dropdown": ""}
+
+
+def _same_field_name(a, b) -> bool:
+    return bool(a and b) and a.strip().casefold() == b.strip().casefold()
+
+
+def lot_has_auction_default_minimum(lot) -> bool:
+    """Whether *lot*'s minimum bid is just its auction's minimum, rather than one the seller chose."""
+    return bool(lot.auction_id) and lot.reserve_price == lot.auction.minimum_bid
+
+
+def clone_lot_values(lot, target_auction=None) -> dict:
     """The values a copy of *lot* starts with. Foreign keys come back as instances (form ``initial``); a
     caller building form data swaps in pks. The scientific name is kept unless the target auction has
     the field off.
+
+    Given the auction the copy goes into, a minimum bid that was only the old auction's minimum becomes
+    the new one's, and a custom field's value is kept only if both auctions give the field the same name.
     """
-    return {field: getattr(lot, field) for field in CLONE_LOT_FIELDS}
+    values = {field: getattr(lot, field) for field in CLONE_LOT_FIELDS}
+    if target_auction is None:
+        return values
+    if lot_has_auction_default_minimum(lot):
+        values["reserve_price"] = target_auction.minimum_bid
+    for field, name_setting in CLONE_CUSTOM_FIELD_NAMES.items():
+        old_name = getattr(lot.auction, name_setting, "") if lot.auction_id else ""
+        if not _same_field_name(old_name, getattr(target_auction, name_setting, "")):
+            values[field] = _CUSTOM_FIELD_BLANK[field]
+    return values
+
+
+def clone_lot_hints(lot) -> dict:
+    """What lot_form.html needs to redo ``clone_lot_values`` when the seller picks another auction."""
+    auction = lot.auction if lot.auction_id else None
+    return {
+        "minimum_follows_auction": lot_has_auction_default_minimum(lot),
+        "reserve_price": str(lot.reserve_price),
+        "values": {
+            "custom_checkbox": lot.custom_checkbox,
+            "custom_field_1": lot.custom_field_1 or "",
+            "custom_dropdown": lot.custom_dropdown or "",
+        },
+        "names": {field: (getattr(auction, setting, "") or "") for field, setting in CLONE_CUSTOM_FIELD_NAMES.items()},
+    }
 
 
 def copy_lot_images(original_lot, new_lot):
@@ -1020,6 +1157,9 @@ PER_RUN_TOS_STATE = {
     "confirm_email_sent": False,
     "second_confirm_email_sent": False,
     "print_reminder_email_sent": False,
+    "hold_for_second_pickup": False,
+    "marked_off_first_pickup": None,
+    "marked_off_second_pickup": None,
     "time_spent_reading_rules": 0,
     "possible_duplicate": None,
     # The copy made the row, not a join.

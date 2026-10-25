@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Search the library{% endblock %}
+{% block content %}
+{% comment %}The library's search as it was when it was the front page, kept while the site's AI page is built; see LibrarySearchView.{% endcomment %}
+<div class="container py-4">
+  <h1 class="h4 mb-3"><a href="{% url 'library' %}" class="text-decoration-none">Library</a> &middot; Search</h1>
+
+  <form method="get" action="{% url 'library_search' %}" class="mb-2" role="search">
+    {% if club %}<input type="hidden" name="club" value="{{ club.slug }}">{% endif %}
+    {% if topic %}<input type="hidden" name="topic" value="{{ topic }}">{% endif %}
+    {% if species %}<input type="hidden" name="species" value="{{ species.pk }}">{% endif %}
+    <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Ask a question or search: spawning Apistogramma, brine shrimp hatchery..." aria-label="Search the library" autofocus>
+  </form>
+
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <div class="dropdown">
+      <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{% if topic %}{% for slug, label in topics %}{% if slug == topic %}{{ label }}{% endif %}{% endfor %}{% else %}Topic{% endif %}</button>
+      <div class="dropdown-menu dropdown-menu-scroll">
+        <a class="dropdown-item" href="?{% querystring topic=None %}">Any topic</a>
+        {% for slug, label in topics %}
+        <a class="dropdown-item{% if slug == topic %} active{% endif %}" href="?{% querystring topic=slug %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% if user_clubs %}
+    <div class="dropdown">
+      <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{% if club %}{{ club.name }}{% else %}Any club{% endif %}</button>
+      <div class="dropdown-menu dropdown-menu-scroll">
+        <a class="dropdown-item" href="?{% querystring club=None %}">Any club</a>
+        {% for each in user_clubs %}
+        <a class="dropdown-item{% if each.pk == club.pk %} active{% endif %}" href="?{% querystring club=each.slug %}">{{ each.name }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if species %}<a class="btn btn-sm btn-secondary" href="?{% querystring species=None %}"><i class="bi bi-x"></i> <i>{{ species.scientific_name }}</i></a>{% endif %}
+  </div>
+
+  {% if query %}
+    <div class="card mb-3">
+      <div class="card-body" hx-get="{% url 'library_answer' %}?{{ request.GET.urlencode }}" hx-trigger="load" hx-swap="innerHTML">
+        <span class="spinner-border spinner-border-sm" role="status"></span> Reading the best matches...
+      </div>
+    </div>
+    {% for hit in hits %}
+      <div class="mb-3">
+        <a href="{{ hit.document.get_absolute_url }}{% if hit.chunk.start %}#at-{{ hit.chunk.start }}{% endif %}" class="fw-bold">{{ hit.document.display_title }}</a>
+        <span class="text-muted small">{% if hit.document.author %}{{ hit.document.author }}{% endif %}{% if hit.document.year %} {{ hit.document.year }}{% endif %}{% if hit.chunk.heading %} &middot; {{ hit.chunk.heading }}{% endif %}{% if hit.chunk.page %} &middot; page {{ hit.chunk.page }}{% endif %}</span>
+        <div class="small">{{ hit.chunk.text|truncatechars:400 }}</div>
+      </div>
+    {% empty %}
+      <p>Nothing in the library matches that.</p>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

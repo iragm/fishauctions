@@ -494,7 +494,10 @@ function initMap() {
                                     <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming lot list</a>
                                     <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing lot list</a>
                                     {% endif %}
-                                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm btn-info"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}}</a>
+                                    {% if auction.is_online %}
+                                    <a href='{% url "auction_logistics" slug=auction.slug %}?tab={{ location.pk }}-1' class="btn btn-sm btn-primary"><i class="bi bi-truck"></i> Logistics</a>
+                                    {% endif %}
+                                    {% if location.name %}<a href="{% url 'auction_tos_list' slug=auction.slug %}?query={{ 'location:"'|add:location.name|add:'"'|urlencode }}" class="btn btn-sm btn-info"><i class="bi bi-people-fill"></i> {{location.number_of_users}} users</a>{% endif %}
                                     {% endif %}
                                 </div>
 
@@ -531,7 +534,7 @@ function initMap() {
                 <div class="row g-2 align-items-center">
                     <div class="col-12 col-md-6">
                         <div class="input-group">
-                            <input class="form-control form-control-sm" id='copyShareLink' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly>
+                            <input class="form-control form-control-sm" id='copyShareLink' type="text" value="https://{{ domain }}/?{{ auction.slug }}&amp;utm_source=copied_link" readonly>
                             <button class='btn btn-sm btn-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
                         </div>
                         <div class="valid-feedback d-none" id="copyFeedback">
@@ -540,8 +543,8 @@ function initMap() {
                     </div>
                     <div class="col-12 col-md-auto">
                         <div class="btn-group" role="group">
-                            <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="btn btn-sm btn-primary twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false"><i class="bi bi-twitter"></i> Tweet</a>
-                            <a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Share</a>
+                            <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="btn btn-sm btn-primary twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}&amp;utm_source=twitter" data-dnt="true" data-show-count="false"><i class="bi bi-twitter"></i> Tweet</a>
+                            <a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={% filter urlencode:'' %}https://{{ domain }}/?{{ auction.slug }}&utm_source=facebook{% endfilter %}&amp;src=sdkpreparse" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Share</a>
                         </div>
                     </div>
                 </div>

@@ -74,15 +74,18 @@ def _section(section_id, rows, *, title="", icon="", collapsed=False):
     return section
 
 
-def _main_section():
-    """The two public destinations, which everyone gets. The app appends Offline mode and Clubs here,
-    which is why it stays short.
+def _main_section(user=None):
+    """The two public destinations, which everyone gets, and the library for an account that has it, as
+    the navbar shows it. The app appends Offline mode and Clubs here, which is why it stays short.
     """
+    from auctions.documents.search import can_use_library
+
     return _section(
         "main",
         [
             _row("Auctions", reverse("auctions"), "bi-hammer"),
             _row("Lots", reverse("allLots"), "bi-grid"),
+            _row("Library", reverse("library"), "bi-book") if can_use_library(user) else None,
         ],
     )
 
@@ -168,7 +171,7 @@ def menu_for(user):
     without varying on the caller.
     """
     signed_in = bool(user and user.is_authenticated)
-    sections = [_main_section()]
+    sections = [_main_section(user)]
     if signed_in:
         sections.append(_lots_section())
         sections.append(_account_section())

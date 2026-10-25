@@ -33,7 +33,7 @@
   {% if documents %}
     <h2 class="h6">Articles</h2>
     {% for document in documents %}
-      <div class="mb-1"><a href="{% url 'document_detail' document.pk %}">{{ document.display_title }}</a> <span class="text-muted small">{% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %} &middot; {{ document.pages.count }} page{{ document.pages.count|pluralize }}</span></div>
+      <div class="mb-1"><a href="{{ document.get_absolute_url }}">{{ document.display_title }}</a> <span class="text-muted small">{% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %} &middot; {{ document.pages.count }} page{{ document.pages.count|pluralize }}</span></div>
     {% endfor %}
   {% endif %}
 

@@ -8,7 +8,6 @@ import collections
 import logging
 import secrets
 from datetime import timedelta
-from decimal import Decimal
 from random import randint
 from urllib.parse import urlencode
 
@@ -27,6 +26,7 @@ from django.db.models.functions import TruncDate
 from django.http import (
     Http404,
     HttpResponseRedirect,
+    JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import date as date_format
@@ -111,7 +111,7 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     """A short traffic history: totals, a breakdown by ``?src=``, a daily stacked chart and top referrers.
 
     ``page_views`` must already be narrowed to what this reader may see; this adds the date bound. Four
-    aggregate queries, no rows fetched. ``source`` is the primary breakdown because we label it;
+    aggregate queries (five if a campaign link was used), no rows fetched. ``source`` is the primary breakdown because we label it;
     ``referrer`` is usually a bare origin (strict-origin-when-cross-origin), kept for "who linked here".
     """
     now = timezone.localtime()
@@ -119,27 +119,8 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     recent = page_views.filter(date_start__gte=start)
 
-    # None and "" both mean no ?src=, merged as in Lot.page_view_source_breakdown.
-    merged = {}
-    for row in recent.values("source").annotate(
-        views=Count("pk"),
-        users=Count("user", distinct=True),
-        sessions=Count("session_id", distinct=True, filter=Q(user__isnull=True)),
-    ):
-        source = row["source"] or ""
-        entry = merged.setdefault(
-            source,
-            {
-                "source": source,
-                "label": Lot.PAGE_VIEW_SOURCE_LABELS.get(source, source),
-                "is_ar_event": source in Lot.AR_PAGE_VIEW_SOURCES,
-                "views": 0,
-                "unique": 0,
-            },
-        )
-        entry["views"] += row["views"]
-        entry["unique"] += row["users"] + row["sessions"]
-    sources = sorted(merged.values(), key=lambda entry: (-entry["views"], entry["label"]))
+    # Every view here is a lot page, so the lot page's labels apply.
+    sources = PageView.source_breakdown(recent, Lot.PAGE_VIEW_SOURCE_LABELS)
 
     # One group-by gives both day totals and the per-source split.
     counted = collections.defaultdict(int)
@@ -149,7 +130,11 @@ def page_view_history(page_views, days=PAGE_VIEW_HISTORY_DAYS):
     # Every day gets a column, quiet ones included. Sources beyond the cap become "Everything else".
     window = [first_day + timedelta(days=offset) for offset in range(days)]
     bands = [row["label"] for row in sources[:PAGE_VIEW_HISTORY_CHART_SOURCES]]
-    band_of = {row["source"]: min(index, PAGE_VIEW_HISTORY_CHART_SOURCES) for index, row in enumerate(sources)}
+    band_of = {
+        source: min(index, PAGE_VIEW_HISTORY_CHART_SOURCES)
+        for index, row in enumerate(sources)
+        for source in row["sources"]
+    }
     if len(sources) > PAGE_VIEW_HISTORY_CHART_SOURCES:
         bands.append("Everything else")
     chart_data = [[0] * days for _ in bands]
@@ -250,23 +235,30 @@ class LotPageViewHistoryView(LoginRequiredMixin, View):
         )
 
 
+def seller_lot_ids(user):
+    """Pks of the lots ``user`` sells (matched as ``UserLotFilter`` does), as a list.
+
+    A list, not a subquery: given ``lot_number__in=<subquery with an OR across a join>`` MariaDB drove
+    the PageView side by ``date_start`` and probed every view on the site in the window, about a minute
+    for a seller with a few hundred views. A literal list keeps it on the lot index. Two queries rather
+    than the OR, which can't use an index either.
+    """
+    lots = Lot.objects.exclude(is_deleted=True).order_by()
+    ids = set(lots.filter(user=user).values_list("pk", flat=True))
+    ids.update(lots.filter(auctiontos_seller__user=user).values_list("pk", flat=True))
+    return sorted(ids)
+
+
 class MyLotsPageViewHistoryView(LoginRequiredMixin, View):
-    """The same 15 days totalled over the requesting user's lots (matched as ``UserLotFilter`` does), as a
-    subquery so the PageView query stays owner-bounded. Kept per user for
-    :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`, so only the first click waits for it.
+    """The same 15 days totalled over the requesting user's lots (:func:`seller_lot_ids`). Kept per user
+    for :data:`SELLING_PAGE_VIEW_HISTORY_SECONDS`, so only the first click waits for it.
     """
 
     def get(self, request):
         key = f"selling_page_view_history:{request.user.pk}"
         history = cache.get(key)
         if history is None:
-            lots = (
-                Lot.objects.exclude(is_deleted=True)
-                .filter(Q(user=request.user) | Q(auctiontos_seller__user=request.user))
-                .order_by()
-                .values("pk")
-            )
-            history = page_view_history(PageView.objects.filter(lot_number__in=lots))
+            history = page_view_history(PageView.objects.filter(lot_number_id__in=seller_lot_ids(request.user)))
             cache.set(key, history, SELLING_PAGE_VIEW_HISTORY_SECONDS)
         return render(
             request,
@@ -395,12 +387,7 @@ class ViewLot(DetailView):
             if viewer_bid:
                 context["viewer_bid_pk"] = viewer_bid.pk
                 context["viewer_bid"] = viewer_bid.amount
-                if lot.auction and not lot.auction.only_whole_dollar_bids:
-                    defaultBidAmount = viewer_bid.amount + Decimal("0.01")
-                else:
-                    defaultBidAmount = viewer_bid.amount + 1
             else:
-                defaultBidAmount = 0
                 context["viewer_bid"] = None
             # App push replaces browser subscription; a WebView has no Push API either.
             context["has_app_push"] = user_has_app_push(self.request.user)
@@ -411,37 +398,13 @@ class ViewLot(DetailView):
                 context["has_app_push"] or PushInformation.objects.filter(user=self.request.user).exists()
             )
         else:
-            defaultBidAmount = 0
             context["viewer_bid"] = None
             context["has_app_push"] = False
             context["can_subscribe_to_webpush"] = False
             context["has_push_subscription"] = False
-        if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
-            defaultBidAmount = lot.buy_now_price
-            context["force_buy_now"] = True
-        else:
-            context["force_buy_now"] = False
-        if not lot.sealed_bid:
-            # reserve price if there are no bids
-            if not lot.high_bidder:
-                defaultBidAmount = lot.reserve_price
-            else:
-                if lot.auction and not lot.auction.only_whole_dollar_bids:
-                    # 5% rounded down to nearest cent, minimum $0.01
-                    min_increment = max(
-                        (lot.high_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
-                        Decimal("0.01"),
-                    )
-                else:
-                    # 5% rounded down to nearest dollar, minimum $1
-                    min_increment = max(
-                        (lot.high_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
-                        Decimal(1),
-                    )
-                if defaultBidAmount > lot.high_bid + min_increment:
-                    pass
-                else:
-                    defaultBidAmount = lot.high_bid + min_increment
+        context["force_buy_now"] = bool(
+            lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price
+        )
         context["viewer_pk"] = self.request.user.pk
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
@@ -454,12 +417,8 @@ class ViewLot(DetailView):
             )
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
-        context["only_whole_dollar_bids"] = lot.auction.only_whole_dollar_bids if lot.auction else True
-        # Whole-dollar auctions show ".00" beside the box, so the default must be an integer, rounded
-        # up (it's the minimum next bid). Visible since 0437 made money columns decimal.
-        if context["only_whole_dollar_bids"]:
-            defaultBidAmount = int(Decimal(defaultBidAmount).to_integral_value(rounding="ROUND_CEILING"))
-        context["amount"] = defaultBidAmount
+        context["only_whole_dollar_bids"] = lot.only_whole_dollar_bids
+        context["amount"] = lot.suggested_bid(context["viewer_bid"])
         context["watched"] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context["category"] = lot.species_category
         context["user_tos"] = None
@@ -649,6 +608,17 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
     def get_lot(self, request, *args, **kwargs):
         return get_object_or_404(Lot, pk=kwargs["lot"], is_deleted=False)
 
+    @property
+    def is_paste(self):
+        """An image pasted onto the lot page, posted by fetch(): answered in JSON, not a page."""
+        return self.request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    def refuse(self, message):
+        if self.is_paste:
+            return JsonResponse({"error": message}, status=400)
+        messages.error(self.request, message)
+        return redirect(self.get_success_url())
+
     def dispatch(self, request, *args, **kwargs):
         self.lot = self.get_lot(self, request, *args, **kwargs)
         if not self.lot:
@@ -658,14 +628,9 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             )
             return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
         if not self.lot.image_permission_check(request.user):
-            messages.error(request, "You can't add an image to this lot")
-            return redirect(self.get_success_url())
+            return self.refuse("You can't add an image to this lot")
         if self.lot.image_count > 5:
-            messages.error(
-                request,
-                "You can't add another image to this lot.  Delete one and try again",
-            )
-            return redirect(self.get_success_url())
+            return self.refuse("You can't add another image to this lot.  Delete one and try again")
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -699,7 +664,16 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             )
             return self.form_invalid(form)
         # Anything else (permissions, disk, database) is ours: let it 500 so admins hear.
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        if self.is_paste:
+            return JsonResponse({"ok": True})
+        return response
+
+    def form_invalid(self, form):
+        if self.is_paste:
+            errors = [error for field_errors in form.errors.values() for error in field_errors]
+            return JsonResponse({"error": errors[0] if errors else "That image couldn't be added."}, status=400)
+        return super().form_invalid(form)
 
 
 class QuickBulkAddImages(ImageCreateView):
@@ -838,7 +812,8 @@ class LotValidation(LoginRequiredMixin):
             lot.donation = False
         # someday we may change this to be a field on the form, but for now we need to collect data
         lot.promotion_weight = randint(0, 20)
-        if lot.pk:
+        is_new = not lot.pk
+        if not is_new:
             # this is an existing lot
             lot.save()
         else:
@@ -853,18 +828,6 @@ class LotValidation(LoginRequiredMixin):
                         copy_lot_images(original_lot, lot)
                 except Exception as e:
                     logger.exception(e)
-            msg = mark_safe("Created lot! ")
-            if not lot.image_count:
-                msg += format_html(
-                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
-                    lot.lot_number,
-                )
-            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
-            messages.success(
-                self.request,
-                msg,
-                extra_tags="safe",
-            )
         # if image_url is set, add an image to the lot using this URL, then clear the field
         image_url = form.cleaned_data.get("image_url")
         if image_url:
@@ -881,6 +844,43 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
+        pasted_image = form.cleaned_data.get("pasted_image")
+        if not pasted_image:
+            pass
+        elif not lot.image_permission_check(self.request.user):
+            # ImageCreateView's rule, e.g. a sold lot showing this lot's pictures.
+            messages.error(self.request, "The pasted image wasn't added: this lot's images can't be changed.")
+        elif LotImage.objects.filter(lot_number=lot).count() > 5:
+            # ImageCreateView's limit, counted fresh: images were just copied or added from a URL.
+            messages.error(self.request, "The pasted image wasn't added: this lot already has the most images it can.")
+        else:
+            # A broken file is a message; anything else is ours to hear about.
+            try:
+                LotImage(
+                    lot_number=lot,
+                    image=pasted_image,
+                    is_primary=not LotImage.objects.filter(lot_number=lot).exists(),
+                    image_source="RANDOM",
+                ).save()
+            except IMAGE_PROCESSING_EXCEPTIONS as e:
+                logger.info("Rejected pasted lot image: %s", e)
+                messages.error(
+                    self.request, "We couldn't process the pasted image.  Try adding it again from the lot page."
+                )
+        if is_new:
+            # After the images, so "add an image" is only suggested to a lot that really has none.
+            msg = mark_safe("Created lot! ")
+            if not LotImage.objects.filter(lot_number=lot).exists():
+                msg += format_html(
+                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
+                    lot.lot_number,
+                )
+            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
+            messages.success(
+                self.request,
+                msg,
+                extra_tags="safe",
+            )
         # Record what the seller did with the offered species (never writes the cache). See
         # species_matching.record_choice.
         if lot.auction and lot.auction.use_scientific_name and lot.lot_name:

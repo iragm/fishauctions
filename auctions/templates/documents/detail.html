@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
 {% block title %}{{ document.display_title }}{% endblock %}
+{% block meta_description %}{% if indexable %}{{ document.display_title }}{% if document.author %} by {{ document.author }}{% endif %}{% if document.year %}, {{ document.year }}{% endif %}{% if document.club %}, from {{ document.club.name }}{% endif %}.{% endif %}{% endblock %}
+{% block extra_head %}{% if indexable %}<link rel="canonical" href="{{ request.scheme }}://{{ request.get_host }}{{ document.get_absolute_url }}">{% else %}<meta name="robots" content="noindex">{% endif %}{% endblock %}
 {% block content %}
 {% comment %}While the document is being read, the page re-fetches itself and swaps this container in place; once it is ready or failed the attributes are gone and the polling stops.{% endcomment %}
 <div class="container py-4" id="document-page"{% if document.status == "pending" or document.status == "processing" %} hx-get="{{ request.path }}" hx-trigger="every 5s" hx-select="#document-page" hx-target="this" hx-swap="outerHTML"{% endif %}>
@@ -8,22 +10,23 @@
   <p class="text-muted small mb-2">
     {% if document.author %}{{ document.author }}{% endif %}{% if document.year %} {{ document.year }}{% endif %}
     &middot; {{ document.get_visibility_display }}{% if document.club %} &middot; {{ document.club.name }}{% endif %}
-    {% if document.batch %}&middot; from <a href="{% url 'document_batch' document.batch.pk %}">{{ document.batch }}</a>{% endif %}
-    &middot; {{ document.original_name }}
+    {% comment %}Where it came from is for the people who keep the library, not the open web.{% endcomment %}
+    {% if has_library %}{% if document.batch %}&middot; from <a href="{% url 'document_batch' document.batch.pk %}">{{ document.batch }}</a>{% endif %}
+    &middot; {{ document.original_name }}{% endif %}
   </p>
 
-  {% if document.status == "pending" or document.status == "processing" %}
+  {% if not has_library %}{% elif document.status == "pending" or document.status == "processing" %}
     <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> {{ document.get_status_display }}...</div>
   {% elif document.status == "failed" %}
     <div class="alert alert-danger">{{ document.error }}</div>
   {% elif document.error %}
     <div class="alert alert-warning text-dark">Reading it again didn't work: {{ document.error }}</div>
   {% endif %}
-  {% if document.notes %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ document.notes }}</div>{% endif %}
+  {% if document.notes and has_library %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ document.notes }}</div>{% endif %}
 
   <div class="mb-3">
-    {% for slug, label in topics %}<a class="badge bg-primary text-decoration-none me-1" href="{% url 'library' %}?topic={{ slug }}">{{ label }}</a>{% endfor %}
-    {% for each in species %}<a class="badge bg-secondary text-decoration-none me-1" href="{% url 'library' %}?species={{ each.pk }}"><i>{{ each.scientific_name }}</i></a>{% endfor %}
+    {% for slug, label in topics %}<a class="badge bg-primary text-decoration-none me-1" href="{% url 'library_search' %}?topic={{ slug }}">{{ label }}</a>{% endfor %}
+    {% for each in species %}<a class="badge bg-secondary text-decoration-none me-1" href="{% url 'library_search' %}?species={{ each.pk }}"><i>{{ each.scientific_name }}</i></a>{% endfor %}
   </div>
 
   <div class="d-flex flex-wrap gap-2 mb-3">
@@ -38,9 +41,10 @@
         {% csrf_token %}<button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-trash"></i> Delete</button>
       </form>
     {% endif %}
-    <button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-form" aria-expanded="false"><i class="bi bi-flag"></i> Report a problem</button>
+    {% if has_library %}<button class="btn btn-sm btn-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-form" aria-expanded="false"><i class="bi bi-flag"></i> Report a problem</button>{% endif %}
   </div>
 
+  {% if has_library %}
   <div class="collapse mb-3" id="report-form">
     <div class="card card-body">
       <form method="post" action="{% url 'document_feedback' document.pk %}">
@@ -51,6 +55,9 @@
       </form>
     </div>
   </div>
+  {% else %}
+  <p class="small"><a href="{{ dmca_url }}">Copyright problem?</a></p>
+  {% endif %}
 
   {% if reports %}
     <div class="card mb-3">
@@ -64,24 +71,53 @@
     </div>
   {% endif %}
 
-  {% if pictures %}
+  {% if gallery %}
     <div class="row g-3 mb-3">
-      {% for picture in pictures %}
+      {% for picture in gallery %}
         <figure class="col-6 col-md-3 mb-0">
-          <a href="{% url 'document_picture' picture.pk %}" target="_blank" rel="noopener"><img class="img-fluid rounded" src="{% url 'document_picture' picture.pk %}" alt="{{ picture.caption|default:'Picture' }}" loading="lazy"></a>
+          <img class="img-fluid rounded library-picture" src="{% url 'document_picture' picture.pk %}" alt="{{ picture.caption|default:'Picture' }}" loading="lazy">
           {% if picture.caption %}<figcaption class="small text-muted">{{ picture.caption }}</figcaption>{% endif %}
         </figure>
       {% endfor %}
     </div>
   {% endif %}
 
+  {% comment %}Markdown, made safe in auctions/documents/render.py; a picture the text names sits where it names it, and the rest are above.{% endcomment %}
+  <div class="library-text">
   {% if passages %}
     {% for passage in passages %}
-      {% if passage.page and passage.new_page %}<div class="text-muted small mt-3">{% if passage.scan %}<a href="{% url 'batch_page' passage.scan %}" target="_blank" rel="noopener">Page {{ passage.page }}</a>{% else %}Page {{ passage.page }}{% endif %}</div>{% endif %}
-      <div id="at-{{ passage.start }}" class="document-passage" style="white-space: pre-wrap;">{{ passage.text }}</div>
+      {% if passage.page and passage.new_page %}<div class="text-muted small mt-3">{% if passage.scan %}<a href="{% url 'batch_page' passage.scan %}" class="library-zoom">Page {{ passage.page }}</a>{% else %}Page {{ passage.page }}{% endif %}</div>{% endif %}
+      <div id="at-{{ passage.start }}" class="document-passage">{% for at in passage.also %}<span id="at-{{ at }}"></span>{% endfor %}{{ passage.html }}</div>
     {% endfor %}
-  {% elif document.text %}
-    <div style="white-space: pre-wrap;">{{ document.text }}</div>
+  {% elif text_html %}
+    {{ text_html }}
   {% endif %}
+  </div>
 </div>
+
+{% comment %}A picture opens here, over the page, rather than in a tab of its own.{% endcomment %}
+<div class="modal fade" id="picture-zoom" tabindex="-1" aria-label="Picture" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content bg-dark">
+      <div class="modal-body p-1 text-center">
+        <img src="" alt="" class="img-fluid" style="max-height: 85vh;">
+        <div class="small text-muted mt-1"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+document.addEventListener("click", function (event) {
+  var target = event.target.closest(".library-picture, .library-zoom");
+  if (!target || !window.bootstrap) { return; }
+  event.preventDefault();
+  var modal = document.getElementById("picture-zoom");
+  var image = modal.querySelector("img");
+  image.src = target.getAttribute("src") || target.getAttribute("href");
+  image.alt = target.getAttribute("alt") || target.textContent;
+  modal.querySelector(".small").textContent = target.getAttribute("alt") || "";
+  bootstrap.Modal.getOrCreateInstance(modal).show();
+  modal.addEventListener("click", function () { bootstrap.Modal.getOrCreateInstance(modal).hide(); }, { once: true });
+});
+</script>
 {% endblock %}
