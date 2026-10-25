@@ -240,7 +240,7 @@ this only quotes its opening sentence.
 - **`queryset_annotations.py`** (223 lines)
   Queryset builders that answer a question about many rows at once.
   `nearby_auctions`, `add_tos_info`, `add_tos_distance_info`
-- **`rate_limit.py`** (43 lines)
+- **`rate_limit.py`** (51 lines)
   Per-address limits on the public forms and beacons, counted in Redis.
   `over_the_limit`
 - **`recurrence.py`** (151 lines)
@@ -627,7 +627,7 @@ this only quotes its opening sentence.
 - **`test_security.py`** (596 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
-- **`test_site_account_fixes.py`** (569 lines)
+- **`test_site_account_fixes.py`** (582 lines)
   Regression tests for a sweep of site and account fixes.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
@@ -1074,7 +1074,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionPostEndBanner`
 - **`lot_pages.py`** (1329 lines)
   One lot: its page, its photos, and creating or editing it.
-- **`moderation.py`** (225 lines)
+- **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
 - **`offline.py`** (189 lines)
@@ -1094,7 +1094,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (686 lines)
+- **`site_pages.py`** (685 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.

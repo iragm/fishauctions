@@ -101,17 +101,30 @@ class BeaconBudgetTests(StandardTestCase):
                 stalled.incr.return_value = 1
                 getattr(stalled, step).side_effect = stall
                 views = PageView.objects.count()
-                with patch("auctions.rate_limit.cache", stalled), patch("auctions.rate_limit._last_warning", 0.0):
+                with (
+                    patch("auctions.rate_limit.cache", stalled),
+                    patch("auctions.rate_limit._last_warning", float("-inf")),
+                ):
                     with self.assertLogs("auctions.rate_limit", "WARNING"):
                         response = self._beacon()
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(PageView.objects.count(), views + 1)
 
     def test_a_misconfigured_redis_still_raises(self):
-        broken = MagicMock()
-        broken.add.side_effect = redis.exceptions.ResponseError("READONLY")
-        with patch("auctions.rate_limit.cache", broken), self.assertRaises(redis.exceptions.ResponseError):
-            rate_limit.over_the_limit(RequestFactory().post("/"), "pageview", 3, 60)
+        for error in (redis.exceptions.ResponseError("READONLY"), redis.exceptions.AuthenticationError("bad password")):
+            with self.subTest(error=type(error).__name__):
+                broken = MagicMock()
+                broken.add.side_effect = error
+                with patch("auctions.rate_limit.cache", broken), self.assertRaises(type(error)):
+                    rate_limit.over_the_limit(RequestFactory().post("/"), "pageview", 3, 60)
+
+    def test_a_key_remade_by_incr_gets_its_expiry_back(self):
+        expired = MagicMock()
+        expired.add.return_value = False
+        expired.incr.return_value = 1
+        with patch("auctions.rate_limit.cache", expired):
+            self.assertFalse(rate_limit.over_the_limit(RequestFactory().post("/"), "pageview", 3, 60))
+        expired.touch.assert_called_once()
 
     def test_every_request_counts_once(self):
         request, bucket = RequestFactory().post("/", REMOTE_ADDR="10.0.0.9"), f"count-test-{uuid.uuid4()}"

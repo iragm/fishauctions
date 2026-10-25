@@ -56,6 +56,7 @@ from auctions.models import (
     SearchHistory,
     UserData,
 )
+from auctions.rate_limit import over_the_limit
 from auctions.tables import (
     AuctionHTMxTable,
 )
@@ -108,8 +109,6 @@ class SupportView(FormView):
     MESSAGES_PER_HOUR = 5
 
     def _over_the_limit(self, request) -> bool:
-        from auctions.rate_limit import over_the_limit
-
         return over_the_limit(request, "contact-form", self.MESSAGES_PER_HOUR, 3600)
 
     def get_form_kwargs(self):

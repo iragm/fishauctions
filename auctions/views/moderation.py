@@ -29,6 +29,7 @@ from django.views.generic.edit import FormView
 from auctions import dmca
 from auctions.models import Document, Lot
 from auctions.moderation_forms import CopyrightNoticeForm, ReportContentForm
+from auctions.rate_limit import over_the_limit
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,6 @@ SUBMISSIONS_PER_HOUR = 5
 
 
 def _over_the_limit(request, bucket):
-    from auctions.rate_limit import over_the_limit
-
     return over_the_limit(request, bucket, SUBMISSIONS_PER_HOUR, 3600)
 
 

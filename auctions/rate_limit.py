@@ -16,10 +16,12 @@ from auctions.client_ip import client_ip
 logger = logging.getLogger(__name__)
 
 OUTAGE_ERRORS = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
+#: Subclasses of ConnectionError that mean a wrong password or ACL, not a stall.
+NOT_AN_OUTAGE = (redis.exceptions.AuthenticationError, redis.exceptions.AuthorizationError)
 
 #: An outage is logged once a minute per worker, not once per request.
 _WARN_EVERY_SECONDS = 60
-_last_warning = 0.0
+_last_warning = float("-inf")
 
 
 def over_the_limit(request, bucket, limit, seconds):
@@ -31,10 +33,16 @@ def over_the_limit(request, bucket, limit, seconds):
         if cache.add(key, 1, timeout=seconds):
             return limit < 1
         try:
-            return cache.incr(key) > limit
+            count = cache.incr(key)
         except ValueError:  # the window expired between the add and the increment
-            cache.set(key, 1, timeout=seconds)
+            cache.add(key, 1, timeout=seconds)
             return limit < 1
+        if count == 1:
+            # The window expired between incr's EXISTS and its INCR, which made the key with no expiry.
+            cache.touch(key, seconds)
+        return count > limit
+    except NOT_AN_OUTAGE:
+        raise
     except OUTAGE_ERRORS as e:
         now = time.monotonic()
         if now - _last_warning >= _WARN_EVERY_SECONDS:
