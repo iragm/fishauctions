@@ -11,7 +11,6 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
-from django.core.cache import cache
 from django.db.models import (
     Case,
     Exists,
@@ -109,17 +108,9 @@ class SupportView(FormView):
     MESSAGES_PER_HOUR = 5
 
     def _over_the_limit(self, request) -> bool:
-        from auctions.mobile.services.ar import _client_ip
+        from auctions.rate_limit import over_the_limit
 
-        key = f"contact-form:{_client_ip(request) or 'unknown'}"
-        count = cache.get_or_set(key, 0, timeout=3600)
-        if count >= self.MESSAGES_PER_HOUR:
-            return True
-        try:
-            cache.incr(key)
-        except ValueError:  # the window expired between the read and the increment
-            cache.set(key, 1, timeout=3600)
-        return False
+        return over_the_limit(request, "contact-form", self.MESSAGES_PER_HOUR, 3600)
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()

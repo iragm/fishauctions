@@ -240,6 +240,9 @@ this only quotes its opening sentence.
 - **`queryset_annotations.py`** (223 lines)
   Queryset builders that answer a question about many rows at once.
   `nearby_auctions`, `add_tos_info`, `add_tos_distance_info`
+- **`rate_limit.py`** (43 lines)
+  Per-address limits on the public forms and beacons, counted in Redis.
+  `over_the_limit`
 - **`recurrence.py`** (151 lines)
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
@@ -413,7 +416,7 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1379 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_crawler_sessions.py`** (140 lines)
+- **`test_crawler_sessions.py`** (141 lines)
   `IsCrawlerTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
@@ -624,7 +627,7 @@ this only quotes its opening sentence.
 - **`test_security.py`** (596 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
-- **`test_site_account_fixes.py`** (541 lines)
+- **`test_site_account_fixes.py`** (569 lines)
   Regression tests for a sweep of site and account fixes.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
@@ -1005,7 +1008,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`admin_checklist.py`** (1049 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (849 lines)
+- **`ajax.py`** (833 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1265 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
@@ -1071,7 +1074,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionPostEndBanner`
 - **`lot_pages.py`** (1329 lines)
   One lot: its page, its photos, and creating or editing it.
-- **`moderation.py`** (234 lines)
+- **`moderation.py`** (225 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
 - **`offline.py`** (189 lines)
@@ -1091,7 +1094,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (695 lines)
+- **`site_pages.py`** (686 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
