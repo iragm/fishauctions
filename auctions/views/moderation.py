@@ -20,7 +20,6 @@ import re
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.sites.models import Site
-from django.core.cache import cache
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -30,6 +29,7 @@ from django.views.generic.edit import FormView
 from auctions import dmca
 from auctions.models import Document, Lot
 from auctions.moderation_forms import CopyrightNoticeForm, ReportContentForm
+from auctions.rate_limit import over_the_limit
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +39,7 @@ SUBMISSIONS_PER_HOUR = 5
 
 
 def _over_the_limit(request, bucket):
-    from auctions.mobile.services.ar import _client_ip
-
-    key = f"{bucket}:{_client_ip(request) or 'unknown'}"
-    count = cache.get_or_set(key, 0, timeout=3600)
-    if count >= SUBMISSIONS_PER_HOUR:
-        return True
-    try:
-        cache.incr(key)
-    except ValueError:  # the window expired between the read and the increment
-        cache.set(key, 1, timeout=3600)
-    return False
+    return over_the_limit(request, bucket, SUBMISSIONS_PER_HOUR, 3600)
 
 
 class DmcaPolicyView(TemplateView):

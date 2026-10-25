@@ -13,7 +13,6 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
-from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import (
@@ -33,8 +32,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 from PIL import Image
-from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import TimeoutError as RedisTimeoutError
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.exceptions import NotAuthenticated
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -72,6 +69,7 @@ from auctions.models import (
     Watch,
 )
 from auctions.notifications import CATEGORY_LOT_SELLING, user_has_app_push
+from auctions.rate_limit import over_the_limit
 from auctions.tasks import (
     cancel_invoice_notification,
     schedule_invoice_notification,
@@ -345,22 +343,8 @@ ABANDONED_FORMS_PER_ADDRESS_PER_MINUTE = 30
 
 
 def beacon_over_the_limit(request, bucket, limit):
-    """Count one write against the caller's address; True once this minute's ``limit`` is spent.
-
-    A Redis that doesn't answer lets the write through; any other Redis error still raises.
-    """
-    key = f"{bucket}:{client_ip(request) or 'unknown'}"
-    try:
-        count = cache.get_or_set(key, 0, timeout=60)
-        if count >= limit:
-            return True
-        try:
-            cache.incr(key)
-        except ValueError:  # the window expired between the read and the increment
-            cache.set(key, 1, timeout=60)
-    except (RedisConnectionError, RedisTimeoutError) as e:
-        logger.warning("beacon budget skipped for %s: %s", bucket, type(e).__name__)
-    return False
+    """Count one write against the caller's address; True once this minute's ``limit`` is spent."""
+    return over_the_limit(request, bucket, limit, 60)
 
 
 class FormAbandonedBeacon(APIView):

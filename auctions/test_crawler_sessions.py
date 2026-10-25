@@ -96,7 +96,8 @@ class SessionCacheOutageTests(StandardTestCase):
     def test_the_page_view_beacon_records_the_view(self):
         """The beacon's per-address budget lives in the cache; a stall there skips the budget, not the view."""
         has_key, get, set_ = self._redis_down()
-        with has_key, get, set_:
+        add = patch.object(type(caches["default"]), "add", side_effect=RedisTimeoutError("Timeout reading from socket"))
+        with has_key, get, set_, add:
             response = self._page_view()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(PageView.objects.count(), 1)
