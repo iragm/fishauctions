@@ -202,7 +202,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15162 lines)
+- **`models.py`** (15174 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -272,7 +272,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1777 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1882 lines)
+- **`tasks.py`** (1878 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -472,9 +472,9 @@ this only quotes its opening sentence.
 - **`test_history_tools.py`** (108 lines)
   ``recent_changes`` and ``club_history``: the filters, and a superuser reading every auction or club.
   `HistoryToolTests`
-- **`test_invoice_models.py`** (221 lines)
+- **`test_invoice_models.py`** (254 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
-  `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
+  `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`, `InvoiceNotificationNoteTests`
 - **`test_label_layout.py`** (331 lines)
   Every lot label preset, rendered with worst-case lots and held to the layout rules.
   `PlacedText`, `laid_out_text`, `squeezed`, `LabelLayoutTests`, `LabelUnitTests`, `LabelMeasurementTests`

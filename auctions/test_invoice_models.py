@@ -219,3 +219,36 @@ class InvoiceNotificationDueTests(StandardTestCase):
         # Check that notification_due was cleared
         assert self.invoice.status == "DRAFT"
         assert self.invoice.invoice_notification_due is None
+
+
+class InvoiceNotificationNoteTests(StandardTestCase):
+    """The note under an open invoice says an email will go out only when one will."""
+
+    note = "will send a notification email"
+
+    def setUp(self):
+        super().setUp()
+        self.user.userdata.is_trusted = True
+        self.user.userdata.save()
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="buyer@example.com")
+        Invoice.objects.filter(pk=self.invoice.pk).update(status="DRAFT", email_sent=False)
+        self.online_auction.email_users_when_invoices_ready = True
+        self.online_auction.save()
+        # An auction admin looking at somebody else's invoice
+        self.client.login(username="admin_user", password="testpassword")
+
+    def page(self):
+        return self.client.get(f"/invoices/{self.invoice.pk}/").content.decode()
+
+    def test_the_note_shows_when_the_email_will_go_out(self):
+        assert self.note in self.page()
+
+    def test_no_note_when_the_auction_sends_no_invoice_emails(self):
+        self.online_auction.email_users_when_invoices_ready = False
+        self.online_auction.save()
+        assert self.note not in self.page()
+
+    def test_no_note_when_the_auction_creator_is_not_trusted(self):
+        self.user.userdata.is_trusted = False
+        self.user.userdata.save()
+        assert self.note not in self.page()
