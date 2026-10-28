@@ -114,7 +114,7 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1547 lines)
+- **`command_palette.py`** (1559 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
@@ -589,7 +589,7 @@ this only quotes its opening sentence.
   The rest of the account, and the auction and club setup pages behind it.
 - **`test_palette_assist.py`** (5261 lines)
   Tests for the command palette's natural-language assist.
-- **`test_palette_core.py`** (1279 lines)
+- **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
   `CommandPaletteTests`, `MobileCommandPaletteTests`, `MobileMyClubsTests`, `MobileLabelTests`, `MobileConfigTests`, `FirebaseClientConfigParsingTests`, `SingleLotLabelPngTests`, `MobileEmailLoginTests`, `MobileWebSessionTests`, `ExampleSuggestionTests`
 - **`test_palette_mic.py`** (101 lines)
