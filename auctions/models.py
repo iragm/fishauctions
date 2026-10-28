@@ -8190,6 +8190,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
     banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Removed lots are not charged in invoices."
     ban_reason = models.CharField(max_length=100, blank=True, null=True)
+    # Set when removing a lot ended it, so putting it back knows to reopen it.
+    removed_while_open = models.BooleanField(default=False)
     deactivated = models.BooleanField(default=False)
     deactivated.help_text = "You can deactivate your own lots to remove all bids and stop bidding.  Lots can be reactivated at any time, but existing bids won't be kept"
     lot_run_duration = models.PositiveIntegerField(default=10, validators=[MinValueValidator(1), MaxValueValidator(30)])
@@ -8370,6 +8372,29 @@ class Lot(CachedPropertiesMixin, models.Model):
             if related is not None:
                 related.invalidate_cached_properties()
 
+    def _end_or_reopen_for_removal(self, kwargs):
+        """A lot removed while open ends; put back, it opens again, unless its in-person auction is pretty much
+        over. Otherwise removed lots stayed open and filled the admin's open-lot list. Online lots always reopen,
+        so endauctions settles them against their bids.
+        """
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "banned" not in update_fields:
+            return
+        changed = set()
+        if self.banned and self.active:
+            self.active = False
+            self.removed_while_open = True
+            changed = {"active", "removed_while_open"}
+        elif not self.banned and self.removed_while_open:
+            self.removed_while_open = False
+            changed = {"removed_while_open"}
+            over = self.auction and not self.auction.is_online and self.auction.pretty_much_over
+            if not self.active and not self.is_deleted and not over:
+                self.active = True
+                changed.add("active")
+        if changed and update_fields is not None:
+            kwargs["update_fields"] = {*update_fields, *changed}
+
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
         # Seller-dash auctions: bidder_number-lot_number.
@@ -8436,6 +8461,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         elif self.donation_forced:
             self.donation = False
             self.donation_forced = False
+        self._end_or_reopen_for_removal(kwargs)
         if self.ended_unsold and (self.active or self.winning_price is not None):
             self.ended_unsold = False
             if kwargs.get("update_fields") is not None:
