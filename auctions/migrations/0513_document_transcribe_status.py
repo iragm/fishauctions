@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0511_online_pickup_tomorrow_email"),
+        ("auctions", "0512_lot_removed_while_open"),
     ]
 
     operations = [

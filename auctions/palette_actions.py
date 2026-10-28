@@ -5730,6 +5730,8 @@ def undo_sale(request, params: dict[str, Any]) -> dict[str, Any]:
     lot = view.find_lot(lot_hint)
     if not lot:
         return _error(f"I couldn't find lot {lot_hint} in {auction.title}.")
+    if lot.banned:
+        return _error(f"Lot {lot.lot_number_display} was removed; put it back first.")
     sold = bool(lot.winner or lot.auctiontos_winner)
     # unsell also reverses a "no sale", so a winnerless inactive lot is undoable too.
     if not sold and lot.active:
