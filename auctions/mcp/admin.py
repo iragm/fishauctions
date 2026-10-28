@@ -1383,34 +1383,50 @@ USER_FEATURES = {
 
 def _transcription_problem(params: dict[str, Any]) -> str:
     """Why a ``save_transcription`` step would fail on approval, so the agent hears it now: an item that
-    isn't waiting, a batch article with no title or pages, or an item a pending proposal already covers.
+    isn't waiting, a batch article with no title or pages, or an article a pending proposal already
+    covers. Read as the resolver reads it, aliases included. It checks with the owner's reach and no
+    user, so the proposer's own "only me" scans aren't found here: the routine leaves those alone.
     """
     from auctions.documents import transcribe
     from auctions.models import AgentProposal, DocumentBatch
 
-    item, problem = transcribe.find(None, str(params.get("item") or ""), reach=True)
+    item, problem = transcribe.find(None, _transcription_item(params), reach=True)
     if problem:
         return problem
-    if not str(params.get("text") or "").strip() and not params.get("finished"):
+    text = palette_actions._transcription_text(params)
+    if not text and not palette_actions._flag(params, "finished"):
         return "It needs the transcription's text."
-    if isinstance(item, DocumentBatch) and str(params.get("text") or "").strip():
-        if not str(params.get("title") or "").strip():
+    article = _transcription_article(params)
+    if isinstance(item, DocumentBatch) and text:
+        if not article[0]:
             return "An article from a batch needs its title."
-        pages = params.get("pages")
         total = transcribe.page_count(item)
-        if (
-            not isinstance(pages, list)
-            or not pages
-            or any(not isinstance(n, int) or not 1 <= n <= total for n in pages)
-        ):
+        pages = palette_actions._page_numbers(params.get("pages"))
+        if not pages or any(not 1 <= number <= total for number in pages):
             return f"An article from a batch needs its pages, as a list of numbers from 1 to {total}."
     reference = transcribe.reference(item)
+    batch = isinstance(item, DocumentBatch)
     for steps in AgentProposal.objects.filter(status=AgentProposal.STATUS_PENDING).values_list("steps", flat=True):
         for step in steps or []:
-            said = (step.get("arguments") or {}).get("item") if isinstance(step, dict) else None
-            if step.get("tool") == "save_transcription" and transcribe.normalise(said) == reference:
-                return f"A proposal waiting for approval already transcribes {reference}."
+            if not isinstance(step, dict) or step.get("tool") != "save_transcription":
+                continue
+            arguments = step.get("arguments") or {}
+            if not isinstance(arguments, dict) or transcribe.normalise(_transcription_item(arguments)) != reference:
+                continue
+            # A batch is many articles: only the same one again is a duplicate.
+            if not batch or _transcription_article(arguments) == article:
+                return f"A proposal waiting for approval already transcribes this from {reference}."
     return ""
+
+
+def _transcription_item(params: dict[str, Any]) -> str:
+    return palette_actions._said(params, "item", "document", "batch", "id")
+
+
+def _transcription_article(params: dict[str, Any]) -> tuple[str, tuple[int, ...]]:
+    """Which article of a batch a step saves: its title and pages."""
+    title = str(params.get("title") or "").strip().casefold()
+    return title, tuple(sorted(set(palette_actions._page_numbers(params.get("pages")))))
 
 
 def _features_problem(params: dict[str, Any]) -> str:

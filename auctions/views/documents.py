@@ -484,6 +484,7 @@ class DocumentBatchView(LibraryMixin, View):
         context = {
             "batch": batch,
             "can_manage": manager,
+            "locked": batch.copyright_locked,
             "page_count": pages.count(),
             "pages_read": pages.filter(read=True).count(),
             "pages_settled": batch.stitched_through,
@@ -501,7 +502,9 @@ class DocumentBatchView(LibraryMixin, View):
         if not can_manage(request.user, batch):
             raise Http404
         action = request.POST.get("action", "")
-        if batch.status == batch.STITCHING and action in ("add", "again"):
+        if batch.copyright_locked:
+            messages.error(request, "This batch stays as it is after a copyright notice.")
+        elif batch.status == batch.STITCHING and action in ("add", "again"):
             messages.error(request, "It's being put together right now. Wait for it to finish first.")
         elif action == "add":
             form = BatchPagesForm(request.POST, request.FILES, user=request.user, batch=batch)

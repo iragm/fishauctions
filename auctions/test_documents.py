@@ -1736,6 +1736,64 @@ class TranscribeTests(LibraryTestCase):
         document.refresh_from_db()
         self.assertEqual((document.text, document.owner, document.visibility), ("Read.", self.member, Visibility.CLUB))
 
+    def test_a_batch_proposal_is_checked_as_it_would_run(self):
+        from auctions.mcp import admin
+
+        batch = self.scanned_batch()
+        request = RequestFactory().post("/mcp/admin/")
+        request.user, request.palette_page, request.owner_reach = self.staff, {}, True
+
+        def propose(**arguments):
+            steps = [{"tool": "save_transcription", "arguments": arguments}]
+            return admin.propose_change(request, {"summary": "Transcribe", "steps": steps})
+
+        # The aliases the resolver accepts, and pages as text.
+        first = propose(batch=f"Batch #{batch.pk}", body="One.", title="One", pages="1, 2")
+        self.assertTrue(first.get("ok"), first)
+        second = propose(item=f"batch {batch.pk}", markdown="Two.", title="Two", pages=[3], finished="yes")
+        self.assertTrue(second.get("ok"), "another article of the same batch")
+        again = propose(item=f"batch {batch.pk}", text="One.", title="one", pages=[2, 1])
+        self.assertIn("already transcribes", again["error"])
+        self.assertIn("pages", propose(item=f"batch {batch.pk}", text="x", title="T", pages=[9])["error"])
+
+    def test_a_batch_article_taken_down_for_copyright_stays_down(self):
+        from auctions import dmca
+        from auctions.documents import stitch
+        from auctions.documents.search import delete_document
+
+        batch = self.scanned_batch()
+        self.run_as(self.owner, "save_transcription", item=f"batch {batch.pk}", text="A.", title="A", pages=[1])
+        article = batch.documents.get()
+        notice = CopyrightNotice.objects.create(
+            name="R", email="r@example.com", address="a", work="w", material="m", document=article
+        )
+        dmca.take_down(notice)
+        batch.refresh_from_db()
+        self.assertEqual(batch.visibility, Visibility.PRIVATE, "the batch shows the scans")
+        self.assertTrue(batch.copyright_locked)
+        listed = [row["item"] for row in self.run_as(self.owner, "waiting_articles")["articles"]]
+        self.assertNotIn(f"batch {batch.pk}", listed)
+        self.assertIn(
+            "error",
+            self.run_as(self.owner, "save_transcription", item=f"batch {batch.pk}", text="B.", title="B", pages=[2]),
+        )
+        self.client.force_login(self.owner)
+        for action in ("again", "delete", "finish"):
+            self.client.post(reverse("document_batch", args=[batch.pk]), {"action": action})
+        self.assertTrue(type(batch).objects.filter(pk=batch.pk).exists())
+        self.assertEqual(stitch.build_documents(batch), [])
+        article.refresh_from_db()
+        self.assertTrue(article.copyright_locked, "a rebuild would have made it again, unlocked")
+        # Deleting it keeps the record, so its pages can't come back.
+        delete_document(article)
+        self.assertTrue(Document.objects.filter(pk=article.pk, removed=True).exists())
+        data = picture(800, 1000, fmt="JPEG")
+        article.pages.update(sha256=hashlib.sha256(data).hexdigest())
+        self.client.force_login(self.member)
+        upload = SimpleUploadedFile("scan.jpg", data, content_type="image/jpeg")
+        response = self.client.post(reverse("library_add"), {"visibility": Visibility.PUBLIC, "file": upload})
+        self.assertContains(response, "copyright notice")
+
 
 class LibraryHelpTests(LibraryTestCase):
     def test_the_help_shows_until_something_is_asked_and_leads_with_an_agent(self):

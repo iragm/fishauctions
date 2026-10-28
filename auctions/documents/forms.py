@@ -164,7 +164,8 @@ class _Uploads:
         already = visible_documents(self.user).filter(sha256=digest).first()
         if already:
             return digest, f"That file is already in the library, as “{already.display_title}”."
-        if Document.objects.filter(Q(removed=True) | Q(copyright_locked=True), sha256=digest).exists():
+        taken_down = Document.objects.filter(Q(removed=True) | Q(copyright_locked=True), sha256=digest).exists()
+        if taken_down or BatchPage.objects.filter(sha256=digest, documents__copyright_locked=True).exists():
             return digest, "That file was taken down after a copyright notice."
         return digest, ""
 

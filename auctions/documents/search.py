@@ -161,9 +161,17 @@ def clubs_to_file_under(user):
 
 
 def delete_document(document) -> str:
-    """Delete one document; its file goes after commit (``signals.on_document_deleted``). Returns its title."""
+    """Delete one document; its file goes after commit (``signals.on_document_deleted``). Returns its title.
+
+    One taken down after a copyright notice is only marked removed, so its file stays on record and the
+    same file can't be uploaded again.
+    """
     title = document.display_title
-    document.delete()
+    if document.copyright_locked:
+        document.removed = True
+        document.save(update_fields=["removed"])
+    else:
+        document.delete()
     return title
 
 

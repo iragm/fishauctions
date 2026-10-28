@@ -15738,6 +15738,20 @@ def _said(params: dict[str, Any], *keys: str) -> str:
     return next((_str(params, key) for key in keys if _str(params, key)), "")
 
 
+def _transcription_text(params: dict[str, Any]) -> str:
+    """The transcription ``save_transcription`` was sent, under its name or an alias."""
+    return next((str(params[key]).strip() for key in ("text", "body", "content", "markdown") if params.get(key)), "")
+
+
+def _page_numbers(raw) -> list[int]:
+    """Page numbers sent as a list or as "3, 4"; empty if any isn't a number."""
+    raw = raw if isinstance(raw, list) else str(raw or "").replace(",", " ").split()
+    try:
+        return [int(each) for each in raw]
+    except (TypeError, ValueError):
+        return []
+
+
 def _waiting_facts(item, pages: int | None = None, user=None) -> dict[str, Any]:
     """One waiting article as the transcription tools describe it. ``yours``: the caller uploaded it."""
     from .documents.models import DocumentBatch
@@ -15820,7 +15834,7 @@ def save_transcription(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(problem)
     batch = isinstance(item, DocumentBatch)
     finished = bool(_flag(params, "finished"))
-    text = next((str(params[key]).strip() for key in ("text", "body", "content", "markdown") if params.get(key)), "")
+    text = _transcription_text(params)
     if not text:
         if batch and finished:
             finish(item)
@@ -15841,13 +15855,8 @@ def save_transcription(request, params: dict[str, Any]) -> dict[str, Any]:
             return problem
     pages: list[int] = []
     if batch:
-        raw = params.get("pages")
-        raw = raw if isinstance(raw, list) else str(raw or "").replace(",", " ").split()
         total = page_count(item)
-        try:
-            pages = [int(each) for each in raw]
-        except (TypeError, ValueError):
-            pages = []
+        pages = _page_numbers(params.get("pages"))
         if not pages or any(not 1 <= number <= total for number in pages):
             return _need(f"Which of its {total} pages is this article on? Give their numbers, e.g. [3, 4].")
     document = save(

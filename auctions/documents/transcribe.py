@@ -52,9 +52,10 @@ def _waiting(user, reach: bool = False):
             mine_or_shared |= Q(owner=user)
         documents = Document.objects.filter(mine_or_shared, removed=False, status=Document.TRANSCRIBE)
         batches = DocumentBatch.objects.filter(mine_or_shared, status=DocumentBatch.TRANSCRIBE)
-        return documents, batches
+        return documents, batches.exclude(documents__copyright_locked=True)
     documents = visible_documents(user).filter(status=Document.TRANSCRIBE)
-    batches = visible_batches(user).filter(status=DocumentBatch.TRANSCRIBE)
+    # A batch with an article taken down for copyright stays as it is (DocumentBatch.copyright_locked).
+    batches = visible_batches(user).filter(status=DocumentBatch.TRANSCRIBE).exclude(documents__copyright_locked=True)
     # can_manage: the uploader, or anyone who edits its club, which a superuser does for every club.
     clubs = Q(club__isnull=False) if user.is_superuser else Q(club__in=clubs_to_file_under(user))
     theirs = Q(owner=user) | clubs
