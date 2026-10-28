@@ -1600,7 +1600,7 @@ class TranscribeTests(LibraryTestCase):
         self.assertEqual((killies.owner, killies.club, killies.visibility), (self.owner, self.club, Visibility.CLUB))
         self.assertEqual(self.run_as(self.owner, "waiting_articles")["articles"], [])
 
-    def test_the_page_reaches_the_agent_as_a_picture_but_never_the_admin_endpoint(self):
+    def test_the_page_reaches_the_agent_as_a_picture_on_either_endpoint(self):
         from auctions.mcp import admin
 
         document = self.scan()
@@ -1611,7 +1611,7 @@ class TranscribeTests(LibraryTestCase):
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["mimeType"], "image/jpeg")
         self.assertNotIn("_images", result["content"][0]["text"])
-        self.assertEqual([block["type"] for block in admin.private_result(result)["content"]], ["text"])
+        self.assertEqual([block["type"] for block in admin.private_result(result)["content"]], ["text", "image"])
 
     def test_the_pages_say_it_waits_and_offer_an_agent(self):
         document = self.scan()
@@ -1674,3 +1674,22 @@ class TranscribeTests(LibraryTestCase):
         self.assertEqual(untouched.status, untouched.READING)
         self.assertFalse(untouched.pages.filter(read=True).exists())
         self.assertEqual(started.status, started.TRANSCRIBE, "never rebuilt over an agent's articles")
+
+    def test_the_owners_routine_proposes_and_the_approval_saves_it(self):
+        from auctions.mcp import admin
+        from auctions.models import AgentProposal
+
+        document = self.scan(owner=self.member, club=self.club)  # club-only: staff isn't in the club
+        listed = self.run_as(self.staff, "waiting_articles")["articles"]
+        self.assertEqual([(row["item"], row["yours"]) for row in listed], [(f"document {document.pk}", False)])
+        request = RequestFactory().post("/mcp/admin/")
+        request.user = self.staff
+        steps = [{"tool": "save_transcription", "arguments": {"item": f"document {document.pk}", "text": "Read."}}]
+        proposed = admin.propose_change(request, {"summary": "Transcribe a scan", "steps": steps})
+        self.assertTrue(proposed.get("ok"), proposed)
+        self.assertEqual(Document.objects.get(pk=document.pk).text, "", "nothing changes until approved")
+        self.assertEqual(AgentProposal.objects.get().steps, steps)
+        result = self.run_as(self.staff, "save_transcription", **steps[0]["arguments"])
+        self.assertTrue(result.get("ok"), result)
+        document.refresh_from_db()
+        self.assertEqual((document.text, document.owner), ("Read.", self.member))

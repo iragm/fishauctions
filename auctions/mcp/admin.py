@@ -227,8 +227,8 @@ def private_result(result: dict[str, Any]) -> dict[str, Any]:
     """A ``CallToolResult`` passed through :func:`private`, text rebuilt from the structure so the two
     still agree. Every answer this endpoint gives goes through here."""
     structured = result.get("structuredContent")
-    # A scanned page is a picture nothing here can scrub: a membership list's phone numbers ride along.
-    content = [dict(block) for block in result.get("content") or [] if block.get("type") != "image"]
+    # Pictures pass as they are: read_waiting_page's scans are what the owner's routine transcribes.
+    content = [dict(block) for block in result.get("content") or []]
     if isinstance(structured, dict):
         structured = private(structured)
         result = {**result, "structuredContent": structured}
@@ -1661,8 +1661,9 @@ PROPOSAL_CHECKS = {
 #: Registry writes a proposal may name. Short on purpose: an approved step runs with a superuser's
 #: reach, and the agent that wrote it read text strangers typed. The owner's own one-off chores are
 #: species, feature requests and the :data:`APPROVAL_ONLY` admin jobs (the species list's upkeep among them); a refund, an announcement or
-#: an email to a club is done by hand.
-PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species"})
+#: an email to a club is done by hand. ``save_transcription`` is the owner's daily routine transcribing
+#: members' waiting scans: the approver reads the text before it goes in the library.
+PROPOSABLE = frozenset({"set_lot_species", "name_a_species", "add_species", "save_transcription"})
 
 
 def step_action(name: Any) -> Action | None:

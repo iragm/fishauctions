@@ -125,8 +125,9 @@ view or service it goes through. This file keeps only choices that look like mis
 ## The library
 
 - `read_waiting_page` is the one tool that answers with a picture: `palette_actions.KEY_IMAGES` becomes
-  an MCP image block, never a field in the JSON. `/mcp/admin/` drops it (`admin.private_result`): a
-  scanned membership list's phone numbers can't be scrubbed out of a picture.
+  an MCP image block, never a field in the JSON. `/mcp/admin/` passes it unscrubbed, because the owner's
+  daily routine transcribes members' scans there and proposes each `save_transcription`.
+- A superuser's waiting list is every club's, but never someone else's "only me" scan.
 - `save_transcription` files a batch's article under the **batch's** owner, club and readers, not the
   caller's: a site admin's agent transcribing a club's scans must not take them over.
 

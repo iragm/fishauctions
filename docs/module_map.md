@@ -219,7 +219,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16867 lines)
+- **`palette_actions.py`** (16868 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -439,7 +439,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1676 lines)
+- **`test_documents.py`** (1695 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -760,7 +760,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`stitch.py`** (469 lines)
   Put a pile of page pictures back together into articles.
   `paragraphs`, `read_page`, `put_in_order`, `number_new_pages`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
-- **`transcribe.py`** (214 lines)
+- **`transcribe.py`** (220 lines)
   Articles waiting for a person's AI agent to transcribe them, and saving what it read.
   `waiting`, `waiting_count`, `reference`, `find`, `page_count`, `pages_done`, `page_picture`, `save`, `finish`
 
@@ -881,7 +881,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2067 lines)
+- **`admin.py`** (2068 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.

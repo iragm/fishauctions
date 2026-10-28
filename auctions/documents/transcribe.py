@@ -7,8 +7,9 @@ together. A member's own agent works through them over ``/mcp/`` (``waiting_arti
 
 What it saves stays the uploader's and the club's: a document keeps its owner, club and visibility, and
 a batch's articles take the batch's. Who may: whoever can read it and may edit it, the web's own rule
-(:func:`.search.visible_documents` and :func:`.search.can_manage`): a superuser may edit anything, but
-sees only what the library shows them, never another club's members-only scans or anyone's "only me".
+(:func:`.search.visible_documents` and :func:`.search.can_manage`). A superuser reaches every club's
+waiting scans, never anyone else's "only me": the owner's daily routine reads them on ``/mcp/admin/``
+and files each transcription as a ``propose_change`` step the owner approves.
 """
 
 from __future__ import annotations
@@ -26,21 +27,26 @@ from auctions.documents.extract import (
     frames_as_jpeg,
     parser_version,
 )
-from auctions.documents.models import Document, DocumentBatch
+from auctions.documents.models import Document, DocumentBatch, Visibility
 
 _REFERENCE = re.compile(r"\s*(document|batch)\s*[#:\-]?\s*(\d+)\s*", re.IGNORECASE)
 
 
 def _waiting(user):
-    """``(documents, batches)`` waiting for ``user``'s agent: ones they can read and may edit."""
+    """``(documents, batches)`` waiting for ``user``'s agent: ones they can read and may edit, or for a
+    superuser, every one but somebody else's "only me".
+    """
     from auctions.documents.search import clubs_to_file_under, visible_batches, visible_documents
 
+    if user.is_superuser:
+        mine_or_shared = Q(owner=user) | ~Q(visibility=Visibility.PRIVATE)
+        documents = Document.objects.filter(mine_or_shared, removed=False, status=Document.TRANSCRIBE)
+        batches = DocumentBatch.objects.filter(mine_or_shared, status=DocumentBatch.TRANSCRIBE)
+        return documents, batches
     documents = visible_documents(user).filter(status=Document.TRANSCRIBE)
     batches = visible_batches(user).filter(status=DocumentBatch.TRANSCRIBE)
-    if not user.is_superuser:
-        theirs = Q(owner=user) | Q(club__in=clubs_to_file_under(user))
-        documents, batches = documents.filter(theirs), batches.filter(theirs)
-    return documents, batches
+    theirs = Q(owner=user) | Q(club__in=clubs_to_file_under(user))
+    return documents.filter(theirs), batches.filter(theirs)
 
 
 def waiting(user, club=None) -> list:

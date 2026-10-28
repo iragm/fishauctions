@@ -15738,8 +15738,8 @@ def _said(params: dict[str, Any], *keys: str) -> str:
     return next((_str(params, key) for key in keys if _str(params, key)), "")
 
 
-def _waiting_facts(item, pages: int | None = None) -> dict[str, Any]:
-    """One waiting article as the transcription tools describe it."""
+def _waiting_facts(item, pages: int | None = None, user=None) -> dict[str, Any]:
+    """One waiting article as the transcription tools describe it. ``yours``: the caller uploaded it."""
     from .documents.models import DocumentBatch
     from .documents.transcribe import page_count, pages_done, reference
 
@@ -15753,6 +15753,7 @@ def _waiting_facts(item, pages: int | None = None) -> dict[str, Any]:
         "uploaded": item.createdon.date().isoformat(),
         "pages": page_count(item) if pages is None else pages,
         "url": item.get_absolute_url(),
+        "yours": user is not None and item.owner_id == user.pk,
     }
     if batch:
         facts["pages_already_in_an_article"] = pages_done(item)
@@ -15773,7 +15774,7 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
             return _error(f"I couldn't find a club called “{hint}” that you're part of.")
     items = waiting(request.user, club)
     limit, offset = _slice(params)
-    rows = [_waiting_facts(item) for item in items[offset : offset + limit]]
+    rows = [_waiting_facts(item, user=request.user) for item in items[offset : offset + limit]]
     if not rows:
         return {"articles": [], "summary": "Nothing is waiting to be transcribed."}
     return {
@@ -15800,7 +15801,7 @@ def read_waiting_page(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"There's no page {number}: it has {total}.")
     more = f" Page {number + 1} is next." if number < total else " That's the last page."
     return {
-        **_waiting_facts(item, total),
+        **_waiting_facts(item, total, request.user),
         "page": number,
         "summary": f"Page {number} of {total} of “{untrusted_short(str(item))}”, as a picture.{more}",
         KEY_IMAGES: [picture],
