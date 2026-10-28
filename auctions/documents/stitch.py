@@ -294,9 +294,18 @@ def _last_label(batch, before: int) -> str:
 
 
 def build_documents(batch) -> list:
-    """One document per article, replacing any this batch made before. Returns them, unsaved notes aside."""
+    """One document per article, replacing any this batch made before. Returns them, unsaved notes aside.
+
+    A batch holding an article taken down after a copyright notice is left as it is: rebuilding would
+    put that article back as a new, unlocked one.
+    """
     from auctions.documents import index
     from auctions.models import Document
+
+    if batch.copyright_locked:
+        batch.status = batch.DONE
+        batch.save(update_fields=["status"])
+        return []
 
     pieces: dict[str, list[tuple]] = {key: [] for key in batch.articles}
     for page in batch.pages.order_by("position"):

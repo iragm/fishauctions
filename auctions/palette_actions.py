@@ -15738,8 +15738,22 @@ def _said(params: dict[str, Any], *keys: str) -> str:
     return next((_str(params, key) for key in keys if _str(params, key)), "")
 
 
-def _waiting_facts(item, pages: int | None = None) -> dict[str, Any]:
-    """One waiting article as the transcription tools describe it."""
+def _transcription_text(params: dict[str, Any]) -> str:
+    """The transcription ``save_transcription`` was sent, under its name or an alias."""
+    return next((str(params[key]).strip() for key in ("text", "body", "content", "markdown") if params.get(key)), "")
+
+
+def _page_numbers(raw) -> list[int]:
+    """Page numbers sent as a list or as "3, 4"; empty if any isn't a number."""
+    raw = raw if isinstance(raw, list) else str(raw or "").replace(",", " ").split()
+    try:
+        return [int(each) for each in raw]
+    except (TypeError, ValueError):
+        return []
+
+
+def _waiting_facts(item, pages: int | None = None, user=None) -> dict[str, Any]:
+    """One waiting article as the transcription tools describe it. ``yours``: the caller uploaded it."""
     from .documents.models import DocumentBatch
     from .documents.transcribe import page_count, pages_done, reference
 
@@ -15753,6 +15767,7 @@ def _waiting_facts(item, pages: int | None = None) -> dict[str, Any]:
         "uploaded": item.createdon.date().isoformat(),
         "pages": page_count(item) if pages is None else pages,
         "url": item.get_absolute_url(),
+        "yours": user is not None and item.owner_id == user.pk,
     }
     if batch:
         facts["pages_already_in_an_article"] = pages_done(item)
@@ -15763,7 +15778,7 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
     """Uploads waiting for an agent to transcribe them (:func:`auctions.documents.transcribe.waiting`):
     the caller's own and their clubs' where they edit the club; every one for a superuser.
     """
-    from .documents.transcribe import waiting
+    from .documents.transcribe import owner_reach, waiting
 
     club = None
     hint = _str(params, "club")
@@ -15771,9 +15786,9 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
         club = palette_routes._club_from_hint(request.user, hint)
         if club is None:
             return _error(f"I couldn't find a club called “{hint}” that you're part of.")
-    items = waiting(request.user, club)
+    items = waiting(request.user, club, owner_reach(request))
     limit, offset = _slice(params)
-    rows = [_waiting_facts(item) for item in items[offset : offset + limit]]
+    rows = [_waiting_facts(item, user=request.user) for item in items[offset : offset + limit]]
     if not rows:
         return {"articles": [], "summary": "Nothing is waiting to be transcribed."}
     return {
@@ -15786,9 +15801,9 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def read_waiting_page(request, params: dict[str, Any]) -> dict[str, Any]:
     """One page of a waiting article, as a picture for the agent to read. Writes nothing."""
-    from .documents.transcribe import find, page_count, page_picture
+    from .documents.transcribe import find, owner_reach, page_count, page_picture
 
-    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"))
+    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"), owner_reach(request))
     if problem:
         return _error(problem)
     number = _int(params, "page") or _int(params, "number") or 1
@@ -15800,7 +15815,7 @@ def read_waiting_page(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"There's no page {number}: it has {total}.")
     more = f" Page {number + 1} is next." if number < total else " That's the last page."
     return {
-        **_waiting_facts(item, total),
+        **_waiting_facts(item, total, request.user),
         "page": number,
         "summary": f"Page {number} of {total} of “{untrusted_short(str(item))}”, as a picture.{more}",
         KEY_IMAGES: [picture],
@@ -15812,14 +15827,14 @@ def save_transcription(request, params: dict[str, Any]) -> dict[str, Any]:
     The article stays the uploader's and its club's; only who may edit it may save it.
     """
     from .documents.models import DocumentBatch
-    from .documents.transcribe import find, finish, page_count, save
+    from .documents.transcribe import find, finish, owner_reach, page_count, save
 
-    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"))
+    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"), owner_reach(request))
     if problem:
         return _error(problem)
     batch = isinstance(item, DocumentBatch)
     finished = bool(_flag(params, "finished"))
-    text = next((str(params[key]).strip() for key in ("text", "body", "content", "markdown") if params.get(key)), "")
+    text = _transcription_text(params)
     if not text:
         if batch and finished:
             finish(item)
@@ -15840,13 +15855,8 @@ def save_transcription(request, params: dict[str, Any]) -> dict[str, Any]:
             return problem
     pages: list[int] = []
     if batch:
-        raw = params.get("pages")
-        raw = raw if isinstance(raw, list) else str(raw or "").replace(",", " ").split()
         total = page_count(item)
-        try:
-            pages = [int(each) for each in raw]
-        except (TypeError, ValueError):
-            pages = []
+        pages = _page_numbers(params.get("pages"))
         if not pages or any(not 1 <= number <= total for number in pages):
             return _need(f"Which of its {total} pages is this article on? Give their numbers, e.g. [3, 4].")
     document = save(

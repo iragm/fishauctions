@@ -136,6 +136,7 @@ class MCPEndpointView(View):
         request.user = credential.user
         request.mcp_credential = credential
         request.assistant_surface = credential.label  # what the auction history says did this
+        request.owner_reach = self.admin  # documents.transcribe: the owner's routine reads every club's scans
 
         caller = protocol.Caller(
             request=request,

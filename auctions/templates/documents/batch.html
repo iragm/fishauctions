@@ -20,7 +20,9 @@
   {% endif %}
   {% if batch.notes %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ batch.notes }}</div>{% endif %}
 
-  {% if can_manage %}
+  {% if locked and can_manage %}
+    <div class="alert alert-warning text-dark">Only you can read this batch, after a copyright notice.</div>
+  {% elif can_manage %}
     <div class="d-flex flex-wrap gap-2 mb-3">
       {% if batch.status == "waiting" or batch.status == "failed" %}
         <form method="post">{% csrf_token %}<input type="hidden" name="action" value="finish"><button type="submit" class="btn btn-sm btn-primary">{% if batch.status == "failed" %}Carry on{% else %}Put the articles together now{% endif %}</button></form>
@@ -39,7 +41,7 @@
     {% endfor %}
   {% endif %}
 
-  {% if can_manage and form and batch.status != "stitching" %}
+  {% if can_manage and form and not locked and batch.status != "stitching" %}
     <div class="col-12 col-lg-6 mt-4">
       <h2 class="h6">Add pages</h2>
       {% if batch.status == "done" %}<p class="small text-muted">Its articles are rebuilt when you put them together again.</p>{% endif %}

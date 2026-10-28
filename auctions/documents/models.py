@@ -124,6 +124,11 @@ class DocumentBatch(models.Model):
 
         return reverse("document_batch", kwargs={"pk": self.pk})
 
+    @property
+    def copyright_locked(self) -> bool:
+        """An article of it was taken down after a copyright notice: the batch is private and stays as it is."""
+        return self.documents.filter(copyright_locked=True).exists()
+
 
 class BatchPage(models.Model):
     """One page of a batch: a picture, or one page of an uploaded PDF (``pdf_page``, from 0).
@@ -205,6 +210,10 @@ class Document(models.Model):
         default=False, help_text="Hidden from everyone, e.g. after a copyright notice. The file is kept."
     )
     removed_reason = models.CharField(max_length=300, blank=True)
+    copyright_locked = models.BooleanField(
+        default=False,
+        help_text="Made private by a copyright notice. Its owner can't share it again; untick after a counter-notice.",
+    )
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)
     indexed_on = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(

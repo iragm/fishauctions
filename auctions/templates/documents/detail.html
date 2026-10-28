@@ -24,6 +24,7 @@
   {% elif document.error %}
     <div class="alert alert-warning text-dark">Reading it again didn't work: {{ document.error }}</div>
   {% endif %}
+  {% if document.copyright_locked and can_manage %}<div class="alert alert-warning text-dark">Only you can read this, after a copyright notice.</div>{% endif %}
   {% if document.notes and has_library %}<div class="alert alert-secondary small" style="white-space: pre-line;">{{ document.notes }}</div>{% endif %}
 
   <div class="mb-3">

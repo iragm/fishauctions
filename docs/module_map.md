@@ -131,7 +131,7 @@ this only quotes its opening sentence.
 - **`discord_events.py`** (354 lines)
   Discord scheduled events for clubs.
   `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`, `discord_link`, `auction_location`
-- **`dmca.py`** (245 lines)
+- **`dmca.py`** (252 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
 - **`donation_views.py`** (608 lines)
@@ -204,7 +204,7 @@ this only quotes its opening sentence.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
 - **`models.py`** (15224 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
-- **`moderation_admin.py`** (173 lines)
+- **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
   `ContentReportAdmin`, `CopyrightNoticeAdmin`, `CopyrightStrikeAdmin`, `DocumentAdmin`, `DocumentFeedbackAdmin`
 - **`moderation_forms.py`** (158 lines)
@@ -219,7 +219,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16867 lines)
+- **`palette_actions.py`** (16877 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -439,7 +439,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1676 lines)
+- **`test_documents.py`** (1807 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -742,12 +742,12 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`extract.py`** (408 lines)
   A file, as Markdown: ``markitdown`` for the formats, the site's vision model for the pictures.
   `parser_version`, `document_model`, `ExtractionError`, `NeedsTranscribing`, `server_reads_pictures`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
-- **`forms.py`** (433 lines)
+- **`forms.py`** (439 lines)
   The library's forms: upload, adding pages to a batch, edit, and a reader's report. ``update_document``
   `natural_key`, `space_used`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
 - **`index.py`** (597 lines)
   Read a document, cut it into passages, embed them and tag it -- each stage only when it is stale.
-- **`models.py`** (339 lines)
+- **`models.py`** (348 lines)
   The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
 - **`pictures.py`** (118 lines)
   Pictures on a document: the photographs and drawings an article printed, cropped out and kept.
@@ -755,14 +755,13 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`render.py`** (58 lines)
   A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
   `to_html`
-- **`search.py`** (331 lines)
+- **`search.py`** (339 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
-- **`stitch.py`** (469 lines)
+- **`stitch.py`** (478 lines)
   Put a pile of page pictures back together into articles.
   `paragraphs`, `read_page`, `put_in_order`, `number_new_pages`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
-- **`transcribe.py`** (214 lines)
+- **`transcribe.py`** (239 lines)
   Articles waiting for a person's AI agent to transcribe them, and saving what it read.
-  `waiting`, `waiting_count`, `reference`, `find`, `page_count`, `pages_done`, `page_picture`, `save`, `finish`
 
 ## `auctions/management/`
 
@@ -881,7 +880,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2067 lines)
+- **`admin.py`** (2133 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -911,7 +910,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
 - **`tools.py`** (457 lines)
   The action registry, as MCP tools.
-- **`transport.py`** (161 lines)
+- **`transport.py`** (162 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
 - **`verification.py`** (28 lines)
@@ -1063,7 +1062,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (638 lines)
+- **`documents.py`** (640 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.

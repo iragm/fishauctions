@@ -55,11 +55,12 @@ there to approve.
   refresh token that never named it; the toolkit alone would allow that.
 - **Nothing private leaves**: every answer goes through `admin.private_result` (contact-detail keys
   dropped at any depth, emails, phones, keys and public IPs scrubbed), because the agents reading
-  here also read strangers' text and may push to a public repo. No resources, no prompts.
+  here also read strangers' text and may push to a public repo. No resources, no prompts. Pictures
+  (`read_waiting_page`'s scans) pass unscrubbed: transcribing them is the owner's daily routine.
 - The two tools that write only fill queues a person decides: `suggest_feature` adds a feature request
   (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
   `/admin-dashboard/proposals/` changes data. Approve runs
-  the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes) and
+  the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes, a library transcription) and
   `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, its details, admins and interests, an account's features (PayPal, Square, library), a club's outreach
   stage, trusting a user, filing an auction under a club, merging two accounts, a palette shortcut;
   the species list's upkeep from `admin_species`) can be proposed, checked again at approval.

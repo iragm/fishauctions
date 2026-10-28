@@ -17,6 +17,7 @@ radio menu with htmx on the menu itself, as the club finder's interests are.
 
 <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
   <a class="btn btn-sm btn-info" href="{% url 'library_add' %}{% if club %}?club={{ club.slug }}{% endif %}"><i class="bi bi-file-earmark-plus"></i> Add articles</a>
+  <a class="btn btn-sm btn-secondary" href="{% url 'library_search' %}"><i class="bi bi-question-circle"></i> Help</a>
   <span class="dropdown">
     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="bi bi-eye"></i> <span>{{ selected_visibility_label|default:"Who can read it" }}</span>
