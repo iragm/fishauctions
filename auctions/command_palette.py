@@ -1357,6 +1357,17 @@ def _example_items(request):
     return items
 
 
+def _connect_ai_items(user):
+    """The AI agents guide, until this person has an assistant connected."""
+    from .help_guides import GUIDES
+    from .mcp.auth import connected_apps
+
+    if any(app["live"] for app in connected_apps(user)):
+        return []
+    url = GUIDES["ai-agents"].url + "#connect"
+    return [_item("page", "Connect an AI assistant", url, "bi-robot", "Claude, ChatGPT or Grok")]
+
+
 def default_items(request, *, app_deep_links=True):
     """Groups shown when the palette opens with no query."""
     user = request.user
@@ -1368,6 +1379,7 @@ def default_items(request, *, app_deep_links=True):
     # Right after that auction's rows.
     if app_deep_links:
         primary += _app_deep_link_items(request)
+    primary += _connect_ai_items(user)
     primary += _club_default_items(user)
     next_auction = (
         Auction.objects.filter(

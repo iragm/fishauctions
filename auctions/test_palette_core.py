@@ -51,6 +51,28 @@ class CommandPaletteTests(StandardTestCase):
         resp = client.post(reverse("command_palette_log"), {"search": "x"})
         self.assertEqual(resp.status_code, 302)
 
+    def test_default_items_offer_an_ai_assistant_until_one_is_connected(self):
+        from oauth2_provider.models import AccessToken, Application, RefreshToken
+
+        self._login(self.user)
+        titles = self._all_item_titles(self.client.get(reverse("command_palette")))
+        self.assertIn("Connect an AI assistant", titles)
+        application = Application.objects.create(
+            name="an agent",
+            client_type=Application.CLIENT_PUBLIC,
+            authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+            redirect_uris="https://example.com/callback",
+        )
+        access = AccessToken.objects.create(
+            user=self.user,
+            application=application,
+            token="access-1",
+            expires=timezone.now() + datetime.timedelta(hours=1),
+        )
+        RefreshToken.objects.create(user=self.user, application=application, token="refresh-1", access_token=access)
+        titles = self._all_item_titles(self.client.get(reverse("command_palette")))
+        self.assertNotIn("Connect an AI assistant", titles)
+
     def test_default_items_for_admin(self):
         self.user.userdata.last_auction_used = self.online_auction
         self.user.userdata.save()
