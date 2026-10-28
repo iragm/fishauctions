@@ -219,7 +219,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16860 lines)
+- **`palette_actions.py`** (16865 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -273,7 +273,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1223 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1774 lines)
+- **`tables.py`** (1780 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (1878 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
@@ -439,7 +439,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1622 lines)
+- **`test_documents.py`** (1674 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -587,7 +587,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (878 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5261 lines)
+- **`test_palette_assist.py`** (5263 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -736,13 +736,13 @@ this only quotes its opening sentence.
 
 The library: documents people upload, read into text, and searched from ``/library/`` and ``/mcp/``.
 
-- **`extract.py`** (402 lines)
+- **`extract.py`** (408 lines)
   A file, as Markdown: ``markitdown`` for the formats, the site's vision model for the pictures.
   `parser_version`, `document_model`, `ExtractionError`, `NeedsTranscribing`, `server_reads_pictures`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
 - **`forms.py`** (433 lines)
   The library's forms: upload, adding pages to a batch, edit, and a reader's report. ``update_document``
   `natural_key`, `space_used`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
-- **`index.py`** (594 lines)
+- **`index.py`** (597 lines)
   Read a document, cut it into passages, embed them and tag it -- each stage only when it is stale.
 - **`models.py`** (339 lines)
   The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
@@ -754,12 +754,12 @@ The library: documents people upload, read into text, and searched from ``/libra
   `to_html`
 - **`search.py`** (331 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
-- **`stitch.py`** (435 lines)
+- **`stitch.py`** (469 lines)
   Put a pile of page pictures back together into articles.
-  `paragraphs`, `read_page`, `put_in_order`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
-- **`transcribe.py`** (195 lines)
+  `paragraphs`, `read_page`, `put_in_order`, `number_new_pages`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
+- **`transcribe.py`** (214 lines)
   Articles waiting for a person's AI agent to transcribe them, and saving what it read.
-  `waiting`, `reference`, `find`, `page_count`, `pages_done`, `page_picture`, `save`, `finish`
+  `waiting`, `waiting_count`, `reference`, `find`, `page_count`, `pages_done`, `page_picture`, `save`, `finish`
 
 ## `auctions/management/`
 

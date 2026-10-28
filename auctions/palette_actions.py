@@ -15731,7 +15731,12 @@ TRANSCRIBE_HOW = (
 )
 
 
-def _waiting_facts(item) -> dict[str, Any]:
+def _said(params: dict[str, Any], *keys: str) -> str:
+    """The first of ``keys`` given: a parameter and the aliases its action accepts for it."""
+    return next((_str(params, key) for key in keys if _str(params, key)), "")
+
+
+def _waiting_facts(item, pages: int | None = None) -> dict[str, Any]:
     """One waiting article as the transcription tools describe it."""
     from .documents.models import DocumentBatch
     from .documents.transcribe import page_count, pages_done, reference
@@ -15744,7 +15749,7 @@ def _waiting_facts(item) -> dict[str, Any]:
         "club": item.club.name if item.club_id else "",
         "who_can_read_it": item.get_visibility_display(),
         "uploaded": item.createdon.date().isoformat(),
-        "pages": page_count(item),
+        "pages": page_count(item) if pages is None else pages,
         "url": item.get_absolute_url(),
     }
     if batch:
@@ -15781,10 +15786,10 @@ def read_waiting_page(request, params: dict[str, Any]) -> dict[str, Any]:
     """One page of a waiting article, as a picture for the agent to read. Writes nothing."""
     from .documents.transcribe import find, page_count, page_picture
 
-    item, problem = find(request.user, _str(params, "item"))
+    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"))
     if problem:
         return _error(problem)
-    number = _int(params, "page") or 1
+    number = _int(params, "page") or _int(params, "number") or 1
     total = page_count(item)
     picture = page_picture(item, number) if 1 <= number <= total else None
     if picture is None:
@@ -15793,7 +15798,7 @@ def read_waiting_page(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(f"There's no page {number}: it has {total}.")
     more = f" Page {number + 1} is next." if number < total else " That's the last page."
     return {
-        **_waiting_facts(item),
+        **_waiting_facts(item, total),
         "page": number,
         "summary": f"Page {number} of {total} of “{untrusted_short(str(item))}”, as a picture.{more}",
         KEY_IMAGES: [picture],
@@ -15807,12 +15812,12 @@ def save_transcription(request, params: dict[str, Any]) -> dict[str, Any]:
     from .documents.models import DocumentBatch
     from .documents.transcribe import find, finish, page_count, save
 
-    item, problem = find(request.user, _str(params, "item"))
+    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"))
     if problem:
         return _error(problem)
     batch = isinstance(item, DocumentBatch)
     finished = bool(_flag(params, "finished"))
-    text = str(params.get("text") or "").strip()
+    text = next((str(params[key]).strip() for key in ("text", "body", "content", "markdown") if params.get(key)), "")
     if not text:
         if batch and finished:
             finish(item)

@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import django_tables2 as tables
 from django.contrib.humanize.templatetags.humanize import naturalday
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import F
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join, strip_tags
@@ -1215,6 +1216,11 @@ class ClubBapLotHTMxTable(tables.Table):
         return value.name if value else "—"
 
     def render_bap_reason(self, value, record):
+        try:
+            if record.bap_award:
+                return ""  # it earned points: today's rules don't take them back
+        except ObjectDoesNotExist:
+            pass
         return format_html_join("", "<div>{}</div>", ((label,) for label in record.bap_reason_labels))
 
     def render_date_end(self, value, record):

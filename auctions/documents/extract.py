@@ -138,14 +138,15 @@ class Reader:
 
         digest = hashlib.sha256(jpeg).hexdigest()
         model = document_model()
-        self.model = model
         kept = DocumentImageText.objects.filter(document=self.document, sha256=digest, model=model)
         cached = kept.first() if self.document is not None else None
         if cached:
+            self.model = model
             return cached.text
         if not server_reads_pictures():
             self.unread += 1
             return ""
+        self.model = model
         if self.asked >= self.allowance:
             self.skipped += 1
             return ""
@@ -256,6 +257,9 @@ def extract(data: bytes, filename: str, reader: Reader | None = None) -> Extract
         text = text[:MAX_TEXT_CHARS]
         notes.append(f"Only the first {MAX_TEXT_CHARS:,} characters were kept.")
     if not text:
+        if reader.unread:
+            msg = "Only pictures are in this file. Upload them as pictures or a PDF to have them transcribed."
+            raise ExtractionError(msg)
         if reader.failed or reader.skipped:
             raise ExtractionError(" ".join(notes))
         msg = "No text or pictures could be read out of this file."
@@ -296,7 +300,9 @@ def _read_scanned_pdf(data: bytes, reader: Reader) -> str | None:
         parts = []
         for index, (layer, scanned) in enumerate(layers):
             body = layer
-            if scanned:
+            # Without the site's model, a scan's own text layer is as good as it gets until an agent
+            # transcribes it, and it is searchable; only a page with none waits for one.
+            if scanned and (server_reads_pictures() or len(layer) < SCANNED_TEXT_CHARS):
                 page = pdf[index]
                 picture = page.render(scale=RENDER_DPI / 72).to_pil()
                 page.close()

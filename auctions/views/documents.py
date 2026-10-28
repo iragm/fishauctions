@@ -181,7 +181,7 @@ class LibraryView(LibraryMixin, HTMxTableView):
         if not self.request.htmx:
             context["removed"] = Document.objects.filter(owner=user, removed=True).order_by("-createdon")
             context["batches"] = DocumentBatch.objects.filter(owner=user).exclude(status=DocumentBatch.DONE)
-            context["waiting"] = len(transcribe.waiting(user))
+            context["waiting"] = transcribe.waiting_count(user)
         return context
 
 

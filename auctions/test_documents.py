@@ -1533,7 +1533,7 @@ class TranscribeTests(LibraryTestCase):
         self.assertEqual(self.provider.calls["complete"], 0)
 
     def test_only_who_may_edit_it_sees_it_waiting(self):
-        document = self.scan()
+        document = self.scan(visibility=Visibility.PUBLIC)
         reference = f"document {document.pk}"
         for user, sees in ((self.owner, True), (self.staff, True), (self.member, False), (self.outsider, False)):
             listed = [row["item"] for row in self.run_as(user, "waiting_articles")["articles"]]
@@ -1542,7 +1542,7 @@ class TranscribeTests(LibraryTestCase):
         self.assertIn("error", self.run_as(self.member, "save_transcription", item=reference, text="x"))
 
     def test_an_agent_reads_a_page_and_saves_it_for_the_uploader(self):
-        document = self.scan()
+        document = self.scan(visibility=Visibility.PUBLIC)
         reference = f"document {document.pk}"
         page = self.run_as(self.staff, "read_waiting_page", item=reference)
         self.assertEqual(page["pages"], 1)
@@ -1561,7 +1561,9 @@ class TranscribeTests(LibraryTestCase):
                 )
         self.assertTrue(result.get("ok"), result)
         document.refresh_from_db()
-        self.assertEqual((document.owner, document.club, document.visibility), (self.owner, self.club, Visibility.CLUB))
+        self.assertEqual(
+            (document.owner, document.club, document.visibility), (self.owner, self.club, Visibility.PUBLIC)
+        )
         self.assertEqual((document.title, document.year, document.status), ("Apistos", 1978, Document.READY))
         self.assertTrue(document.text_edited, "never read over again")
         self.assertIn(self.species, document.species.all())
@@ -1620,3 +1622,55 @@ class TranscribeTests(LibraryTestCase):
         response = self.client.get(document.get_absolute_url())
         self.assertContains(response, "Waiting to be transcribed")
         self.assertNotContains(response, reverse("user_api_keys"))
+
+    def test_nobody_else_sees_an_only_me_scan(self):
+        document = self.scan(visibility=Visibility.PRIVATE)
+        self.assertEqual(len(self.run_as(self.owner, "waiting_articles")["articles"]), 1)
+        self.assertEqual(self.run_as(self.staff, "waiting_articles")["articles"], [], "as on the web: a 404")
+        self.assertIn("error", self.run_as(self.staff, "read_waiting_page", item=f"document {document.pk}"))
+
+    def test_the_text_under_another_name_is_still_the_text(self):
+        batch = self.scanned_batch(pages=1)
+        result = self.run_as(
+            self.owner, "save_transcription", batch=str(batch.pk), content="Bettas.", title="B", pages=[1]
+        )
+        self.assertIn("error", result, "a bare number isn't an item")
+        result = self.run_as(
+            self.owner,
+            "save_transcription",
+            batch=f"batch {batch.pk}",
+            content="Bettas.",
+            title="B",
+            pages=[1],
+            finished=True,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(batch.documents.get().text, "Bettas.", "never closed with the article thrown away")
+
+    def test_pages_added_later_keep_the_numbers_already_given(self):
+        from auctions.documents import stitch
+        from auctions.models import BatchPage
+
+        batch = self.scanned_batch(pages=2)
+        page = BatchPage(batch=batch, original_name="scan1b.jpg")
+        page.file.save("scan1b.jpg", ContentFile(picture(800, 1000, fmt="JPEG")), save=True)
+        batch.status = batch.READING
+        batch.save(update_fields=["status"])
+        stitch.process(batch.pk)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, batch.TRANSCRIBE)
+        names = list(batch.pages.order_by("position").values_list("original_name", flat=True))
+        self.assertEqual(names, ["scan1.jpg", "scan2.jpg", "scan1b.jpg"])
+
+    def test_turning_the_sites_reading_on_picks_up_what_waited(self):
+        from auctions.documents import stitch
+
+        untouched, started = self.scanned_batch(), self.scanned_batch()
+        self.run_as(self.owner, "save_transcription", item=f"batch {started.pk}", text="B.", title="B", pages=[1])
+        with override_settings(DOCUMENT_SERVER_OCR=True), mock.patch.object(stitch, "_send"):
+            stitch.requeue_stuck()
+        untouched.refresh_from_db()
+        started.refresh_from_db()
+        self.assertEqual(untouched.status, untouched.READING)
+        self.assertFalse(untouched.pages.filter(read=True).exists())
+        self.assertEqual(started.status, started.TRANSCRIBE, "never rebuilt over an agent's articles")

@@ -6,8 +6,9 @@ together. A member's own agent works through them over ``/mcp/`` (``waiting_arti
 ``read_waiting_page``, ``save_transcription``), so the reading is paid for by whoever wants it done.
 
 What it saves stays the uploader's and the club's: a document keeps its owner, club and visibility, and
-a batch's articles take the batch's. Who may: whoever may edit it (:func:`.search.can_manage`), and a
-superuser, for whom every waiting article on the site is listed.
+a batch's articles take the batch's. Who may: whoever can read it and may edit it, the web's own rule
+(:func:`.search.visible_documents` and :func:`.search.can_manage`): a superuser may edit anything, but
+sees only what the library shows them, never another club's members-only scans or anyone's "only me".
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 from django.db.models import Q
 
 from auctions.documents.extract import (
+    MAX_PICTURES,
     MAX_TEXT_CHARS,
     PICTURE_EXTENSIONS,
     as_jpeg,
@@ -29,19 +31,30 @@ from auctions.documents.models import Document, DocumentBatch
 _REFERENCE = re.compile(r"\s*(document|batch)\s*[#:\-]?\s*(\d+)\s*", re.IGNORECASE)
 
 
-def waiting(user, club=None) -> list:
-    """Documents and batches waiting for ``user``'s agent, oldest first."""
-    from auctions.documents.search import clubs_to_file_under
+def _waiting(user):
+    """``(documents, batches)`` waiting for ``user``'s agent: ones they can read and may edit."""
+    from auctions.documents.search import clubs_to_file_under, visible_batches, visible_documents
 
-    documents = Document.objects.filter(status=Document.TRANSCRIBE, removed=False)
-    batches = DocumentBatch.objects.filter(status=DocumentBatch.TRANSCRIBE)
+    documents = visible_documents(user).filter(status=Document.TRANSCRIBE)
+    batches = visible_batches(user).filter(status=DocumentBatch.TRANSCRIBE)
     if not user.is_superuser:
         theirs = Q(owner=user) | Q(club__in=clubs_to_file_under(user))
         documents, batches = documents.filter(theirs), batches.filter(theirs)
+    return documents, batches
+
+
+def waiting(user, club=None) -> list:
+    """Documents and batches waiting for ``user``'s agent, oldest first."""
+    documents, batches = _waiting(user)
     if club is not None:
         documents, batches = documents.filter(club=club), batches.filter(club=club)
     items = [*documents.select_related("club").defer("text"), *batches.select_related("club")]
     return sorted(items, key=lambda item: (item.createdon, item.pk))
+
+
+def waiting_count(user) -> int:
+    documents, batches = _waiting(user)
+    return documents.count() + batches.count()
 
 
 def reference(item) -> str:
@@ -55,9 +68,10 @@ def find(user, said: str):
     if not match:
         return None, "Name it as waiting_articles does, e.g. “document 12” or “batch 5”."
     kind, pk = match.group(1).lower(), int(match.group(2))
-    for item in waiting(user):
-        if reference(item) == f"{kind} {pk}":
-            return item, None
+    documents, batches = _waiting(user)
+    item = (batches if kind == "batch" else documents).select_related("club").filter(pk=pk).first()
+    if item is not None:
+        return item, None
     return None, f"There's no {kind} {pk} waiting for you to transcribe."
 
 
@@ -76,7 +90,8 @@ def page_count(item) -> int:
         return item.pages.count()
     data = _data(item.file)
     if Path(item.original_name).suffix.lower() in PICTURE_EXTENSIONS:
-        return frames_as_jpeg(data, limit=0)[1]
+        # The frames page_picture can show: an icon-sized thumbnail frame isn't a page.
+        return len(frames_as_jpeg(data)[0])
     import pypdfium2 as pdfium
 
     try:
@@ -101,27 +116,31 @@ def page_picture(item, number: int) -> bytes | None:
     """Page ``number`` (from 1) of ``item`` as a bounded JPEG, or ``None`` if there is no such page or it
     won't open. Nothing is saved: listing and reading pages writes nothing.
     """
+    import pypdfium2 as pdfium
+
+    from auctions.documents.extract import ExtractionError
     from auctions.documents.stitch import _pdf_page
 
     if number < 1:
         return None
-    if isinstance(item, DocumentBatch):
-        pages = _batch_pages(item)
-        if number > len(pages):
-            return None
-        page = pages[number - 1]
-        if page.pdf_page is None:
-            return as_jpeg(_data(page.file))
-        if page.image:
-            return as_jpeg(_data(page.image))
-        return _pdf_page(_data(page.file), page.pdf_page)[0]
-    data = _data(item.file)
-    if Path(item.original_name).suffix.lower() in PICTURE_EXTENSIONS:
-        frames, total = frames_as_jpeg(data, limit=number)
-        return frames[number - 1] if number <= min(total, len(frames)) else None
-    if number > page_count(item):
+    try:
+        if isinstance(item, DocumentBatch):
+            pages = _batch_pages(item)
+            if number > len(pages):
+                return None
+            page = pages[number - 1]
+            if page.pdf_page is None:
+                return as_jpeg(_data(page.file))
+            if page.image:
+                return as_jpeg(_data(page.image))
+            return _pdf_page(_data(page.file), page.pdf_page)[0]
+        data = _data(item.file)
+        if Path(item.original_name).suffix.lower() in PICTURE_EXTENSIONS:
+            frames = frames_as_jpeg(data, limit=MAX_PICTURES)[0]
+            return frames[number - 1] if number <= len(frames) else None
+        return _pdf_page(data, number - 1)[0]
+    except (ExtractionError, pdfium.PdfiumError, IndexError, OSError):
         return None
-    return _pdf_page(data, number - 1)[0]
 
 
 def save(item, *, text: str, title: str = "", author: str = "", year=None, topics=None, pages=()) -> Document:

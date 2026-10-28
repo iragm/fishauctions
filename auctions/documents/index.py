@@ -553,8 +553,11 @@ def stale_documents():
     current = embedding_model_name()
     if current:
         stale |= Exists(DocumentChunk.objects.filter(document=OuterRef("pk")).exclude(embedding_model=current))
-    # Waiting for an agent: reading it again would only find that out again.
-    return Document.objects.filter(removed=False).exclude(status=Document.TRANSCRIBE).filter(stale)
+    documents = Document.objects.filter(removed=False)
+    if not server_reads_pictures():
+        # Waiting for an agent: reading it again would only find that out again.
+        documents = documents.exclude(status=Document.TRANSCRIBE)
+    return documents.filter(stale)
 
 
 #: Documents :func:`tidy` brings up to date in one night. Re-reading a scanned newsletter with a new
