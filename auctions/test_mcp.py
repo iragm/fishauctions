@@ -945,10 +945,10 @@ class ConnectPageTests(StandardTestCase):
         response = self.client.get(self.url, follow=True)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
-        # The address, and the two assistants the steps are written for.
+        # The address for Claude, and ChatGPT's official app.
         self.assertIn("/mcp", body)
         self.assertIn("Add a custom connector", body)
-        self.assertIn("developer mode", body)
+        self.assertIn("chatgpt.com/plugins/", body)
         self.assertIn("Create key", body)
 
     def test_creating_a_key_shows_it_exactly_once(self):
