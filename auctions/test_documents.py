@@ -1611,7 +1611,10 @@ class TranscribeTests(LibraryTestCase):
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["mimeType"], "image/jpeg")
         self.assertNotIn("_images", result["content"][0]["text"])
-        self.assertEqual([block["type"] for block in admin.private_result(result)["content"]], ["text", "image"])
+        kept = admin.private_result(result, "read_waiting_page")["content"]
+        self.assertEqual([block["type"] for block in kept], ["text", "image"])
+        dropped = admin.private_result(result, "describe_lot")["content"]
+        self.assertEqual([block["type"] for block in dropped], ["text"], "no other tool's pictures leave")
 
     def test_the_pages_say_it_waits_and_offer_an_agent(self):
         document = self.scan()
@@ -1680,16 +1683,36 @@ class TranscribeTests(LibraryTestCase):
         from auctions.models import AgentProposal
 
         document = self.scan(owner=self.member, club=self.club)  # club-only: staff isn't in the club
-        listed = self.run_as(self.staff, "waiting_articles")["articles"]
-        self.assertEqual([(row["item"], row["yours"]) for row in listed], [(f"document {document.pk}", False)])
+        mine = self.scan(owner=self.staff, club=None, visibility=Visibility.PUBLIC)
+        item = f"document {document.pk}"
+        self.assertEqual(self.run_as(self.staff, "waiting_articles")["articles"][0]["item"], f"document {mine.pk}")
+        self.assertIn("error", self.run_as(self.staff, "save_transcription", item=item, text="x"), "not on /mcp/")
         request = RequestFactory().post("/mcp/admin/")
-        request.user = self.staff
-        steps = [{"tool": "save_transcription", "arguments": {"item": f"document {document.pk}", "text": "Read."}}]
+        request.user, request.palette_page, request.owner_reach = self.staff, {}, True
+        listed = palette_actions.run_action(request, "waiting_articles", {})["articles"]
+        self.assertEqual(
+            {(row["item"], row["yours"]) for row in listed}, {(item, False), (f"document {mine.pk}", True)}
+        )
+        steps = [{"tool": "save_transcription", "arguments": {"item": item, "text": "Read."}}]
         proposed = admin.propose_change(request, {"summary": "Transcribe a scan", "steps": steps})
         self.assertTrue(proposed.get("ok"), proposed)
+        again = admin.propose_change(request, {"summary": "Transcribe it again", "steps": steps})
+        self.assertIn("already transcribes", again["error"])
+        self.assertIn(
+            "error",
+            admin.propose_change(
+                request,
+                {
+                    "summary": "s",
+                    "steps": [{"tool": "save_transcription", "arguments": {"item": "document 999999", "text": "x"}}],
+                },
+            ),
+        )
         self.assertEqual(Document.objects.get(pk=document.pk).text, "", "nothing changes until approved")
-        self.assertEqual(AgentProposal.objects.get().steps, steps)
-        result = self.run_as(self.staff, "save_transcription", **steps[0]["arguments"])
-        self.assertTrue(result.get("ok"), result)
+        approver = RequestFactory().post("/admin-dashboard/proposals/")
+        approver.user = self.staff
+        proposal = AgentProposal.objects.get()
+        admin.apply_proposal(proposal, approver)
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
         document.refresh_from_db()
-        self.assertEqual((document.text, document.owner), ("Read.", self.member))
+        self.assertEqual((document.text, document.owner, document.visibility), ("Read.", self.member, Visibility.CLUB))

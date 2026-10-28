@@ -439,7 +439,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1695 lines)
+- **`test_documents.py`** (1718 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -760,9 +760,8 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`stitch.py`** (469 lines)
   Put a pile of page pictures back together into articles.
   `paragraphs`, `read_page`, `put_in_order`, `number_new_pages`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
-- **`transcribe.py`** (220 lines)
+- **`transcribe.py`** (236 lines)
   Articles waiting for a person's AI agent to transcribe them, and saving what it read.
-  `waiting`, `waiting_count`, `reference`, `find`, `page_count`, `pages_done`, `page_picture`, `save`, `finish`
 
 ## `auctions/management/`
 
@@ -881,7 +880,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2068 lines)
+- **`admin.py`** (2117 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -911,7 +910,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
 - **`tools.py`** (457 lines)
   The action registry, as MCP tools.
-- **`transport.py`** (161 lines)
+- **`transport.py`** (162 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
 - **`verification.py`** (28 lines)

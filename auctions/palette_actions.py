@@ -15764,7 +15764,7 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
     """Uploads waiting for an agent to transcribe them (:func:`auctions.documents.transcribe.waiting`):
     the caller's own and their clubs' where they edit the club; every one for a superuser.
     """
-    from .documents.transcribe import waiting
+    from .documents.transcribe import owner_reach, waiting
 
     club = None
     hint = _str(params, "club")
@@ -15772,7 +15772,7 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
         club = palette_routes._club_from_hint(request.user, hint)
         if club is None:
             return _error(f"I couldn't find a club called “{hint}” that you're part of.")
-    items = waiting(request.user, club)
+    items = waiting(request.user, club, owner_reach(request))
     limit, offset = _slice(params)
     rows = [_waiting_facts(item, user=request.user) for item in items[offset : offset + limit]]
     if not rows:
@@ -15787,9 +15787,9 @@ def waiting_articles(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def read_waiting_page(request, params: dict[str, Any]) -> dict[str, Any]:
     """One page of a waiting article, as a picture for the agent to read. Writes nothing."""
-    from .documents.transcribe import find, page_count, page_picture
+    from .documents.transcribe import find, owner_reach, page_count, page_picture
 
-    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"))
+    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"), owner_reach(request))
     if problem:
         return _error(problem)
     number = _int(params, "page") or _int(params, "number") or 1
@@ -15813,9 +15813,9 @@ def save_transcription(request, params: dict[str, Any]) -> dict[str, Any]:
     The article stays the uploader's and its club's; only who may edit it may save it.
     """
     from .documents.models import DocumentBatch
-    from .documents.transcribe import find, finish, page_count, save
+    from .documents.transcribe import find, finish, owner_reach, page_count, save
 
-    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"))
+    item, problem = find(request.user, _said(params, "item", "document", "batch", "id"), owner_reach(request))
     if problem:
         return _error(problem)
     batch = isinstance(item, DocumentBatch)

@@ -223,12 +223,18 @@ def private(value: Any) -> Any:
     return value
 
 
-def private_result(result: dict[str, Any]) -> dict[str, Any]:
+#: The one tool whose pictures leave this endpoint: the scans the owner's routine transcribes. Nothing
+#: can scrub a picture, so no other tool's do.
+PICTURE_TOOLS = frozenset({"read_waiting_page"})
+
+
+def private_result(result: dict[str, Any], tool: str = "") -> dict[str, Any]:
     """A ``CallToolResult`` passed through :func:`private`, text rebuilt from the structure so the two
     still agree. Every answer this endpoint gives goes through here."""
     structured = result.get("structuredContent")
-    # Pictures pass as they are: read_waiting_page's scans are what the owner's routine transcribes.
-    content = [dict(block) for block in result.get("content") or []]
+    content = [
+        dict(block) for block in result.get("content") or [] if block.get("type") != "image" or tool in PICTURE_TOOLS
+    ]
     if isinstance(structured, dict):
         structured = private(structured)
         result = {**result, "structuredContent": structured}
@@ -1375,6 +1381,38 @@ USER_FEATURES = {
 }
 
 
+def _transcription_problem(params: dict[str, Any]) -> str:
+    """Why a ``save_transcription`` step would fail on approval, so the agent hears it now: an item that
+    isn't waiting, a batch article with no title or pages, or an item a pending proposal already covers.
+    """
+    from auctions.documents import transcribe
+    from auctions.models import AgentProposal, DocumentBatch
+
+    item, problem = transcribe.find(None, str(params.get("item") or ""), reach=True)
+    if problem:
+        return problem
+    if not str(params.get("text") or "").strip() and not params.get("finished"):
+        return "It needs the transcription's text."
+    if isinstance(item, DocumentBatch) and str(params.get("text") or "").strip():
+        if not str(params.get("title") or "").strip():
+            return "An article from a batch needs its title."
+        pages = params.get("pages")
+        total = transcribe.page_count(item)
+        if (
+            not isinstance(pages, list)
+            or not pages
+            or any(not isinstance(n, int) or not 1 <= n <= total for n in pages)
+        ):
+            return f"An article from a batch needs its pages, as a list of numbers from 1 to {total}."
+    reference = transcribe.reference(item)
+    for steps in AgentProposal.objects.filter(status=AgentProposal.STATUS_PENDING).values_list("steps", flat=True):
+        for step in steps or []:
+            said = (step.get("arguments") or {}).get("item") if isinstance(step, dict) else None
+            if step.get("tool") == "save_transcription" and transcribe.normalise(said) == reference:
+                return f"A proposal waiting for approval already transcribes {reference}."
+    return ""
+
+
 def _features_problem(params: dict[str, Any]) -> str:
     """Why ``set_user_features`` can't run as asked, or ``""``."""
     if _account(params, "user") is None:
@@ -1654,6 +1692,7 @@ PROPOSAL_CHECKS = {
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
     "add_palette_shortcut": _shortcut_problem,
+    "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
 }
 
@@ -1680,6 +1719,9 @@ def step_action(name: Any) -> Action | None:
 
 #: The most a proposal's steps may say, all told: the approver reads every word of it.
 MAX_STEPS_CHARACTERS = 20000
+#: ... except a transcription, which is a whole article and can't be split: a document's text is saved
+#: in one piece.
+MAX_TRANSCRIPTION_CHARACTERS = 200_000
 
 #: Proposals one person's agents may have waiting at once.
 MAX_PENDING = 25
@@ -1723,7 +1765,12 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
         if problem:
             return [], f"Step {number}: {problem}"
         steps.append({"tool": action.name, "arguments": arguments})
-    if len(json.dumps(steps, default=str)) > MAX_STEPS_CHARACTERS:
+    limit = (
+        MAX_TRANSCRIPTION_CHARACTERS
+        if all(step["tool"] == "save_transcription" for step in steps)
+        else MAX_STEPS_CHARACTERS
+    )
+    if len(json.dumps(steps, default=str)) > limit:
         return [], "Those steps are too long to read before approving; split them."
     return steps, ""
 
@@ -1812,6 +1859,8 @@ def apply_proposal(proposal, request) -> None:
     from auctions.models import AgentProposal
 
     request.palette_page = {}
+    # The reach the proposing agent read with on this endpoint (documents.transcribe.owner_reach).
+    request.owner_reach = True
     request.assistant_surface = f"{proposal.surface or 'an assistant'}, approved by {request.user.username}"[:100]
     results = []
     status = AgentProposal.STATUS_APPLIED

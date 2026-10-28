@@ -7,9 +7,10 @@ together. A member's own agent works through them over ``/mcp/`` (``waiting_arti
 
 What it saves stays the uploader's and the club's: a document keeps its owner, club and visibility, and
 a batch's articles take the batch's. Who may: whoever can read it and may edit it, the web's own rule
-(:func:`.search.visible_documents` and :func:`.search.can_manage`). A superuser reaches every club's
-waiting scans, never anyone else's "only me": the owner's daily routine reads them on ``/mcp/admin/``
-and files each transcription as a ``propose_change`` step the owner approves.
+(:func:`.search.visible_documents` and :func:`.search.can_manage`), on every surface. The one wider
+reach is the owner's (``reach``): a superuser on ``/mcp/admin/``, which only reads, and approving a
+``propose_change`` there sees every club's waiting scans, never anyone else's "only me". That is how
+the owner's daily routine transcribes members' scans: it reads them there and proposes each one.
 """
 
 from __future__ import annotations
@@ -32,26 +33,37 @@ from auctions.documents.models import Document, DocumentBatch, Visibility
 _REFERENCE = re.compile(r"\s*(document|batch)\s*[#:\-]?\s*(\d+)\s*", re.IGNORECASE)
 
 
-def _waiting(user):
-    """``(documents, batches)`` waiting for ``user``'s agent: ones they can read and may edit, or for a
-    superuser, every one but somebody else's "only me".
+def owner_reach(request) -> bool:
+    """Whether ``request`` carries the owner's wider reach: set by ``/mcp/admin/`` and by approving a
+    proposal, never by the palette or ``/mcp/``.
+    """
+    return bool(getattr(request, "owner_reach", False)) and request.user.is_superuser
+
+
+def _waiting(user, reach: bool = False):
+    """``(documents, batches)`` waiting for ``user``'s agent: ones they can read and may edit, or with
+    the owner's ``reach``, every one but somebody else's "only me".
     """
     from auctions.documents.search import clubs_to_file_under, visible_batches, visible_documents
 
-    if user.is_superuser:
-        mine_or_shared = Q(owner=user) | ~Q(visibility=Visibility.PRIVATE)
+    if reach:
+        mine_or_shared = ~Q(visibility=Visibility.PRIVATE)
+        if user is not None:
+            mine_or_shared |= Q(owner=user)
         documents = Document.objects.filter(mine_or_shared, removed=False, status=Document.TRANSCRIBE)
         batches = DocumentBatch.objects.filter(mine_or_shared, status=DocumentBatch.TRANSCRIBE)
         return documents, batches
     documents = visible_documents(user).filter(status=Document.TRANSCRIBE)
     batches = visible_batches(user).filter(status=DocumentBatch.TRANSCRIBE)
-    theirs = Q(owner=user) | Q(club__in=clubs_to_file_under(user))
+    # can_manage: the uploader, or anyone who edits its club, which a superuser does for every club.
+    clubs = Q(club__isnull=False) if user.is_superuser else Q(club__in=clubs_to_file_under(user))
+    theirs = Q(owner=user) | clubs
     return documents.filter(theirs), batches.filter(theirs)
 
 
-def waiting(user, club=None) -> list:
+def waiting(user, club=None, reach: bool = False) -> list:
     """Documents and batches waiting for ``user``'s agent, oldest first."""
-    documents, batches = _waiting(user)
+    documents, batches = _waiting(user, reach)
     if club is not None:
         documents, batches = documents.filter(club=club), batches.filter(club=club)
     items = [*documents.select_related("club").defer("text"), *batches.select_related("club")]
@@ -68,13 +80,19 @@ def reference(item) -> str:
     return f"{'batch' if isinstance(item, DocumentBatch) else 'document'} {item.pk}"
 
 
-def find(user, said: str):
+def normalise(said) -> str:
+    """``said`` as :func:`reference` writes it (``Batch #5`` -> ``batch 5``), or blank."""
+    match = _REFERENCE.fullmatch(str(said or ""))
+    return f"{match.group(1).lower()} {int(match.group(2))}" if match else ""
+
+
+def find(user, said: str, reach: bool = False):
     """The waiting item ``said`` names, if ``user`` may transcribe it. ``(item, problem)``."""
     match = _REFERENCE.fullmatch(str(said or ""))
     if not match:
         return None, "Name it as waiting_articles does, e.g. “document 12” or “batch 5”."
     kind, pk = match.group(1).lower(), int(match.group(2))
-    documents, batches = _waiting(user)
+    documents, batches = _waiting(user, reach)
     item = (batches if kind == "batch" else documents).select_related("club").filter(pk=pk).first()
     if item is not None:
         return item, None
