@@ -8190,6 +8190,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
     banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Removed lots are not charged in invoices."
     ban_reason = models.CharField(max_length=100, blank=True, null=True)
+    # Set when removing a lot ended it, so putting it back knows to reopen it.
+    removed_while_open = models.BooleanField(default=False)
     deactivated = models.BooleanField(default=False)
     deactivated.help_text = "You can deactivate your own lots to remove all bids and stop bidding.  Lots can be reactivated at any time, but existing bids won't be kept"
     lot_run_duration = models.PositiveIntegerField(default=10, validators=[MinValueValidator(1), MaxValueValidator(30)])
@@ -8370,37 +8372,28 @@ class Lot(CachedPropertiesMixin, models.Model):
             if related is not None:
                 related.invalidate_cached_properties()
 
-    @classmethod
-    def from_db(cls, db, field_names, values):
-        """Remembers ``banned`` as loaded, so a save can tell a lot being put back."""
-        instance = super().from_db(db, field_names, values)
-        instance._loaded_banned = instance.__dict__.get("banned")
-        return instance
-
     def _end_or_reopen_for_removal(self, kwargs):
-        """A removed lot ends; putting it back reopens it, unless it sold, was ended unsold, or its auction
-        is pretty much over. Otherwise removed lots stayed open and filled the admin's open-lot list.
+        """A lot removed while open ends; put back, it opens again, unless its in-person auction is pretty much
+        over. Otherwise removed lots stayed open and filled the admin's open-lot list. Online lots always reopen,
+        so endauctions settles them against their bids.
         """
         update_fields = kwargs.get("update_fields")
         if update_fields is not None and "banned" not in update_fields:
             return
-        if self.banned:
-            active = False
-        elif (
-            getattr(self, "_loaded_banned", False)
-            and self.winning_price is None
-            and not self.ended_unsold
-            and not self.is_deleted
-            and not self.deactivated
-            and not (self.auction and self.auction.pretty_much_over)
-        ):
-            active = True
-        else:
-            return
-        if self.active != active:
-            self.active = active
-            if update_fields is not None:
-                kwargs["update_fields"] = {*update_fields, "active"}
+        changed = set()
+        if self.banned and self.active:
+            self.active = False
+            self.removed_while_open = True
+            changed = {"active", "removed_while_open"}
+        elif not self.banned and self.removed_while_open:
+            self.removed_while_open = False
+            changed = {"removed_while_open"}
+            over = self.auction and not self.auction.is_online and self.auction.pretty_much_over
+            if not self.active and not self.is_deleted and not over:
+                self.active = True
+                changed.add("active")
+        if changed and update_fields is not None:
+            kwargs["update_fields"] = {*update_fields, *changed}
 
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
@@ -8483,7 +8476,6 @@ class Lot(CachedPropertiesMixin, models.Model):
                 if kwargs.get("update_fields") is not None:
                     kwargs["update_fields"] = {*kwargs["update_fields"], "custom_random"}
         super().save(*args, **kwargs)
-        self._loaded_banned = self.banned
 
         # chat history subscription for the owner
         if self.user:

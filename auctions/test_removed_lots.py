@@ -68,16 +68,41 @@ class RemovedLotsEndTests(TestCase):
         self.assertFalse(lot.banned)
         self.assertFalse(lot.active)
 
-    def test_unremove_stays_ended_when_sold_or_ended_unsold(self):
-        sold = self._lot(winning_price=10, auctiontos_winner=self.auction.tos)
+    def test_lot_ended_before_removal_stays_ended_when_put_back(self):
+        sold = self._lot(winning_price=10, auctiontos_winner=self.auction.tos, active=False)
         unsold = self._lot()
         unsold.end_unsold(self.user)
-        for lot in (sold, unsold):
+        no_auction = Lot.objects.create(lot_name="Plants", user=self.user, active=False)
+        for lot in (sold, unsold, no_auction):
             lot.remove(True, self.user)
             lot = Lot.objects.get(pk=lot.pk)
             lot.remove(False, self.user)
             lot.refresh_from_db()
             self.assertFalse(lot.active)
+
+    def test_online_lot_reopens_even_when_auction_pretty_much_over(self):
+        """So endauctions settles it against its bids, instead of it sitting unsold and charged the fee."""
+        start = timezone.now() - datetime.timedelta(days=10)
+        online = Auction.objects.create(
+            title="Online", created_by=self.user, is_online=True, date_start=start, date_end=start
+        )
+        lot = Lot.objects.create(lot_name="Tetras", auction=online, user=self.user)
+        lot.remove(True, self.user)
+        lot = Lot.objects.get(pk=lot.pk)
+        self.assertTrue(lot.auction.pretty_much_over)
+        lot.remove(False, self.user)
+        lot.refresh_from_db()
+        self.assertTrue(lot.active)
+
+    def test_reopen_survives_a_stale_instance(self):
+        lot = self._lot()
+        stale = Lot.objects.get(pk=lot.pk)
+        lot.remove(True, self.user)
+        stale.refresh_from_db()
+        stale.remove(False, self.user)
+        stale.refresh_from_db()
+        self.assertTrue(stale.active)
+        self.assertFalse(stale.removed_while_open)
 
     def test_saving_an_open_lot_does_not_reopen_an_ended_one(self):
         lot = self._lot()
@@ -99,6 +124,7 @@ class RemovedLotsEndTests(TestCase):
         lot.save(update_fields=["banned"])
         lot.refresh_from_db()
         self.assertFalse(lot.active)
+        self.assertTrue(lot.removed_while_open)
 
     def test_removed_lots_stay_out_of_the_bap_queue(self):
         club = Club.objects.create(name="Removed club")
@@ -108,6 +134,7 @@ class RemovedLotsEndTests(TestCase):
         lot = self._lot()
         ended = self._lot()
         ended.end_unsold(self.user)
+        ended.remove(True, self.user)
         lot.remove(True, self.user)
         self.assertIn(ended, bap_review_lots(club))
         self.assertNotIn(lot, bap_review_lots(club))
@@ -118,5 +145,8 @@ class RemovedLotsEndTests(TestCase):
         lot = self._lot()
         Lot.objects.filter(pk=lot.pk).update(banned=True)
         call_command("endauctions")
-        lot.refresh_from_db()
+        lot = Lot.objects.get(pk=lot.pk)
         self.assertFalse(lot.active)
+        lot.remove(False, self.user)
+        lot.refresh_from_db()
+        self.assertTrue(lot.active)
