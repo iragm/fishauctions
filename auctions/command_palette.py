@@ -1362,7 +1362,7 @@ def _connect_ai_items(user):
     from .help_guides import GUIDES
     from .mcp.auth import connected_apps
 
-    if any(app["live"] for app in connected_apps(user)):
+    if not user.is_authenticated or any(app["live"] for app in connected_apps(user)):
         return []
     url = GUIDES["ai-agents"].url + "#connect"
     return [_item("page", "Connect an AI assistant", url, "bi-robot", "Claude, ChatGPT or Grok")]
