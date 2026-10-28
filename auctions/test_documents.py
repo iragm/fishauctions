@@ -758,9 +758,28 @@ class LifecycleTests(LibraryTestCase):
         )
         dmca.take_down(notice)
         document.refresh_from_db()
-        self.assertTrue(document.removed)
+        self.assertEqual((document.visibility, document.copyright_locked), (Visibility.PRIVATE, True))
+        self.assertFalse(document.removed, "its uploader keeps it")
         self.assertTrue(document.file.storage.exists(document.file.name), "kept, for a counter-notice")
         self.assertEqual(CopyrightStrike.objects.filter(user=self.owner).count(), 1)
+        self.assertNotIn(document, visible_documents(self.member))
+        self.assertIn(document, visible_documents(self.owner))
+        # It can't be shared again: not on the edit page, not over /mcp/, not by uploading it again.
+        self.client.force_login(self.owner)
+        self.client.post(
+            reverse("document_edit", args=[document.pk]),
+            {"title": "T", "visibility": Visibility.PUBLIC, "club": self.club.pk, "text": document.text},
+        )
+        request = RequestFactory().post("/mcp/")
+        request.user, request.palette_page = self.owner, {}
+        palette_actions.run_action(request, "update_document", {"document": str(document.pk), "visibility": "web"})
+        document.refresh_from_db()
+        self.assertEqual(document.visibility, Visibility.PRIVATE)
+        Document.objects.filter(pk=document.pk).update(sha256=hashlib.sha256(ARTICLE.encode()).hexdigest())
+        self.client.force_login(self.member)
+        upload = SimpleUploadedFile("again.md", ARTICLE.encode(), content_type="text/markdown")
+        response = self.client.post(reverse("library_add"), {"visibility": Visibility.PUBLIC, "file": upload})
+        self.assertContains(response, "copyright notice")
 
 
 class ChunkRowTests(LibraryTestCase):
@@ -1716,3 +1735,15 @@ class TranscribeTests(LibraryTestCase):
         self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
         document.refresh_from_db()
         self.assertEqual((document.text, document.owner, document.visibility), ("Read.", self.member, Visibility.CLUB))
+
+
+class LibraryHelpTests(LibraryTestCase):
+    def test_the_help_shows_until_something_is_asked_and_leads_with_an_agent(self):
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("library_search"))
+        self.assertContains(response, "Let an AI agent do the work")
+        self.assertContains(response, reverse("help_guide", kwargs={"slug": "ai-agents"}) + "#connect")
+        self.assertContains(self.client.get(reverse("library")), reverse("library_search"))
+        self.document()
+        response = self.client.get(reverse("library_search"), {"q": "microworms"})
+        self.assertNotContains(response, "Let an AI agent do the work")

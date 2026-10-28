@@ -142,8 +142,8 @@ class DocumentAdmin(admin.ModelAdmin):
     reports go to whoever manages each document, on its own page, not here.
     """
 
-    list_display = ("createdon", "__str__", "club", "visibility", "owner", "status", "removed")
-    list_filter = ("status", "removed", "createdon")
+    list_display = ("createdon", "__str__", "club", "visibility", "owner", "status", "removed", "copyright_locked")
+    list_filter = ("status", "removed", "copyright_locked", "createdon")
     list_select_related = ("club", "owner")
     search_fields = ("title", "original_name", "author", "owner__username", "club__name")
     raw_id_fields = ("owner", "club")
@@ -157,6 +157,8 @@ class DocumentAdmin(admin.ModelAdmin):
         "status",
         "error",
         "notes",
+        "visibility",
+        "copyright_locked",
         "removed",
         "removed_reason",
     )

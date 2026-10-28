@@ -186,10 +186,9 @@ class LibraryView(LibraryMixin, HTMxTableView):
 
 
 class LibrarySearchView(LibraryMixin, TemplateView):
-    """Search every document you can read, with a written answer, narrowed by club, topic or species.
-
-    Kept as it was when it was the library's front page. Marked for a rework with the site's own AI
-    page: the answer here is one model call over the top passages, and filters are links, not words.
+    """The library's help page, and its search: every document you can read, with a written answer,
+    narrowed by club, topic or species. The help (``documents/_help.html``) shows until something is
+    asked, and leads with connecting an AI agent to transcribe scans.
     """
 
     template_name = "documents/search.html"

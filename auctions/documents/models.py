@@ -205,6 +205,10 @@ class Document(models.Model):
         default=False, help_text="Hidden from everyone, e.g. after a copyright notice. The file is kept."
     )
     removed_reason = models.CharField(max_length=300, blank=True)
+    copyright_locked = models.BooleanField(
+        default=False,
+        help_text="Made private by a copyright notice. Its owner can't share it again; untick after a counter-notice.",
+    )
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)
     indexed_on = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(

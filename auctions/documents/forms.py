@@ -164,7 +164,7 @@ class _Uploads:
         already = visible_documents(self.user).filter(sha256=digest).first()
         if already:
             return digest, f"That file is already in the library, as “{already.display_title}”."
-        if Document.objects.filter(sha256=digest, removed=True).exists():
+        if Document.objects.filter(Q(removed=True) | Q(copyright_locked=True), sha256=digest).exists():
             return digest, "That file was taken down after a copyright notice."
         return digest, ""
 
@@ -394,6 +394,11 @@ class DocumentEditForm(_Placement, forms.ModelForm):
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
         self._place(user, current_club=self.instance.club)
+        if self.instance.copyright_locked:
+            visibility = self.fields["visibility"]
+            visibility.choices = [(Visibility.PRIVATE, Visibility.PRIVATE.label)]
+            visibility.disabled = True
+            visibility.help_text = "Only you can read it, after a copyright notice."
         if len(self.instance.text) > MAX_EDITABLE_TEXT:
             del self.fields["text"]
         if not self.instance.feedback.filter(resolved=False).exists():

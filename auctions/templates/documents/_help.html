@@ -1,0 +1,47 @@
+{% load help_tags %}
+{% comment %}The library's help, under the search box on /library/search/ until something is asked. HELP.md has the voice.{% endcomment %}
+<p>The library keeps your club's old newsletters, breeder reports and care sheets, read into text so anyone allowed can search them. Ask it a question above and it answers from the articles, with links to each one. The easiest way to fill it is to let an AI agent do the reading for you.</p>
+
+<div class="card mb-4 border-primary">
+  <div class="card-body">
+    <h2 class="h5 card-title"><i class="bi bi-robot"></i> Let an AI agent do the work</h2>
+    <p>The site doesn't read scans or photos of pages itself. Connect your own AI agent, like Claude or ChatGPT, and it transcribes them, word for word, into the library.</p>
+    <ol class="mb-3">
+      <li><a href="{% url 'help_guide' slug='ai-agents' %}#connect">Connect an AI agent</a> to this site. It takes a minute.</li>
+      <li>Upload your scans with <a href="{% url 'library_add' %}">Add articles</a>, or give the agent a folder of them.</li>
+      <li>Ask it to <strong>"work through my articles"</strong>. It reads every waiting page and saves each article, with its title, author and year.</li>
+    </ol>
+    <p class="small mb-1">Other things to ask:</p>
+    <ul class="small mb-0">
+      <li>"Digitize the scans in this folder into our club's library."</li>
+      <li>"Tidy our club's library: fill in missing titles, authors and years."</li>
+      <li>"What did our club write about hatching killifish eggs?"</li>
+    </ul>
+  </div>
+</div>
+
+<h2 class="h5" id="add">Adding articles</h2>
+<ol>
+  <li>Click <a href="{% url 'library_add' %}">Add articles</a>.</li>
+  <li>Drop in your files: PDFs, Word files, photos or scans of pages. A pile of pages from one newsletter is fine; the articles in it are put back together, one per article.</li>
+  <li>Pick the club whose library it goes in, and who can read it.</li>
+</ol>
+<p>Typed files are read straight away. Scans and photos show <em>Waiting to be transcribed</em> until an AI agent reads them.</p>
+{% mike %}Mike photographed forty pages of the 1978 newsletter on his kitchen table, half of them sideways. Lay pages flat, in order, in good light, and the transcription comes out right the first time.{% endmike %}
+
+<h2 class="h5 mt-4" id="who">Who can read it</h2>
+<table class="table table-sm help-table">
+  <tbody>
+    <tr><th>Everyone on the site</th><td>Anyone signed in. The usual choice for club articles.</td></tr>
+    <tr><th>Anyone, and search engines</th><td>Open to the whole web. For articles your club wants found.</td></tr>
+    <tr><th>Members of its club</th><td>Only the club's members.</td></tr>
+    <tr><th>Only me</th><td>Only you.</td></tr>
+  </tbody>
+</table>
+{% tip %}Leave out membership lists and anything with members' addresses or phone numbers, and articles reprinted from magazines or books: those aren't the club's to share.{% endtip %}
+
+<h2 class="h5 mt-4" id="fix">Fixing mistakes</h2>
+<p>Whoever added an article, and the club's admins, can click <strong>Edit</strong> on it to correct the title, author, year, topics or the text itself. Anyone who reads it can click <strong>Report a problem</strong> when the text is garbled or the species is wrong.</p>
+
+<h2 class="h5 mt-4" id="copyright">Copyright</h2>
+<p>When a copyright owner complains about an article, it becomes private: only the person who added it can read it, and it can't be shared again. It also counts as a copyright strike against their account.</p>
