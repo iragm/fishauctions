@@ -17,6 +17,8 @@
 
   {% if not has_library %}{% elif document.status == "pending" or document.status == "processing" %}
     <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> {{ document.get_status_display }}...</div>
+  {% elif document.status == "transcribe" %}
+    <div class="alert alert-secondary">Waiting to be transcribed{% if can_manage %}: <a href="{% url 'user_api_keys' %}">connect an AI agent</a> and ask it to work through your articles{% endif %}.</div>
   {% elif document.status == "failed" %}
     <div class="alert alert-danger">{{ document.error }}</div>
   {% elif document.error %}

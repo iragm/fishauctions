@@ -15,6 +15,10 @@ one and the start of the next, a few are adverts or membership lists. Three step
    paragraphs in page order under ``<!-- page N -->`` markers, linked to the scans it came from, then
    indexed like any other document.
 
+When the site doesn't read pictures (``DOCUMENT_SERVER_OCR`` off), a batch with any scanned page stops
+after step 1 as ``TRANSCRIBE``, its pages in order, and a person's agent does all three steps itself
+(:mod:`.transcribe`).
+
 Pages are assumed to be in roughly the right order. A pile that was shuffled can't be put back
 together from text alone; "continued on page 7" within a few pages works, since an article stays open
 for :data:`OPEN_FOR_PAGES`.
@@ -32,6 +36,7 @@ from django.db import transaction
 
 from auctions.documents.extract import (
     ExtractionError,
+    NeedsTranscribing,
     Reader,
     _looks_scanned,
     as_jpeg,
@@ -91,20 +96,25 @@ def paragraphs(text: str) -> list[str]:
 
 
 def read_page(page, reader: Reader) -> None:
-    """Read one page and save its text, and for a PDF page the rendered picture of it."""
+    """Read one page and save its text, and for a PDF page the rendered picture of it. Raises
+    :class:`NeedsTranscribing` for a scan the site doesn't read, keeping the rendered picture for the agent.
+    """
     from django.core.files.base import ContentFile
 
     with page.file.open("rb") as handle:
         data = handle.read()
-    failed = reader.failed
+    failed, unread = reader.failed, reader.unread
     if page.pdf_page is None:
         jpeg = as_jpeg(data)
         text = reader.read_jpeg(jpeg) if jpeg else ""
     else:
         jpeg, layer, scanned = _pdf_page(data, page.pdf_page)
         text = (reader.read_jpeg(jpeg) if scanned and jpeg else "") or layer
-        if jpeg:
+        if jpeg and not page.image:
             page.image.save(f"page{page.pdf_page + 1}.jpg", ContentFile(jpeg), save=False)
+    if reader.unread > unread:
+        page.save(update_fields=["image"])
+        raise NeedsTranscribing
     if reader.failed > failed:
         # The model is failing, not the page: stop, and carry on from this page later.
         msg = "the model couldn't be reached to read a page"
@@ -342,7 +352,7 @@ def process(pk: int) -> str:
     cache.delete(_queued(pk))
     try:
         batch = DocumentBatch.objects.filter(pk=pk).first()
-        if batch is None or batch.status in (batch.DONE, batch.FAILED):
+        if batch is None or batch.status in (batch.DONE, batch.FAILED, batch.TRANSCRIBE):
             return DONE
         try:
             return MORE if _work(batch, time.monotonic() + SLICE_SECONDS) else DONE
@@ -358,17 +368,26 @@ def process(pk: int) -> str:
 
 def _work(batch, deadline: float) -> bool:
     reader = Reader(allowance=10**9)  # a batch's size is bounded at upload, not here
+    scans = False
     for page in batch.pages.filter(read=False).order_by("pk"):
         if time.monotonic() > deadline:
             return True
         try:
             read_page(page, reader)
+        except NeedsTranscribing:
+            scans = True
         except ExtractionError as error:
             page.text, page.read = f"[This page couldn't be read: {error}]", True
             page.save(update_fields=["text", "read"])
     # "Put them together now" may have been pressed while the pages were being read.
     batch.refresh_from_db(fields=["status"])
     if batch.status == batch.WAITING:
+        return False
+    if scans:
+        # Numbered now, so the pages an agent is shown are the pages it cites back.
+        put_in_order(batch)
+        batch.status = batch.TRANSCRIBE
+        batch.save(update_fields=["status"])
         return False
     if batch.status == batch.READING:
         put_in_order(batch)

@@ -25,6 +25,10 @@ model and will outgrow ours.
 by one, then put back together into one document per article, across page breaks, with adverts and
 membership lists left out. ``DocumentBatch`` / ``BatchPage``.
 
+**Transcribing** (:mod:`.transcribe`): unless ``DOCUMENT_SERVER_OCR`` is on, the site's model reads no
+pictures. Scans wait as ``TRANSCRIBE`` for a person's own agent, which lists them, looks at each page and
+saves what it read over ``/mcp/``; the articles stay the uploader's and the club's.
+
 **Pictures** (:mod:`.pictures`): the photographs and drawings an article printed, cropped out by
 whoever transcribed it and posted to a signed link, because an assistant can't put a file into a tool
 call. ``DocumentPicture``.

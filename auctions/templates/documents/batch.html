@@ -13,6 +13,8 @@
     <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> Reading page {{ pages_read }} of {{ page_count }}...</div>
   {% elif batch.status == "stitching" %}
     <div class="alert alert-secondary"><span class="spinner-border spinner-border-sm" role="status"></span> Putting the articles together: page {{ pages_settled }} of {{ page_count }}...</div>
+  {% elif batch.status == "transcribe" %}
+    <div class="alert alert-secondary">Waiting to be transcribed{% if can_manage %}: <a href="{% url 'user_api_keys' %}">connect an AI agent</a> and ask it to work through your articles{% endif %}.</div>
   {% elif batch.status == "failed" %}
     <div class="alert alert-danger">{{ batch.error }}</div>
   {% endif %}

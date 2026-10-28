@@ -26,7 +26,15 @@ from django.db import IntegrityError, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 
-from auctions.documents.extract import ExtractionError, Reader, document_model, extract, parser_version
+from auctions.documents.extract import (
+    ExtractionError,
+    NeedsTranscribing,
+    Reader,
+    document_model,
+    extract,
+    parser_version,
+    server_reads_pictures,
+)
 from auctions.llm import LLMError, get_provider
 
 logger = logging.getLogger(__name__)
@@ -410,6 +418,8 @@ def index_document(pk: int) -> bool:
         Document.objects.filter(pk=pk).update(status=Document.PROCESSING, error="", attempts=F("attempts") + 1)
         try:
             notes = _bring_up_to_date(document)
+        except NeedsTranscribing:
+            Document.objects.filter(pk=pk).update(status=Document.TRANSCRIBE, error="", attempts=0)
         except ExtractionError as error:
             _failed(pk, str(error))
         except SoftTimeLimitExceeded:
@@ -436,7 +446,8 @@ def _needs_reading(document) -> bool:
         return True
     if document.text_edited:
         return False
-    newer_model = bool(document.read_with) and document.read_with != document_model()
+    # Re-reading with a newer model only means something when the site does the reading.
+    newer_model = server_reads_pictures() and bool(document.read_with) and document.read_with != document_model()
     return document.parser_version != parser_version() or newer_model
 
 
@@ -444,14 +455,21 @@ def _bring_up_to_date(document) -> list[str]:
     notes = [line for line in document.notes.splitlines() if line]
     text_changed = False
     if _needs_reading(document):
-        with document.file.open("rb") as handle:
-            extraction = extract(handle.read(), document.original_name, Reader(document))
-        document.text = extraction.text
-        document.text_edited = False
-        document.parser_version = parser_version()
-        document.read_with = extraction.read_with
-        notes = extraction.notes
-        text_changed = True
+        try:
+            with document.file.open("rb") as handle:
+                extraction = extract(handle.read(), document.original_name, Reader(document))
+        except NeedsTranscribing:
+            if not document.text:
+                raise
+            # Read before the site stopped reading pictures: that reading stands, and isn't tried again.
+            document.parser_version = parser_version()
+        else:
+            document.text = extraction.text
+            document.text_edited = False
+            document.parser_version = parser_version()
+            document.read_with = extraction.read_with
+            notes = extraction.notes
+            text_changed = True
     title = document.title
     # Tags first: the title they may fill in is part of every passage's embedded text.
     describe_it = text_changed or _needs_describing(document)
@@ -527,18 +545,16 @@ def stale_documents():
 
     model = document_model()
     has_file = ~Q(file="") & Q(batch__isnull=True)
-    reread = (
-        has_file
-        & Q(text_edited=False)
-        & (~Q(parser_version=parser_version()) | (~Q(read_with="") & ~Q(read_with=model)))
-    )
+    newer_model = (~Q(read_with="") & ~Q(read_with=model)) if server_reads_pictures() else Q(pk__in=[])
+    reread = has_file & Q(text_edited=False) & (~Q(parser_version=parser_version()) | newer_model)
     something_to_do = ~Q(auto_fields=[]) | Q(title="") | Q(author="") | Q(year__isnull=True) | Q(topics=[])
     redescribe = ~Q(described_with=model) & something_to_do
     stale = ~Q(chunker_version=CHUNKER_VERSION) | reread | redescribe
     current = embedding_model_name()
     if current:
         stale |= Exists(DocumentChunk.objects.filter(document=OuterRef("pk")).exclude(embedding_model=current))
-    return Document.objects.filter(removed=False).filter(stale)
+    # Waiting for an agent: reading it again would only find that out again.
+    return Document.objects.filter(removed=False).exclude(status=Document.TRANSCRIBE).filter(stale)
 
 
 #: Documents :func:`tidy` brings up to date in one night. Re-reading a scanned newsletter with a new

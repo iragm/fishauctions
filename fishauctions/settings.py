@@ -786,6 +786,9 @@ LLM_EMBEDDING_MODEL = os.environ.get("LLM_EMBEDDING_MODEL", "" if LLM_BASE_URL e
 # is the one place a better model is worth paying for. Defaults to LLM_MODEL behind an LLM_BASE_URL,
 # which won't know OpenAI's model names.
 DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (LLM_MODEL if LLM_BASE_URL else "gpt-5-mini")
+# Whether DOCUMENT_MODEL transcribes pictures and scanned pages. Off: they wait for a member's own AI
+# agent to transcribe them over /mcp/ (auctions/documents/transcribe.py), so the site's key pays for none.
+DOCUMENT_SERVER_OCR = parse_bool_env(os.environ.get("DOCUMENT_SERVER_OCR") or None, default=False)
 # Uploaded files, outside mediafiles/ because nginx serves all of /media/ to anyone with the URL.
 DOCUMENT_ROOT = os.environ.get("DOCUMENT_ROOT", "/home/app/web/privatefiles/documents/")
 
