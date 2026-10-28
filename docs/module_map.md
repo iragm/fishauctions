@@ -202,7 +202,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15174 lines)
+- **`models.py`** (15200 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (173 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -219,7 +219,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16628 lines)
+- **`palette_actions.py`** (16630 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -249,7 +249,7 @@ this only quotes its opening sentence.
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (854 lines)
   DRF serializers for the club API.
-- **`services.py`** (1643 lines)
+- **`services.py`** (1646 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
@@ -621,6 +621,9 @@ this only quotes its opening sentence.
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
+- **`test_removed_lots.py`** (152 lines)
+  Removing a lot ends it; putting it back reopens it unless it is finished or its auction is pretty much over.
+  `RemovedLotsEndTests`
 - **`test_reverify_email.py`** (255 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`, `TrustedBounceTopicTests`
@@ -809,7 +812,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`email_unseen_chats.py`** (53 lines)
   `Command`
-- **`endauctions.py`** (149 lines)
+- **`endauctions.py`** (151 lines)
   `declare_winners_on_lots`, `deactivate_pretty_much_over_lots`, `Command`
 - **`ensure_site_defaults.py`** (71 lines)
   `Command`
