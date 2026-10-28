@@ -106,6 +106,27 @@ class LotBapEligibilityTests(TestCase):
         lot = self._make_lot()
         self.assertIsNone(lot.unsold_lot_no_bap_reason)
 
+    def test_every_reason_is_listed_and_the_first_is_the_old_single_reason(self):
+        self.club.min_quantity = 10
+        self.club.save()
+        outsider = User.objects.create_user(username="outsider2", password="tp", email="out2@example.com")
+        outsider_tos = AuctionTOS.objects.create(user=outsider, auction=self.auction, pickup_location=self.location)
+        lot = self._make_lot(i_bred_this_fish=False, quantity=3, auctiontos_seller=outsider_tos)
+        self.assertEqual(lot.unsold_lot_no_bap_reasons, ["not_bred", "low_quantity", "not_club_member"])
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_bred")
+        self.assertEqual(
+            lot.bap_reason_labels, ["Didn't breed this fish", "Quantity below club minimum", "Not a club member"]
+        )
+
+    def test_recorded_reason_comes_first_without_repeating(self):
+        lot = self._make_lot(i_bred_this_fish=False, bap_auto_reason="not_bred")
+        self.assertEqual(lot.bap_reason_labels, ["Didn't breed this fish"])
+        lot = self._make_lot(i_bred_this_fish=False, bap_auto_reason="not_sold")
+        self.assertEqual(lot.bap_reason_labels, ["Not sold", "Didn't breed this fish"])
+
+    def test_eligible_lists_no_reasons(self):
+        self.assertEqual(self._make_lot().unsold_lot_no_bap_reasons, [])
+
     def test_same_name_rule_uses_email_when_seller_user_missing(self):
         self.club.days_between_same_name_lots = 30
         self.club.save(update_fields=["days_between_same_name_lots"])
@@ -794,6 +815,16 @@ class ClubBapLotsViewTests(TestCase):
         self.client.login(username="bap_lots_user", password="testpass")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 404)
+
+    def test_every_reason_is_shown(self):
+        Lot.objects.filter(pk=self.pending_lot.pk).update(i_bred_this_fish=False)
+        self.club.min_quantity = 5
+        self.club.save()
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url, {"query": "non_bap"})
+        self.assertContains(response, "Pending Foo Lot")
+        self.assertContains(response, "Didn&#x27;t breed this fish")
+        self.assertContains(response, "Quantity below club minimum")
 
     def test_query_pending_filter(self):
         """Pending filter shows only sold lots without manually_approved=True."""

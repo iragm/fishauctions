@@ -87,12 +87,15 @@ class DocumentBatch(models.Model):
     WAITING = "waiting"
     READING = "reading"
     STITCHING = "stitching"
+    #: Scanned pages the site doesn't read: a person's agent transcribes them (:mod:`.transcribe`).
+    TRANSCRIBE = "transcribe"
     DONE = "done"
     FAILED = "failed"
     STATUSES = (
         (WAITING, "Waiting for more pages"),
         (READING, "Reading the pages"),
         (STITCHING, "Putting the articles together"),
+        (TRANSCRIBE, "Waiting to be transcribed"),
         (DONE, "Done"),
         (FAILED, "Couldn't be finished"),
     )
@@ -159,9 +162,12 @@ class Document(models.Model):
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+    #: Pictures of pages the site doesn't read: a person's agent transcribes them (:mod:`.transcribe`).
+    TRANSCRIBE = "transcribe"
     STATUSES = (
         (PENDING, "Waiting to be read"),
         (PROCESSING, "Being read"),
+        (TRANSCRIBE, "Waiting to be transcribed"),
         (READY, "Ready"),
         (FAILED, "Couldn't be read"),
     )

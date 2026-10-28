@@ -2247,6 +2247,8 @@ class DriftTests(PaletteAssistTestCase):
         "update_donation_vendor": "add_donation_vendor",
         # The Contact dialog's Copy & record is a person recording mail sent from their own mailbox.
         "record_donation_email": "contact_donation_vendor",
+        # A person types a transcription into the document's Edit page, the text box under the scan.
+        "save_transcription": "update_document",
     }
 
     def test_every_mcp_only_write_is_still_reachable_as_a_page(self):

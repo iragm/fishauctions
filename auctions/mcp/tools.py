@@ -14,6 +14,7 @@ Permissions are not enforced here; the resolvers re-check them in ``run_action``
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -446,6 +447,11 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
     # Reads only. ChatGPT shows each link as a file attachment and asks before opening it, so every
     # add_lot came back with two "files" and a prompt, which one organizer took for the duplicate lots.
     links = resources.links_for(action.name, result.get(palette_actions.KEY_ABOUT)) if read_only(action) else []
+    # A page of a scan for the agent to read: an image block, never inside the JSON.
+    links += [
+        {"type": "image", "data": base64.b64encode(picture).decode(), "mimeType": "image/jpeg"}
+        for picture in result.get(palette_actions.KEY_IMAGES) or []
+    ]
     body = _text(_absolute(_payload(result), request.build_absolute_uri))
     # Parsed back from the text so both say the same thing and the structure is JSON-safe (Decimals).
     return _result(body, structured=json.loads(body), links=links)

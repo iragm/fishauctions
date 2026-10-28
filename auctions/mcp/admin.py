@@ -227,7 +227,8 @@ def private_result(result: dict[str, Any]) -> dict[str, Any]:
     """A ``CallToolResult`` passed through :func:`private`, text rebuilt from the structure so the two
     still agree. Every answer this endpoint gives goes through here."""
     structured = result.get("structuredContent")
-    content = [dict(block) for block in result.get("content") or []]
+    # A scanned page is a picture nothing here can scrub: a membership list's phone numbers ride along.
+    content = [dict(block) for block in result.get("content") or [] if block.get("type") != "image"]
     if isinstance(structured, dict):
         structured = private(structured)
         result = {**result, "structuredContent": structured}

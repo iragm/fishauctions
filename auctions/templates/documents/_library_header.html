@@ -33,6 +33,8 @@ radio menu with htmx on the menu itself, as the club finder's interests are.
   {% if club %}<a class="btn btn-sm btn-secondary" href="{% url 'library' %}"><i class="bi bi-x"></i> {{ club.name }}</a>{% endif %}
 </div>
 
+{% if waiting %}<div class="help-note help-ai"><i class="bi bi-robot"></i><div>{{ waiting }} article{{ waiting|pluralize }} waiting to be transcribed: <a href="{% url 'user_api_keys' %}">connect an AI agent</a> and ask it to work through your articles.</div></div>{% endif %}
+
 {% for batch in batches %}
   <div class="mb-2"><a href="{% url 'document_batch' batch.pk %}">{{ batch }}</a> <span class="badge bg-secondary">{{ batch.get_status_display }}</span></div>
 {% endfor %}

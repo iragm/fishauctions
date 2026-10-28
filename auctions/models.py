@@ -9331,28 +9331,38 @@ class Lot(CachedPropertiesMixin, models.Model):
                 return "HAP"
         return "BAP"
 
-    @cached_property
+    @property
     def unsold_lot_no_bap_reason(self):
         """A BAP_REASON_CHOICES key if ineligible for points, or None. Ignores whether sold (see
-        sold_lot_no_bap_reason).
+        sold_lot_no_bap_reason). The first of :attr:`unsold_lot_no_bap_reasons`.
+        """
+        reasons = self.unsold_lot_no_bap_reasons
+        return reasons[0] if reasons else None
+
+    @cached_property
+    def unsold_lot_no_bap_reasons(self):
+        """Every BAP_REASON_CHOICES key this lot is ineligible for, most important first; empty if it
+        qualifies. Ignores whether sold. Without a club running the program there is nothing else to
+        check, and without a club membership, nothing to check it against.
         """
         if not self.auction or not self.auction.club:
-            return "not_eligible"
+            return ["not_eligible"]
         club = self.auction.club
         if not club.enable_breeder_award_program:
-            return "not_eligible"
+            return ["not_eligible"]
+        reasons = []
         if not self.i_bred_this_fish:
-            return "not_bred"
+            reasons.append("not_bred")
         if self.species and not self.species.earns_breeder_points:
-            return "species_not_eligible"
+            reasons.append("species_not_eligible")
         if club.only_donation_lots and not self.donation:
-            return "not_donation"
+            reasons.append("not_donation")
         if club.no_min_bids and self.reserve_price > self.auction.minimum_bid:
-            return "has_min_bid"
+            reasons.append("has_min_bid")
         category_name = self.species_category.name if self.species_category else None
         # Live food is eligible only when CAP is on.
         if not club.separate_cap and category_name == "Live food cultures":
-            return "category_not_eligible"
+            reasons.append("category_not_eligible")
         # Seller identity, needed before the low_quantity check.
         seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
         seller_email = (self.auctiontos_seller.email if self.auctiontos_seller else None) or (
@@ -9375,9 +9385,14 @@ class Lot(CachedPropertiesMixin, models.Model):
                     Q(auctiontos_seller__email__iexact=seller_email) | Q(user__email__iexact=seller_email)
                 ).exists()
             if prior:
-                return "not_long_enough"
+                reasons.append("not_long_enough")
         # The same rule on the species row (not its parent): strains are separate things to breed.
-        if club.days_between_same_species_lots > 0 and self.species_id and (seller_user or seller_email):
+        if (
+            "not_long_enough" not in reasons
+            and club.days_between_same_species_lots > 0
+            and self.species_id
+            and (seller_user or seller_email)
+        ):
             cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_species_lots)
             base_prior = Lot.objects.filter(
                 auction__club=club,
@@ -9393,25 +9408,34 @@ class Lot(CachedPropertiesMixin, models.Model):
                     Q(auctiontos_seller__email__iexact=seller_email) | Q(user__email__iexact=seller_email)
                 ).exists()
             if prior:
-                return "not_long_enough"
+                reasons.append("not_long_enough")
         # Plants, snails and live food ignore quantity minimums.
         ignore_quantity = category_name in ("Aquatic plants", "Live food cultures", "Snails and other inverts")
         if not ignore_quantity and self.quantity < club.min_quantity:
-            return "low_quantity"
-        if not self.species_category or self.species_category.bap_points == 0:
-            return "category_not_eligible"
+            reasons.append("low_quantity")
+        if (not self.species_category or self.species_category.bap_points == 0) and (
+            "category_not_eligible" not in reasons
+        ):
+            reasons.append("category_not_eligible")
         member = None
         if seller_user:
             member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
         if not member and seller_email:
             member = ClubMember.objects.filter(club=club, email__iexact=seller_email, is_deleted=False).first()
         if not member:
-            return "not_club_member"
-        seller_user = seller_user or member.user
-        if club.only_active_members_can_participate:
-            if not member.is_paid_member:
-                return "not_active_member"
-        return None
+            reasons.append("not_club_member")
+        elif club.only_active_members_can_participate and not member.is_paid_member:
+            reasons.append("not_active_member")
+        return reasons
+
+    @property
+    def bap_reason_labels(self):
+        """Every reason this lot's points don't qualify, as BAP_REASON_CHOICES labels: the one recorded
+        when it ended (``bap_auto_reason``), then today's.
+        """
+        labels = dict(self.BAP_REASON_CHOICES)
+        keys = dict.fromkeys(([self.bap_auto_reason] if self.bap_auto_reason else []) + self.unsold_lot_no_bap_reasons)
+        return [labels.get(key, key) for key in keys]
 
     @property
     def sold_lot_no_bap_reason(self):

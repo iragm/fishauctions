@@ -25,7 +25,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView
 
-from auctions.documents import index, pictures, stitch
+from auctions.documents import index, pictures, stitch, transcribe
 from auctions.documents.forms import (
     MAX_REQUEST_BYTES,
     BatchPagesForm,
@@ -181,6 +181,7 @@ class LibraryView(LibraryMixin, HTMxTableView):
         if not self.request.htmx:
             context["removed"] = Document.objects.filter(owner=user, removed=True).order_by("-createdon")
             context["batches"] = DocumentBatch.objects.filter(owner=user).exclude(status=DocumentBatch.DONE)
+            context["waiting"] = transcribe.waiting_count(user)
         return context
 
 

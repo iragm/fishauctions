@@ -9,6 +9,10 @@ Three paths, chosen by what the file is:
 * **Everything else**, including a PDF that is all text: ``markitdown``. Pictures inside Word and
   PowerPoint files, and inside zips, come back through :class:`_VisionClient` to the same reader.
 
+**Who reads the pictures**: unless ``settings.DOCUMENT_SERVER_OCR`` is on, the site's model never does.
+A picture or a scanned PDF then waits for a person's AI agent to transcribe it over ``/mcp/``
+(:mod:`.transcribe`), and pictures inside a Word file are left out and counted.
+
 Reading a picture never raises: one bad image costs its own text, not the document. Every answer is
 kept in :class:`~auctions.models.DocumentImageText` by document, image hash and model, so re-reading a
 document after a parser change pays only for pictures it hasn't read with that model.
@@ -90,6 +94,15 @@ class ExtractionError(Exception):
     """The file can't be read at all. The message is shown to the person who uploaded it."""
 
 
+class NeedsTranscribing(Exception):
+    """The file is pictures of pages and the site doesn't read pictures: an agent has to (:mod:`.transcribe`)."""
+
+
+def server_reads_pictures() -> bool:
+    """Whether the site's own vision model transcribes pictures and scans (``DOCUMENT_SERVER_OCR``)."""
+    return bool(settings.DOCUMENT_SERVER_OCR)
+
+
 @dataclass
 class Extraction:
     text: str
@@ -110,6 +123,8 @@ class Reader:
         self.asked = 0
         self.failed = 0
         self.skipped = 0
+        #: Pictures left for an agent, because the site doesn't read pictures.
+        self.unread = 0
         #: Set once any picture is read, so the document records which model read it.
         self.model = ""
 
@@ -123,11 +138,15 @@ class Reader:
 
         digest = hashlib.sha256(jpeg).hexdigest()
         model = document_model()
-        self.model = model
         kept = DocumentImageText.objects.filter(document=self.document, sha256=digest, model=model)
         cached = kept.first() if self.document is not None else None
         if cached:
+            self.model = model
             return cached.text
+        if not server_reads_pictures():
+            self.unread += 1
+            return ""
+        self.model = model
         if self.asked >= self.allowance:
             self.skipped += 1
             return ""
@@ -150,6 +169,8 @@ class Reader:
             said.append(f"{self.skipped} pictures or pages weren't read: over the limit of {self.allowance}.")
         if self.failed:
             said.append(f"{self.failed} pictures or pages couldn't be read; reading the document again retries them.")
+        if self.unread:
+            said.append(f"{self.unread} pictures in it weren't read.")
         return said
 
 
@@ -220,8 +241,12 @@ def extract(data: bytes, filename: str, reader: Reader | None = None) -> Extract
     extension = Path(filename).suffix.lower()
     if extension in PICTURE_EXTENSIONS:
         text = _read_picture_file(data, reader)
+        if reader.unread:
+            raise NeedsTranscribing
     elif extension == ".pdf" or data[:5] == b"%PDF-":
         text = _read_scanned_pdf(data, reader)
+        if reader.unread:
+            raise NeedsTranscribing
         if text is None:
             text = _markitdown(data, filename, reader)
     else:
@@ -232,6 +257,9 @@ def extract(data: bytes, filename: str, reader: Reader | None = None) -> Extract
         text = text[:MAX_TEXT_CHARS]
         notes.append(f"Only the first {MAX_TEXT_CHARS:,} characters were kept.")
     if not text:
+        if reader.unread:
+            msg = "Only pictures are in this file. Upload them as pictures or a PDF to have them transcribed."
+            raise ExtractionError(msg)
         if reader.failed or reader.skipped:
             raise ExtractionError(" ".join(notes))
         msg = "No text or pictures could be read out of this file."
@@ -272,7 +300,9 @@ def _read_scanned_pdf(data: bytes, reader: Reader) -> str | None:
         parts = []
         for index, (layer, scanned) in enumerate(layers):
             body = layer
-            if scanned:
+            # Without the site's model, a scan's own text layer is as good as it gets until an agent
+            # transcribes it, and it is searchable; only a page with none waits for one.
+            if scanned and (server_reads_pictures() or len(layer) < SCANNED_TEXT_CHARS):
                 page = pdf[index]
                 picture = page.render(scale=RENDER_DPI / 72).to_pil()
                 page.close()
