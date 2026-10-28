@@ -1382,7 +1382,7 @@ def bap_review_lots(club):
         | Q(user=OuterRef("user"))
         | Q(email__iexact=OuterRef("auctiontos_seller__email"))
     )
-    lots = Lot.objects.filter(auction__club=club, is_deleted=False, active=False)
+    lots = Lot.objects.filter(auction__club=club, is_deleted=False, banned=False, active=False)
     if club.only_sold_lots:
         lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
     return (

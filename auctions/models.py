@@ -8370,6 +8370,38 @@ class Lot(CachedPropertiesMixin, models.Model):
             if related is not None:
                 related.invalidate_cached_properties()
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        """Remembers ``banned`` as loaded, so a save can tell a lot being put back."""
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_banned = instance.__dict__.get("banned")
+        return instance
+
+    def _end_or_reopen_for_removal(self, kwargs):
+        """A removed lot ends; putting it back reopens it, unless it sold, was ended unsold, or its auction
+        is pretty much over. Otherwise removed lots stayed open and filled the admin's open-lot list.
+        """
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "banned" not in update_fields:
+            return
+        if self.banned:
+            active = False
+        elif (
+            getattr(self, "_loaded_banned", False)
+            and self.winning_price is None
+            and not self.ended_unsold
+            and not self.is_deleted
+            and not self.deactivated
+            and not (self.auction and self.auction.pretty_much_over)
+        ):
+            active = True
+        else:
+            return
+        if self.active != active:
+            self.active = active
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "active"}
+
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
         # Seller-dash auctions: bidder_number-lot_number.
@@ -8436,6 +8468,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         elif self.donation_forced:
             self.donation = False
             self.donation_forced = False
+        self._end_or_reopen_for_removal(kwargs)
         if self.ended_unsold and (self.active or self.winning_price is not None):
             self.ended_unsold = False
             if kwargs.get("update_fields") is not None:
@@ -8450,6 +8483,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                 if kwargs.get("update_fields") is not None:
                     kwargs["update_fields"] = {*kwargs["update_fields"], "custom_random"}
         super().save(*args, **kwargs)
+        self._loaded_banned = self.banned
 
         # chat history subscription for the owner
         if self.user:
