@@ -882,6 +882,18 @@
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
+    "read_waiting_page": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (look at one page of an article waiting to be transcribed).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
     "recent_changes": {
       "annotations": {
         "readOnlyHint": true,
@@ -1161,6 +1173,18 @@
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: turn a lot's photo the right way up, and pick which picture is its thumbnail.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+      }
+    },
+    "save_transcription": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Changes data on this site: save the transcription of an article waiting to be transcribed.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
@@ -1596,6 +1620,18 @@
         "read_only_justification": "Changes data on this site: change this user's own username.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It replaces the user's username, which is also the address of their public page."
+      }
+    },
+    "waiting_articles": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (list uploaded scans and photos of old club articles waiting to be transcribed).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
     "watch_lot": {

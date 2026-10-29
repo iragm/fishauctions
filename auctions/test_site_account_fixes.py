@@ -14,8 +14,10 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from unittest.mock import MagicMock, patch
 
+import redis
 from django.conf import settings
 from django.contrib.auth import login
 from django.contrib.auth.models import AnonymousUser, User
@@ -27,7 +29,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions import account_export
+from auctions import account_export, rate_limit
 from auctions.account_deletion import delete_account
 from auctions.context_processors import add_location, dismissed_cookies_tos
 from auctions.models import (
@@ -89,6 +91,45 @@ class BeaconBudgetTests(StandardTestCase):
         self.assertEqual(self._beacon("10.0.0.1").status_code, 204)
         self.assertEqual(self._beacon("10.0.0.2").status_code, 200)
         self.assertEqual(PageView.objects.count(), 2)
+
+    def test_a_redis_stall_records_the_view_instead_of_a_503(self):
+        stall = redis.exceptions.TimeoutError("Timeout reading from socket")
+        for step in ("add", "incr"):
+            with self.subTest(stalled_at=step):
+                stalled = MagicMock()
+                stalled.add.return_value = False
+                stalled.incr.return_value = 1
+                getattr(stalled, step).side_effect = stall
+                views = PageView.objects.count()
+                with (
+                    patch("auctions.rate_limit.cache", stalled),
+                    patch("auctions.rate_limit._last_warning", float("-inf")),
+                ):
+                    with self.assertLogs("auctions.rate_limit", "WARNING"):
+                        response = self._beacon()
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(PageView.objects.count(), views + 1)
+
+    def test_a_misconfigured_redis_still_raises(self):
+        for error in (redis.exceptions.ResponseError("READONLY"), redis.exceptions.AuthenticationError("bad password")):
+            with self.subTest(error=type(error).__name__):
+                broken = MagicMock()
+                broken.add.side_effect = error
+                with patch("auctions.rate_limit.cache", broken), self.assertRaises(type(error)):
+                    rate_limit.over_the_limit(RequestFactory().post("/"), "pageview", 3, 60)
+
+    def test_a_key_remade_by_incr_gets_its_expiry_back(self):
+        expired = MagicMock()
+        expired.add.return_value = False
+        expired.incr.return_value = 1
+        with patch("auctions.rate_limit.cache", expired):
+            self.assertFalse(rate_limit.over_the_limit(RequestFactory().post("/"), "pageview", 3, 60))
+        expired.touch.assert_called_once()
+
+    def test_every_request_counts_once(self):
+        request, bucket = RequestFactory().post("/", REMOTE_ADDR="10.0.0.9"), f"count-test-{uuid.uuid4()}"
+        spent = [rate_limit.over_the_limit(request, bucket, 3, 60) for _ in range(5)]
+        self.assertEqual(spent, [False, False, False, True, True])
 
     @patch("auctions.views.ajax.ABANDONED_FORMS_PER_ADDRESS_PER_MINUTE", 1)
     def test_the_abandonment_beacon_has_a_budget_too(self):

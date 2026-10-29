@@ -171,9 +171,13 @@ def take_down(notice, admin=None):
     edge cache (``auctions.signals.on_uploaded_image_deleted``). The lot is left alone: a notice is
     about a photograph, and deleting the listing would remove bids and an auction entry too.
 
-    A library document is hidden from everyone rather than deleted ("remove, or disable access to"):
-    it was never on a public URL, and a counter-notice restores it by unticking ``removed``.
+    A library document is made private and locked there rather than deleted ("remove, or disable
+    access to"): its uploader keeps their own copy and can't share it again
+    (``Document.copyright_locked``). An article from a batch takes its batch private too, since the
+    batch shows its scans. A counter-notice restores it in the admin: untick that, and set the
+    visibility (and the batch's) back.
     """
+    from auctions.documents.models import Visibility
     from auctions.models import LotImage
 
     removed = 0
@@ -187,9 +191,12 @@ def take_down(notice, admin=None):
             notice.lot.image.delete(save=True)
 
     if notice.document:
-        notice.document.removed = True
-        notice.document.removed_reason = "Removed after a copyright notice."
-        notice.document.save(update_fields=["removed", "removed_reason"])
+        notice.document.visibility = Visibility.PRIVATE
+        notice.document.copyright_locked = True
+        notice.document.save(update_fields=["visibility", "copyright_locked"])
+        if notice.document.batch:
+            notice.document.batch.visibility = Visibility.PRIVATE
+            notice.document.batch.save(update_fields=["visibility"])
         removed += 1
 
     notice.status = "REMOVED"

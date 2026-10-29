@@ -114,7 +114,7 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1547 lines)
+- **`command_palette.py`** (1559 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
@@ -131,7 +131,7 @@ this only quotes its opening sentence.
 - **`discord_events.py`** (354 lines)
   Discord scheduled events for clubs.
   `send_channel_message`, `delete_channel_message`, `create_scheduled_event`, `cancel_scheduled_event`, `sync_club_events`, `sync_one_event`, `sync_auction_events`, `discord_link`, `auction_location`
-- **`dmca.py`** (245 lines)
+- **`dmca.py`** (252 lines)
   The DMCA designated agent, the takedown, and the repeat-infringer policy.
   `agent`, `is_configured`, `agent_email`, `strike_count`, `record_strike`, `take_down`, `terminate`
 - **`donation_views.py`** (608 lines)
@@ -202,9 +202,9 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15162 lines)
+- **`models.py`** (15224 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
-- **`moderation_admin.py`** (173 lines)
+- **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
   `ContentReportAdmin`, `CopyrightNoticeAdmin`, `CopyrightStrikeAdmin`, `DocumentAdmin`, `DocumentFeedbackAdmin`
 - **`moderation_forms.py`** (158 lines)
@@ -219,7 +219,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16628 lines)
+- **`palette_actions.py`** (16877 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2191 lines)
   Natural-language orchestration for the command palette.
@@ -240,13 +240,16 @@ this only quotes its opening sentence.
 - **`queryset_annotations.py`** (223 lines)
   Queryset builders that answer a question about many rows at once.
   `nearby_auctions`, `add_tos_info`, `add_tos_distance_info`
+- **`rate_limit.py`** (51 lines)
+  Per-address limits on the public forms and beacons, counted in Redis.
+  `over_the_limit`
 - **`recurrence.py`** (151 lines)
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
 - **`routing.py`** (9 lines)
 - **`serializers.py`** (854 lines)
   DRF serializers for the club API.
-- **`services.py`** (1643 lines)
+- **`services.py`** (1646 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
@@ -270,9 +273,9 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1223 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`tables.py`** (1777 lines)
+- **`tables.py`** (1780 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1882 lines)
+- **`tasks.py`** (1878 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -342,7 +345,7 @@ this only quotes its opening sentence.
 - **`test_auctiontos.py`** (672 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
-- **`test_bap_lots.py`** (1378 lines)
+- **`test_bap_lots.py`** (1409 lines)
   The breeder award program: which lots are eligible, and the pages that award points.
 - **`test_bid_recorder_accuracy.py`** (35 lines)
   `SalesRecordedTests`, `LotAdminPriceEditTests`
@@ -413,7 +416,7 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1379 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_crawler_sessions.py`** (140 lines)
+- **`test_crawler_sessions.py`** (141 lines)
   `IsCrawlerTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
@@ -436,7 +439,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1488 lines)
+- **`test_documents.py`** (1807 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -472,9 +475,9 @@ this only quotes its opening sentence.
 - **`test_history_tools.py`** (108 lines)
   ``recent_changes`` and ``club_history``: the filters, and a superuser reading every auction or club.
   `HistoryToolTests`
-- **`test_invoice_models.py`** (221 lines)
+- **`test_invoice_models.py`** (254 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
-  `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`
+  `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`, `InvoiceNotificationNoteTests`
 - **`test_label_layout.py`** (331 lines)
   Every lot label preset, rendered with worst-case lots and held to the layout rules.
   `PlacedText`, `laid_out_text`, `squeezed`, `LabelLayoutTests`, `LabelUnitTests`, `LabelMeasurementTests`
@@ -584,9 +587,9 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (878 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5261 lines)
+- **`test_palette_assist.py`** (5263 lines)
   Tests for the command palette's natural-language assist.
-- **`test_palette_core.py`** (1279 lines)
+- **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
   `CommandPaletteTests`, `MobileCommandPaletteTests`, `MobileMyClubsTests`, `MobileLabelTests`, `MobileConfigTests`, `FirebaseClientConfigParsingTests`, `SingleLotLabelPngTests`, `MobileEmailLoginTests`, `MobileWebSessionTests`, `ExampleSuggestionTests`
 - **`test_palette_mic.py`** (101 lines)
@@ -618,13 +621,16 @@ this only quotes its opening sentence.
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
   Printing from a computer to the phone's Bluetooth label printer.
+- **`test_removed_lots.py`** (152 lines)
+  Removing a lot ends it; putting it back reopens it unless it is finished or its auction is pretty much over.
+  `RemovedLotsEndTests`
 - **`test_reverify_email.py`** (255 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`, `TrustedBounceTopicTests`
 - **`test_security.py`** (596 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
-- **`test_site_account_fixes.py`** (541 lines)
+- **`test_site_account_fixes.py`** (582 lines)
   Regression tests for a sweep of site and account fixes.
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
@@ -733,15 +739,15 @@ this only quotes its opening sentence.
 
 The library: documents people upload, read into text, and searched from ``/library/`` and ``/mcp/``.
 
-- **`extract.py`** (378 lines)
+- **`extract.py`** (408 lines)
   A file, as Markdown: ``markitdown`` for the formats, the site's vision model for the pictures.
-  `parser_version`, `document_model`, `ExtractionError`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
-- **`forms.py`** (433 lines)
+  `parser_version`, `document_model`, `ExtractionError`, `NeedsTranscribing`, `server_reads_pictures`, `Extraction`, `Reader`, `as_jpeg`, `frames_as_jpeg`, `extract`
+- **`forms.py`** (439 lines)
   The library's forms: upload, adding pages to a batch, edit, and a reader's report. ``update_document``
   `natural_key`, `space_used`, `add_pages`, `DocumentUploadForm`, `BatchPagesForm`, `DocumentEditForm`, `DocumentFeedbackForm`
-- **`index.py`** (578 lines)
+- **`index.py`** (597 lines)
   Read a document, cut it into passages, embed them and tag it -- each stage only when it is stale.
-- **`models.py`** (333 lines)
+- **`models.py`** (348 lines)
   The library's tables: documents, their chunks, image transcriptions, pictures and readers' reports.
 - **`pictures.py`** (118 lines)
   Pictures on a document: the photographs and drawings an article printed, cropped out and kept.
@@ -749,11 +755,13 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`render.py`** (58 lines)
   A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
   `to_html`
-- **`search.py`** (331 lines)
+- **`search.py`** (339 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
-- **`stitch.py`** (416 lines)
+- **`stitch.py`** (478 lines)
   Put a pile of page pictures back together into articles.
-  `paragraphs`, `read_page`, `put_in_order`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
+  `paragraphs`, `read_page`, `put_in_order`, `number_new_pages`, `stitch_window`, `build_documents`, `process`, `queue`, `requeue_stuck`
+- **`transcribe.py`** (239 lines)
+  Articles waiting for a person's AI agent to transcribe them, and saving what it read.
 
 ## `auctions/management/`
 
@@ -806,7 +814,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`email_unseen_chats.py`** (53 lines)
   `Command`
-- **`endauctions.py`** (149 lines)
+- **`endauctions.py`** (151 lines)
   `declare_winners_on_lots`, `deactivate_pretty_much_over_lots`, `Command`
 - **`ensure_site_defaults.py`** (71 lines)
   `Command`
@@ -872,7 +880,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2066 lines)
+- **`admin.py`** (2133 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -891,7 +899,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`oidc.py`** (118 lines)
   OpenID Connect on top of the OAuth 2.1 server, for the one thing OAuth alone can't say: who.
   `Validator`, `sign_with_rs256`
-- **`prompts.py`** (470 lines)
+- **`prompts.py`** (502 lines)
   Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
   `Argument`, `Prompt`, `descriptors`, `prompt_list`, `render`, `complete`, `completes`
 - **`protocol.py`** (273 lines)
@@ -900,9 +908,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`resources.py`** (379 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
   `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (451 lines)
+- **`tools.py`** (457 lines)
   The action registry, as MCP tools.
-- **`transport.py`** (161 lines)
+- **`transport.py`** (162 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
 - **`verification.py`** (28 lines)
@@ -1005,7 +1013,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`admin_checklist.py`** (1049 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (849 lines)
+- **`ajax.py`** (833 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1265 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
@@ -1054,7 +1062,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (637 lines)
+- **`documents.py`** (640 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.
@@ -1071,7 +1079,7 @@ Every view on the site, split by the part of it the view belongs to.
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionPostEndBanner`
 - **`lot_pages.py`** (1329 lines)
   One lot: its page, its photos, and creating or editing it.
-- **`moderation.py`** (234 lines)
+- **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.
   `DmcaPolicyView`, `CopyrightNoticeCreate`, `ReportContentCreate`
 - **`offline.py`** (189 lines)
@@ -1091,7 +1099,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (695 lines)
+- **`site_pages.py`** (685 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
@@ -1134,7 +1142,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1282 lines)
+- **`settings.py`** (1285 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

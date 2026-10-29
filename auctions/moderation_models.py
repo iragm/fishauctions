@@ -132,7 +132,7 @@ class CopyrightNotice(models.Model):
     )
     document.help_text = (
         "The library document the material was, when it could be worked out from the URLs given. "
-        "Taking it down is ticking Removed on the document."
+        "Taking it down makes the document private and locks it there (Copyright locked)."
     )
 
     status = models.CharField(max_length=10, choices=STATUSES, default="RECEIVED")

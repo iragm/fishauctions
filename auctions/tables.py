@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import django_tables2 as tables
 from django.contrib.humanize.templatetags.humanize import naturalday
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import F
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join, strip_tags
@@ -1185,7 +1186,7 @@ class ClubBapLotHTMxTable(tables.Table):
     date_end = tables.Column(
         verbose_name="Ended", orderable=True, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
     )
-    bap_reason = tables.Column(accessor="bap_auto_reason", verbose_name="Reason", orderable=False)
+    bap_reason = tables.Column(accessor="bap_auto_reason", verbose_name="Reason", orderable=False, empty_values=())
     actions = tables.Column(empty_values=(), verbose_name="Actions", orderable=False)
 
     def render_lot_name(self, value, record):
@@ -1215,10 +1216,12 @@ class ClubBapLotHTMxTable(tables.Table):
         return value.name if value else "—"
 
     def render_bap_reason(self, value, record):
-        reason = value or record.unsold_lot_no_bap_reason
-        if not reason:
-            return ""
-        return dict(Lot.BAP_REASON_CHOICES).get(reason, reason)
+        try:
+            if record.bap_award:
+                return ""  # it earned points: today's rules don't take them back
+        except ObjectDoesNotExist:
+            pass
+        return format_html_join("", "<div>{}</div>", ((label,) for label in record.bap_reason_labels))
 
     def render_date_end(self, value, record):
         return value.strftime("%b %-d, %Y") if value else "—"

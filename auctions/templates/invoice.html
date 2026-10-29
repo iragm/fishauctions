@@ -290,12 +290,10 @@ document.addEventListener("DOMContentLoaded", function() {
 </div>
 <div class="row"><br>
   {% if is_admin and show_links %}
-    {% if invoice.status == "DRAFT" and not invoice.email_sent %}
+    {% if invoice.status == "DRAFT" and not invoice.email_sent and invoice.auction_sends_ready_email %}
       <small>
-      {% if invoice.auctiontos_user.email and auction.created_by.userdata.is_trusted %}
+      {% if invoice.auctiontos_user.email %}
         <span class='text-muted'>Marking this invoice ready or paid will send a notification email to {{ invoice.auctiontos_user.name }}</span><br>
-      {% elif not auction.created_by.userdata.is_trusted %}
-
       {% else %}
         <span class='text-danger'>{{ invoice.auctiontos_user.name }} does not have an email address set!</span><br>
       {%endif%}

@@ -213,7 +213,7 @@ def _tools_call(caller: Caller, params: dict[str, Any]) -> dict[str, Any] | _Pro
                 answered = tools.call_tool(caller.request, name, params.get("arguments"), writes=False)
             except tools.UnknownTool:
                 return _Problem(INVALID_PARAMS, f"There is no tool called “{name}”.")
-        return admin.private_result(answered)
+        return admin.private_result(answered, name.strip())
     try:
         return tools.call_tool(caller.request, name, params.get("arguments"), writes=caller.writes)
     except tools.UnknownTool:

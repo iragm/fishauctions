@@ -122,6 +122,17 @@ view or service it goes through. This file keeps only choices that look like mis
   `asks_for_something_removed` then took `set_lot_winner` away mid-auction. **vendor** is the word
   that names the desk, and it stays (with its plural and "sponsor", through `_SYNONYMS`).
 
+## The library
+
+- `read_waiting_page` is the one tool that answers with a picture: `palette_actions.KEY_IMAGES` becomes
+  an MCP image block, never a field in the JSON. `/mcp/admin/` passes it unscrubbed, because the owner's
+  daily routine transcribes members' scans there and proposes each `save_transcription`.
+- On `/mcp/admin/` and when a proposal is approved (`transcribe.owner_reach`), a superuser's waiting
+  list is every club's, but never someone else's "only me" scan. On `/mcp/` it is what they may edit.
+- A batch holding an article taken down for copyright is never offered, transcribed or rebuilt.
+- `save_transcription` files a batch's article under the **batch's** owner, club and readers, not the
+  caller's: a site admin's agent transcribing a club's scans must not take them over.
+
 ## Account, history, help, source
 
 - `change_email` changes nothing until the link is followed (`nothing_was_changed_yet`).

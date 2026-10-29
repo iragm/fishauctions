@@ -25,7 +25,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView
 
-from auctions.documents import index, pictures, stitch
+from auctions.documents import index, pictures, stitch, transcribe
 from auctions.documents.forms import (
     MAX_REQUEST_BYTES,
     BatchPagesForm,
@@ -181,14 +181,14 @@ class LibraryView(LibraryMixin, HTMxTableView):
         if not self.request.htmx:
             context["removed"] = Document.objects.filter(owner=user, removed=True).order_by("-createdon")
             context["batches"] = DocumentBatch.objects.filter(owner=user).exclude(status=DocumentBatch.DONE)
+            context["waiting"] = transcribe.waiting_count(user)
         return context
 
 
 class LibrarySearchView(LibraryMixin, TemplateView):
-    """Search every document you can read, with a written answer, narrowed by club, topic or species.
-
-    Kept as it was when it was the library's front page. Marked for a rework with the site's own AI
-    page: the answer here is one model call over the top passages, and filters are links, not words.
+    """The library's help page, and its search: every document you can read, with a written answer,
+    narrowed by club, topic or species. The help (``documents/_help.html``) shows until something is
+    asked, and leads with connecting an AI agent to transcribe scans.
     """
 
     template_name = "documents/search.html"
@@ -484,6 +484,7 @@ class DocumentBatchView(LibraryMixin, View):
         context = {
             "batch": batch,
             "can_manage": manager,
+            "locked": batch.copyright_locked,
             "page_count": pages.count(),
             "pages_read": pages.filter(read=True).count(),
             "pages_settled": batch.stitched_through,
@@ -501,7 +502,9 @@ class DocumentBatchView(LibraryMixin, View):
         if not can_manage(request.user, batch):
             raise Http404
         action = request.POST.get("action", "")
-        if batch.status == batch.STITCHING and action in ("add", "again"):
+        if batch.copyright_locked:
+            messages.error(request, "This batch stays as it is after a copyright notice.")
+        elif batch.status == batch.STITCHING and action in ("add", "again"):
             messages.error(request, "It's being put together right now. Wait for it to finish first.")
         elif action == "add":
             form = BatchPagesForm(request.POST, request.FILES, user=request.user, batch=batch)

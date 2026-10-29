@@ -87,12 +87,15 @@ class DocumentBatch(models.Model):
     WAITING = "waiting"
     READING = "reading"
     STITCHING = "stitching"
+    #: Scanned pages the site doesn't read: a person's agent transcribes them (:mod:`.transcribe`).
+    TRANSCRIBE = "transcribe"
     DONE = "done"
     FAILED = "failed"
     STATUSES = (
         (WAITING, "Waiting for more pages"),
         (READING, "Reading the pages"),
         (STITCHING, "Putting the articles together"),
+        (TRANSCRIBE, "Waiting to be transcribed"),
         (DONE, "Done"),
         (FAILED, "Couldn't be finished"),
     )
@@ -120,6 +123,11 @@ class DocumentBatch(models.Model):
         from django.urls import reverse
 
         return reverse("document_batch", kwargs={"pk": self.pk})
+
+    @property
+    def copyright_locked(self) -> bool:
+        """An article of it was taken down after a copyright notice: the batch is private and stays as it is."""
+        return self.documents.filter(copyright_locked=True).exists()
 
 
 class BatchPage(models.Model):
@@ -159,9 +167,12 @@ class Document(models.Model):
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+    #: Pictures of pages the site doesn't read: a person's agent transcribes them (:mod:`.transcribe`).
+    TRANSCRIBE = "transcribe"
     STATUSES = (
         (PENDING, "Waiting to be read"),
         (PROCESSING, "Being read"),
+        (TRANSCRIBE, "Waiting to be transcribed"),
         (READY, "Ready"),
         (FAILED, "Couldn't be read"),
     )
@@ -199,6 +210,10 @@ class Document(models.Model):
         default=False, help_text="Hidden from everyone, e.g. after a copyright notice. The file is kept."
     )
     removed_reason = models.CharField(max_length=300, blank=True)
+    copyright_locked = models.BooleanField(
+        default=False,
+        help_text="Made private by a copyright notice. Its owner can't share it again; untick after a counter-notice.",
+    )
     createdon = models.DateTimeField(auto_now_add=True, db_index=True)
     indexed_on = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(

@@ -119,7 +119,7 @@ def picture(width=400, height=300, frames=1, fmt="PNG") -> bytes:
 
 
 @isolated_cache("library")
-@override_settings(LLM_EMBEDDING_MODEL="fake-embedding", DOCUMENT_MODEL="fake-vision")
+@override_settings(LLM_EMBEDDING_MODEL="fake-embedding", DOCUMENT_MODEL="fake-vision", DOCUMENT_SERVER_OCR=True)
 class LibraryTestCase(TestCase):
     """A club with a member and an outsider, a fake model, and a throwaway ``DOCUMENT_ROOT``."""
 
@@ -758,9 +758,28 @@ class LifecycleTests(LibraryTestCase):
         )
         dmca.take_down(notice)
         document.refresh_from_db()
-        self.assertTrue(document.removed)
+        self.assertEqual((document.visibility, document.copyright_locked), (Visibility.PRIVATE, True))
+        self.assertFalse(document.removed, "its uploader keeps it")
         self.assertTrue(document.file.storage.exists(document.file.name), "kept, for a counter-notice")
         self.assertEqual(CopyrightStrike.objects.filter(user=self.owner).count(), 1)
+        self.assertNotIn(document, visible_documents(self.member))
+        self.assertIn(document, visible_documents(self.owner))
+        # It can't be shared again: not on the edit page, not over /mcp/, not by uploading it again.
+        self.client.force_login(self.owner)
+        self.client.post(
+            reverse("document_edit", args=[document.pk]),
+            {"title": "T", "visibility": Visibility.PUBLIC, "club": self.club.pk, "text": document.text},
+        )
+        request = RequestFactory().post("/mcp/")
+        request.user, request.palette_page = self.owner, {}
+        palette_actions.run_action(request, "update_document", {"document": str(document.pk), "visibility": "web"})
+        document.refresh_from_db()
+        self.assertEqual(document.visibility, Visibility.PRIVATE)
+        Document.objects.filter(pk=document.pk).update(sha256=hashlib.sha256(ARTICLE.encode()).hexdigest())
+        self.client.force_login(self.member)
+        upload = SimpleUploadedFile("again.md", ARTICLE.encode(), content_type="text/markdown")
+        response = self.client.post(reverse("library_add"), {"visibility": Visibility.PUBLIC, "file": upload})
+        self.assertContains(response, "copyright notice")
 
 
 class ChunkRowTests(LibraryTestCase):
@@ -1486,3 +1505,303 @@ class MarkdownTests(LibraryTestCase):
         picture = _picture_on(document, size=(2400, 1200))
         with picture.file.open("rb") as handle, Image.open(handle) as image:
             self.assertEqual(image.size, (1000, 500))
+
+
+@override_settings(DOCUMENT_SERVER_OCR=False)
+class TranscribeTests(LibraryTestCase):
+    """The site reads no pictures: scans wait for a person's agent, which works through them over ``/mcp/``."""
+
+    def run_as(self, user, name, **params):
+        request = RequestFactory().post("/mcp/")
+        request.user = user
+        request.palette_page = {}
+        return palette_actions.run_action(request, name, params)
+
+    def scan(self, **kwargs) -> Document:
+        with mock.patch("auctions.tasks.index_document.delay"):
+            return self.document(text=picture(1200, 1600), name="page.png", **kwargs)
+
+    def scanned_batch(self, pages=3):
+        from auctions.documents import stitch
+        from auctions.models import BatchPage, DocumentBatch
+
+        batch = DocumentBatch.objects.create(owner=self.owner, club=self.club, visibility=Visibility.CLUB)
+        for number in range(pages, 0, -1):
+            page = BatchPage(batch=batch, original_name=f"scan{number}.jpg")
+            page.file.save(f"scan{number}.jpg", ContentFile(picture(800, 1000, fmt="JPEG")), save=True)
+        stitch.process(batch.pk)
+        batch.refresh_from_db()
+        return batch
+
+    def test_a_scan_waits_and_the_site_pays_for_nothing(self):
+        document = self.scan()
+        self.assertEqual(document.status, Document.TRANSCRIBE)
+        self.assertEqual(document.text, "")
+        self.assertEqual(self.provider.calls["complete"], 0)
+        self.assertNotIn(document, index.stale_documents(), "the nightly tidy leaves it alone")
+
+    def test_text_files_are_still_read(self):
+        self.assertEqual(self.document().status, Document.READY)
+
+    def test_a_reading_from_before_stands(self):
+        document = self.scan()
+        Document.objects.filter(pk=document.pk).update(text="Read by the old model.", parser_version="old")
+        index.index_document(document.pk)
+        document.refresh_from_db()
+        self.assertEqual((document.status, document.text), (Document.READY, "Read by the old model."))
+        self.assertEqual(self.provider.calls["complete"], 0)
+
+    def test_only_who_may_edit_it_sees_it_waiting(self):
+        document = self.scan(visibility=Visibility.PUBLIC)
+        reference = f"document {document.pk}"
+        for user, sees in ((self.owner, True), (self.staff, True), (self.member, False), (self.outsider, False)):
+            listed = [row["item"] for row in self.run_as(user, "waiting_articles")["articles"]]
+            self.assertEqual(reference in listed, sees, user)
+        self.assertIn("error", self.run_as(self.member, "read_waiting_page", item=reference))
+        self.assertIn("error", self.run_as(self.member, "save_transcription", item=reference, text="x"))
+
+    def test_an_agent_reads_a_page_and_saves_it_for_the_uploader(self):
+        document = self.scan(visibility=Visibility.PUBLIC)
+        reference = f"document {document.pk}"
+        page = self.run_as(self.staff, "read_waiting_page", item=reference)
+        self.assertEqual(page["pages"], 1)
+        (jpeg,) = page[palette_actions.KEY_IMAGES]
+        self.assertEqual(jpeg[:2], b"\xff\xd8")
+        self.assertIn("error", self.run_as(self.staff, "read_waiting_page", item=reference, page=2))
+        with mock.patch("auctions.tasks.index_document.delay", side_effect=index.index_document):
+            with self.captureOnCommitCallbacks(execute=True):
+                result = self.run_as(
+                    self.staff,
+                    "save_transcription",
+                    item=reference,
+                    text="<!-- page 1 -->\n\nThe Apistogramma agassizii spawned in a clay pot.",
+                    title="Apistos",
+                    year=1978,
+                )
+        self.assertTrue(result.get("ok"), result)
+        document.refresh_from_db()
+        self.assertEqual(
+            (document.owner, document.club, document.visibility), (self.owner, self.club, Visibility.PUBLIC)
+        )
+        self.assertEqual((document.title, document.year, document.status), ("Apistos", 1978, Document.READY))
+        self.assertTrue(document.text_edited, "never read over again")
+        self.assertIn(self.species, document.species.all())
+        self.assertEqual(self.run_as(self.owner, "waiting_articles")["articles"], [])
+
+    def test_a_batch_of_scans_waits_and_is_saved_article_by_article(self):
+        batch = self.scanned_batch()
+        self.assertEqual(batch.status, batch.TRANSCRIBE)
+        self.assertEqual(self.provider.calls, {"complete": 0, "complete_json": 0, "embed": 0})
+        (row,) = self.run_as(self.owner, "waiting_articles")["articles"]
+        self.assertEqual((row["item"], row["pages"], row["pages_already_in_an_article"]), (f"batch {batch.pk}", 3, []))
+        names = list(batch.pages.order_by("position").values_list("original_name", flat=True))
+        self.assertEqual(names, ["scan1.jpg", "scan2.jpg", "scan3.jpg"], "numbered in file-name order")
+        item = f"batch {batch.pk}"
+        self.assertIn("more_info_needed", self.run_as(self.owner, "save_transcription", item=item, text="x", title="T"))
+        self.assertIn(
+            "more_info_needed",
+            self.run_as(self.owner, "save_transcription", item=item, text="x", title="T", pages=[4]),
+        )
+        first = self.run_as(self.owner, "save_transcription", item=item, text="Bettas.", title="Bettas", pages=[1, 2])
+        self.assertTrue(first.get("ok"), first)
+        again = self.run_as(self.owner, "save_transcription", item=item, text="Bettas!", title="Bettas", pages=[1, 2])
+        self.assertTrue(again.get("ok"), again)
+        self.assertEqual(batch.documents.get().text, "Bettas!", "saved again, not twice")
+        (row,) = self.run_as(self.owner, "waiting_articles")["articles"]
+        self.assertEqual(row["pages_already_in_an_article"], [1, 2])
+        last = self.run_as(
+            self.owner, "save_transcription", item=item, text="Killifish.", title="Killies", pages="3", finished=True
+        )
+        self.assertTrue(last.get("ok"), last)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, batch.DONE)
+        killies = batch.documents.get(title="Killies")
+        self.assertEqual((killies.owner, killies.club, killies.visibility), (self.owner, self.club, Visibility.CLUB))
+        self.assertEqual(self.run_as(self.owner, "waiting_articles")["articles"], [])
+
+    def test_the_page_reaches_the_agent_as_a_picture_on_either_endpoint(self):
+        from auctions.mcp import admin
+
+        document = self.scan()
+        request = RequestFactory().post("/mcp/")
+        request.user = self.owner
+        result = tools.call_tool(request, "read_waiting_page", {"item": f"document {document.pk}"})
+        images = [block for block in result["content"] if block["type"] == "image"]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["mimeType"], "image/jpeg")
+        self.assertNotIn("_images", result["content"][0]["text"])
+        kept = admin.private_result(result, "read_waiting_page")["content"]
+        self.assertEqual([block["type"] for block in kept], ["text", "image"])
+        dropped = admin.private_result(result, "describe_lot")["content"]
+        self.assertEqual([block["type"] for block in dropped], ["text"], "no other tool's pictures leave")
+
+    def test_the_pages_say_it_waits_and_offer_an_agent(self):
+        document = self.scan()
+        self.client.force_login(self.owner)
+        self.assertContains(self.client.get(document.get_absolute_url()), reverse("user_api_keys"))
+        self.assertContains(self.client.get(reverse("library")), "1 article waiting to be transcribed")
+        self.client.force_login(self.member)
+        response = self.client.get(document.get_absolute_url())
+        self.assertContains(response, "Waiting to be transcribed")
+        self.assertNotContains(response, reverse("user_api_keys"))
+
+    def test_nobody_else_sees_an_only_me_scan(self):
+        document = self.scan(visibility=Visibility.PRIVATE)
+        self.assertEqual(len(self.run_as(self.owner, "waiting_articles")["articles"]), 1)
+        self.assertEqual(self.run_as(self.staff, "waiting_articles")["articles"], [], "as on the web: a 404")
+        self.assertIn("error", self.run_as(self.staff, "read_waiting_page", item=f"document {document.pk}"))
+
+    def test_the_text_under_another_name_is_still_the_text(self):
+        batch = self.scanned_batch(pages=1)
+        result = self.run_as(
+            self.owner, "save_transcription", batch=str(batch.pk), content="Bettas.", title="B", pages=[1]
+        )
+        self.assertIn("error", result, "a bare number isn't an item")
+        result = self.run_as(
+            self.owner,
+            "save_transcription",
+            batch=f"batch {batch.pk}",
+            content="Bettas.",
+            title="B",
+            pages=[1],
+            finished=True,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(batch.documents.get().text, "Bettas.", "never closed with the article thrown away")
+
+    def test_pages_added_later_keep_the_numbers_already_given(self):
+        from auctions.documents import stitch
+        from auctions.models import BatchPage
+
+        batch = self.scanned_batch(pages=2)
+        page = BatchPage(batch=batch, original_name="scan1b.jpg")
+        page.file.save("scan1b.jpg", ContentFile(picture(800, 1000, fmt="JPEG")), save=True)
+        batch.status = batch.READING
+        batch.save(update_fields=["status"])
+        stitch.process(batch.pk)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, batch.TRANSCRIBE)
+        names = list(batch.pages.order_by("position").values_list("original_name", flat=True))
+        self.assertEqual(names, ["scan1.jpg", "scan2.jpg", "scan1b.jpg"])
+
+    def test_turning_the_sites_reading_on_picks_up_what_waited(self):
+        from auctions.documents import stitch
+
+        untouched, started = self.scanned_batch(), self.scanned_batch()
+        self.run_as(self.owner, "save_transcription", item=f"batch {started.pk}", text="B.", title="B", pages=[1])
+        with override_settings(DOCUMENT_SERVER_OCR=True), mock.patch.object(stitch, "_send"):
+            stitch.requeue_stuck()
+        untouched.refresh_from_db()
+        started.refresh_from_db()
+        self.assertEqual(untouched.status, untouched.READING)
+        self.assertFalse(untouched.pages.filter(read=True).exists())
+        self.assertEqual(started.status, started.TRANSCRIBE, "never rebuilt over an agent's articles")
+
+    def test_the_owners_routine_proposes_and_the_approval_saves_it(self):
+        from auctions.mcp import admin
+        from auctions.models import AgentProposal
+
+        document = self.scan(owner=self.member, club=self.club)  # club-only: staff isn't in the club
+        mine = self.scan(owner=self.staff, club=None, visibility=Visibility.PUBLIC)
+        item = f"document {document.pk}"
+        self.assertEqual(self.run_as(self.staff, "waiting_articles")["articles"][0]["item"], f"document {mine.pk}")
+        self.assertIn("error", self.run_as(self.staff, "save_transcription", item=item, text="x"), "not on /mcp/")
+        request = RequestFactory().post("/mcp/admin/")
+        request.user, request.palette_page, request.owner_reach = self.staff, {}, True
+        listed = palette_actions.run_action(request, "waiting_articles", {})["articles"]
+        self.assertEqual(
+            {(row["item"], row["yours"]) for row in listed}, {(item, False), (f"document {mine.pk}", True)}
+        )
+        steps = [{"tool": "save_transcription", "arguments": {"item": item, "text": "Read."}}]
+        proposed = admin.propose_change(request, {"summary": "Transcribe a scan", "steps": steps})
+        self.assertTrue(proposed.get("ok"), proposed)
+        again = admin.propose_change(request, {"summary": "Transcribe it again", "steps": steps})
+        self.assertIn("already transcribes", again["error"])
+        self.assertIn(
+            "error",
+            admin.propose_change(
+                request,
+                {
+                    "summary": "s",
+                    "steps": [{"tool": "save_transcription", "arguments": {"item": "document 999999", "text": "x"}}],
+                },
+            ),
+        )
+        self.assertEqual(Document.objects.get(pk=document.pk).text, "", "nothing changes until approved")
+        approver = RequestFactory().post("/admin-dashboard/proposals/")
+        approver.user = self.staff
+        proposal = AgentProposal.objects.get()
+        admin.apply_proposal(proposal, approver)
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        document.refresh_from_db()
+        self.assertEqual((document.text, document.owner, document.visibility), ("Read.", self.member, Visibility.CLUB))
+
+    def test_a_batch_proposal_is_checked_as_it_would_run(self):
+        from auctions.mcp import admin
+
+        batch = self.scanned_batch()
+        request = RequestFactory().post("/mcp/admin/")
+        request.user, request.palette_page, request.owner_reach = self.staff, {}, True
+
+        def propose(**arguments):
+            steps = [{"tool": "save_transcription", "arguments": arguments}]
+            return admin.propose_change(request, {"summary": "Transcribe", "steps": steps})
+
+        # The aliases the resolver accepts, and pages as text.
+        first = propose(batch=f"Batch #{batch.pk}", body="One.", title="One", pages="1, 2")
+        self.assertTrue(first.get("ok"), first)
+        second = propose(item=f"batch {batch.pk}", markdown="Two.", title="Two", pages=[3], finished="yes")
+        self.assertTrue(second.get("ok"), "another article of the same batch")
+        again = propose(item=f"batch {batch.pk}", text="One.", title="one", pages=[2, 1])
+        self.assertIn("already transcribes", again["error"])
+        self.assertIn("pages", propose(item=f"batch {batch.pk}", text="x", title="T", pages=[9])["error"])
+
+    def test_a_batch_article_taken_down_for_copyright_stays_down(self):
+        from auctions import dmca
+        from auctions.documents import stitch
+        from auctions.documents.search import delete_document
+
+        batch = self.scanned_batch()
+        self.run_as(self.owner, "save_transcription", item=f"batch {batch.pk}", text="A.", title="A", pages=[1])
+        article = batch.documents.get()
+        notice = CopyrightNotice.objects.create(
+            name="R", email="r@example.com", address="a", work="w", material="m", document=article
+        )
+        dmca.take_down(notice)
+        batch.refresh_from_db()
+        self.assertEqual(batch.visibility, Visibility.PRIVATE, "the batch shows the scans")
+        self.assertTrue(batch.copyright_locked)
+        listed = [row["item"] for row in self.run_as(self.owner, "waiting_articles")["articles"]]
+        self.assertNotIn(f"batch {batch.pk}", listed)
+        self.assertIn(
+            "error",
+            self.run_as(self.owner, "save_transcription", item=f"batch {batch.pk}", text="B.", title="B", pages=[2]),
+        )
+        self.client.force_login(self.owner)
+        for action in ("again", "delete", "finish"):
+            self.client.post(reverse("document_batch", args=[batch.pk]), {"action": action})
+        self.assertTrue(type(batch).objects.filter(pk=batch.pk).exists())
+        self.assertEqual(stitch.build_documents(batch), [])
+        article.refresh_from_db()
+        self.assertTrue(article.copyright_locked, "a rebuild would have made it again, unlocked")
+        # Deleting it keeps the record, so its pages can't come back.
+        delete_document(article)
+        self.assertTrue(Document.objects.filter(pk=article.pk, removed=True).exists())
+        data = picture(800, 1000, fmt="JPEG")
+        article.pages.update(sha256=hashlib.sha256(data).hexdigest())
+        self.client.force_login(self.member)
+        upload = SimpleUploadedFile("scan.jpg", data, content_type="image/jpeg")
+        response = self.client.post(reverse("library_add"), {"visibility": Visibility.PUBLIC, "file": upload})
+        self.assertContains(response, "copyright notice")
+
+
+class LibraryHelpTests(LibraryTestCase):
+    def test_the_help_shows_until_something_is_asked_and_leads_with_an_agent(self):
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("library_search"))
+        self.assertContains(response, "Let an AI agent do the work")
+        self.assertContains(response, reverse("help_guide", kwargs={"slug": "ai-agents"}) + "#connect")
+        self.assertContains(self.client.get(reverse("library")), reverse("library_search"))
+        self.document()
+        response = self.client.get(reverse("library_search"), {"q": "microworms"})
+        self.assertNotContains(response, "Let an AI agent do the work")

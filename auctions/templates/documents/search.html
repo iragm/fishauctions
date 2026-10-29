@@ -1,15 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Search the library{% endblock %}
+{% load help_tags %}
+{% block title %}Library help{% endblock %}
 {% block content %}
-{% comment %}The library's search as it was when it was the front page, kept while the site's AI page is built; see LibrarySearchView.{% endcomment %}
+{% comment %}The library's help page and its search with a written answer; see LibrarySearchView. The help is below the box until something is asked. Voice: HELP.md.{% endcomment %}
 <div class="container py-4">
-  <h1 class="h4 mb-3"><a href="{% url 'library' %}" class="text-decoration-none">Library</a> &middot; Search</h1>
+  <h1 class="h4 mb-3"><a href="{% url 'library' %}" class="text-decoration-none">Library</a> &middot; Help</h1>
 
   <form method="get" action="{% url 'library_search' %}" class="mb-2" role="search">
     {% if club %}<input type="hidden" name="club" value="{{ club.slug }}">{% endif %}
     {% if topic %}<input type="hidden" name="topic" value="{{ topic }}">{% endif %}
     {% if species %}<input type="hidden" name="species" value="{{ species.pk }}">{% endif %}
-    <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Ask a question or search: spawning Apistogramma, brine shrimp hatchery..." aria-label="Search the library" autofocus>
+    <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Ask the library: how did members spawn Apistogramma?" aria-label="Search the library" autofocus>
   </form>
 
   <div class="d-flex flex-wrap gap-2 mb-3">
@@ -51,6 +52,8 @@
     {% empty %}
       <p>Nothing in the library matches that.</p>
     {% endfor %}
+  {% else %}
+    {% include "documents/_help.html" %}
   {% endif %}
 </div>
 {% endblock %}

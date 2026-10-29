@@ -329,6 +329,38 @@ PROMPTS: tuple[Prompt, ...] = (
         "a problem with one, tell me.",
     ),
     Prompt(
+        "work_through_my_articles",
+        "Work through my articles",
+        "Transcribe the scans waiting in your and your club's library, one after another.",
+        (
+            Argument(
+                "club",
+                "Only this club's. Its name or its slug. Optional.",
+                False,
+                "club",
+                unsaid="every library I look after",
+            ),
+        ),
+        "Work through the articles waiting to be transcribed, in {club}: the site doesn't read scans "
+        "itself, so you do.\n"
+        "\n"
+        "1. waiting_articles (for that club, if I named one), every page of it, and tell me how many there are and how many pages that is.\n"
+        "2. For each, oldest first, read_waiting_page every page, then transcribe it exactly as printed, as "
+        "Markdown in reading order, with <!-- page N --> on a line of its own before each page's text. "
+        "Don't correct spelling or summarise; write [illegible] for a word you can't make out. Add a line "
+        "starting 'Picture:' for each photograph or drawing, naming any fish or plant you can identify.\n"
+        "3. One waiting document is one article: save_transcription its whole text, with the title, author "
+        "and year as printed, leaving out what the pages don't show. A batch is a pile of pages holding "
+        "several articles: save_transcription each article with the pages it is on, and finished=true with "
+        "the last. Leave out adverts, and anything listing members' addresses or phone numbers.\n"
+        "4. If you can run commands, crop each photograph out of its page and upload it to the "
+        "pictures_upload_url save_transcription answers with, captioned with its 'Picture:' line.\n"
+        "5. Tell me after each one, briefly, and keep going until none are left. If you run low on room, "
+        "stop after a whole article and tell me where you got to; waiting_articles picks up from there.\n"
+        "\n"
+        "At the end, list what you saved and any pages you couldn't read well enough, so they can be rescanned.",
+    ),
+    Prompt(
         "tidy_the_library",
         "Tidy a club library",
         "Fill in missing titles, authors, years and topics across a club's library, and list what needs a person to look at it.",
@@ -378,7 +410,7 @@ PROMPTS: tuple[Prompt, ...] = (
 BY_NAME = {prompt.name: prompt for prompt in PROMPTS}
 
 #: Listed only to accounts the library is on for (``UserData.library_enabled``).
-LIBRARY_PROMPTS = frozenset({"digitize_documents", "tidy_the_library", "ask_the_library"})
+LIBRARY_PROMPTS = frozenset({"digitize_documents", "work_through_my_articles", "tidy_the_library", "ask_the_library"})
 
 
 def descriptors(user=None) -> list[dict[str, Any]]:

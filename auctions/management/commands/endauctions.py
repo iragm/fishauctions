@@ -147,3 +147,5 @@ class Command(BaseCommand):
         lots = Lot.objects.filter(active=True, is_deleted=False, banned=False, deactivated=False)
         declare_winners_on_lots(lots)
         deactivate_pretty_much_over_lots()
+        # Lot.save ends a lot as it's removed; this catches the rest (bulk updates, and lots removed before that).
+        Lot.objects.filter(banned=True, active=True).update(active=False, removed_while_open=True)
