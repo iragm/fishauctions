@@ -502,7 +502,11 @@ class ClubEventViewTests(TestCase):
         self.admin = User.objects.create_user(username="ev_admin", password="pw", email="a@example.com")
         ClubMember.objects.create(club=self.club, user=self.admin, permission_admin=True)
         self.outsider = User.objects.create_user(username="ev_out", password="pw", email="o@example.com")
-        self.start = timezone.now() + datetime.timedelta(days=4)
+        # Noon site time: a time posted as wall-clock text must never land in a DST change's
+        # repeated or skipped hour, which the form rightly refuses.
+        self.start = (timezone.localtime() + datetime.timedelta(days=4)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
 
     def _post_event(self, **overrides):
         data = {
@@ -2976,7 +2980,10 @@ class ClubEventCancellationTests(TestCase):
             club=self.club, user=self.admin, name="Cancel Admin", email="c@example.com", permission_admin=True
         )
         self.client.force_login(self.admin)
-        self.start = timezone.now() + datetime.timedelta(days=3)
+        # Noon site time, so the posted wall-clock text is never in a DST change's repeated hour.
+        self.start = (timezone.localtime() + datetime.timedelta(days=3)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
         self.event = ClubEvent.objects.create(club=self.club, title="Monthly meeting", date_start=self.start)
 
     def test_an_admin_can_call_an_event_off(self):
@@ -2985,7 +2992,7 @@ class ClubEventCancellationTests(TestCase):
             url,
             {
                 "title": self.event.title,
-                "date_start": self.event.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+                "date_start": self.start.strftime("%Y-%m-%d %H:%M:%S"),
                 "cancelled": "on",
             },
         )

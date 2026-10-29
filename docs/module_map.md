@@ -378,7 +378,7 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1446 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_events.py`** (3076 lines)
+- **`test_club_events.py`** (3083 lines)
   Tests for club events, Google Calendar sync, and Discord events.
 - **`test_club_finder.py`** (297 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
