@@ -710,7 +710,10 @@ def navigation_shortcut(request, query: str):
     (route, best), runner_up = scored[0], (scored[1][1] if len(scored) > 1 else 0.0)
     if best - runner_up < NAVIGATION_CONFIDENCE:
         return None
-    if target == query.strip(" .") and route not in palette_routes.confident_routes(target, request.user, limit=1):
+    if target == query.strip(" .") and (
+        route.key in palette_routes.NOT_OFFERED_BY_NAME
+        or route not in palette_routes.confident_routes(target, request.user, limit=1)
+    ):
         # Without an opener every word has to name the page: "celestial pearl danio" is a lot.
         return None
     result = palette_routes.resolve_route(request, route, {})

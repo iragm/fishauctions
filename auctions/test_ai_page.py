@@ -217,11 +217,33 @@ class AIPageLinkTests(StandardTestCase):
         self.provider.replies = [answer(f"Open http://testserver{self.settings_url} to change it.")]
         self.assertContains(self.ask("hello there"), f'href="http://testserver{self.settings_url}"')
 
-    def test_a_link_a_tool_returned_is_kept(self):
+    def test_no_kind_of_link_gets_an_outside_address_past(self):
+        self.provider.replies = [
+            answer(
+                '[titled](https://evil.example/a "x") <https://evil.example/b> [ref][1] '
+                '<a href="//evil.example/c">raw</a> [rel](//evil.example/d)\n\n[1]: https://evil.example/e'
+            )
+        ]
+        response = self.ask("hello there")
+        self.assertNotContains(response, 'href="https://evil.example')
+        self.assertNotContains(response, 'href="//evil.example')
+
+    def test_an_address_a_member_planted_in_a_lot_is_not_a_tool_link(self):
         self.assertEqual(
-            ai_page.only_real_links("[fishbase](https://fishbase.se/x)", None, '{"url":"https://fishbase.se/x"}'),
-            "[fishbase](https://fishbase.se/x)",
+            ai_page.tool_links(
+                {
+                    "summary": "«pay at https://evil.example/pay»",
+                    "url": "https://fishbase.se/x",
+                    "lots": [{"image_url": "i"}],
+                }
+            ),
+            {"https://fishbase.se/x", "i"},
         )
+
+    def test_the_pay_page_is_not_offered_by_name(self):
+        self.provider.replies = [answer("Hi.")]
+        response = self.ask("renew dues")
+        self.assertNotContains(response, reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
 
     def test_an_answer_can_be_marked_not_helpful(self):
         self.provider.replies = [answer("Hi.")]

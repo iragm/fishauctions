@@ -136,22 +136,23 @@ def _tool_text(result: dict) -> str:
     return text
 
 
-def _run_tool(request, call) -> str:
-    """One read, through the same path ``/mcp/`` uses. A write is refused there, not here."""
+def _run_tool(request, call) -> tuple[str, set[str]]:
+    """One read, through the same path ``/mcp/`` uses, and the links it returned. A write is refused
+    there, not here."""
     from .mcp import tools as mcp_tools
 
     try:
-        return _tool_text(mcp_tools.call_tool(request, call.name, call.arguments, writes=False))
+        result = mcp_tools.call_tool(request, call.name, call.arguments, writes=False)
     except mcp_tools.UnknownTool:
-        return f"There is no tool called {call.name}."
+        return f"There is no tool called {call.name}.", set()
     except Exception:
         logger.exception("The AI page's %s call failed", call.name)
-        return f"{call.name} failed. Say so, and suggest the page that does it instead."
+        return f"{call.name} failed. Say so, and suggest the page that does it instead.", set()
+    return _tool_text(result), tool_links(result.get("structuredContent"))
 
 
-#: A Markdown link, and a bare address the model wrote out without one.
-_MARKDOWN_LINK = re.compile(r"\[([^\]\n]+)\]\(\s*<?([^)\s>]+)>?\s*\)")
-_BARE_URL = re.compile(r"(?<![(<\[])\bhttps?://[^\s)<>\]]+")
+#: A bare address the model wrote out without making it a link.
+_BARE_URL = re.compile(r"(?<![(<\[\"'=])\bhttps?://[^\s)<>\]\"']+")
 #: Excuses in :data:`palette_routes.EXCLUDED` that mean the address answers a program, not a person.
 _NOT_A_PAGE = {
     palette_routes._API,
@@ -169,13 +170,15 @@ def is_a_page(url: str, request) -> bool:
     The model wrote ``https://auction.fish/api/describe_club?club=…`` for a club's BAP settings: a tool
     name dressed as an address, which goes nowhere.
     """
-    parsed = urlparse(url)
+    parsed = urlparse(url or "")
     if parsed.scheme not in ("", "http", "https"):
         return False
     if parsed.netloc and parsed.netloc.lower() != request.get_host().lower():
         return False
+    if not parsed.netloc and parsed.scheme:
+        return False
     path = parsed.path or "/"
-    if not path.startswith("/") or path.startswith("/api/"):
+    if not path.startswith("/") or path.startswith("//") or path.startswith("/api/"):
         return False
     try:
         match = resolve(path)
@@ -184,25 +187,48 @@ def is_a_page(url: str, request) -> bool:
     return palette_routes.excluded_reason(match.url_name or "") not in _NOT_A_PAGE
 
 
-def only_real_links(reply: str, request, seen: str) -> str:
-    """``reply`` with every link the tools didn't return and that isn't one of this site's pages taken
-    out, leaving its words. A bare address that is real becomes a link; one that isn't is dropped.
-    ``seen`` is everything the tools said this question.
-    """
+def tool_links(value) -> set[str]:
+    """Every address a tool returned under a ``url`` or ``*_url`` key: the resolvers' own links, never
+    the text members wrote, where a planted address would otherwise pass as one a tool returned."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, str) and isinstance(key, str) and (key == "url" or key.endswith("_url")):
+                found.add(item)
+            else:
+                found |= tool_links(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= tool_links(item)
+    return found
 
-    def keep(url: str) -> bool:
-        return url in seen or is_a_page(url, request)
 
-    def markdown_link(match):
-        words, url = match.group(1), match.group(2)
-        return match.group(0) if keep(url) else words
+def link_bare_addresses(reply: str, request, links: set[str]) -> str:
+    """A bare address that is a real page or a tool's link becomes a link; any other is dropped."""
 
     def bare(match):
         url = match.group(0).rstrip(".,;:!?")
         trailing = match.group(0)[len(url) :]
-        return (f"<{url}>" if keep(url) else "") + trailing
+        return (f"<{url}>" if url in links or is_a_page(url, request) else "") + trailing
 
-    return _BARE_URL.sub(bare, _MARKDOWN_LINK.sub(markdown_link, reply or ""))
+    return _BARE_URL.sub(bare, reply or "")
+
+
+def answer_html(reply: str, request, links: set[str]):
+    """``reply`` as safe HTML, with every link that is neither one of this site's pages nor exactly an
+    address a tool returned (:func:`tool_links`) turned back into its words. Done on the HTML, after
+    Markdown, so a title, an autolink, a reference link or raw ``<a>`` can't slip past it."""
+    from bs4 import BeautifulSoup
+    from django.utils.safestring import mark_safe
+
+    from .documents.render import to_html
+
+    soup = BeautifulSoup(str(to_html(link_bare_addresses(reply, request, links), [])), "html.parser")
+    for anchor in soup.find_all("a"):
+        href = anchor.get("href") or ""
+        if href not in links and not is_a_page(href, request):
+            anchor.unwrap()
+    return mark_safe(str(soup))  # noqa: S308 -- to_html's allowlist, with links only taken away
 
 
 def pages_for(request, question: str) -> list[dict]:
@@ -210,12 +236,7 @@ def pages_for(request, question: str) -> list[dict]:
 
     Asked "bap setup", the model described the settings page and linked nothing; this needs no model.
     """
-    pages = []
-    for route in palette_routes.confident_routes(question, request.user, limit=2):
-        result = palette_routes.resolve_route(request, route, {})
-        if result.get("url"):
-            pages.append({"title": result.get("title") or route.label, "url": result["url"]})
-    return pages
+    return palette_routes.pages_named_by(request, question)
 
 
 USED_UP = "That's today's AI allowance used up. Connect your own AI agent to keep going."
@@ -223,7 +244,8 @@ BUSY = "The AI is busy right now. Try again in a minute."
 
 
 def ask(request, conversation: str, question: str) -> dict:
-    """Answer ``question`` in ``conversation``: ``{"reply", "usage_id"}`` (Markdown) or ``{"error"}``,
+    """Answer ``question`` in ``conversation``: ``{"reply", "links", "usage_id"}`` (Markdown, and the
+    addresses its tools returned) or ``{"error"}``,
     with ``"pages"`` the question names (:func:`pages_for`) on either.
 
     One question at a time per person, so the allowance, checked before each model call, can't be
@@ -267,7 +289,7 @@ def _answer(request, conversation: str, question: str) -> dict:
     # the model asked which club rather than looking. Rebuilt every question, never kept.
     facts = palette_assist.context_message(user)
     messages = [facts, *earlier, {"role": "user", "content": question}]
-    seen = ""
+    links: set[str] = set()
     request_id = uuid.uuid4().hex
     started = time.monotonic()
     for _round in range(MAX_ROUNDS):
@@ -297,14 +319,14 @@ def _answer(request, conversation: str, question: str) -> dict:
             tools_offered=SURFACE,
         )  # fmt: skip
         if not result.tool_calls:
-            reply = only_real_links(result.text, request, seen)
+            reply = result.text or ""
             messages.append({"role": "assistant", "content": reply})
             _keep(user, conversation, [message for message in messages if message is not facts])
-            return {"reply": reply, "usage_id": usage_id}
+            return {"reply": reply, "links": links, "usage_id": usage_id}
         messages.append(llm.tool_call_message(result.tool_calls))
         for call in result.tool_calls:
-            said = _run_tool(request, call)
-            seen += said
+            said, found = _run_tool(request, call)
+            links |= found
             messages.append(llm.tool_result_message(call, said))
         if usage(user)["over"]:
             return {"error": USED_UP}

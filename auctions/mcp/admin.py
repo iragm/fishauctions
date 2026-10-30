@@ -888,9 +888,20 @@ def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
     days = min(max(_int(params, "days", 7) or 7, 1), 90)
     found = usage.report(days, conversations=min(max(_int(params, "conversations", 20) or 20, 1), 100))
     fence = palette_actions.untrusted_short
+
+    def tool_name(name: str) -> str:
+        # An agent chooses the name it calls, so one that isn't ours is its words.
+        return name if palette_actions.get_action(name) or name in ADMIN_TOOLS else fence(name)
+
+    for client in found["by_client"]:
+        client["client"] = fence(client["client"])  # an OAuth client names itself
+    for tool in found["by_tool"]:
+        tool["tool"] = tool_name(tool["tool"])
     for problem in found["what_went_wrong"]:
+        problem["tool"] = tool_name(problem["tool"])
         problem["detail"] = fence(problem["detail"])
     for story in found["recent_conversations"]:
+        story["client"] = fence(story["client"])
         story["calls"] = [fence(step) for step in story["calls"]]
     found["ai_page"]["marked_not_helpful"] = [fence(query) for query in found["ai_page"]["marked_not_helpful"]]
     found["skills_asked_for"] = [fence(skill) for skill in found["skills_asked_for"]]
@@ -2044,8 +2055,8 @@ ADMIN_TOOLS: dict[str, Action] = {
                 "page did: calls per client (ChatGPT, Claude...) and per tool, every way a call went "
                 "wrong (unknown tool, refused, error, a question asked back, nothing found) with how "
                 "often, recent conversations as the calls they made, /ai/ questions marked not helpful, "
-                "and skills agents asked for. People are numbered, never named. The owner's own "
-                "/mcp/admin/ calls are left out."
+                "and skills agents asked for. People are numbered; what they typed is fenced and has no "
+                "contact details. /mcp/admin/ calls are not recorded."
             ),
             params={
                 "days": "integer, optional, default 7, at most 90. How far back.",

@@ -4462,7 +4462,7 @@ class PagesByNameTests(PaletteAssistTestCase):
         self.assertNotIn(self.settings_url, self._urls(self._search("bap rules", user=self.member)))
 
     def test_a_word_or_a_lot_name_is_not_a_page(self):
-        for query in ("bap", "a", "celestial pearl danio"):
+        for query in ("bap", "a", "celestial pearl danio", "leaderboard celestial pearl", "my bids shrimp"):
             self.assertNotIn(self.settings_url, self._urls(self._search(query)), query)
 
     @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
@@ -4472,6 +4472,11 @@ class PagesByNameTests(PaletteAssistTestCase):
         self.assertEqual(data["kind"], "navigate")
         self.assertEqual(data["url"], self.settings_url)
         self.assertEqual(self.provider.call_count, 0)
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_a_label_inside_a_longer_phrase_is_not_a_page(self):
+        for query in ("leaderboard celestial pearl", "my bids shrimp"):
+            self.assertIsNone(palette_assist.navigation_shortcut(self._request_for(self.user), query), query)
 
     def test_without_navigate_only_a_bare_phrase_still_reaches_the_model(self):
         self.assertIsNone(palette_assist.navigation_shortcut(self._request_for(self.user), "bap setup"))

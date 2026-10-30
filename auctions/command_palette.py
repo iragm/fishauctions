@@ -756,10 +756,6 @@ def _page_phrases(page):
 #: Pages from the route catalog offered while typing, at most.
 ROUTE_LIMIT = 2
 
-#: Catalog pages never offered while typing. The pay page stays behind the renew commands and the
-#: membership card (``test_palette_core.test_membership_pay_page_not_in_palette``).
-_NOT_OFFERED_WHILE_TYPING = frozenset({"club_membership_pay"})
-
 
 def _route_items(request, q):
     """The route catalog's pages that every word of ``q`` names, resolved for this user.
@@ -769,14 +765,10 @@ def _route_items(request, q):
     """
     from . import palette_routes
 
-    items = []
-    for route in palette_routes.confident_routes(q, request.user, limit=ROUTE_LIMIT):
-        if route.key in _NOT_OFFERED_WHILE_TYPING:
-            continue
-        result = palette_routes.resolve_route(request, route, {})
-        if result.get("url"):
-            items.append(_item("page", result.get("title") or route.label, result["url"], "bi-signpost", route.section))
-    return items
+    return [
+        _item("page", page["title"], page["url"], "bi-signpost", page["section"])
+        for page in palette_routes.pages_named_by(request, q, limit=ROUTE_LIMIT)
+    ]
 
 
 def _page_items(user, ql):

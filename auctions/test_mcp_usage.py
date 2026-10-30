@@ -77,6 +77,21 @@ class RecordingTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("result", response.json())
 
+    def test_contact_details_are_never_stored(self):
+        self.call("find_person", {"name": "x" * 590 + " jane.doe@example.com"})
+        self.call("find_person", {"name": "reach me at jane.doe@example.com or 555-123-4567"})
+        for arguments in MCPCall.objects.filter(tool="find_person").values_list("arguments", flat=True):
+            self.assertNotIn("jane.doe", arguments)
+            self.assertNotIn("555-123-4567", arguments)
+
+    def test_deleting_the_account_takes_its_words(self):
+        from auctions.account_deletion import _anonymize_assistant_records
+
+        self.call("find_person", {"name": "Somebody"})
+        _anonymize_assistant_records(self.user)
+        row = MCPCall.objects.get(tool="find_person")
+        self.assertEqual((row.user, row.arguments, row.client), (None, "", ""))
+
     def test_results_are_compact(self):
         text = self.call("my_context").json()["result"]["content"][0]["text"]
         self.assertNotIn("\n ", text)
@@ -134,7 +149,12 @@ class ChatGPTTextTests(StandardTestCase):
         self.assertEqual(result["content"][0]["text"], result["structuredContent"]["summary"])
 
     def test_a_client_merely_called_chatgpt_gets_the_json(self):
-        for client_id in ("dcr-random-id", "https://chatgpt.com.example.net/client.json", "http://chatgpt.com/x"):
+        for client_id in (
+            "dcr-random-id",
+            "https://chatgpt.com.example.net/client.json",
+            "http://chatgpt.com/x",
+            "https://platform.openai.com/client.json",
+        ):
             with self.subTest(client_id=client_id):
                 result = self.result(self.token(client_id))
                 self.assertEqual(json.loads(result["content"][0]["text"]), result["structuredContent"])
@@ -163,7 +183,10 @@ class UsageReportTests(AdminEndpointCase):
         found = self.call("mcp_usage")["structuredContent"]
         self.assertIn("3 tool calls from 1 people", found["summary"])
         (client,) = found["by_client"]
-        self.assertEqual((client["client"], client["calls"], client["went_wrong"]), ("ChatGPT", 3, "67%"))
+        self.assertEqual((client["client"], client["calls"], client["went_wrong"]), ("«ChatGPT»", 3, "67%"))
+        unknown = [tool["tool"] for tool in found["by_tool"] if "describe_clubs" in tool["tool"]]
+        self.assertEqual(unknown, ["«describe_clubs»"])
+        self.assertIn("my_context", [tool["tool"] for tool in found["by_tool"]])
         self.assertEqual({problem["outcome"] for problem in found["what_went_wrong"]}, {"empty", "unknown_tool"})
         (story,) = found["recent_conversations"]
         self.assertEqual(story["who"], "person 1")

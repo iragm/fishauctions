@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 #: Methods not worth a row: liveness, and what every session sends before it does anything.
 _NOT_RECORDED = frozenset({"ping", "notifications/initialized"})
 
+#: The most tool calls one report reads.
+MAX_CALLS = 5000
+
 #: Calls by one connection this close together are one conversation.
 CONVERSATION_GAP = timedelta(minutes=15)
 
@@ -47,7 +50,8 @@ def outcome_of(method: str, answer: dict[str, Any]) -> tuple[str, str, int]:
             return MCPCall.UNKNOWN_TOOL, message, 0
         return MCPCall.BAD_REQUEST, message, 0
     result = answer.get("result") or {}
-    size = len(json.dumps(result, default=str))
+    # The text blocks, not a second serialisation of everything: a scan's pictures are megabytes.
+    size = len(_text_of(result))
     if method != "tools/call":
         return MCPCall.OK, "", size
     structured = result.get("structuredContent") or {}
@@ -74,15 +78,18 @@ def record(request, credential, message: Any, answer: dict[str, Any] | None, sta
         tool = str(params.get("name") or "") if method == "tools/call" else ""
         arguments = params.get("arguments") if method == "tools/call" else None
         outcome, detail, size = outcome_of(method, answer)
+        # Contact details out before anything is cut, so a cut can't leave half an address behind.
+        from .admin import redact
+
         MCPCall.objects.create(
             user=credential.user,
             client=credential.label[:100],
             connection=_connection(credential)[:40],
             method=method[:40],
             tool=tool[:60],
-            arguments=json.dumps(arguments, default=str)[:600] if arguments else "",
+            arguments=redact(json.dumps(arguments, ensure_ascii=False, default=str))[:600] if arguments else "",
             outcome=outcome,
-            detail=detail[:300],
+            detail=redact(detail)[:300],
             result_chars=size,
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
@@ -97,31 +104,35 @@ def _rate(part: int, whole: int) -> str:
 def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
     """What agents asked for over ``days``, and how often it went wrong, for the weekly review.
 
-    People are numbered, never named: the reader is an agent that also reads strangers' text and may
-    write to a public repository. ``/mcp/admin/`` is never recorded, so the owner's routines aren't here.
+    People are numbered rather than named, and what they or their agents wrote was stored without
+    contact details; the reader is an agent that also reads strangers' text and may write to a public
+    repository, so :func:`auctions.mcp.admin.mcp_usage` fences it as well. ``/mcp/admin/`` is never recorded, so the owner's routines aren't here.
     """
     from auctions.models import LLMUsage, MCPCall
 
     since = timezone.now() - timedelta(days=days)
-    rows = list(
-        MCPCall.objects.filter(createdon__gte=since)
-        .order_by("createdon")
-        .values("user_id", "client", "connection", "method", "tool", "arguments", "outcome", "detail", "createdon")
-    )
-    calls = [row for row in rows if row["method"] == "tools/call"]
+    recent = MCPCall.objects.filter(createdon__gte=since)
+    # The newest MAX_CALLS, oldest first: enough for a week's review, bounded for a busy quarter.
+    calls = list(
+        recent.filter(method="tools/call")
+        .order_by("-createdon")
+        .values("user_id", "client", "connection", "tool", "arguments", "outcome", "detail", "createdon")[:MAX_CALLS]
+    )[::-1]
     people: dict[Any, str] = {}
 
     def who(user_id) -> str:
         return people.setdefault(user_id, f"person {len(people) + 1}")
 
     by_client: dict[str, Counter] = defaultdict(Counter)
+    client_people: dict[str, set] = defaultdict(set)
     for row in calls:
         by_client[row["client"] or "unknown"][row["outcome"]] += 1
+        client_people[row["client"] or "unknown"].add(row["user_id"])
     clients = [
         {
             "client": client,
             "calls": sum(counts.values()),
-            "people": len({row["user_id"] for row in calls if (row["client"] or "unknown") == client}),
+            "people": len(client_people[client]),
             "went_wrong": _rate(sum(counts.values()) - counts["ok"], sum(counts.values())),
             "outcomes": dict(counts),
         }
@@ -187,7 +198,8 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
             {"tool": tool, "outcome": outcome, "detail": detail, "times": times}
             for (tool, outcome, detail), times in problems.most_common(30)
         ],
-        "sessions_opened": sum(1 for row in rows if row["method"] == "initialize"),
+        "sessions_opened": recent.filter(method="initialize").count(),
+        "calls_read": len(calls),
         "recent_conversations": stories[-conversations:],
         "ai_page": ai_page,
         "skills_asked_for": wanted,

@@ -97,7 +97,7 @@ class Credential:
 #: Clients whose model is shown a result's ``structuredContent`` as well as its text, so the text can
 #: be the one-line summary instead of the same JSON again. ChatGPT's Apps SDK documents both as model
 #: input; Claude reads the text.
-STRUCTURED_CONTENT_CLIENTS = ("chatgpt.com", "openai.com")
+STRUCTURED_CONTENT_CLIENTS = ("chatgpt.com",)
 
 
 def reads_structured_content(credential: Credential | None) -> bool:
