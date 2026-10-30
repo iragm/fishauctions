@@ -372,7 +372,7 @@ this only quotes its opening sentence.
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
-- **`test_club_announcements.py`** (1132 lines)
+- **`test_club_announcements.py`** (1136 lines)
   Tests for club announcements, the website-integration snippets, and the embeds.
 - **`test_club_api_read.py`** (1446 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.

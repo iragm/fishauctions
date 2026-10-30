@@ -998,7 +998,11 @@ class AnnouncementSchedulingTests(TestCase):
         ClubMember.objects.create(club=self.club, user=self.admin, permission_send_announcements=True)
         self.client = Client()
         self.url = reverse("club_announcements", kwargs={"slug": self.club.slug})
-        self.later = timezone.now() + datetime.timedelta(days=2)
+        # Noon site time: a time posted as wall-clock text must never land in a DST change's
+        # repeated or skipped hour, which the form rightly refuses.
+        self.later = (timezone.localtime() + datetime.timedelta(days=2)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
 
     def _schedule(self, **extra):
         data = {
