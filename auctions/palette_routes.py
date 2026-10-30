@@ -696,7 +696,7 @@ ROUTE_LIST: list[Route] = [
         "A club's Breeder Award / culture pages",
         "Club",
         scope=SCOPE_CLUB_TAB,
-        keywords=["bap", "hap", "culture", "my points", "breeder award"],
+        keywords=["bap", "hap", "culture", "my points", "breeder award", "bap leaderboard"],
     ),
     _r("club_membership_pay", "Pay or renew my club membership", "Club", scope=SCOPE_CLUB, keywords=["renew", "dues"]),
     _r("club_events_ical", "Club calendar feed", "Club", scope=SCOPE_CLUB, keywords=["calendar", "ics", "events"]),
@@ -905,7 +905,7 @@ ROUTE_LIST: list[Route] = [
         "Club admin",
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
-        keywords=["bap points", "award rules"],
+        keywords=["bap points", "award rules", "bap rules", "bap setup", "bap settings", "set up bap"],
     ),
     _r(
         "club_bap_import",
@@ -1719,6 +1719,18 @@ def match_routes_with_scores(query: str, user=None, limit: int = 5) -> list[tupl
             scored.append((score, -index, route))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [(route, score) for score, _, route in scored[:limit]]
+
+
+def confident_routes(query: str, user=None, limit: int = 2) -> list[Route]:
+    """Routes every word of ``query`` points at: each word in the route's own words, or one of them
+    only inside a longer word. Nothing for a query of one short word, which names half the catalog.
+    """
+    words = _tokens(query)
+    if not words or (len(words) == 1 and len(words[0]) < 4):
+        return []
+    # Two points a whole word, one inside a longer one: all words, at most one of them partial.
+    needed = 2.0 * len(words) - 1.0
+    return [route for route, score in match_routes_with_scores(query, user, limit) if score >= needed]
 
 
 def get_route(key: str) -> Route | None:

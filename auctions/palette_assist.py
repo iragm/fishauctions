@@ -689,7 +689,8 @@ def navigation_shortcut(request, query: str):
     the same phrasing, and the model has to pick a key out of four hundred. Here the sentence names
     its own destination, so the matcher does it — free, instant, and it cannot pick a write.
 
-    Only when one route is clearly ahead of the next; anything closer is left to the model.
+    Only when one route is clearly ahead of the next; anything closer is left to the model. With
+    :func:`navigate_only` on, the sentence needn't open with "take me to".
     """
     lowered = query.lower().strip()
     for opener in _NAVIGATION_OPENERS:
@@ -697,7 +698,10 @@ def navigation_shortcut(request, query: str):
             target = query.strip()[len(opener) :].strip(" ?.")
             break
     else:
-        return None
+        # A palette that only opens pages reads "bap rules" as the page it names, opener or not.
+        if not navigate_only(request.user) or asks_a_question(query):
+            return None
+        target = query.strip(" .")
     if not target:
         return None
     scored = palette_routes.match_routes_with_scores(target, request.user, limit=2)
@@ -705,6 +709,9 @@ def navigation_shortcut(request, query: str):
         return None
     (route, best), runner_up = scored[0], (scored[1][1] if len(scored) > 1 else 0.0)
     if best - runner_up < NAVIGATION_CONFIDENCE:
+        return None
+    if target == query.strip(" .") and route not in palette_routes.confident_routes(target, request.user, limit=1):
+        # Without an opener every word has to name the page: "celestial pearl danio" is a lot.
         return None
     result = palette_routes.resolve_route(request, route, {})
     if "error" in result or not result.get("url"):

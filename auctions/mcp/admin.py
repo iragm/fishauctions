@@ -61,7 +61,7 @@ INSTRUCTIONS = (
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
     "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
-    "palette_shortcut_candidates, square_reconnects and untrusted_auction_creators. Nothing here "
+    "palette_shortcut_candidates, mcp_usage, square_reconnects and untrusted_auction_creators. Nothing here "
     "changes the site. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -878,6 +878,24 @@ def palette_shortcut_candidates(request, params: dict[str, Any]) -> dict[str, An
     summary = f"{len(found)} phrase{'s' if len(found) != 1 else ''} the assistant always sends to the same page"
     summary += f", {len(disputed)} it answers more than one way, {len(lookups)} answered from one lookup."
     return _ok(summary, candidates=found[:SHORTCUT_CANDIDATES_SHOWN], answered_two_ways=len(disputed))
+
+
+def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
+    """How other people's agents and ``/ai/`` got on lately (:func:`auctions.mcp.usage.report`), with
+    everything a member or their agent wrote fenced."""
+    from . import usage
+
+    days = min(max(_int(params, "days", 7) or 7, 1), 90)
+    found = usage.report(days, conversations=min(max(_int(params, "conversations", 20) or 20, 1), 100))
+    fence = palette_actions.untrusted_short
+    for problem in found["what_went_wrong"]:
+        problem["detail"] = fence(problem["detail"])
+    for story in found["recent_conversations"]:
+        story["calls"] = [fence(step) for step in story["calls"]]
+    found["ai_page"]["marked_not_helpful"] = [fence(query) for query in found["ai_page"]["marked_not_helpful"]]
+    found["skills_asked_for"] = [fence(skill) for skill in found["skills_asked_for"]]
+    summary = found.pop("summary")
+    return _ok(summary, **found)
 
 
 def square_reconnects(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -2018,6 +2036,23 @@ ADMIN_TOOLS: dict[str, Action] = {
             },
             danger=DANGER_SAFE,
             resolver=palette_shortcut_candidates,
+        ),
+        Action(
+            name="mcp_usage",
+            description=(
+                "How other people's AI agents got on with this site's tools, and how the site's own /ai/ "
+                "page did: calls per client (ChatGPT, Claude...) and per tool, every way a call went "
+                "wrong (unknown tool, refused, error, a question asked back, nothing found) with how "
+                "often, recent conversations as the calls they made, /ai/ questions marked not helpful, "
+                "and skills agents asked for. People are numbered, never named. The owner's own "
+                "/mcp/admin/ calls are left out."
+            ),
+            params={
+                "days": "integer, optional, default 7, at most 90. How far back.",
+                "conversations": "integer, optional, default 20, at most 100. How many recent conversations to show.",
+            },
+            danger=DANGER_SAFE,
+            resolver=mcp_usage,
         ),
         Action(
             name="untrusted_auction_creators",

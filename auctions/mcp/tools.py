@@ -289,8 +289,12 @@ def _absolute(value: Any, base) -> Any:
 
 
 def _text(payload: Any) -> str:
-    """Serialise a result, replacing (never slicing) one over budget, so it stays valid JSON."""
-    body = json.dumps(payload, indent=2, default=str)
+    """Serialise a result, replacing (never slicing) one over budget, so it stays valid JSON.
+
+    Compact and unescaped: indenting and ``\\u00ab`` for every fence mark were a fifth of a list's
+    tokens, paid again on every later turn of the conversation.
+    """
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False, default=str)
     if len(body) <= MAX_RESULT_CHARS:
         return body
     # The summary is a resolver's string and may itself be the oversized part.
@@ -306,7 +310,8 @@ def _text(payload: Any) -> str:
                 f"take a narrower query. The ceiling is {MAX_RESULT_CHARS} characters."
             ),
         },
-        indent=2,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
 
 
@@ -454,4 +459,8 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
     ]
     body = _text(_absolute(_payload(result), request.build_absolute_uri))
     # Parsed back from the text so both say the same thing and the structure is JSON-safe (Decimals).
-    return _result(body, structured=json.loads(body), links=links)
+    structured = json.loads(body)
+    if auth.reads_structured_content(credential) and isinstance(structured.get("summary"), str):
+        # ChatGPT hands its model structuredContent *and* the text, so the JSON went in twice.
+        body = structured["summary"]
+    return _result(body, structured=structured, links=links)

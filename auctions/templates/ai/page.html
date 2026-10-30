@@ -36,6 +36,17 @@
   form.addEventListener("htmx:afterRequest", function (event) {
     if (event.detail.successful) { box.value = ""; box.focus(); }
   });
+  // "Not helpful" marks the answer reported, which the owner's weekly review reads first.
+  document.getElementById("ai-conversation").addEventListener("click", function (event) {
+    var thumb = event.target.closest(".ai-not-helpful");
+    if (!thumb || thumb.disabled) { return; }
+    thumb.disabled = true;
+    fetch("{% url 'command_palette_report' %}", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-CSRFToken": form.querySelector("[name=csrfmiddlewaretoken]").value},
+      body: JSON.stringify({usage_id: thumb.dataset.usageId})
+    }).then(function () { thumb.classList.add("text-danger"); }).catch(function () { thumb.disabled = false; });
+  });
 })();
 </script>
 {% endblock %}

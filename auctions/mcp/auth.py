@@ -94,6 +94,24 @@ class Credential:
         return f"mcp-writes-{self.kind}-{getattr(self.token, 'pk', 'none')}"
 
 
+#: Clients whose model is shown a result's ``structuredContent`` as well as its text, so the text can
+#: be the one-line summary instead of the same JSON again. ChatGPT's Apps SDK documents both as model
+#: input; Claude reads the text.
+STRUCTURED_CONTENT_CLIENTS = ("chatgpt.com", "openai.com")
+
+
+def reads_structured_content(credential: Credential | None) -> bool:
+    """Whether this credential's client is one of :data:`STRUCTURED_CONTENT_CLIENTS`, by the OAuth
+    application's CIMD ``client_id`` URL (which nobody else can claim), never by a self-chosen name."""
+    if credential is None or credential.kind != "oauth":
+        return False
+    client_id = str(getattr(getattr(credential.token, "application", None), "client_id", "") or "").lower()
+    if not client_id.startswith("https://"):
+        return False
+    host = client_id[len("https://") :].split("/", 1)[0]
+    return any(host == domain or host.endswith("." + domain) for domain in STRUCTURED_CONTENT_CLIENTS)
+
+
 def oauth_enabled() -> bool:
     """Whether this deployment is also an OAuth authorization server."""
     return apps.is_installed("oauth2_provider")

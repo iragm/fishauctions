@@ -72,6 +72,8 @@ class AIAskView(LoginRequiredMixin, View):
             "question": question,
             "reply": to_html(outcome["reply"], []) if "reply" in outcome else "",
             "error": outcome.get("error", ""),
+            "pages": outcome.get("pages") or [],
+            "usage_id": outcome.get("usage_id"),
             "usage": ai_page.usage(request.user),
         }
         return render(request, "ai/_turn.html", context)

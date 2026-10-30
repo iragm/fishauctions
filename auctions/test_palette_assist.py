@@ -1146,8 +1146,8 @@ class RegistryTests(PaletteAssistTestCase):
 
     def test_a_plain_bidder_is_not_offered_club_administration(self):
         offered = self._tool_names(self.member)
-        # Exact names: "renew_member" is a prefix of renew_membership, which this user does get.
-        for name in ("award_points", "renew_member", "set_invoice_status"):
+        # renew_club_member renews somebody else; renew_membership, which this user does get, is their own.
+        for name in ("award_points", "renew_club_member", "set_invoice_status"):
             self.assertNotIn(name, offered)
         for name in ("watch_lot", "add_a_lot_via_webform", "renew_membership"):
             self.assertIn(name, offered)
@@ -1590,7 +1590,7 @@ class SearchLotsTests(PaletteAssistTestCase):
     """'find shrimp in this auction' shows the shrimp."""
 
     def test_it_navigates_to_a_filtered_lot_list(self):
-        self._script({"action": "search_lots", "params": {"query": "shrimp"}, "summary": "Search"})
+        self._script({"action": "open_lot_search", "params": {"query": "shrimp"}, "summary": "Search"})
         path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
         data = self._assist("find shrimp in this auction", path=path).json()
         self.assertEqual(data["kind"], "navigate")
@@ -1598,14 +1598,14 @@ class SearchLotsTests(PaletteAssistTestCase):
         self.assertIn(f"auction={self.in_person_auction.slug}", data["url"])
 
     def test_it_says_where_it_is_taking_you(self):
-        self._script({"action": "search_lots", "params": {"query": "shrimp"}, "summary": ""})
+        self._script({"action": "open_lot_search", "params": {"query": "shrimp"}, "summary": ""})
         path = reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug})
         data = self._assist("find shrimp in this auction", path=path).json()
         self.assertIn("shrimp", data["message"])
         self.assertIn(self.in_person_auction.title, data["message"])
 
     def test_searching_everywhere_is_not_scoped_to_an_auction(self):
-        self._script({"action": "search_lots", "params": {"query": "shrimp", "everywhere": True}, "summary": ""})
+        self._script({"action": "open_lot_search", "params": {"query": "shrimp", "everywhere": True}, "summary": ""})
         data = self._assist("find every shrimp lot on the whole site").json()
         self.assertEqual(data["kind"], "navigate")
         self.assertNotIn("auction=", data["url"])
@@ -2185,7 +2185,7 @@ class DriftTests(PaletteAssistTestCase):
         # The door.
         "add_person",
         "add_club_member",
-        "renew_member",
+        "renew_club_member",
         # Anyone, on a phone.
         "join_auction",
         "watch_lot",
@@ -2240,7 +2240,7 @@ class DriftTests(PaletteAssistTestCase):
         "add_random_option": "update_auction_setting",
         "rename_random_option": "update_auction_setting",
         "remove_random_option": "update_auction_setting",
-        "set_current_auction": "update_club_setting",
+        "set_club_current_auction": "update_club_setting",
         "send_membership_card": "resend_member_card",
         "cancel_volunteer_request": "request_volunteers",
         "undo_check_in": "check_in",
@@ -4435,6 +4435,50 @@ class NavigationShortcutTests(PaletteAssistTestCase):
         data = self._assist("take me to my invoices").json()
         self.assertEqual(data["kind"], "navigate")
         self.assertEqual(self.provider.call_count, 0)
+
+
+class PagesByNameTests(PaletteAssistTestCase):
+    """ "bap rules" names a page. Typing it found nothing, and pressing Enter asked the model."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Named Page Aquarium Society", abbreviation="NPAS", active=True)
+        ClubMember.objects.create(club=self.club, user=self.user, permission_admin=True)
+        self.user.userdata.last_club_used = self.club
+        self.user.userdata.save()
+        self.settings_url = reverse("club_bap_settings", kwargs={"slug": self.club.slug})
+
+    def _search(self, query, user=None):
+        return command_palette.search(self._request_for(user or self.user), query)
+
+    def _urls(self, groups):
+        return [item["url"] for group in groups if group["label"] == "Go to" for item in group["items"]]
+
+    def test_typing_a_page_name_offers_it_first(self):
+        for query in ("bap rules", "bap setup", "BAP settings"):
+            self.assertEqual(self._urls(self._search(query))[:1], [self.settings_url], query)
+
+    def test_a_page_someone_cannot_open_is_not_offered(self):
+        self.assertNotIn(self.settings_url, self._urls(self._search("bap rules", user=self.member)))
+
+    def test_a_word_or_a_lot_name_is_not_a_page(self):
+        for query in ("bap", "a", "celestial pearl danio"):
+            self.assertNotIn(self.settings_url, self._urls(self._search(query)), query)
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_enter_goes_there_without_the_model(self):
+        self._script()  # calling the provider at all would raise
+        data = self._assist("bap setup").json()
+        self.assertEqual(data["kind"], "navigate")
+        self.assertEqual(data["url"], self.settings_url)
+        self.assertEqual(self.provider.call_count, 0)
+
+    def test_without_navigate_only_a_bare_phrase_still_reaches_the_model(self):
+        self.assertIsNone(palette_assist.navigation_shortcut(self._request_for(self.user), "bap setup"))
+
+    @override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+    def test_a_question_is_never_a_page(self):
+        self.assertIsNone(palette_assist.navigation_shortcut(self._request_for(self.user), "what are the bap rules?"))
 
 
 class ReadsThatAnswerTests(PaletteAssistTestCase):

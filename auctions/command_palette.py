@@ -753,19 +753,56 @@ def _page_phrases(page):
     return [p.lower() for p in phrases if p]
 
 
-def _page_items(user, ql):
+#: Pages from the route catalog offered while typing, at most.
+ROUTE_LIMIT = 2
+
+#: Catalog pages never offered while typing. The pay page stays behind the renew commands and the
+#: membership card (``test_palette_core.test_membership_pay_page_not_in_palette``).
+_NOT_OFFERED_WHILE_TYPING = frozenset({"club_membership_pay"})
+
+
+def _route_items(request, q):
+    """The route catalog's pages that every word of ``q`` names, resolved for this user.
+
+    Typing "bap rules" found only the curated rows for "bap" and "auction rules", never the Breeder
+    Award settings: the catalog that ``go_to_page`` and the assist use was never consulted while typing.
+    """
+    from . import palette_routes
+
     items = []
+    for route in palette_routes.confident_routes(q, request.user, limit=ROUTE_LIMIT):
+        if route.key in _NOT_OFFERED_WHILE_TYPING:
+            continue
+        result = palette_routes.resolve_route(request, route, {})
+        if result.get("url"):
+            items.append(_item("page", result.get("title") or route.label, result["url"], "bi-signpost", route.section))
+    return items
+
+
+def _page_items(user, ql):
+    """Curated rows matching ``ql``, as ``(whole, part, spoke)``: items from rows whose phrase holds the
+    whole query, items from rows whose phrase is only part of it, and whether any row held the whole
+    query at all, even one that resolves to nothing for this user."""
+    whole, part = [], []
+    spoke = False
     seen_urls = set()
     for page in CommandPalettePage.objects.filter(is_active=True).order_by("-hits"):
-        if any(phrase in ql or ql in phrase for phrase in _page_phrases(page)):
-            for item in resolve_page(page, user):
-                if item["url"] in seen_urls:
-                    continue
-                seen_urls.add(item["url"])
-                items.append(item)
-        if len(items) >= PAGE_LIMIT:
-            break
-    return items[:PAGE_LIMIT]
+        phrases = _page_phrases(page)
+        if any(ql in phrase for phrase in phrases):
+            spoke = True
+            bucket = whole
+        elif any(phrase in ql for phrase in phrases):
+            bucket = part
+        else:
+            continue
+        if len(whole) + len(part) >= PAGE_LIMIT:
+            continue
+        for item in resolve_page(page, user):
+            if item["url"] in seen_urls:
+                continue
+            seen_urls.add(item["url"])
+            bucket.append(item)
+    return whole, part, spoke
 
 
 def _editable_auction_fields():
@@ -1448,9 +1485,14 @@ def search(request, q, *, app_deep_links=True):
     groups = []
     ql = q.lower()
 
+    whole, part, spoke = _page_items(user, ql)
+    # A curated row holding the whole query wins; the catalog's page naming every word beats one
+    # matching only a word of it ("bap" in "bap rules").
     page_items = (
         (_app_deep_link_items(request, ql) if app_deep_links else [])
-        + _page_items(user, ql)
+        + whole
+        + ([] if spoke else _route_items(request, q))
+        + part
         + _auction_field_items(user, q)
         + _user_pref_field_items(user, q)
         + _club_settings_field_items(user, q)

@@ -797,6 +797,18 @@
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }
     },
+    "open_lot_search": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only returns a link to a page on this site (show the user lots matching what they're looking for, by opening the lot list filtered to their search); nothing is saved unless the person does it on that page themselves.",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
+      }
+    },
     "place_bid": {
       "annotations": {
         "readOnlyHint": false,
@@ -1076,7 +1088,7 @@
         "destructive_justification": "It overwrites the name of a random-field option on every lot that was given it."
       }
     },
-    "renew_member": {
+    "renew_club_member": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
@@ -1213,18 +1225,6 @@
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
-    "search_lots": {
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false,
-        "destructiveHint": false
-      },
-      "justifications": {
-        "read_only_justification": "Only returns a link to a page on this site (show the user lots matching what they're looking for, by opening the lot list filtered to their search); nothing is saved unless the person does it on that page themselves.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
-      }
-    },
     "send_club_announcement": {
       "annotations": {
         "readOnlyHint": false,
@@ -1249,7 +1249,7 @@
         "destructive_justification": "It sends an email that cannot be recalled, though only to the address already on that membership and only with that member's own card."
       }
     },
-    "set_current_auction": {
+    "set_club_current_auction": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,

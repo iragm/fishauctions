@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from urllib.parse import urlsplit
 
 from django.http import HttpResponse, JsonResponse
@@ -32,7 +33,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from . import admin, auth, protocol, tools
+from . import admin, auth, protocol, tools, usage
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,10 @@ class MCPEndpointView(View):
             areas=tools.parse_areas(request.GET.get("tools", "")),  # ``?tools=club`` narrows it
             admin=self.admin,
         )
+        started = time.monotonic()
         answer = protocol.handle(message, caller)
+        if not self.admin:
+            usage.record(request, credential, message, answer, started)
         if answer is None:
             return HttpResponse(status=202)
         return _json(answer)

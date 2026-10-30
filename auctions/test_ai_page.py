@@ -7,7 +7,7 @@ from django.urls import reverse
 from auctions import ai_page, command_palette, llm
 from auctions.documents import search as library_search
 from auctions.llm import LLMResult, ToolCall
-from auctions.models import LLMUsage, UserData
+from auctions.models import Club, ClubMember, LLMUsage, UserData
 from auctions.palette_actions import DANGER_CONFIRM, get_action
 from auctions.test_palette_assist import FakeProvider
 from auctions.test_support import isolated_cache
@@ -96,20 +96,20 @@ class AIPageTests(StandardTestCase):
         self.ask("two", conversation="abc")
         # The fake keeps the list it was handed, which the answer is appended to afterwards.
         contents = [message.get("content") for message in self.provider.calls[1]["messages"]]
-        self.assertEqual(contents[:3], ["one", "First.", "two"])
+        self.assertEqual(contents[1:4], ["one", "First.", "two"])
 
     def test_a_new_conversation_starts_empty(self):
         self.provider.replies = [answer("First."), answer("Second.")]
         self.ask("one", conversation="abc")
         self.ask("two", conversation="xyz")
-        self.assertEqual(self.provider.calls[1]["messages"][0]["content"], "two")
+        self.assertEqual(self.provider.calls[1]["messages"][1]["content"], "two")
 
     def test_lookups_are_not_kept_for_the_next_question(self):
         """A lookup's result would be sent again with every later round, spending the allowance."""
         self.provider.replies = [lookup("my_context"), answer("First."), answer("Second.")]
         self.ask("one", conversation="abc")
         self.ask("two", conversation="abc")
-        roles = [message.get("role") for message in self.provider.calls[2]["messages"]][:3]
+        roles = [message.get("role") for message in self.provider.calls[2]["messages"]][1:4]
         self.assertEqual(roles, ["user", "assistant", "user"])
 
     def test_someone_cut_off_from_the_model_is_cut_off_here(self):
@@ -167,6 +167,70 @@ class AIPageTests(StandardTestCase):
         request.user = self.user
         labels = [group["label"] for group in command_palette.search(request, "pickup times")]
         self.assertNotIn("Ask AI", labels)
+
+
+@isolated_cache("ai-page")
+class AIPageLinkTests(StandardTestCase):
+    """Asked "bap setup", it described the page, linked nothing, and wrote a tool name as an address."""
+
+    def setUp(self):
+        super().setUp()
+        self.provider = FakeProvider()
+        llm.set_provider_override(self.provider)
+        self.addCleanup(llm.set_provider_override, None)
+        UserData.objects.filter(user=self.user).update(use_llm_search=True)
+        self.club = Club.objects.create(name="Linked Page Aquarium Society", active=True)
+        ClubMember.objects.create(club=self.club, user=self.user, permission_admin=True)
+        self.user.userdata.refresh_from_db()
+        self.user.userdata.last_club_used = self.club
+        self.user.userdata.save()
+        self.client.force_login(self.user)
+        self.settings_url = reverse("club_bap_settings", kwargs={"slug": self.club.slug})
+
+    def ask(self, question):
+        return self.client.post(reverse("ai_ask"), {"q": question, "conversation": "c1"})
+
+    def test_the_page_a_question_names_is_a_link_above_the_answer(self):
+        self.provider.replies = [answer("It's where the points rules live.")]
+        self.assertContains(self.ask("bap setup"), f'href="{self.settings_url}"')
+
+    def test_their_clubs_go_with_the_question(self):
+        self.provider.replies = [answer("Hi.")]
+        self.ask("bap setup")
+        first = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn(self.club.name, first)
+
+    def test_an_invented_address_is_not_linked(self):
+        self.provider.replies = [
+            answer(
+                "Club overview: https://testserver/api/describe_club?club=x and "
+                "[the settings](https://testserver/api/club_bap_settings) and [elsewhere](https://evil.example/x)."
+            )
+        ]
+        response = self.ask("hello there")
+        self.assertNotContains(response, "/api/describe_club")
+        self.assertNotContains(response, 'href="https://testserver/api/')
+        self.assertNotContains(response, "evil.example")
+        self.assertContains(response, "the settings")
+
+    def test_a_real_page_is_linked_even_when_written_bare(self):
+        self.provider.replies = [answer(f"Open http://testserver{self.settings_url} to change it.")]
+        self.assertContains(self.ask("hello there"), f'href="http://testserver{self.settings_url}"')
+
+    def test_a_link_a_tool_returned_is_kept(self):
+        self.assertEqual(
+            ai_page.only_real_links("[fishbase](https://fishbase.se/x)", None, '{"url":"https://fishbase.se/x"}'),
+            "[fishbase](https://fishbase.se/x)",
+        )
+
+    def test_an_answer_can_be_marked_not_helpful(self):
+        self.provider.replies = [answer("Hi.")]
+        response = self.ask("hello there")
+        row = LLMUsage.objects.get(user=self.user, tools_offered=ai_page.SURFACE)
+        self.assertContains(response, f'data-usage-id="{row.pk}"')
+        self.client.post(reverse("command_palette_report"), {"usage_id": row.pk}, content_type="application/json")
+        row.refresh_from_db()
+        self.assertTrue(row.reported)
 
 
 @isolated_cache("library-allowance")
