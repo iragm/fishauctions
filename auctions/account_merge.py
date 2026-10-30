@@ -89,6 +89,7 @@ REPOINTED = frozenset(
         "auctions.FormFailure.user",
         "auctions.InvoiceAdjustment.user",
         "auctions.LLMUsage.user",
+        "auctions.MCPCall.user",
         "auctions.Lot.added_by",
         "auctions.Lot.label_first_printed_by",
         "auctions.Lot.max_bid_revealed_by",

@@ -14138,6 +14138,49 @@ class LLMUsage(models.Model):
         return f"{self.user} · {self.model} · {self.total_tokens} tokens ({self.response_kind})"
 
 
+class MCPCall(models.Model):
+    """One message an agent sent ``/mcp/``: which tool, for whom, through which client, and how it went.
+
+    The site never sees the conversation an agent is having, only its calls, so this is the evidence for
+    whether people get answers: a tool name that doesn't exist, a parameter it refuses, an error, a
+    question back, or an empty find is a turn that went wrong. ``mcp_usage`` on ``/mcp/admin/`` reads it.
+    ``/mcp/admin/`` itself is never recorded: nothing there writes, and it is the owner's own routines.
+    """
+
+    OK = "ok"
+    ERROR = "error"
+    NEEDS_INFO = "needs_info"
+    EMPTY = "empty"
+    UNKNOWN_TOOL = "unknown_tool"
+    BAD_REQUEST = "bad_request"
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    createdon = models.DateTimeField(auto_now_add=True)
+    client = models.CharField(
+        max_length=100, blank=True, help_text="The OAuth application's or key's name, e.g. ChatGPT or Claude."
+    )
+    connection = models.CharField(
+        max_length=40,
+        blank=True,
+        help_text="oauth-<application> or key-<key>: one connected agent, which stays the same across token refreshes.",
+    )
+    method = models.CharField(max_length=40, blank=True)
+    tool = models.CharField(max_length=60, blank=True, db_index=True)
+    arguments = models.CharField(max_length=600, blank=True, help_text="As sent, cut short.")
+    outcome = models.CharField(max_length=20, blank=True, db_index=True)
+    detail = models.CharField(max_length=300, blank=True, help_text="The error, or the question asked back.")
+    result_chars = models.PositiveIntegerField(default=0)
+    elapsed_ms = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-createdon"]
+        verbose_name = "MCP call"
+        indexes = [models.Index(fields=["-createdon"], name="mcpcall_createdon_desc")]
+
+    def __str__(self):
+        return f"{self.client} · {self.tool or self.method} · {self.outcome}"
+
+
 class ChatSubscription(models.Model):
     """Get notifications about new chat messages on lots"""
 

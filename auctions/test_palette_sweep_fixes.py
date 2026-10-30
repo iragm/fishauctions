@@ -256,7 +256,7 @@ class HistoryLineTests(ClubSweepTestCase):
         self.in_person_auction.club = self.club
         self.in_person_auction.save()
         result = self._run(
-            "set_current_auction",
+            "set_club_current_auction",
             {"club": self.club.name, "auction": self.in_person_auction.slug},
             user=self.admin_user,
         )

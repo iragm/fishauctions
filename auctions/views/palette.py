@@ -64,14 +64,15 @@ class AIAskView(LoginRequiredMixin, View):
 
     def post(self, request, *args, **kwargs):
         from auctions import ai_page
-        from auctions.documents.render import to_html
 
         question = request.POST.get("q", "").strip()[: ai_page.MAX_QUESTION_CHARS]
         outcome = ai_page.ask(request, request.POST.get("conversation", ""), question)
         context = {
             "question": question,
-            "reply": to_html(outcome["reply"], []) if "reply" in outcome else "",
+            "reply": ai_page.answer_html(outcome["reply"], request, outcome["links"]) if "reply" in outcome else "",
             "error": outcome.get("error", ""),
+            "pages": outcome.get("pages") or [],
+            "usage_id": outcome.get("usage_id"),
             "usage": ai_page.usage(request.user),
         }
         return render(request, "ai/_turn.html", context)

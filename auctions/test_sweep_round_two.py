@@ -699,7 +699,7 @@ class PaletteScopingAndWordingTests(StandardTestCase):
         editor = User.objects.create_user(username="settings_editor", password="pw", email="se@example.com")
         ClubMember.objects.create(club=club, user=editor, name="Editor", permission_edit_club=True)
         result = palette_actions.run_action(
-            self._request(editor), "set_current_auction", {"club": club.slug, "auction": self.online_auction.slug}
+            self._request(editor), "set_club_current_auction", {"club": club.slug, "auction": self.online_auction.slug}
         )
         self.assertIn("error", result)
         club.refresh_from_db()

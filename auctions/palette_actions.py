@@ -154,11 +154,26 @@ def register(action: Action) -> Action:
     return action
 
 
+#: Names a tool was published under before it was renamed, still answered so an agent holding an
+#: old tool list (ChatGPT's app keeps the one it was reviewed with until it is resubmitted) keeps
+#: working. Never listed. Each was renamed because a model confused it with its neighbour.
+RENAMED: dict[str, str] = {
+    # set_my_auction is the user's own; this one is the club page's.
+    "set_current_auction": "set_club_current_auction",
+    # renew_membership is the user's own; this one is an admin renewing somebody else.
+    "renew_member": "renew_club_member",
+    # It opens a page; find_lot and list_lots answer.
+    "search_lots": "open_lot_search",
+}
+
+
 def get_action(name: str) -> Action | None:
-    """Look an action up by name. Unknown names return ``None`` -- never guess."""
+    """Look an action up by name, or by a name it had before (:data:`RENAMED`). Unknown names return
+    ``None`` -- never guess."""
     if not isinstance(name, str):
         return None
-    return ACTIONS.get(name.strip().lower())
+    name = name.strip().lower()
+    return ACTIONS.get(RENAMED.get(name, name))
 
 
 # --- helpers -----------------------------------------------------------------
@@ -1828,7 +1843,7 @@ def update_person(request, params: dict[str, Any]) -> dict[str, Any]:
 # --- searching lots ----------------------------------------------------------
 
 
-def search_lots(request, params: dict[str, Any]) -> dict[str, Any]:
+def open_lot_search(request, params: dict[str, Any]) -> dict[str, Any]:
     """Open the lot list filtered to a search (``?q=`` and ``?auction=``, read by ``LotFilter``)."""
     term = _str(params, "query") or _str(params, "q") or _str(params, "name")
     if not term:
@@ -6835,7 +6850,7 @@ def update_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def renew_member(request, params: dict[str, Any]) -> dict[str, Any]:
+def renew_club_member(request, params: dict[str, Any]) -> dict[str, Any]:
     """Extend a member's membership by one period (club admins) via ``views.renew_club_member``, the Renew
     button's function. Not ``renew_membership``, the user's own, which navigates.
     """
@@ -8554,7 +8569,7 @@ def retract_announcement(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(summary, club=club.name)
 
 
-def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
+def set_club_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     """Pin which auction a club's page, embeds and calendar links point at."""
     from .views import check_club_permission
 
@@ -8594,7 +8609,7 @@ def set_current_auction(request, params: dict[str, Any]) -> dict[str, Any]:
         **(
             {
                 "undo": {
-                    "action": "set_current_auction",
+                    "action": "set_club_current_auction",
                     "params": {"club": club.slug, "auction": was.slug},
                     "describes": f"making {auction.title} the current auction",
                 }
@@ -9260,7 +9275,7 @@ _CLUB_FEATURES: tuple[dict[str, Any], ...] = (
         "name": "A current auction",
         "what": "The auction your club page and your members' invitations point at.",
         "on": lambda club: club.current_auction_id is not None,
-        "tool": "set_current_auction",
+        "tool": "set_club_current_auction",
     },
 )
 
@@ -13050,7 +13065,7 @@ register(
 
 register(
     Action(
-        name="renew_member",
+        name="renew_club_member",
         description=(
             "Renew SOMEONE ELSE's club membership, extending it by one period and recording the "
             "payment in the club's books. Club admins only. 'renew bob's membership', 'bob paid his "
@@ -13062,7 +13077,7 @@ register(
             "club": "string, optional. Club name. See my_context.",
         },
         danger=DANGER_CONFIRM,
-        resolver=renew_member,
+        resolver=renew_club_member,
         aliases={"name"},
         confirm_template="Renew a membership",
         examples=["renew bob's membership", "mike paid his dues"],
@@ -13323,7 +13338,7 @@ register(
 
 register(
     Action(
-        name="set_current_auction",
+        name="set_club_current_auction",
         description=(
             "Pin which auction a club's page, website snippets and calendar links point at. Club "
             "admins only. Useful when two auctions overlap — last month's pickups and next "
@@ -13335,7 +13350,7 @@ register(
         },
         danger=DANGER_CONFIRM,
         idempotent=True,
-        resolver=set_current_auction,
+        resolver=set_club_current_auction,
         aliases={"name"},
         confirm_template="Set the current auction",
         examples=["make the spring auction our current one"],
@@ -13795,7 +13810,7 @@ register(
 
 register(
     Action(
-        name="search_lots",
+        name="open_lot_search",
         description=(
             "Show the user lots matching what they're looking for, by opening the lot list "
             "filtered to their search. This is the right answer for 'find shrimp', 'what plants "
@@ -13809,7 +13824,7 @@ register(
             "everywhere": "boolean, optional. True to search the whole site rather than one auction.",
         },
         danger=DANGER_NAVIGATE,
-        resolver=search_lots,
+        resolver=open_lot_search,
         aliases={"q", "name", "this_auction"},
         examples=["find shrimp in this auction", "show me the plants", "any pleco lots?"],
     )
@@ -14122,7 +14137,7 @@ register(
             "'mine' (the user's own lots), 'donations', or 'all', optionally narrowed to a search "
             "term. This answers 'which lots haven't sold?', 'did my lots sell?', 'what's left?' and "
             "— with 'query' — 'show me the unsold daphnia'. If they want to SEE and browse lots "
-            "matching a search term, use search_lots instead."
+            "matching a search term, use open_lot_search instead."
         ),
         params={
             "status": "string, required. One of: 'unsold', 'sold', 'mine', 'donations', 'all'.",
@@ -14409,7 +14424,7 @@ register(
             "expire?', 'who renewed?', 'who has BAP points?', 'who has between 50 and 500 HAP "
             "points?' — club_numbers only counts them. Each row carries the member's point totals "
             "when the club runs a breeder award program; a points filter lists highest first. The "
-            "names it returns are what renew_member, update_club_member and award_points take. "
+            "names it returns are what renew_club_member, update_club_member and award_points take. "
             "Club staff only; the points desk may list points."
         ),
         params={
@@ -16268,7 +16283,7 @@ MCP_ONLY_SKILLS: dict[str, str] = {
     "update_club_member": "As update_person: correcting a record is done with that record on screen in front of you.",
     # Once a season.
     "create_auction": _ONCE_A_SEASON,
-    "set_current_auction": _ONCE_A_SEASON,
+    "set_club_current_auction": _ONCE_A_SEASON,
     "hide_category": _ONCE_A_SEASON,
     "change_email": _ONCE_A_SEASON,
     "update_username": _ONCE_A_SEASON,
@@ -16374,7 +16389,7 @@ SKILLS: dict[str, str] = {
     "BulkAddUsers": "add_person",
     "ClubMemberAdminView": "update_club_member",
     "ClubMemberCreateView": "add_club_member",
-    "ClubMemberRenewView": "renew_member",
+    "ClubMemberRenewView": "renew_club_member",
     "DynamicSetLotWinner": "set_lot_winner",
     "InvoicePaid": "set_invoice_status",
     "LotAdmin": "edit_lot",
@@ -16646,7 +16661,7 @@ NOT_A_SKILL: dict[str, str] = {
     ),
     "ClubDetailView": _FORM_PAGE,
     "ClubMemberRenewPageView": (
-        "Sets an expiration date by hand, overriding the club's renewal rules. renew_member is the "
+        "Sets an expiration date by hand, overriding the club's renewal rules. renew_club_member is the "
         "skill for an ordinary renewal; overriding the date deliberately means seeing the page."
     ),
     "MyAccount": _FORM_PAGE,

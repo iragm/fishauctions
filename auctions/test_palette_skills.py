@@ -389,7 +389,9 @@ class ClubMemberSkillTests(ClubSkillTestCase):
         self.assertEqual(self.club_member.email, "newrita@example.com")
 
     def test_renewing_extends_the_membership(self):
-        result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user)
+        result = self._run(
+            "renew_club_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user
+        )
         self.assertTrue(result.get("ok"), result)
         self.club_member.refresh_from_db()
         self.assertIsNotNone(self.club_member.membership_expiration_date)
@@ -411,20 +413,22 @@ class ClubMemberSkillTests(ClubSkillTestCase):
     def test_a_carried_membership_is_not_renewed_on_its_own(self):
         self.club_member.membership_carried_by = self.club_admin
         self.club_member.save()
-        result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user)
+        result = self._run(
+            "renew_club_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.admin_user
+        )
         self.assertIn("error", result)
         self.club_member.refresh_from_db()
         self.assertIsNone(self.club_member.membership_expiration_date)
 
     def test_a_stranger_cannot_renew_anybody(self):
-        result = self._run("renew_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.userB)
+        result = self._run("renew_club_member", {"person": "Renewable Rita", "club": self.club.name}, user=self.userB)
         self.assertIn("error", result)
         self.club_member.refresh_from_db()
         self.assertIsNone(self.club_member.membership_expiration_date)
 
     def test_an_ambiguous_name_asks_which_one(self):
         ClubMember.objects.create(club=self.club, name="Renewable Robert", email="robert@example.com")
-        result = self._run("renew_member", {"person": "Renewable", "club": self.club.name}, user=self.admin_user)
+        result = self._run("renew_club_member", {"person": "Renewable", "club": self.club.name}, user=self.admin_user)
         self.assertIn("more_info_needed", result)
         self.assertEqual(len(result["options"]), 2)
 
