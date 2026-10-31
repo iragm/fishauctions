@@ -8300,7 +8300,7 @@ class Lot(CachedPropertiesMixin, models.Model):
     no_more_refunds_possible.help_text = (
         "Set to True after a Square refund is issued to prevent multiple refunds that would unbalance the books"
     )
-    # The winner the refund was issued to. A refund never moves to another buyer: see refund_owner_changed.
+    # The winner the refund was issued to: see _clear_refund_for_new_winner.
     refund_issued_to = models.ForeignKey(
         "AuctionTOS", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -8416,19 +8416,26 @@ class Lot(CachedPropertiesMixin, models.Model):
         update_fields = kwargs.get("update_fields")
         if update_fields is not None and not {"auctiontos_winner", "auctiontos_winner_id"} & set(update_fields):
             return 0
-        owner_id = self.refund_issued_to_id
+        owner_id, owner_user_id = self.refund_issued_to_id, None
         if owner_id is None:
-            # Issued to a bidder since deleted: whoever the lot belonged to before this save.
-            owner_id = Lot._base_manager.filter(pk=self.pk).values_list("auctiontos_winner_id", flat=True).first()
+            # Issued before the owner was recorded, or to a bidder since deleted: whoever the lot belonged
+            # to before this save. With nobody there, the owner is unknown and the refund stays.
+            owner_id, owner_user_id = Lot._base_manager.filter(pk=self.pk).values_list(
+                "auctiontos_winner_id", "winner_id"
+            ).first() or (None, None)
+            if owner_id is None and owner_user_id is None:
+                return 0
         if owner_id == self.auctiontos_winner_id:
             return 0
-        if owner_id is not None:
-            # Two bidder rows for the same account are the same buyer.
-            users = dict(
-                AuctionTOS.objects.filter(pk__in=[owner_id, self.auctiontos_winner_id]).values_list("pk", "user_id")
+        # Two bidder rows for the same account are the same buyer.
+        users = dict(
+            AuctionTOS.objects.filter(pk__in=[pk for pk in (owner_id, self.auctiontos_winner_id) if pk]).values_list(
+                "pk", "user_id"
             )
-            if users.get(owner_id) and users.get(owner_id) == users.get(self.auctiontos_winner_id):
-                return 0
+        )
+        owner_user_id = users.get(owner_id) or owner_user_id
+        if owner_user_id and owner_user_id == users.get(self.auctiontos_winner_id):
+            return 0
         if update_fields is not None:
             kwargs["update_fields"] = {*update_fields, "partial_refund_percent", "refund_issued_to"}
         cleared = self.partial_refund_percent
@@ -8818,7 +8825,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         with transaction.atomic():
             fresh = (
                 Lot._base_manager.select_for_update()
-                .values("partial_refund_percent", "no_more_refunds_possible")
+                .values("partial_refund_percent", "no_more_refunds_possible", "auctiontos_winner_id")
                 .get(pk=self.pk)
             )
             self.partial_refund_percent = fresh["partial_refund_percent"]
@@ -8841,7 +8848,10 @@ class Lot(CachedPropertiesMixin, models.Model):
                         message += f" {provider} refund processed automatically."
                 LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
             self.partial_refund_percent = amount
-            self.refund_issued_to_id = self.auctiontos_winner_id if amount else None
+            if not amount:
+                self.refund_issued_to_id = None
+            elif fresh["auctiontos_winner_id"]:
+                self.refund_issued_to_id = fresh["auctiontos_winner_id"]
             self.save()
         return provider, error
 

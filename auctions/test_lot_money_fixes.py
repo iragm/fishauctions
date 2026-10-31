@@ -126,7 +126,7 @@ class ForceSaveOverASaleTests(InPersonSaleBase):
 
     def test_undoing_a_refunded_sale_then_selling_again_charges_the_new_winner(self):
         self.sell()
-        Lot.objects.filter(pk=self.in_person_lot.pk).update(partial_refund_percent=100)
+        self.sold_lot().refund(100, self.admin_user)
         self.client.post(self.undo_url, {"lot_number": "101-1"})
         self.sell(price="12", winner="504")
         self.assertEqual(self.sold_lot().partial_refund_percent, 0)
@@ -145,6 +145,21 @@ class ForceSaveOverASaleTests(InPersonSaleBase):
         Lot.objects.filter(pk=self.in_person_lot.pk).update(refund_issued_to=None)
         self.sell(action="force_save", price="12", winner="504")
         self.assertEqual(self.sold_lot().partial_refund_percent, 0)
+
+    def test_resaving_the_refund_on_an_unsold_lot_keeps_its_owner(self):
+        self.sell()
+        self.sold_lot().refund(100, self.admin_user)
+        self.client.post(self.undo_url, {"lot_number": "101-1"})
+        self.sold_lot().refund(100, self.admin_user)
+        self.sell()
+        self.assertEqual(self.sold_lot().partial_refund_percent, 100)
+
+    def test_a_refund_with_no_known_owner_stays(self):
+        self.sell()
+        self.client.post(self.undo_url, {"lot_number": "101-1"})
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(partial_refund_percent=100, refund_issued_to=None)
+        self.sell()
+        self.assertEqual(self.sold_lot().partial_refund_percent, 100)
 
     def test_refunding_a_lot_keeps_its_refund(self):
         self.sell()
