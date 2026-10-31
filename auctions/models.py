@@ -8395,6 +8395,33 @@ class Lot(CachedPropertiesMixin, models.Model):
         if changed and update_fields is not None:
             kwargs["update_fields"] = {*update_fields, *changed}
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        lot = super().from_db(db, field_names, values)
+        lot._loaded_winner_id = lot.__dict__.get("auctiontos_winner_id")
+        return lot
+
+    def _clear_refund_if_winner_changed(self, kwargs):
+        """A refund belongs to the buyer it was issued to, so it comes off when the winner changes or is
+        cleared. Left on, a 100% refund charged the next winner nothing and paid the seller nothing.
+        Returns the percent cleared, or 0.
+
+        ``no_more_refunds_possible`` stays: the card refund it records went to the old buyer, and PayPal
+        keys refunds on the lot, so a second automatic one would come back as the first. Merging duplicate
+        bidders moves winners with ``update()``, which keeps the refund, as it should.
+        """
+        if not self.partial_refund_percent or not hasattr(self, "_loaded_winner_id"):
+            return 0
+        if self.auctiontos_winner_id == self._loaded_winner_id or not self._loaded_winner_id:
+            return 0
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            if "auctiontos_winner" not in update_fields:
+                return 0
+            kwargs["update_fields"] = {*update_fields, "partial_refund_percent"}
+        cleared, self.partial_refund_percent = self.partial_refund_percent, 0
+        return cleared
+
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
         # Seller-dash auctions: bidder_number-lot_number.
@@ -8475,7 +8502,16 @@ class Lot(CachedPropertiesMixin, models.Model):
                 self.custom_random = dealt
                 if kwargs.get("update_fields") is not None:
                     kwargs["update_fields"] = {*kwargs["update_fields"], "custom_random"}
+        refund_cleared = self._clear_refund_if_winner_changed(kwargs)
         super().save(*args, **kwargs)
+        if kwargs.get("update_fields") is None or "auctiontos_winner" in kwargs["update_fields"]:
+            self._loaded_winner_id = self.auctiontos_winner_id
+        if refund_cleared:
+            LotHistory.objects.create(
+                lot=self,
+                message=f"The buyer changed, so the {refund_cleared}% refund was cleared.",
+                changed_price=True,
+            )
 
         # chat history subscription for the owner
         if self.user:

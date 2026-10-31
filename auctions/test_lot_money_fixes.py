@@ -115,6 +115,29 @@ class ForceSaveOverASaleTests(InPersonSaleBase):
         self.assertEqual(self.sold_lot().auctiontos_winner, self.in_person_tos)
         self.assert_current(self.buyer_invoice(), changed_from=before)
 
+    def test_a_refund_stays_with_the_previous_winner(self):
+        self.sell()
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(partial_refund_percent=100, no_more_refunds_possible=True)
+        self.sell(action="force_save", price="12", winner="504")
+        lot = self.sold_lot()
+        self.assertEqual(lot.partial_refund_percent, 0)
+        # The old buyer's card refund still can't be sent twice.
+        self.assertTrue(lot.no_more_refunds_possible)
+
+    def test_undoing_a_refunded_sale_then_selling_again_charges_the_new_winner(self):
+        self.sell()
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(partial_refund_percent=100)
+        self.client.post(self.undo_url, {"lot_number": "101-1"})
+        self.sell(price="12", winner="504")
+        self.assertEqual(self.sold_lot().partial_refund_percent, 0)
+
+    def test_refunding_a_lot_keeps_its_refund(self):
+        self.sell()
+        lot = self.sold_lot()
+        lot.refund(100, self.admin_user)
+        lot.remove(True, self.admin_user)
+        self.assertEqual(self.sold_lot().partial_refund_percent, 100)
+
 
 class LotAdminTests(InPersonSaleBase):
     def url(self):
@@ -155,6 +178,23 @@ class LotAdminTests(InPersonSaleBase):
         before = self.stored_total(self.buyer_invoice())
         self.client.post(self.url(), self.data(auctiontos_winner=self.in_person_tos.pk, winning_price="10"))
         self.assert_current(self.buyer_invoice(), changed_from=before)
+
+    def test_a_new_winner_is_charged_despite_the_old_winners_refund(self):
+        self.client.post(self.url(), self.data(auctiontos_winner=self.in_person_buyer.pk, winning_price="16"))
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(partial_refund_percent=100)
+        self.client.post(self.url(), self.data(auctiontos_winner=self.in_person_tos.pk, winning_price="12"))
+        lot = self.sold_lot()
+        self.assertEqual(lot.partial_refund_percent, 0)
+        self.assertTrue(lot.lothistory_set.filter(message__contains="refund was cleared").exists())
+        new_winner = Invoice.objects.get(auctiontos_user=self.in_person_tos)
+        self.assertEqual(new_winner.total_bought, Decimal("12.00"))
+        self.assert_current(self.seller_invoice)
+
+    def test_editing_the_same_winners_price_keeps_their_refund(self):
+        self.client.post(self.url(), self.data(auctiontos_winner=self.in_person_buyer.pk, winning_price="16"))
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(partial_refund_percent=50)
+        self.client.post(self.url(), self.data(auctiontos_winner=self.in_person_buyer.pk, winning_price="12"))
+        self.assertEqual(self.sold_lot().partial_refund_percent, 50)
 
     def test_a_negative_winning_price_is_refused(self):
         response = self.client.post(
