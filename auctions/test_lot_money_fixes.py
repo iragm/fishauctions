@@ -131,6 +131,21 @@ class ForceSaveOverASaleTests(InPersonSaleBase):
         self.sell(price="12", winner="504")
         self.assertEqual(self.sold_lot().partial_refund_percent, 0)
 
+    def test_undoing_a_refunded_sale_then_selling_back_to_the_same_buyer_keeps_the_refund(self):
+        self.sell()
+        self.sold_lot().refund(100, self.admin_user)
+        self.client.post(self.undo_url, {"lot_number": "101-1"})
+        self.assertEqual(self.sold_lot().partial_refund_percent, 100)
+        self.sell()
+        self.assertEqual(self.sold_lot().partial_refund_percent, 100)
+
+    def test_a_refund_on_a_deleted_bidder_comes_off_for_the_next_one(self):
+        self.sell()
+        self.sold_lot().refund(100, self.admin_user)
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(refund_issued_to=None)
+        self.sell(action="force_save", price="12", winner="504")
+        self.assertEqual(self.sold_lot().partial_refund_percent, 0)
+
     def test_refunding_a_lot_keeps_its_refund(self):
         self.sell()
         lot = self.sold_lot()

@@ -7766,6 +7766,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             Lot.objects.filter(auctiontos_winner=duplicate, winner=duplicate.user_id).update(winner=self.user_id)
             Bid.reassign(duplicate.user_id, self.user_id, lots=Lot.objects.filter(auction_id=self.auction_id))
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
+        Lot.objects.filter(refund_issued_to=duplicate).update(refund_issued_to=self)
         Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
         if self.user_id:
             # Lots added while neither row had an account, as save() claims them when it links one.
@@ -8299,6 +8300,10 @@ class Lot(CachedPropertiesMixin, models.Model):
     no_more_refunds_possible.help_text = (
         "Set to True after a Square refund is issued to prevent multiple refunds that would unbalance the books"
     )
+    # The winner the refund was issued to. A refund never moves to another buyer: see refund_owner_changed.
+    refund_issued_to = models.ForeignKey(
+        "AuctionTOS", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     max_bid_revealed_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
@@ -8395,31 +8400,40 @@ class Lot(CachedPropertiesMixin, models.Model):
         if changed and update_fields is not None:
             kwargs["update_fields"] = {*update_fields, *changed}
 
-    @classmethod
-    def from_db(cls, db, field_names, values):
-        lot = super().from_db(db, field_names, values)
-        lot._loaded_winner_id = lot.__dict__.get("auctiontos_winner_id")
-        return lot
+    def _clear_refund_for_new_winner(self, kwargs):
+        """A refund belongs to the winner it was issued to (``refund_issued_to``), so it comes off when the
+        lot is sold to anybody else. Left on, a 100% refund charged the next winner nothing and paid the
+        seller nothing. Returns the percent cleared, or 0.
 
-    def _clear_refund_if_winner_changed(self, kwargs):
-        """A refund belongs to the buyer it was issued to, so it comes off when the winner changes or is
-        cleared. Left on, a 100% refund charged the next winner nothing and paid the seller nothing.
-        Returns the percent cleared, or 0.
-
-        ``no_more_refunds_possible`` stays: the card refund it records went to the old buyer, and PayPal
-        keys refunds on the lot, so a second automatic one would come back as the first. Merging duplicate
-        bidders moves winners with ``update()``, which keeps the refund, as it should.
+        Undoing a sale keeps the refund (an unsold lot charges nobody), so selling back to the same buyer
+        restores it. ``no_more_refunds_possible`` stays: the card refund it records went to the old
+        buyer, and PayPal keys refunds on the lot, so a second automatic one would come back as the first.
         """
-        if not self.partial_refund_percent or not hasattr(self, "_loaded_winner_id"):
+        if not self.pk or "partial_refund_percent" in self.get_deferred_fields():
             return 0
-        if self.auctiontos_winner_id == self._loaded_winner_id or not self._loaded_winner_id:
+        if not self.partial_refund_percent or not self.auctiontos_winner_id:
             return 0
         update_fields = kwargs.get("update_fields")
-        if update_fields is not None:
-            if "auctiontos_winner" not in update_fields:
+        if update_fields is not None and not {"auctiontos_winner", "auctiontos_winner_id"} & set(update_fields):
+            return 0
+        owner_id = self.refund_issued_to_id
+        if owner_id is None:
+            # Issued to a bidder since deleted: whoever the lot belonged to before this save.
+            owner_id = Lot._base_manager.filter(pk=self.pk).values_list("auctiontos_winner_id", flat=True).first()
+        if owner_id == self.auctiontos_winner_id:
+            return 0
+        if owner_id is not None:
+            # Two bidder rows for the same account are the same buyer.
+            users = dict(
+                AuctionTOS.objects.filter(pk__in=[owner_id, self.auctiontos_winner_id]).values_list("pk", "user_id")
+            )
+            if users.get(owner_id) and users.get(owner_id) == users.get(self.auctiontos_winner_id):
                 return 0
-            kwargs["update_fields"] = {*update_fields, "partial_refund_percent"}
-        cleared, self.partial_refund_percent = self.partial_refund_percent, 0
+        if update_fields is not None:
+            kwargs["update_fields"] = {*update_fields, "partial_refund_percent", "refund_issued_to"}
+        cleared = self.partial_refund_percent
+        self.partial_refund_percent = 0
+        self.refund_issued_to = None
         return cleared
 
     def _do_save(self, *args, **kwargs):
@@ -8502,14 +8516,12 @@ class Lot(CachedPropertiesMixin, models.Model):
                 self.custom_random = dealt
                 if kwargs.get("update_fields") is not None:
                     kwargs["update_fields"] = {*kwargs["update_fields"], "custom_random"}
-        refund_cleared = self._clear_refund_if_winner_changed(kwargs)
+        refund_cleared = self._clear_refund_for_new_winner(kwargs)
         super().save(*args, **kwargs)
-        if kwargs.get("update_fields") is None or "auctiontos_winner" in kwargs["update_fields"]:
-            self._loaded_winner_id = self.auctiontos_winner_id
         if refund_cleared:
             LotHistory.objects.create(
                 lot=self,
-                message=f"The buyer changed, so the {refund_cleared}% refund was cleared.",
+                message=f"Sold to a new winner, so the previous winner's {refund_cleared}% refund was cleared.",
                 changed_price=True,
             )
 
@@ -8829,6 +8841,7 @@ class Lot(CachedPropertiesMixin, models.Model):
                         message += f" {provider} refund processed automatically."
                 LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
             self.partial_refund_percent = amount
+            self.refund_issued_to_id = self.auctiontos_winner_id if amount else None
             self.save()
         return provider, error
 

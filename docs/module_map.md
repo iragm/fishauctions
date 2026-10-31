@@ -201,7 +201,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15303 lines)
+- **`models.py`** (15316 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -501,7 +501,7 @@ this only quotes its opening sentence.
 - **`test_lot_models.py`** (930 lines)
   Lot and auction model behaviour, and the chat subscriptions hanging off a lot.
   `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
-- **`test_lot_money_fixes.py`** (480 lines)
+- **`test_lot_money_fixes.py`** (495 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
 - **`test_lot_page_fixes.py`** (281 lines)
   The lot page and label fixes: the SOLD stamp, online labels only once sold, pasted images, the upload
@@ -538,7 +538,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1702 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`, `CarriedMembershipTests`, `WelcomeLetterTests`
-- **`test_merges.py`** (414 lines)
+- **`test_merges.py`** (415 lines)
   What a merge carries over: everything that points at the participant, club member or account it closes.
   `relations_to`, `MergeCoverageTests`, `ParticipantMergeTests`, `MemberMergeTests`
 - **`test_mobile_features.py`** (2724 lines)
