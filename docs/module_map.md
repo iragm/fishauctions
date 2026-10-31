@@ -26,13 +26,13 @@ this only quotes its opening sentence.
 - **`account_adapter.py`** (33 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
-- **`account_deletion.py`** (445 lines)
+- **`account_deletion.py`** (446 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
 - **`account_export.py`** (311 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_merge.py`** (421 lines)
+- **`account_merge.py`** (422 lines)
   Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
   `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
 - **`account_nav.py`** (201 lines)
@@ -49,9 +49,8 @@ this only quotes its opening sentence.
 - **`ads_admin.py`** (122 lines)
   The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
-- **`ai_page.py`** (231 lines)
+- **`ai_page.py`** (335 lines)
   ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
-  `model`, `enabled`, `daily_limit`, `tokens_used`, `usage`, `new_conversation`, `ask`
 - **`announcements.py`** (405 lines)
   Club announcements: one message, sent to the places a club's members look.
 - **`app_crashes.py`** (131 lines)
@@ -114,7 +113,7 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1559 lines)
+- **`command_palette.py`** (1593 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
@@ -202,7 +201,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15224 lines)
+- **`models.py`** (15267 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -219,11 +218,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16877 lines)
+- **`palette_actions.py`** (16892 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (2191 lines)
+- **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2001 lines)
+- **`palette_routes.py`** (2038 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -303,9 +302,9 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
-- **`test_ai_page.py`** (203 lines)
+- **`test_ai_page.py`** (289 lines)
   ``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance.
-  `answer`, `lookup`, `AIPageTests`, `LibraryAllowanceTests`
+  `answer`, `lookup`, `AIPageTests`, `AIPageLinkTests`, `LibraryAllowanceTests`
 - **`test_android_testers.py`** (135 lines)
   `AndroidTestersTests`, `AndroidTestersInviteTests`
 - **`test_app_crashes.py`** (132 lines)
@@ -373,7 +372,7 @@ this only quotes its opening sentence.
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
-- **`test_club_announcements.py`** (1132 lines)
+- **`test_club_announcements.py`** (1136 lines)
   Tests for club announcements, the website-integration snippets, and the embeds.
 - **`test_club_api_read.py`** (1446 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
@@ -530,6 +529,9 @@ this only quotes its opening sentence.
 - **`test_mcp_resources.py`** (350 lines)
   The addressable reads and the recipes: ``resources/templates/list``, ``prompts/*``, completions.
   `ResourceCatalogueTests`, `ResourceEndpointTests`, `PromptTests`, `PromptEndpointTests`
+- **`test_mcp_usage.py`** (212 lines)
+  What agents ask ``/mcp/`` for (:mod:`auctions.mcp.usage`), ``mcp_usage`` on ``/mcp/admin/``, and the
+  `RecordingTests`, `ChatGPTTextTests`, `UsageReportTests`
 - **`test_mcp_widgets.py`** (197 lines)
   Tests for the MCP-app widgets: the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
@@ -587,7 +589,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (878 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5263 lines)
+- **`test_palette_assist.py`** (5312 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -598,7 +600,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (164 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3229 lines)
+- **`test_palette_skills.py`** (3233 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -880,12 +882,12 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2133 lines)
+- **`admin.py`** (2179 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
   `species_dashboard`, `species_backfill`, `approve_species`, `merge_species`, `dismiss_species_duplicate`, `forget_species_answer`, `allow_species_pairing_again`, `backfill_species`, `set_species_on_lot_names`, `remember_not_a_species`
-- **`auth.py`** (367 lines)
+- **`auth.py`** (385 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
   Client ID Metadata Document handling for the clients that actually turn up.
@@ -902,17 +904,20 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`prompts.py`** (502 lines)
   Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
   `Argument`, `Prompt`, `descriptors`, `prompt_list`, `render`, `complete`, `completes`
-- **`protocol.py`** (273 lines)
+- **`protocol.py`** (275 lines)
   JSON-RPC 2.0 and the MCP methods, with no HTTP in it.
   `Caller`, `error`, `is_notification`, `negotiate`, `handle`
 - **`resources.py`** (379 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
   `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (457 lines)
+- **`tools.py`** (466 lines)
   The action registry, as MCP tools.
-- **`transport.py`** (162 lines)
+- **`transport.py`** (166 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
+- **`usage.py`** (206 lines)
+  Recording what agents ask ``/mcp/`` for, and reading it back for ``mcp_usage`` on ``/mcp/admin/``.
+  `outcome_of`, `record`, `report`
 - **`verification.py`** (28 lines)
   Proving to a plugin directory that this host is ours.
   `openai_apps_challenge`
@@ -1088,7 +1093,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (559 lines)
+- **`palette.py`** (560 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
 - **`payments.py`** (1185 lines)
   Connecting PayPal and Square accounts and taking payments through them.

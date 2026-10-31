@@ -204,6 +204,12 @@ guess made on somebody's behalf; **`tools_offered`** names the tier (`all`/`read
 so a turn that quietly lost its write tools isn't just another navigation. The page also shows
 whether the breaker is open right now, which was previously visible only as slow answers.
 
+Agents on `/mcp/` are watched the same way: every answered message is an `MCPCall` row
+(`auctions/mcp/usage.py`; `/mcp/admin/` itself is never recorded), and `mcp_usage` on `/mcp/admin/`
+reads them back with `/ai/`'s own questions and its "not helpful" thumbs: which client, which tool, and
+every way a call went wrong. The site never sees an agent's conversation, so an unknown tool name, a
+refusal, a question back or an empty find is the evidence. The project's weekly review reads it.
+
 `palette_shortcut_candidates` on `/mcp/admin/` lists the phrases the assistant has answered the same
 way every single time, and an approved `add_palette_shortcut` proposal turns one into a shortcut. An
 accepted phrase stops reaching the model at all: no call, no wait, and no way for it to come back
@@ -306,6 +312,10 @@ the whole registry as three people who shouldn't reach a tenant's objects.
 - `more_info_needed` is **not** `isError`. It's a successful result naming the question, the
   candidates, and which tool to call again — MCP elicitation needs a session this transport lacks.
 - Every result carries `structuredContent`, parsed back out of the text so the two can't disagree.
+  The text is compact JSON. For ChatGPT (`auth.reads_structured_content`, by its CIMD `client_id`)
+  it is only the `summary`: ChatGPT shows its model both, so the JSON was paid for twice.
+- A renamed tool keeps answering to its old name (`palette_actions.RENAMED`, never listed), because
+  ChatGPT's app holds the tool list it was reviewed with until it is resubmitted.
 - `resource_link` blocks ride alongside **read** results naming an auction/club/lot, from
   `palette_actions._about`. A tool never links to its own answer; rows in a long list aren't linked;
   `resources.MAX_LINKS` is 12.

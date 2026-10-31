@@ -696,7 +696,7 @@ ROUTE_LIST: list[Route] = [
         "A club's Breeder Award / culture pages",
         "Club",
         scope=SCOPE_CLUB_TAB,
-        keywords=["bap", "hap", "culture", "my points", "breeder award"],
+        keywords=["bap", "hap", "culture", "my points", "breeder award", "bap leaderboard"],
     ),
     _r("club_membership_pay", "Pay or renew my club membership", "Club", scope=SCOPE_CLUB, keywords=["renew", "dues"]),
     _r("club_events_ical", "Club calendar feed", "Club", scope=SCOPE_CLUB, keywords=["calendar", "ics", "events"]),
@@ -905,7 +905,7 @@ ROUTE_LIST: list[Route] = [
         "Club admin",
         scope=SCOPE_CLUB,
         admin=ADMIN_CLUB,
-        keywords=["bap points", "award rules"],
+        keywords=["bap points", "award rules", "bap rules", "bap setup", "bap settings", "set up bap"],
     ),
     _r(
         "club_bap_import",
@@ -1719,6 +1719,43 @@ def match_routes_with_scores(query: str, user=None, limit: int = 5) -> list[tupl
             scored.append((score, -index, route))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [(route, score) for score, _, route in scored[:limit]]
+
+
+def confident_routes(query: str, user=None, limit: int = 2) -> list[Route]:
+    """Routes every word of ``query`` points at: each word one of the route's own words, or at most one
+    of them only inside a longer word. Nothing for a query of one short word, which names half the
+    catalog. Checked word by word, because a label inside the query scores on its own: "leaderboard
+    celestial pearl" is a fish, not the leaderboard.
+    """
+    words = _tokens(query)
+    if not words or (len(words) == 1 and len(words[0]) < 4):
+        return []
+    confident = []
+    for route, _score in match_routes_with_scores(query, user, limit):
+        haystack = route.search_text
+        hay_tokens = set(_tokens(haystack))
+        partial = [word for word in words if word not in hay_tokens]
+        if len(partial) <= 1 and all(len(word) > 3 and word in haystack for word in partial):
+            confident.append(route)
+    return confident
+
+
+#: Catalog pages never offered for a phrase alone. The pay page stays behind the renew commands and the
+#: membership card (``test_palette_core.test_membership_pay_page_not_in_palette``).
+NOT_OFFERED_BY_NAME = frozenset({"club_membership_pay"})
+
+
+def pages_named_by(request, query: str, limit: int = 2) -> list[dict[str, str]]:
+    """``{"title", "url", "section"}`` for each page :func:`confident_routes` finds that this user can
+    open, for the palette's search and above an answer on ``/ai/``."""
+    pages = []
+    for route in confident_routes(query, request.user, limit=limit):
+        if route.key in NOT_OFFERED_BY_NAME:
+            continue
+        result = resolve_route(request, route, {})
+        if result.get("url"):
+            pages.append({"title": result.get("title") or route.label, "url": result["url"], "section": route.section})
+    return pages
 
 
 def get_route(key: str) -> Route | None:

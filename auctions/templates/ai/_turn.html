@@ -1,10 +1,16 @@
-{% comment %}One question and its answer, appended to the conversation on /ai/.{% endcomment %}
+{% comment %}One question and its answer, appended to the conversation on /ai/. "pages" are the ones the question named (ai_page.pages_for); the thumb marks the answer's LLMUsage row reported.{% endcomment %}
 <div class="ai-turn mb-3">
   <div class="ai-question text-end mb-2"><span class="d-inline-block bg-primary-subtle rounded px-3 py-2 text-start" style="white-space: pre-wrap;">{{ question }}</span></div>
+  {% for page in pages %}
+    <a class="btn btn-sm btn-outline-primary mb-2 me-1" href="{{ page.url }}"><i class="bi bi-signpost"></i> {{ page.title }}</a>
+  {% endfor %}
   {% if error %}
     <div class="alert alert-secondary mb-0">{{ error }}</div>
   {% else %}
     <div class="ai-answer library-text">{{ reply }}</div>
+    {% if usage_id %}
+      <button type="button" class="btn btn-sm btn-link text-muted p-0 ai-not-helpful" data-usage-id="{{ usage_id }}" title="Not helpful" aria-label="Not helpful"><i class="bi bi-hand-thumbs-down"></i></button>
+    {% endif %}
   {% endif %}
 </div>
 {% include "ai/_usage.html" with oob=True %}

@@ -250,13 +250,14 @@ def _anonymize_assistant_records(user):
     """The command palette and agents: the site's cost and tuning records stay, the person's words go.
 
     A skill request is their own request in their own words, so it goes. An LLM call keeps its token
-    counts for the bill and loses what they typed. A voice-command line is the auction's tuning data
+    counts for the bill and loses what they typed, and an agent's call keeps its tool and outcome. A voice-command line is the auction's tuning data
     (lot and bidder words, not theirs) and a speaker comment is the club's note: both lose the link.
     """
-    from auctions.models import AssistantSkillRequest, LLMUsage, SpeakerComment, VoiceCommandLog
+    from auctions.models import AssistantSkillRequest, LLMUsage, MCPCall, SpeakerComment, VoiceCommandLog
 
     AssistantSkillRequest.objects.filter(user=user).delete()
     LLMUsage.objects.filter(user=user).update(user=None, query="")
+    MCPCall.objects.filter(user=user).update(user=None, arguments="", detail="", client="", connection="")
     VoiceCommandLog.objects.filter(user=user).update(user=None)
     SpeakerComment.objects.filter(user=user).update(user=None)
 
