@@ -345,7 +345,6 @@ function initMap() {
                         <h5 class="mb-0"><i class="bi bi-box-arrow-in-right"></i> Join This Auction</h5>
                     </div>
                     <div class="card-body">
-                        {% if request.user.is_authenticated %}
                             {% if auction.is_online %}
                             <p class="mb-3">Confirm you've read the rules and pick a pickup location.</p>
                             {% else %}
@@ -355,9 +354,6 @@ function initMap() {
                             <p class="mb-3"><small class="text-muted"><i class="bi bi-info-circle"></i> Joining this auction will also add you to <strong>{{ auction.club.name }}</strong>.</small></p>
                             {% endif %}
                             {% crispy form form.helper %}
-                        {% else %}
-                            <p class="mb-0"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class="btn btn-primary">Sign in to join</a></p>
-                        {% endif %}
 
                         {# Single location details shown here #}
                         {% if not auction.multi_location %}
