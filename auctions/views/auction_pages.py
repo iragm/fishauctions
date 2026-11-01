@@ -1029,8 +1029,11 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
     def post(self, request, *args, **kwargs):
         """Join, via ``services.join_auction``."""
         auction = self.auction
+        if not request.user.is_authenticated:
+            # Signed out since the page loaded (another tab, an expired session): sign in, then come back.
+            return redirect_to_login(request.get_full_path())
         form = self.get_form()
-        if request.user.is_authenticated and form.is_valid():
+        if form.is_valid():
             _tos, _created, problem = join_auction(
                 request.user,
                 auction,
@@ -1050,9 +1053,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 )
                 return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
             return self.form_valid(form)
-        else:
-            logger.debug(form.cleaned_data)
-            return self.form_invalid(form)
+        return self.form_invalid(form)
 
 
 class AuctionLeave(LoginRequiredMixin, View):

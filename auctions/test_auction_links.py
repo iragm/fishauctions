@@ -122,6 +122,23 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         response = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug}) + "?next=/lots/")
         self.assertEqual(response.context["form"].helper.form_action.split("?next=")[-1], "%2Flots%2F")
 
+    def test_signed_out_join_goes_to_login(self):
+        """A join posted after signing out redirects to login instead of a 500."""
+        url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
+        response = self.client.post(url, {"i_agree": "on", "pickup_location": str(self.open_location.pk)})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith("/login/"))
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction).exclude(user=self.user).exists())
+
+    def test_invalid_join_rerenders_form(self):
+        """Missing the rules checkbox re-shows the form rather than failing."""
+        self.client.force_login(self.fresh_user)
+        url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
+        response = self.client.post(url, {"pickup_location": str(self.open_location.pk), "time_spent_reading_rules": "5"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("i_agree", response.context["form"].errors)
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction, user=self.fresh_user).exists())
+
     def test_join_redirects_to_next(self):
         self.client.force_login(self.fresh_user)
         response = self.client.post(
