@@ -813,6 +813,8 @@ class MailchimpWebhookView(View):
 class ClubMemberSelfServiceView(View):
     """Public UUID-keyed email-preference links in Mailchimp merge fields. Changes club contact status only."""
 
+    private_page = True
+
     action = None  # "unsubscribe" | "resubscribe" | "nocomm"
 
     def _get_member(self, slug, uuid):

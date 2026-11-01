@@ -276,6 +276,7 @@ MIDDLEWARE = [
     "auctions.middleware.CrawlerSessionMiddleware",
     # After AuthenticationMiddleware: it needs request.user to tell a visitor from a member.
     "auctions.middleware.ShortAnonymousSessionMiddleware",
+    "auctions.middleware.PrivatePageMiddleware",
 ]
 
 ROOT_URLCONF = "fishauctions.urls"

@@ -6,6 +6,7 @@ import logging
 import time
 
 from django.conf import settings
+from django.utils.cache import add_never_cache_headers
 
 from auctions.crawlers import is_crawler
 
@@ -88,6 +89,38 @@ class CrawlerSessionMiddleware:
         session = getattr(request, "session", None)
         if session is not None and session.modified and is_crawler(request):
             session.modified = False
+        return response
+
+
+class PrivatePageMiddleware:
+    """Keep pages whose URL is a secret, or that show one member's details, out of search engines,
+    shared caches, third-party scripts and other sites' referrers.
+
+    A view opts in with ``private_page = True``; a third-party view by its URL name in
+    ``PRIVATE_URL_NAMES``. ``base.html`` reads ``request.is_private_page`` to
+    leave out analytics and ads, which would otherwise send the URL to Google.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    #: allauth's emailed-key pages, which show the address and username to whoever holds the link.
+    PRIVATE_URL_NAMES = frozenset({"account_confirm_email", "account_reset_password_from_key"})
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        match = getattr(request, "resolver_match", None)
+        if getattr(getattr(view_func, "view_class", None), "private_page", False) or (
+            match is not None and match.url_name in self.PRIVATE_URL_NAMES
+        ):
+            request.is_private_page = True
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if getattr(request, "is_private_page", False):
+            response["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+            # Not no-referrer: that makes a POST's Origin "null", which fails the CSRF check.
+            response["Referrer-Policy"] = "same-origin"
+            add_never_cache_headers(response)  # includes private
         return response
 
 

@@ -347,6 +347,8 @@ class SelfServeContactLinkView(ClubViewMixin, View):
     non_essential, all → contact.
     """
 
+    private_page = True
+
     allow_non_admins = True
 
     _LEVEL_TO_STATUS = {

@@ -347,6 +347,8 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
 class InvoiceNoLoginView(InvoiceView):
     """Enter a uuid, go to your invoice.  This bypasses the login checks"""
 
+    private_page = True
+
     # need a template with a popup
     authorized_by_default = True
     form_view = "opened"
