@@ -109,8 +109,8 @@ class ClubInvoiceSquarePrefillTests(TestCase):
         cls.invoice = Invoice.objects.create(club=cls.club, club_member=cls.member, buyer=cls.owner, status="UNPAID")
         cls.seller = SquareSeller(user=cls.owner, currency="USD")
 
-    def prefill_for(self, user):
-        request = RequestFactory().post("/")
+    def prefill_for(self, user, data=None):
+        request = RequestFactory().post("/", data or {})
         request.user = user
         client = MagicMock()
         client.checkout.payment_links.create.return_value = MagicMock(payment_link=MagicMock(url="https://sq/x"))
@@ -132,3 +132,59 @@ class ClubInvoiceSquarePrefillTests(TestCase):
 
     def test_the_member_signed_in_gets_their_email_filled_in(self):
         self.assertEqual(self.prefill_for(self.owner).get("buyer_email"), "owner@fishclub.dev")
+
+    def test_paying_from_the_members_own_uuid_page_fills_it_in(self):
+        data = {"member_uuid": str(self.member.uuid)}
+        self.assertEqual(self.prefill_for(AnonymousUser(), data).get("buyer_email"), "owner@fishclub.dev")
+
+    def test_another_members_uuid_fills_in_nothing(self):
+        other = ClubMember.objects.create(club=self.club, name="Other", email="other@fishclub.dev")
+        for value in (str(other.uuid), "not-a-uuid"):
+            self.assertNotIn("buyer_email", self.prefill_for(AnonymousUser(), {"member_uuid": value}))
+
+    def test_uuid_page_posts_the_uuid_and_number_page_does_not(self):
+        from auctions.views.club_pages import _get_or_create_membership_invoice
+
+        invoice = _get_or_create_membership_invoice(self.club, self.member)
+        with (
+            patch.object(Invoice, "show_payment_button", new_callable=PropertyMock, return_value=True),
+            patch.object(Invoice, "show_square_button", new_callable=PropertyMock, return_value=True),
+            patch("auctions.views.club_pages._membership_renewal_state", return_value=(True, False, True, True)),
+        ):
+            uuid_page = self.client.get(
+                reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
+            )
+            number_page = self.client.get(
+                reverse(
+                    "club_member_by_number",
+                    kwargs={"slug": self.club.slug, "number": self.member.membership_number},
+                )
+            )
+        self.assertContains(uuid_page, invoice.no_login_link)
+        self.assertContains(uuid_page, f'name="member_uuid" value="{self.member.uuid}"')
+        self.assertContains(number_page, invoice.no_login_link)
+        self.assertNotContains(number_page, "member_uuid")
+
+
+class SuccessRedirectTests(TestCase):
+    def test_uuid_page_only_for_the_invoices_member(self):
+        from auctions.views.payments import _club_membership_success_url
+
+        club = Club.objects.create(name="Redirect club")
+        mine = ClubMember.objects.create(club=club, name="Mine")
+        theirs = ClubMember.objects.create(club=club, name="Theirs")
+        ClubMember.objects.filter(pk=theirs.pk).update(membership_number=0)  # no number: the UUID page
+        their_invoice = Invoice.objects.create(club=club, club_member=theirs, status="UNPAID")
+        my_invoice = Invoice.objects.create(club=club, club_member=mine, status="UNPAID")
+        self.assertIn(str(theirs.uuid), _club_membership_success_url(club, theirs.pk, their_invoice))
+        self.assertNotIn(str(theirs.uuid), _club_membership_success_url(club, theirs.pk, my_invoice))
+
+
+class EmailedKeyPagesArePrivateTests(TestCase):
+    def test_allauth_confirm_email_page(self):
+        response = self.client.get(reverse("account_confirm_email", kwargs={"key": "nope"}))
+        self.assertIn("noindex", response.get("X-Robots-Tag", ""))
+
+    def test_reverify_page(self):
+        response = self.client.get(reverse("reverify_email_confirm", kwargs={"token": "nope"}))
+        self.assertIn("noindex", response.get("X-Robots-Tag", ""))

@@ -318,6 +318,8 @@ class ReverifyEmailView(LoginRequiredMixin, TemplateView):
 class ReverifyEmailConfirmView(View):
     """The link in the reverify email. The link is the proof, so it works signed out, and logs nobody in."""
 
+    private_page = True
+
     def get(self, request, token):
         try:
             data = signing.loads(token, salt=REVERIFY_SALT, max_age=REVERIFY_MAX_AGE)

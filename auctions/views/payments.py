@@ -875,13 +875,15 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
         return self.get_success_url()
 
 
-def _club_membership_success_url(club, member_pk):
-    """Post-payment URL for a membership invoice: member-number page, else UUID page, else club page."""
+def _club_membership_success_url(club, member_pk, invoice=None):
+    """Post-payment URL for a membership invoice: member-number page, else UUID page, else club page.
+    ``member_pk`` comes from the browser, so the UUID page is only for the invoice's own member.
+    """
     if club and member_pk:
         member = ClubMember.objects.filter(pk=member_pk, club=club, is_deleted=False).first()
         if member and member.membership_number:
             return reverse("club_member_by_number", kwargs={"slug": club.slug, "number": member.membership_number})
-        if member:
+        if member and invoice is not None and member.pk == invoice.club_member_id:
             return reverse("club_member_by_uuid", kwargs={"slug": club.slug, "uuid": member.uuid})
     if club:
         return reverse("club_detail", kwargs={"slug": club.slug})
@@ -945,7 +947,7 @@ class PayPalSuccessView(PayPalAPIMixin, View):
                 return redirect(reverse("club_membership_pay", kwargs={"slug": invoice_for_creds.club.slug}))
             invoice = invoice_for_creds
         if invoice and invoice.club:
-            return redirect(_club_membership_success_url(invoice.club, member_pk))
+            return redirect(_club_membership_success_url(invoice.club, member_pk, invoice))
         if invoice:
             return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
         return redirect(reverse("home"))

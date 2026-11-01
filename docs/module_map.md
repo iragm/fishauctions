@@ -195,13 +195,13 @@ this only quotes its opening sentence.
   `Tab`, `tabs`, `people`, `mark_off`, `running_lots`, `bidding_over`, `progress`
 - **`mailchimp.py`** (656 lines)
   One-way Django -> Mailchimp sync for clubs.
-- **`middleware.py`** (211 lines)
+- **`middleware.py`** (217 lines)
   Custom middleware for the auctions application.
   `ContentSecurityPolicyMiddleware`, `ShortAnonymousSessionMiddleware`, `CrawlerSessionMiddleware`, `PrivatePageMiddleware`, `MobileAppMiddleware`, `SlowRequestMiddleware`
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15334 lines)
+- **`models.py`** (15352 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -535,9 +535,9 @@ this only quotes its opening sentence.
 - **`test_mcp_widgets.py`** (197 lines)
   Tests for the MCP-app widgets: the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
-- **`test_member_privacy.py`** (134 lines)
+- **`test_member_privacy.py`** (190 lines)
   Pages keyed on a member's UUID or membership number stay out of search, caches and Google's scripts,
-  `MemberPagePrivacyTests`, `ClubInvoiceSquarePrefillTests`
+  `MemberPagePrivacyTests`, `ClubInvoiceSquarePrefillTests`, `SuccessRedirectTests`, `EmailedKeyPagesArePrivateTests`
 - **`test_membership_flow.py`** (1702 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`, `CarriedMembershipTests`, `WelcomeLetterTests`
@@ -1016,7 +1016,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (706 lines)
+- **`account.py`** (708 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
 - **`admin_checklist.py`** (1049 lines)
   The admin setup checklist: the one page that says what a new site still needs.
@@ -1059,9 +1059,9 @@ Every view on the site, split by the part of it the view belongs to.
   `ClubFinderView`, `ClubAddView`
 - **`club_integrations.py`** (1248 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
-- **`club_members.py`** (1125 lines)
+- **`club_members.py`** (1123 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (628 lines)
+- **`club_pages.py`** (629 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
 - **`club_reports.py`** (829 lines)
@@ -1098,7 +1098,7 @@ Every view on the site, split by the part of it the view belongs to.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
 - **`palette.py`** (560 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
-- **`payments.py`** (1185 lines)
+- **`payments.py`** (1187 lines)
   Connecting PayPal and Square accounts and taking payments through them.
 - **`printing.py`** (534 lines)
   Labels: what gets drawn on them, and getting them to a printer.

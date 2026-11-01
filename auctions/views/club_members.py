@@ -1039,8 +1039,6 @@ class ClubMemberAppleWalletPassView(LoginRequiredMixin, View):
 class ClubMemberAppleWalletByUUIDView(View):
     """UUID-keyed Apple Wallet download; the UUID is the capability token, so no login is needed."""
 
-    private_page = True
-
     def get(self, request, slug, uuid):
         from auctions.apple_wallet import generate_pkpass_for_member, is_configured
 

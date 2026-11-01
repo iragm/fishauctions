@@ -402,7 +402,7 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         member = get_object_or_404(ClubMember, club=self.club, uuid=kwargs["uuid"], is_deleted=False)
         _process_pending_membership_renewal_for_member(self.club, member)
         member.refresh_from_db()
-        # Mail scanners and crawlers open this link too; only a person counts as activity.
+        # Crawlers that say so in their User-Agent aren't member activity.
         crawler = is_crawler(self.request)
         if not crawler:
             member.update_last_club_activity()
@@ -419,6 +419,7 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon
         context["is_paid_member"] = member.is_paid_member
+        context["post_member_uuid"] = True
         return context
 
 

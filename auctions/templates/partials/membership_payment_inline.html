@@ -1,4 +1,4 @@
-{# Inline membership renewal fee + payment buttons. Requires: membership_invoice, member, club. #}
+{# Inline membership renewal fee + payment buttons. Requires: membership_invoice, member, club; post_member_uuid only where the page's own URL is the member's UUID. #}
 {% if membership_invoice and membership_invoice.show_payment_button %}
 <div class="mt-3 d-flex flex-column flex-md-row align-items-center justify-content-center gap-2">
   <strong class="me-md-2">Membership Fee: {{ membership_invoice.currency_symbol }}{{ club.membership_annual_fee|floatformat:"-2" }}</strong>
@@ -15,6 +15,7 @@
   <form action="{% url 'create_square_payment_link' uuid=membership_invoice.no_login_link %}" method="post" class="d-inline">
     {% csrf_token %}
     <input type="hidden" name="member_pk" value="{{ member.pk }}">
+    {% if post_member_uuid %}<input type="hidden" name="member_uuid" value="{{ member.uuid }}">{% endif %}
     <button type="submit" class="btn btn-success btn-sm">
       <i class="bi bi-credit-card"></i> Square
     </button>

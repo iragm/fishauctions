@@ -13162,6 +13162,25 @@ def sanitize_square_phone(raw):
     return f"+{digits}" if has_plus else digits
 
 
+def _requester_is_invoice_member(request, invoice):
+    """Whether this request comes from the member a club invoice is for: their account, or the
+    ``member_uuid`` their UUID page posts."""
+    requester = getattr(request, "user", None)
+    if invoice.buyer_id and requester is not None and requester.is_authenticated and requester.pk == invoice.buyer_id:
+        return True
+    member_uuid = getattr(request, "POST", {}).get("member_uuid") or ""
+    if not member_uuid or not invoice.club_id:
+        return False
+    try:
+        member_uuid = uuid_module.UUID(member_uuid)
+    except ValueError:
+        return False
+    member = ClubMember.objects.filter(club_id=invoice.club_id, uuid=member_uuid, is_deleted=False).first()
+    if member is None:
+        return False
+    return member.pk == invoice.club_member_id or bool(member.user_id and member.user_id == invoice.buyer_id)
+
+
 class SquareSeller(models.Model):
     """A seller's Square merchant info and OAuth tokens (encrypted at rest)."""
 
@@ -13388,12 +13407,10 @@ class SquareSeller(models.Model):
             else:
                 payment_note = "Membership fee"[:500]
 
-            # A club invoice's pay buttons are on the membership-number page, which anybody can open, so
-            # Square's checkout is only filled in with the member's details for the member signed in.
-            requester = getattr(request, "user", None)
-            prefill = not invoice.club or bool(
-                invoice.buyer_id and requester and requester.is_authenticated and requester.pk == invoice.buyer_id
-            )
+            # A club invoice's pay buttons are also on the membership-number page, which anybody can
+            # open, so Square's checkout only gets the member's details for the member: signed in, or
+            # paying from their private UUID page.
+            prefill = not invoice.club or _requester_is_invoice_member(request, invoice)
             # Get and validate buyer email
             if not prefill:
                 buyer_email = None
@@ -13449,7 +13466,8 @@ class SquareSeller(models.Model):
                             "club_member_by_number",
                             kwargs={"slug": invoice.club.slug, "number": member.membership_number},
                         )
-                    elif member:
+                    elif member and member.pk == invoice.club_member_id:
+                        # member_pk comes from the browser: only the invoice's own member's UUID.
                         club_path = reverse(
                             "club_member_by_uuid",
                             kwargs={"slug": invoice.club.slug, "uuid": member.uuid},
