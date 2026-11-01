@@ -1030,8 +1030,8 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         """Join, via ``services.join_auction``."""
         auction = self.auction
         if not request.user.is_authenticated:
-            # Signed out since the page loaded (another tab, an expired session): sign in, then come back.
-            return redirect_to_login(request.get_full_path())
+            # Join shows to everyone; signing in brings them back to the rules to join.
+            return redirect_to_login(auction.get_absolute_url())
         form = self.get_form()
         if form.is_valid():
             _tos, _created, problem = join_auction(

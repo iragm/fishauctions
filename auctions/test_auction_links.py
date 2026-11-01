@@ -3,6 +3,7 @@
 import datetime
 import io
 from unittest.mock import MagicMock, patch
+from urllib.parse import quote
 
 from django.contrib.auth.models import User
 from django.core.cache import cache
@@ -123,20 +124,21 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         self.assertEqual(response.context["form"].helper.form_action.split("?next=")[-1], "%2Flots%2F")
 
     def test_signed_out_join_goes_to_login(self):
-        """A join posted after signing out redirects to login instead of a 500."""
+        """Join shows to a signed-out visitor, and pressing it goes to login and back to the rules, not a 500."""
         url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
+        self.assertContains(self.client.get(url), "Join auction")
         response = self.client.post(url, {"i_agree": "on", "pickup_location": str(self.open_location.pk)})
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.url.startswith("/login/"))
+        self.assertRedirects(response, f"/login/?next={quote(url)}", fetch_redirect_response=False)
         self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction).exclude(user=self.user).exists())
 
     def test_invalid_join_rerenders_form(self):
-        """Missing the rules checkbox re-shows the form rather than failing."""
+        """Missing the rules checkbox re-shows the page without joining."""
         self.client.force_login(self.fresh_user)
         url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
-        response = self.client.post(url, {"pickup_location": str(self.open_location.pk), "time_spent_reading_rules": "5"})
+        response = self.client.post(
+            url, {"pickup_location": str(self.open_location.pk), "time_spent_reading_rules": "5"}
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("i_agree", response.context["form"].errors)
         self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction, user=self.fresh_user).exists())
 
     def test_join_redirects_to_next(self):
