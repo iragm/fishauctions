@@ -1,6 +1,5 @@
 """The auction as a thing you join: the TOS, creating one, and the auction's own page."""
 
-import logging
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -78,8 +77,6 @@ from .base import (
     close_modal_response,
     safe_next_url,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
@@ -942,7 +939,10 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             else:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
         context["show_club_join_message"] = bool(
-            self.auction.is_club_managed and self.auction.club and not existing_club_member
+            self.request.user.is_authenticated
+            and self.auction.is_club_managed
+            and self.auction.club
+            and not existing_club_member
         )
         context["active_tab"] = "main"
         # Check if user has lots in this auction
@@ -1030,8 +1030,8 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         """Join, via ``services.join_auction``."""
         auction = self.auction
         if not request.user.is_authenticated:
-            # Join shows to everyone; signing in brings them back to the rules to join.
-            return redirect_to_login(auction.get_absolute_url())
+            # Join shows to everyone; signing in brings them back to the rules (and their ?next=) to join.
+            return redirect_to_login(request.get_full_path())
         form = self.get_form()
         if form.is_valid():
             _tos, _created, problem = join_auction(

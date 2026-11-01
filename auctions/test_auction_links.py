@@ -126,10 +126,15 @@ class AuctionJoinLinksUserTests(StandardTestCase):
     def test_signed_out_join_goes_to_login(self):
         """Join shows to a signed-out visitor, and pressing it goes to login and back to the rules, not a 500."""
         url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
+        before = AuctionTOS.objects.filter(auction=self.open_auction).count()
         self.assertContains(self.client.get(url), "Join auction")
         response = self.client.post(url, {"i_agree": "on", "pickup_location": str(self.open_location.pk)})
         self.assertRedirects(response, f"/login/?next={quote(url)}", fetch_redirect_response=False)
-        self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction).exclude(user=self.user).exists())
+        response = self.client.post(f"{url}?next=/lots/", {"i_agree": "on"})
+        self.assertRedirects(
+            response, f"/login/?next={quote(url + '?next=/lots/', safe='/')}", fetch_redirect_response=False
+        )
+        self.assertEqual(AuctionTOS.objects.filter(auction=self.open_auction).count(), before)
 
     def test_invalid_join_rerenders_form(self):
         """Missing the rules checkbox re-shows the page without joining."""
