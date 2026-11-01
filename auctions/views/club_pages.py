@@ -424,8 +424,8 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
 
 
 class ClubMemberByNumberView(ClubViewMixin, TemplateView):
-    """Public, number-keyed page showing the membership number, expiration and a payment button where it
-    applies. Linked from Discord.
+    """Public, number-keyed page a shop checks a membership card against: the member's name, number and
+    expiration, and a payment button where it applies. Linked from Discord.
     """
 
     private_page = True
@@ -441,12 +441,6 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
         context["club"] = self.club
         context["member"] = member
-        # A club can set its own membership numbers (often 1, 2, 3...), and this page is linked from
-        # Discord, so the name is only for the member and the club's admins.
-        user = self.request.user
-        context["show_name"] = user.is_authenticated and (
-            member.user_id == user.pk or self.user_has_club_permission("permission_view")
-        )
         context["expiration"] = member.membership_expiration_date
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon

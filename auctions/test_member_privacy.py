@@ -1,5 +1,5 @@
 """Pages keyed on a member's UUID or membership number stay out of search, caches and Google's scripts,
-and the public membership-number page doesn't name the member."""
+and Square's checkout shows a member's details only to that member."""
 
 import datetime
 from decimal import Decimal
@@ -19,13 +19,10 @@ class MemberPagePrivacyTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.owner = User.objects.create_user(username="privacy_owner", password="pw", email="owner@example.com")
-        cls.stranger = User.objects.create_user(username="privacy_stranger", password="pw", email="x@example.com")
-        cls.admin = User.objects.create_user(username="privacy_admin", password="pw", email="admin@example.com")
         cls.club = Club.objects.create(name="Privacy club", show_member_barcode=True)
         cls.member = ClubMember.objects.create(
             club=cls.club, user=cls.owner, name="Secret Name", email="owner@example.com", membership_number=7
         )
-        ClubMember.objects.create(club=cls.club, user=cls.admin, name="Club Admin", permission_view=True)
 
     def uuid_url(self):
         return reverse("club_member_by_uuid", kwargs={"slug": self.club.slug, "uuid": self.member.uuid})
@@ -62,14 +59,12 @@ class MemberPagePrivacyTests(TestCase):
         self.assertNotContains(self.client.get(self.number_url()), "googletagmanager")
         self.assertContains(self.client.get(reverse("club_detail", kwargs={"slug": self.club.slug})), "G-TEST123")
 
-    def test_number_page_names_the_member_only_to_them_and_admins(self):
-        self.assertNotContains(self.client.get(self.number_url()), "Secret Name")
-        self.client.force_login(self.stranger)
-        self.assertNotContains(self.client.get(self.number_url()), "Secret Name")
-        self.client.force_login(self.owner)
+    def test_number_page_names_the_member_but_never_shows_an_email(self):
+        # A shop checks the card in front of it against this page, so the name stays public.
         self.assertContains(self.client.get(self.number_url()), "Secret Name")
-        self.client.force_login(self.admin)
-        self.assertContains(self.client.get(self.number_url()), "Secret Name")
+        nameless = ClubMember.objects.create(club=self.club, name="", email="nameless@fishclub.dev")
+        url = reverse("club_member_by_number", kwargs={"slug": self.club.slug, "number": nameless.membership_number})
+        self.assertNotContains(self.client.get(url), "nameless@fishclub.dev")
 
     def test_uuid_page_still_names_the_member(self):
         self.assertContains(self.client.get(self.uuid_url()), "Secret Name")
