@@ -5,7 +5,7 @@
 <div class="card mx-auto" style="max-width: 600px;">
   <div class="card-body text-center">
     <h3 class="card-title mb-1">{{ club.name }}</h3>
-    <p class="text-muted mb-3">{{ member.display_name }}</p>
+    {% comment %}The name, never display_name: that falls back to the email, and this page is public.{% endcomment %}{% if member.name %}<p class="text-muted mb-3">{{ member.name }}</p>{% endif %}
 
     {% if member.club.show_member_barcode %}
       <div class="text-muted small mb-1">Membership number</div>

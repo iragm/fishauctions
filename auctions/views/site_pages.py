@@ -650,6 +650,8 @@ class PrivacyPolicyView(TemplateView):
 class UnsubscribeView(TemplateView):
     """Match a UUID to a UserData and unsubscribe that user."""
 
+    private_page = True
+
     template_name = "unsubscribe.html"
 
     def get_context_data(self, **kwargs):

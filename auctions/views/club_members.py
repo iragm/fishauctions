@@ -31,6 +31,7 @@ from rest_framework.authentication import SessionAuthentication, TokenAuthentica
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from auctions.crawlers import is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
     rhyming_name_q,
@@ -1046,7 +1047,8 @@ class ClubMemberAppleWalletByUUIDView(View):
         member = get_object_or_404(ClubMember, club=club_from_url(slug), uuid=uuid, is_deleted=False)
         if not member.club.show_member_barcode:
             raise Http404
-        member.update_last_club_activity()
+        if not is_crawler(request):
+            member.update_last_club_activity()
         pkpass_bytes = generate_pkpass_for_member(member)
         response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
         filename = attachment_filename(f"{member.club.slug}-membership")

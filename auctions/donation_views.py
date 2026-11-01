@@ -535,6 +535,8 @@ class DonationUnsubscribeView(TemplateView):
     GET only offers the unsubscribe; POST performs it. Mail clients fetch every link in a message.
     """
 
+    private_page = True
+
     template_name = "auctions/donation_unsubscribe.html"
 
     def get_vendor(self):

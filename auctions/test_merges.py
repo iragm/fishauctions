@@ -51,6 +51,7 @@ class MergeCoverageTests(TestCase):
         "auctions.Invoice.auctiontos_user",
         "auctions.Lot.auctiontos_seller",
         "auctions.Lot.auctiontos_winner",
+        "auctions.Lot.refund_issued_to",
         "auctions.PickupLocation.contact_person",
         "auctions.VolunteerSignup.auctiontos",
     }

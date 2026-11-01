@@ -7766,6 +7766,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
             Lot.objects.filter(auctiontos_winner=duplicate, winner=duplicate.user_id).update(winner=self.user_id)
             Bid.reassign(duplicate.user_id, self.user_id, lots=Lot.objects.filter(auction_id=self.auction_id))
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
+        Lot.objects.filter(refund_issued_to=duplicate).update(refund_issued_to=self)
         Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
         if self.user_id:
             # Lots added while neither row had an account, as save() claims them when it links one.
@@ -8299,6 +8300,10 @@ class Lot(CachedPropertiesMixin, models.Model):
     no_more_refunds_possible.help_text = (
         "Set to True after a Square refund is issued to prevent multiple refunds that would unbalance the books"
     )
+    # The winner the refund was issued to: see _clear_refund_for_new_winner.
+    refund_issued_to = models.ForeignKey(
+        "AuctionTOS", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     max_bid_revealed_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
@@ -8395,6 +8400,49 @@ class Lot(CachedPropertiesMixin, models.Model):
         if changed and update_fields is not None:
             kwargs["update_fields"] = {*update_fields, *changed}
 
+    def _clear_refund_for_new_winner(self, kwargs):
+        """A refund belongs to the winner it was issued to (``refund_issued_to``), so it comes off when the
+        lot is sold to anybody else. Left on, a 100% refund charged the next winner nothing and paid the
+        seller nothing. Returns the percent cleared, or 0.
+
+        Undoing a sale keeps the refund (an unsold lot charges nobody), so selling back to the same buyer
+        restores it. ``no_more_refunds_possible`` stays: the card refund it records went to the old
+        buyer, and PayPal keys refunds on the lot, so a second automatic one would come back as the first.
+        """
+        if not self.pk or "partial_refund_percent" in self.get_deferred_fields():
+            return 0
+        if not self.partial_refund_percent or not self.auctiontos_winner_id:
+            return 0
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and not {"auctiontos_winner", "auctiontos_winner_id"} & set(update_fields):
+            return 0
+        owner_id, owner_user_id = self.refund_issued_to_id, None
+        if owner_id is None:
+            # Issued before the owner was recorded, or to a bidder since deleted: whoever the lot belonged
+            # to before this save. With nobody there, the owner is unknown and the refund stays.
+            owner_id, owner_user_id = Lot._base_manager.filter(pk=self.pk).values_list(
+                "auctiontos_winner_id", "winner_id"
+            ).first() or (None, None)
+            if owner_id is None and owner_user_id is None:
+                return 0
+        if owner_id == self.auctiontos_winner_id:
+            return 0
+        # Two bidder rows for the same account are the same buyer.
+        users = dict(
+            AuctionTOS.objects.filter(pk__in=[pk for pk in (owner_id, self.auctiontos_winner_id) if pk]).values_list(
+                "pk", "user_id"
+            )
+        )
+        owner_user_id = users.get(owner_id) or owner_user_id
+        if owner_user_id and owner_user_id == users.get(self.auctiontos_winner_id):
+            return 0
+        if update_fields is not None:
+            kwargs["update_fields"] = {*update_fields, "partial_refund_percent", "refund_issued_to"}
+        cleared = self.partial_refund_percent
+        self.partial_refund_percent = 0
+        self.refund_issued_to = None
+        return cleared
+
     def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
         # Seller-dash auctions: bidder_number-lot_number.
@@ -8475,7 +8523,14 @@ class Lot(CachedPropertiesMixin, models.Model):
                 self.custom_random = dealt
                 if kwargs.get("update_fields") is not None:
                     kwargs["update_fields"] = {*kwargs["update_fields"], "custom_random"}
+        refund_cleared = self._clear_refund_for_new_winner(kwargs)
         super().save(*args, **kwargs)
+        if refund_cleared:
+            LotHistory.objects.create(
+                lot=self,
+                message=f"Sold to a new winner, so the previous winner's {refund_cleared}% refund was cleared.",
+                changed_price=True,
+            )
 
         # chat history subscription for the owner
         if self.user:
@@ -8770,7 +8825,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         with transaction.atomic():
             fresh = (
                 Lot._base_manager.select_for_update()
-                .values("partial_refund_percent", "no_more_refunds_possible")
+                .values("partial_refund_percent", "no_more_refunds_possible", "auctiontos_winner_id")
                 .get(pk=self.pk)
             )
             self.partial_refund_percent = fresh["partial_refund_percent"]
@@ -8793,6 +8848,10 @@ class Lot(CachedPropertiesMixin, models.Model):
                         message += f" {provider} refund processed automatically."
                 LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
             self.partial_refund_percent = amount
+            if not amount:
+                self.refund_issued_to_id = None
+            elif fresh["auctiontos_winner_id"]:
+                self.refund_issued_to_id = fresh["auctiontos_winner_id"]
             self.save()
         return provider, error
 
@@ -13103,6 +13162,25 @@ def sanitize_square_phone(raw):
     return f"+{digits}" if has_plus else digits
 
 
+def _requester_is_invoice_member(request, invoice):
+    """Whether this request comes from the member a club invoice is for: their account, or the
+    ``member_uuid`` their UUID page posts."""
+    requester = getattr(request, "user", None)
+    if invoice.buyer_id and requester is not None and requester.is_authenticated and requester.pk == invoice.buyer_id:
+        return True
+    member_uuid = getattr(request, "POST", {}).get("member_uuid") or ""
+    if not member_uuid or not invoice.club_id:
+        return False
+    try:
+        member_uuid = uuid_module.UUID(member_uuid)
+    except ValueError:
+        return False
+    member = ClubMember.objects.filter(club_id=invoice.club_id, uuid=member_uuid, is_deleted=False).first()
+    if member is None:
+        return False
+    return member.pk == invoice.club_member_id or bool(member.user_id and member.user_id == invoice.buyer_id)
+
+
 class SquareSeller(models.Model):
     """A seller's Square merchant info and OAuth tokens (encrypted at rest)."""
 
@@ -13329,8 +13407,14 @@ class SquareSeller(models.Model):
             else:
                 payment_note = "Membership fee"[:500]
 
+            # A club invoice's pay buttons are also on the membership-number page, which anybody can
+            # open, so Square's checkout only gets the member's details for the member: signed in, or
+            # paying from their private UUID page.
+            prefill = not invoice.club or _requester_is_invoice_member(request, invoice)
             # Get and validate buyer email
-            if invoice.club and invoice.buyer:
+            if not prefill:
+                buyer_email = None
+            elif invoice.club and invoice.buyer:
                 buyer_email = invoice.buyer.email
             else:
                 buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
@@ -13354,7 +13438,7 @@ class SquareSeller(models.Model):
             pre_populated_data = {}
             if buyer_email:
                 pre_populated_data["buyer_email"] = buyer_email
-            if invoice.auctiontos_user:
+            if invoice.auctiontos_user and prefill:
                 # Add buyer name if available (50 char limit per Square API)
                 if invoice.auctiontos_user.name:
                     name_parts = invoice.auctiontos_user.name.split(None, 1)
@@ -13382,7 +13466,8 @@ class SquareSeller(models.Model):
                             "club_member_by_number",
                             kwargs={"slug": invoice.club.slug, "number": member.membership_number},
                         )
-                    elif member:
+                    elif member and member.pk == invoice.club_member_id:
+                        # member_pk comes from the browser: only the invoice's own member's UUID.
                         club_path = reverse(
                             "club_member_by_uuid",
                             kwargs={"slug": invoice.club.slug, "uuid": member.uuid},
