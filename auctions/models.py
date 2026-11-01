@@ -13388,8 +13388,16 @@ class SquareSeller(models.Model):
             else:
                 payment_note = "Membership fee"[:500]
 
+            # A club invoice's pay buttons are on the membership-number page, which anybody can open, so
+            # Square's checkout is only filled in with the member's details for the member signed in.
+            requester = getattr(request, "user", None)
+            prefill = not invoice.club or bool(
+                invoice.buyer_id and requester and requester.is_authenticated and requester.pk == invoice.buyer_id
+            )
             # Get and validate buyer email
-            if invoice.club and invoice.buyer:
+            if not prefill:
+                buyer_email = None
+            elif invoice.club and invoice.buyer:
                 buyer_email = invoice.buyer.email
             else:
                 buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
@@ -13413,7 +13421,7 @@ class SquareSeller(models.Model):
             pre_populated_data = {}
             if buyer_email:
                 pre_populated_data["buyer_email"] = buyer_email
-            if invoice.auctiontos_user:
+            if invoice.auctiontos_user and prefill:
                 # Add buyer name if available (50 char limit per Square API)
                 if invoice.auctiontos_user.name:
                     name_parts = invoice.auctiontos_user.name.split(None, 1)

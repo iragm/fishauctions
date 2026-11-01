@@ -1,4 +1,9 @@
 {% comment %}A copy that isn't indexed (ALLOW_SEARCH_INDEXING) still allows crawling: its pages say noindex, and a crawler has to fetch a page to read that and drop it.{% endcomment %}User-agent: *
 Allow: /
-{% if allow_search_indexing %}Sitemap: {{ request.scheme }}://{{ request.get_host }}/sitemap.xml
+{% if allow_search_indexing %}{% comment %}Pages whose URL is the key to one person's membership, invoice or email settings. They also send X-Robots-Tag: noindex (PrivatePageMiddleware).{% endcomment %}Disallow: /clubs/*/member/
+Disallow: /clubs/*/member-number/
+Disallow: /invoices/
+Disallow: /unsubscribe/
+Disallow: /donations/unsubscribe/
+Sitemap: {{ request.scheme }}://{{ request.get_host }}/sitemap.xml
 {% endif %}

@@ -25,6 +25,7 @@ from django.utils.safestring import mark_safe
 from django.views.generic import TemplateView
 
 from auctions import announcements, club_events
+from auctions.crawlers import is_crawler
 from auctions.filters import (
     ClubMemberFilter,
 )
@@ -391,6 +392,8 @@ def _process_pending_membership_renewal_for_member(club, member):
 class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
     """Public, UUID-keyed page showing a member's name and wallet-add buttons; the UUID is the token."""
 
+    private_page = True
+
     template_name = "auctions/club_member_by_uuid.html"
     allow_non_admins = True
 
@@ -399,7 +402,10 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
         member = get_object_or_404(ClubMember, club=self.club, uuid=kwargs["uuid"], is_deleted=False)
         _process_pending_membership_renewal_for_member(self.club, member)
         member.refresh_from_db()
-        member.update_last_club_activity()
+        # Mail scanners and crawlers open this link too; only a person counts as activity.
+        crawler = is_crawler(self.request)
+        if not crawler:
+            member.update_last_club_activity()
         from auctions.apple_wallet import is_configured as _apple_configured
 
         context["club"] = self.club
@@ -408,7 +414,7 @@ class ClubMemberByUUIDView(ClubViewMixin, TemplateView):
 
         is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
         context["membership_invoice"] = (
-            _get_or_create_membership_invoice(self.club, member) if should_show_payment else None
+            _get_or_create_membership_invoice(self.club, member) if should_show_payment and not crawler else None
         )
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon
@@ -421,6 +427,8 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
     applies. Linked from Discord.
     """
 
+    private_page = True
+
     template_name = "auctions/club_member_by_number.html"
     allow_non_admins = True
 
@@ -432,12 +440,20 @@ class ClubMemberByNumberView(ClubViewMixin, TemplateView):
         is_expired, expiring_soon, should_show_payment, _ = _membership_renewal_state(self.club, member)
         context["club"] = self.club
         context["member"] = member
+        # A club can set its own membership numbers (often 1, 2, 3...), and this page is linked from
+        # Discord, so the name is only for the member and the club's admins.
+        user = self.request.user
+        context["show_name"] = user.is_authenticated and (
+            member.user_id == user.pk or self.user_has_club_permission("permission_view")
+        )
         context["expiration"] = member.membership_expiration_date
         context["is_expired"] = is_expired
         context["expiring_soon"] = expiring_soon
         context["is_paid_member"] = member.is_paid_member
         context["membership_invoice"] = (
-            _get_or_create_membership_invoice(self.club, member) if should_show_payment else None
+            _get_or_create_membership_invoice(self.club, member)
+            if should_show_payment and not is_crawler(self.request)
+            else None
         )
         return context
 

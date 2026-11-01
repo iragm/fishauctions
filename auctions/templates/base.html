@@ -8,7 +8,7 @@
 <!DOCTYPE html>
 {# {% include 'demo_formatting.html' %} #}
 <!-- Global site tag (gtag.js) - Google Analytics -->
-{% block analytics %}
+{% block analytics %}{% if not request.is_private_page %}
 {% if GOOGLE_MEASUREMENT_ID %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -24,12 +24,12 @@
   'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
   })(window,document,'script','dataLayer','{{ GOOGLE_TAG_ID }}');</script>{% endif %}
   <!-- End Google Tag Manager -->
-{% endblock %}
+{% endif %}{% endblock %}
   <html class="no-js" lang="en" data-bs-theme="dark">
     <head>
         <meta charset="utf-8" />
         {% block ads %}
-        {% if show_ads and GOOGLE_ADSENSE_ID %}
+        {% if show_ads and GOOGLE_ADSENSE_ID and not request.is_private_page %}
         <script data-ad-client="{{GOOGLE_ADSENSE_ID}}" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
         {% endif %}
         {% endblock %}
@@ -277,7 +277,7 @@
     <body class="{% block body_class %}{% endblock %}">
       {% comment %}WCAG 2.4.1: the first thing a keyboard or screen reader lands on, so the navbar and every banner above the content can be skipped in one keystroke. Bootstrap's .visually-hidden-focusable draws it only while it has focus, so it costs nothing on screen. The target is the main landmark below; auctions/test_template_a11y.py holds them together.{% endcomment %}
       <a href="#content" class="visually-hidden-focusable">Skip to main content</a>
-      {% if GOOGLE_TAG_ID %}
+      {% if GOOGLE_TAG_ID and not request.is_private_page %}
       <!-- Google Tag Manager (noscript) -->
       <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ GOOGLE_TAG_ID }}"
         height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
