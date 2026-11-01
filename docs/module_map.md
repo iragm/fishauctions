@@ -535,7 +535,7 @@ this only quotes its opening sentence.
 - **`test_mcp_widgets.py`** (197 lines)
   Tests for the MCP-app widgets: the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
-- **`test_member_privacy.py`** (190 lines)
+- **`test_member_privacy.py`** (185 lines)
   Pages keyed on a member's UUID or membership number stay out of search, caches and Google's scripts,
   `MemberPagePrivacyTests`, `ClubInvoiceSquarePrefillTests`, `SuccessRedirectTests`, `EmailedKeyPagesArePrivateTests`
 - **`test_membership_flow.py`** (1702 lines)
@@ -1061,7 +1061,7 @@ Every view on the site, split by the part of it the view belongs to.
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1123 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (629 lines)
+- **`club_pages.py`** (623 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
 - **`club_reports.py`** (829 lines)
