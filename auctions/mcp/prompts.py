@@ -409,7 +409,7 @@ PROMPTS: tuple[Prompt, ...] = (
 
 BY_NAME = {prompt.name: prompt for prompt in PROMPTS}
 
-#: Listed only to accounts the library is on for (``UserData.library_enabled``).
+#: Listed only to accounts with the library (``documents.search.can_use_library``).
 LIBRARY_PROMPTS = frozenset({"digitize_documents", "work_through_my_articles", "tidy_the_library", "ask_the_library"})
 
 

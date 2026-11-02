@@ -599,17 +599,16 @@ class AdminJobProposalTests(AdminEndpointCase):
 
     def test_an_accounts_features_are_switched(self):
         userdata = self.userB.userdata
-        userdata.paypal_enabled = userdata.library_enabled = False
+        userdata.paypal_enabled = False
         userdata.square_enabled = True
         userdata.save()
         result = self.propose(
-            "set_user_features", {"user": self.userB.username, "paypal": True, "library": "on", "square": False}
+            "set_user_features", {"user": self.userB.username, "paypal": True, "square": False}
         )
         self.assertFalse(result["isError"], result)
         self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
         userdata.refresh_from_db()
         self.assertTrue(userdata.paypal_enabled)
-        self.assertTrue(userdata.library_enabled)
         self.assertFalse(userdata.square_enabled)
         for arguments, expected in (
             ({"user": self.userB.username}, "at least one"),

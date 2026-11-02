@@ -88,7 +88,7 @@ __all__ = [
 
 
 class LibraryMixin(LoginRequiredMixin):
-    """Signed in, with the library on for this account (:func:`~auctions.documents.search.can_use_library`)."""
+    """Signed in (:func:`~auctions.documents.search.can_use_library`)."""
 
     def dispatch(self, request, *args, **kwargs):
         if request.user.is_authenticated and not can_use_library(request.user):

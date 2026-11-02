@@ -80,8 +80,8 @@ DANGER_NAVIGATE = "navigate"
 NEEDS_ANYONE = ""
 NEEDS_AUCTION_ADMIN = "auction_admin"
 NEEDS_CLUB_ADMIN = "club_admin"
-# The exception: the library is switched on per account (``UserData.library_enabled``), and run_action
-# refuses its tools to anyone it isn't on for.
+# The exception: the library is for signed-in accounts (``documents.search.can_use_library``), and
+# run_action refuses its tools to anyone else.
 NEEDS_LIBRARY = "library"
 
 # How many candidates to name when a lookup is ambiguous ("which bob?").

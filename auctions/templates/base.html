@@ -378,7 +378,7 @@
                     {% endif %}
                   </li>
                   {% endif %}
-                  {% if request.user.userdata.library_enabled %}
+                  {% if request.user.is_authenticated %}
                   <li class="nav-item">
                     <a class="nav-link" href="{% url 'library' %}">Library</a>
                   </li>
