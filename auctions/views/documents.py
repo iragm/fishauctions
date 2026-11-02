@@ -88,12 +88,7 @@ __all__ = [
 
 
 class LibraryMixin(LoginRequiredMixin):
-    """Signed in (:func:`~auctions.documents.search.can_use_library`)."""
-
-    def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated and not can_use_library(request.user):
-            raise Http404
-        return super().dispatch(request, *args, **kwargs)
+    """Signed in, which is all :func:`~auctions.documents.search.can_use_library` asks."""
 
 
 def _filtered(request, documents):

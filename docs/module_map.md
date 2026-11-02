@@ -438,7 +438,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1807 lines)
+- **`test_documents.py`** (1789 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -521,9 +521,9 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1354 lines)
+- **`test_mcp_admin.py`** (1350 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_permissions.py`** (727 lines)
+- **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
 - **`test_mcp_resources.py`** (350 lines)
@@ -603,7 +603,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (164 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3233 lines)
+- **`test_palette_skills.py`** (3230 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -760,7 +760,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`render.py`** (58 lines)
   A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
   `to_html`
-- **`search.py`** (339 lines)
+- **`search.py`** (338 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
 - **`stitch.py`** (478 lines)
   Put a pile of page pictures back together into articles.
@@ -789,8 +789,6 @@ The library: documents people upload, read into text, and searched from ``/libra
   Attach a species to lots that predate the species list.
   `Command`
 - **`change_assistant.py`** (29 lines)
-  `Command`
-- **`change_library.py`** (25 lines)
   `Command`
 - **`change_paypal.py`** (28 lines)
   `Command`
@@ -885,7 +883,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2179 lines)
+- **`admin.py`** (2177 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -1070,7 +1068,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (640 lines)
+- **`documents.py`** (635 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.

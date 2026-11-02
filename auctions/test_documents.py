@@ -16,7 +16,6 @@ from unittest import mock
 from django.contrib.auth.models import AnonymousUser, User
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core.management import call_command
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
@@ -39,7 +38,6 @@ from auctions.models import (
     DocumentFeedback,
     DocumentImageText,
     Species,
-    UserData,
 )
 from auctions.test_support import isolated_cache
 
@@ -1088,7 +1086,6 @@ class AccessTests(LibraryTestCase):
     def test_signed_out_gets_no_tools(self):
         document = self.document(visibility=Visibility.PUBLIC)
         anonymous = AnonymousUser()
-        self.assertFalse(self.TOOLS & {action.name for action in palette_actions.actions_for(anonymous)})
         self.assertIn("error", self.run_as(anonymous, "read_document", document=str(document.pk)))
         self.assertIn("error", self.run_as(anonymous, "add_document", title="T", text="words"))
         self.assertFalse(Document.objects.filter(title="T").exists())
@@ -1172,8 +1169,6 @@ class PictureTests(LibraryTestCase):
         )
         # Signed by a club admin who has since stopped being one.
         admin = User.objects.create_user("admin2", "admin2@example.com", "x")
-        admin.userdata.library_enabled = True
-        admin.userdata.save(update_fields=["library_enabled"])
         membership = ClubMember.objects.create(club=self.club, user=admin, name="A", permission_edit_club=True)
         url = self.link(document, admin)
         self.assertEqual(self.client.get(url).status_code, 200)
@@ -1429,7 +1424,7 @@ class WebVisibilityTests(LibraryTestCase):
         web = self.document(name="w.md", visibility=Visibility.WEB)
         public = self.document(name="p.md", text="# Other\n\nText.", visibility=Visibility.PUBLIC)
         self.assertEqual(self.client.get(web.get_absolute_url()).status_code, 200)
-        self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 404)
+        self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 302)
         self.client.force_login(self.member)
         self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 200)
 

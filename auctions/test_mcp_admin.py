@@ -602,9 +602,7 @@ class AdminJobProposalTests(AdminEndpointCase):
         userdata.paypal_enabled = False
         userdata.square_enabled = True
         userdata.save()
-        result = self.propose(
-            "set_user_features", {"user": self.userB.username, "paypal": True, "square": False}
-        )
+        result = self.propose("set_user_features", {"user": self.userB.username, "paypal": True, "square": False})
         self.assertFalse(result["isError"], result)
         self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
         userdata.refresh_from_db()
@@ -1163,13 +1161,12 @@ class ReadOnlyToolsDontWriteTests(AdminEndpointCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        from auctions.models import Club, ClubMember, UserData
+        from auctions.models import Club, ClubMember
 
         cls.club = Club.objects.create(
             name="Read Only Aquarists", enable_breeder_award_program=True, enable_donation_tracking=True
         )
         ClubMember.objects.create(club=cls.club, user=cls.owner, name="Site Owner", permission_admin=True)
-        UserData.objects.filter(user=cls.owner).update(library_enabled=True)
 
     def arguments_to_try(self):
         return [
