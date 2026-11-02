@@ -34,7 +34,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         # An empty form for adding a club; what it creates belongs to the caller.
         "club_add",
         # Account pages: their content is the caller's own, or a sign-in form. feature_requests lists
-        # only the caller's own requests.
+        # only the caller's own requests. The library's pages show only what visible_documents lets them read.
         "feature_requests",
         "account_login", "account_signup", "account_logout", "account_inactive", "account_email",
         "account_email_verification_sent", "account_reset_password", "account_reset_password_done",
@@ -45,7 +45,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         "ignore_categories", "feedback", "messages", "my_bids", "my_invoices", "selling", "buying", "watched",
         "won_lots", "my_lot_report", "my_won_lot_csv", "my_lots_page_view_history", "user_api_keys",
         "chat_subscriptions", "auction_confirm", "all_my_users", "paypal_seller", "square_seller",
-        "account_data_export", "account_merge", "library", "library_answer",
+        "account_data_export", "account_merge", "library", "library_answer", "library_add", "library_search",
         "command_palette", "ai", "unsubscribe", "auction_join",
         # Beacons, health and static documents.
         "pageview", "form_abandoned", "check_username", "get_ad", "click_ad", "service_worker",
