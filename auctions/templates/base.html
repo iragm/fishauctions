@@ -426,20 +426,17 @@
           }
         </script>
         {% endif %}
-        {# set timezone via js #}
-        {% if not user_timezone_set %}
-          <script>
-            $(document).ready(function(){
-              try {
-                let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                if (!tz) {
-                  throw "Unable to set time zone";
-                }
+        {% comment %}Every page, not only the first: a cookie saved while the computer's clock was wrong would otherwise stay wrong. The server decides how much to trust it (resolve_timezone).{% endcomment %}
+        <script>
+          $(document).ready(function(){
+            try {
+              let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+              if (tz && tz !== "{{ user_timezone_cookie|default:''|escapejs }}") {
                 setSiteCookie("user_timezone", tz);
-              } catch(e) {}
-            });
-          </script>
-        {% endif %}
+              }
+            } catch(e) {}
+          });
+        </script>
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
         {% if not has_user_location and location_message and not request.is_mobile_app %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
