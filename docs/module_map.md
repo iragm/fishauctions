@@ -119,7 +119,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (506 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (368 lines)
+- **`context_processors.py`** (377 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -175,11 +175,11 @@ this only quotes its opening sentence.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
 - **`help_guides.py`** (1009 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
-- **`help_stats.py`** (1076 lines)
+- **`help_stats.py`** (1079 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
-- **`helper_functions.py`** (162 lines)
+- **`helper_functions.py`** (204 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
-  `static_html`, `scrub_emails`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
+  `static_html`, `scrub_emails`, `known_timezones`, `placed_timezone`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
 - **`history.py`** (148 lines)
   What an edit changed, in a form a query can answer.
   `is_secret_field`, `jsonable`, `truncate`, `changed_field_summary`, `record_club_history`, `field_label`
@@ -201,7 +201,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15352 lines)
+- **`models.py`** (15353 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -692,6 +692,9 @@ this only quotes its opening sentence.
 - **`test_tenancy.py`** (413 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
+- **`test_timezones.py`** (85 lines)
+  A saved or cookie timezone of UTC is a browser that didn't know where it was, and must not stick.
+  `TimezoneTests`
 - **`test_untrusted_text.py`** (114 lines)
   Text somebody typed reaches the page as text, and ``?next=`` never leaves the site.
   `LiteralHTMLTests`, `BulkSellQueryTests`, `InvoiceRenewalToggleTests`, `SafeNextUrlTests`, `ChatTests`, `MissingObjectTests`
@@ -779,7 +782,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`auction_emails.py`** (359 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
-- **`auction_promos.py`** (334 lines)
+- **`auction_promos.py`** (335 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
 - **`auctiontos_notifications.py`** (308 lines)
