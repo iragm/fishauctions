@@ -6,14 +6,13 @@ page load.
 """
 
 import functools
-import zoneinfo
 
 from django.conf import settings  # import the settings file
 
 from auctions import dmca
 from auctions.client_ip import client_ip
 from auctions.crawlers import is_crawler
-from auctions.helper_functions import cookie_coordinates
+from auctions.helper_functions import cookie_coordinates, known_timezones, placed_timezone
 
 DEFAULT_USER_TIMEZONE = "America/New_York"
 GOOGLE_OAUTH_PLACEHOLDER_VALUES = {
@@ -57,7 +56,7 @@ def _safe_timezone(value: str | None) -> str | None:
     The cookie is client-controlled and userdata.timezone is free text; an invalid value would 500
     every page in ``{% timezone user_timezone %}`` (Django ticket #33674).
     """
-    if value and value in zoneinfo.available_timezones():
+    if value and value in known_timezones():
         return value
     return None
 
@@ -148,22 +147,31 @@ def theme(request):
     return {"theme": theme}
 
 
+def resolve_timezone(request, default):
+    """The zone to show this request in: the browser's, unless it only says UTC and the account knows better.
+
+    Order: a placed ``user_timezone`` cookie, the account's saved placed zone, a UTC cookie, ``default``.
+    A saved UTC is ignored -- it was copied from a browser that didn't know where it was.
+    """
+    cookie = _safe_timezone(request.COOKIES.get("user_timezone"))
+    if placed_timezone(cookie):
+        return cookie
+    user = getattr(request, "user", None)
+    if user is not None and user.is_authenticated:
+        saved = placed_timezone(getattr(getattr(user, "userdata", None), "timezone", None))
+        if saved:
+            return saved
+    return cookie or default
+
+
 def add_tz(request):
-    """Add the timezone cookie (e.g. 'America/New_York'), set by JS from Intl.DateTimeFormat()."""
-    user_timezone = ""
-    user_timezone_set = False
-    cookie_timezone = _safe_timezone(request.COOKIES.get("user_timezone"))
-    if cookie_timezone:
-        user_timezone = cookie_timezone
-        user_timezone_set = True
-    if not user_timezone:
-        user_timezone = DEFAULT_USER_TIMEZONE
-        if request.user.is_authenticated:
-            # UserData is auto-created when user is saved
-            saved = _safe_timezone(request.user.userdata.timezone)
-            if saved:
-                user_timezone = saved
-    return {"user_timezone": user_timezone, "user_timezone_set": user_timezone_set}
+    """The zone pages render in, and the cookie as it stands so base.html's JS can refresh it when stale."""
+    timezone_cookie = _safe_timezone(request.COOKIES.get("user_timezone")) or ""
+    return {
+        "user_timezone": resolve_timezone(request, DEFAULT_USER_TIMEZONE),
+        "user_timezone_set": bool(timezone_cookie),
+        "user_timezone_cookie": timezone_cookie,
+    }
 
 
 def add_location(request):
@@ -194,7 +202,8 @@ def add_location(request):
             userdata.longitude = longitude_cookie
             changed += ["latitude", "longitude"]
 
-        timezone_cookie = _safe_timezone(request.COOKIES.get("user_timezone"))
+        # A UTC cookie is never saved: it would overwrite a real zone with a misset clock's.
+        timezone_cookie = placed_timezone(request.COOKIES.get("user_timezone"))
         if timezone_cookie and userdata.timezone != timezone_cookie:
             userdata.timezone = timezone_cookie
             changed.append("timezone")

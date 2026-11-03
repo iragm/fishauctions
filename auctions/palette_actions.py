@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
-from zoneinfo import ZoneInfo, available_timezones
+from zoneinfo import ZoneInfo
 
 from django import forms
 from django.conf import settings
@@ -52,6 +52,7 @@ from django.utils.text import Truncator
 from . import command_palette, palette_routes, source_code
 from .documents.models import TOPIC_LABELS, TOPICS
 from .documents.search import can_use_library
+from .helper_functions import known_timezones, placed_timezone
 from .models import AuctionTOS, ClubMember, DonationEmail, DonationVendor, Lot
 from .services import (
     apply_club_member_to_tos,
@@ -727,7 +728,7 @@ def local_time(auction, value) -> str | None:
 def _auction_zone(auction) -> ZoneInfo:
     """The zone :func:`local_time` speaks in (``Auction.timezone``, the creator's), as a ``ZoneInfo``."""
     name = str(auction.timezone)
-    return ZoneInfo(name) if name in available_timezones() else ZoneInfo(settings.TIME_ZONE)
+    return ZoneInfo(name) if name in known_timezones() else ZoneInfo(settings.TIME_ZONE)
 
 
 #: What the history line says when nothing set a surface: the palette on the site itself.
@@ -755,9 +756,9 @@ def user_time(user, value) -> str | None:
     """
     if not value:
         return None
-    name = getattr(getattr(user, "userdata", None), "timezone", None)
+    name = placed_timezone(getattr(getattr(user, "userdata", None), "timezone", None))
     try:
-        zone = ZoneInfo(name) if name and name in available_timezones() else ZoneInfo(settings.TIME_ZONE)
+        zone = ZoneInfo(name or settings.TIME_ZONE)
         return value.astimezone(zone).strftime("%A, %B %-d %Y at %-I:%M %p %Z")
     except Exception:  # pragma: no cover - a broken tz name is not worth losing the answer to
         logger.exception("Could not localize a date for %s", user)
@@ -8216,8 +8217,8 @@ def _parse_when(user, value: str, zone: ZoneInfo | None = None):
         return None, f"I couldn't read “{text}” as a date and time. Use a format like 2026-09-14T19:00."
     if timezone.is_naive(parsed):
         if zone is None:
-            name = getattr(getattr(user, "userdata", None), "timezone", None)
-            zone = ZoneInfo(name) if name and name in available_timezones() else ZoneInfo(settings.TIME_ZONE)
+            name = placed_timezone(getattr(getattr(user, "userdata", None), "timezone", None))
+            zone = ZoneInfo(name or settings.TIME_ZONE)
         parsed = parsed.replace(tzinfo=zone)
     return parsed, ""
 
@@ -8791,9 +8792,8 @@ _AUCTION_DATES = {
 
 
 def _auction_timezone(user) -> str:
-    """The zone ``AuctionEditForm`` parses dates in: the user's if valid, else the site's."""
-    name = getattr(getattr(user, "userdata", None), "timezone", None)
-    return name if name and name in available_timezones() else settings.TIME_ZONE
+    """The zone ``AuctionEditForm`` parses dates in: the user's if it places them, else the site's."""
+    return placed_timezone(getattr(getattr(user, "userdata", None), "timezone", None)) or settings.TIME_ZONE
 
 
 def _auction_setting_form(user, auction=None, data=None):

@@ -42,6 +42,8 @@ from django.db.models import (
 from django.db.models.functions import Floor
 from django.utils import timezone
 
+from auctions.helper_functions import placed_timezone
+
 logger = logging.getLogger(__name__)
 
 SITE_CACHE_KEY = "help_site_stats_v1"
@@ -627,6 +629,7 @@ def _dollar_auctions(auctions) -> set[int]:
 
 def _local(when, zone_name):
     try:
+        zone_name = placed_timezone(zone_name)
         zone = zoneinfo.ZoneInfo(zone_name) if zone_name else timezone.get_default_timezone()
     except (zoneinfo.ZoneInfoNotFoundError, ValueError):
         zone = timezone.get_default_timezone()
