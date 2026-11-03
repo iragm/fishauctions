@@ -26,7 +26,7 @@ from auctions.models import (
 from auctions.test_support import isolated_cache
 
 FAKE_FIREBASE = '{"type": "service_account", "project_id": "x"}'
-#: Today at 10:30 AM in UTC, the fixture user's time zone, so the send hour is open unless a test moves
+#: Today at 10:30 AM in UTC, which is the fixture user's Reykjavik (UTC+0 all year; a saved "UTC" reads as unset), so the send hour is open unless a test moves
 #: it. Today rather than a fixed date: the join reminder and AuctionTOS read the real clock.
 NOW = timezone.now().astimezone(datetime.UTC).replace(hour=10, minute=30, second=0, microsecond=0)
 DAY = datetime.timedelta(days=1)
@@ -42,7 +42,7 @@ class AuctionPromosTestCase(TestCase):
         UserData.objects.filter(user=self.fan).update(
             latitude=40.1,
             longitude=-80.1,
-            timezone="UTC",
+            timezone="Atlantic/Reykjavik",
             email_me_about_new_auctions=True,
             email_me_about_new_auctions_distance=100,
             email_me_about_new_in_person_auctions=True,
@@ -251,7 +251,7 @@ class AudienceTests(AuctionPromosTestCase):
 
     def test_the_organizer_is_not_told_about_their_own_auction(self):
         UserData.objects.filter(user=self.seller).update(
-            latitude=40.1, longitude=-80.1, timezone="UTC", last_activity=NOW - 10 * DAY
+            latitude=40.1, longitude=-80.1, timezone="Atlantic/Reykjavik", last_activity=NOW - 10 * DAY
         )
         self.make_auction(starts=NOW + 5 * DAY)
         send, _ = self.run_job()
