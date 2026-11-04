@@ -64,7 +64,9 @@ def outcome_of(method: str, answer: dict[str, Any]) -> tuple[str, str, int]:
     return MCPCall.OK, "", size
 
 
-def record(request, credential, message: Any, answer: dict[str, Any] | None, started: float) -> None:
+def record(
+    request, credential, message: Any, answer: dict[str, Any] | None, started: float, admin: bool = False
+) -> None:
     """Write one row for this message and its answer. Never raises."""
     if answer is None or not isinstance(message, dict):
         return
@@ -92,6 +94,7 @@ def record(request, credential, message: Any, answer: dict[str, Any] | None, sta
             detail=redact(detail)[:300],
             result_chars=size,
             elapsed_ms=int((time.monotonic() - started) * 1000),
+            admin=admin,
         )
     except Exception:
         logger.warning("Couldn't record an MCP call", exc_info=True)
@@ -106,12 +109,13 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
 
     People are numbered rather than named, and what they or their agents wrote was stored without
     contact details; the reader is an agent that also reads strangers' text and may write to a public
-    repository, so :func:`auctions.mcp.admin.mcp_usage` fences it as well. ``/mcp/admin/`` is never recorded, so the owner's routines aren't here.
+    repository, so :func:`auctions.mcp.admin.mcp_usage` fences it as well. ``/mcp/admin/`` calls are
+    left out: the owner's routines are in :func:`admin_report`.
     """
     from auctions.models import LLMUsage, MCPCall
 
     since = timezone.now() - timedelta(days=days)
-    recent = MCPCall.objects.filter(createdon__gte=since)
+    recent = MCPCall.objects.filter(createdon__gte=since, admin=False)
     # The newest MAX_CALLS, oldest first: enough for a week's review, bounded for a busy quarter.
     calls = list(
         recent.filter(method="tools/call")
@@ -204,3 +208,39 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
         "ai_page": ai_page,
         "skills_asked_for": wanted,
     }
+
+
+def admin_report(days: int = 7) -> dict[str, Any]:
+    """What the owner's own agents read on ``/mcp/admin/``: per tool, how often, how it went, and what it
+    cost in characters of answer, the biggest first, so the routines' token spend has names on it."""
+    from django.db.models import Avg, Count, Max, Q, Sum
+
+    from auctions.models import MCPCall
+
+    since = timezone.now() - timedelta(days=days)
+    calls = MCPCall.objects.filter(createdon__gte=since, admin=True, method="tools/call")
+    rows = list(
+        calls.values("tool")
+        .annotate(
+            calls=Count("pk"),
+            chars=Sum("result_chars"),
+            biggest=Max("result_chars"),
+            average_ms=Avg("elapsed_ms"),
+            went_wrong=Count("pk", filter=~Q(outcome=MCPCall.OK)),
+        )
+        .order_by("-chars")
+    )
+    total = sum(row["chars"] or 0 for row in rows)
+    tools = [
+        {
+            "tool": row["tool"],
+            "calls": row["calls"],
+            "chars": row["chars"] or 0,
+            "average_chars": round((row["chars"] or 0) / row["calls"]) if row["calls"] else 0,
+            "biggest_chars": row["biggest"] or 0,
+            "average_ms": round(row["average_ms"] or 0),
+            "went_wrong": row["went_wrong"],
+        }
+        for row in rows[:40]
+    ]
+    return {"days": days, "calls": sum(row["calls"] for row in rows), "chars": total, "by_tool": tools}

@@ -207,8 +207,8 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
                     )[:800],
                     applies_to="MEMBERS",
                 )
-            except Exception:
-                pass  # Never let the history write mask the original error
+            except Exception:  # never let the history write mask the original error
+                logger.warning("Couldn't record a failed club API write in the club's history", exc_info=True)
             raise
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
@@ -356,8 +356,8 @@ class ClubMemberRenewAPIView(ClubAPIViewMixin, APIView):
                     applies_to="MEMBERSHIP",
                     member=member,
                 )
-            except Exception:
-                pass  # Never let the history write mask the original error
+            except Exception:  # never let the history write mask the original error
+                logger.warning("Couldn't record a failed club API write in the club's history", exc_info=True)
             raise
         save_kwargs = {}
         if created:

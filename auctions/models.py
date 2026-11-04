@@ -30,7 +30,7 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, validate_email
 from django.db import models, transaction
 from django.db.models import (
@@ -1615,7 +1615,7 @@ def _generate_unique_bidder_number(*, is_taken, preferred=None, phone=None, addr
             search = search[1:]
         if str(search)[0] == "0":
             search = search[1:]
-    except Exception:
+    except (IndexError, TypeError):
         pass
     failsafe = 0
     while failsafe < 6000:
@@ -9179,8 +9179,10 @@ class Lot(CachedPropertiesMixin, models.Model):
             if winner.holding_for_second_pickup:
                 return f"{winner.pickup_location} - hold for second pickup"
             return str(winner.pickup_location)
+        except (ObjectDoesNotExist, AttributeError):
+            pass  # no winner's AuctionTOS: fall back to the user's below
         except Exception:
-            pass
+            logger.warning("Couldn't read lot %s's winner pickup location", self.pk, exc_info=True)
         tos = AuctionTOS.objects.filter(user=self.winner, auction=self.auction).first()
         if tos:
             return str(tos.pickup_location)
@@ -9191,8 +9193,10 @@ class Lot(CachedPropertiesMixin, models.Model):
         """Pickup location of the seller"""
         try:
             return self.auctiontos_seller.pickup_location
+        except (ObjectDoesNotExist, AttributeError):
+            pass  # no seller's AuctionTOS: fall back to the user's below
         except Exception:
-            pass
+            logger.warning("Couldn't read lot %s's seller pickup location", self.pk, exc_info=True)
         tos = AuctionTOS.objects.filter(user=self.user, auction=self.auction).first()
         if tos:
             return tos.pickup_location
@@ -14230,7 +14234,8 @@ class MCPCall(models.Model):
     The site never sees the conversation an agent is having, only its calls, so this is the evidence for
     whether people get answers: a tool name that doesn't exist, a parameter it refuses, an error, a
     question back, or an empty find is a turn that went wrong. ``mcp_usage`` on ``/mcp/admin/`` reads it.
-    ``/mcp/admin/`` itself is never recorded: nothing there writes, and it is the owner's own routines.
+    ``/mcp/admin/`` calls are recorded with ``admin`` set: an audit of every privileged read, and what
+    each costs in characters. ``mcp_usage`` leaves them out of its report on other people's agents.
     """
 
     OK = "ok"
@@ -14257,6 +14262,7 @@ class MCPCall(models.Model):
     detail = models.CharField(max_length=300, blank=True, help_text="The error, or the question asked back.")
     result_chars = models.PositiveIntegerField(default=0)
     elapsed_ms = models.PositiveIntegerField(default=0)
+    admin = models.BooleanField(default=False, help_text="Made on /mcp/admin/, by a superuser's agent.")
 
     class Meta:
         ordering = ["-createdon"]

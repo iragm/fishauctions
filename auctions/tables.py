@@ -4,6 +4,7 @@ Each pairs with a filter in :mod:`auctions.filters` and renders through
 ``views.base.HTMxTableView``. HTML columns use ``format_html``: lot names are public input.
 """
 
+import logging
 import re
 from urllib.parse import urlencode
 
@@ -34,6 +35,8 @@ from .models import (
     Lot,
     Speaker,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -570,8 +573,10 @@ class LotHTMxTableForUsers(tables.Table):
                 if notes:
                     badge_parts.append(notes)
                 result += format_html(' <span class="badge bg-success text-dark">{}</span>', " · ".join(badge_parts))
+            except ObjectDoesNotExist:
+                pass  # no points awarded on this lot
             except Exception:
-                pass
+                logger.warning("Couldn't draw lot %s's points badge", record.pk, exc_info=True)
         return result
 
     def render_auction(self, value, record):

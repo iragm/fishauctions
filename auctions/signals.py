@@ -182,8 +182,8 @@ def update_user_location(sender, instance, **kwargs):
         cutLocation = instance.location_coordinates.split(",")
         instance.latitude = float(cutLocation[0])
         instance.longitude = float(cutLocation[1])
-    except Exception:
-        pass
+    except (AttributeError, IndexError, TypeError, ValueError):
+        pass  # no coordinates, or not "lat,lng": keep what was there
 
 
 @receiver(pre_save, sender="auctions.Club")

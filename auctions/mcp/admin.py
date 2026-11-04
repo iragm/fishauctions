@@ -29,6 +29,7 @@ There is deliberately no database tool, read-only or not.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -432,6 +433,11 @@ def list_feature_requests(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 # --- read_logs ---------------------------------------------------------------------------------------
+#
+# A record is one log line with whatever followed it (a traceback). Records of one *kind* -- the same
+# first line and the same final exception, with numbers, ids and the request context taken out -- are
+# one problem, so by default they come back once, with how many times and when, instead of a traceback
+# per occurrence. Its fingerprint names it to the next call (fingerprint=) and to site_health (known=).
 
 #: ``django.log``, ``root-celery.log``...: the files settings.LOGGING writes, never anything else in LOG_DIR.
 _LOG_NAME = re.compile(r"^(?:django|root)(?:-[a-z]+)?$")
@@ -442,6 +448,14 @@ _ROTATIONS = 5
 LOG_RECORDS = 50
 MAX_LOG_RECORDS = 500
 LOG_CHARS = 15000
+#: The furthest back ``since`` reaches.
+MAX_SINCE = timedelta(days=30)
+#: Kinds one read keeps track of; past this, new kinds are counted but not kept.
+MAX_KINDS = 2000
+#: auctions.log_context's "[r=1a2b3c4d u=42] " / "[t=endauctions] ".
+_CONTEXT_TOKEN = re.compile(r"\[(?:r|t)=[^\]]*\] ?")
+_VARYING = re.compile(r"0x[0-9a-fA-F]+|\b[0-9a-fA-F]{8,}\b|\d+")
+_RELATIVE = re.compile(r"^(\d+)\s*([mhd])$")
 
 
 def _log_dir() -> Path:
@@ -473,39 +487,219 @@ def _records(paths: list[Path]):
         yield level, stamp, "".join(lines)
 
 
-def _log_files(name: str, older: bool) -> list[Path]:
+def _log_files(name: str, older: bool, since: datetime | None = None) -> list[Path]:
+    """The log's files, oldest first. With ``since``, a rotated file last written before it is skipped:
+    nothing in it can be new, and reading every rotation of every log would be 240 MB."""
     base = _log_dir() / f"{name}.log"
     if not older:
         return [base]
-    return [base.with_name(f"{name}.log.{index}") for index in range(_ROTATIONS, 0, -1)] + [base]
+    rotated = [base.with_name(f"{name}.log.{index}") for index in range(_ROTATIONS, 0, -1)]
+    if since is not None:
+        floor = since.timestamp()
+        kept = []
+        for path in rotated:
+            try:
+                if path.stat().st_mtime >= floor:
+                    kept.append(path)
+            except OSError:
+                continue
+        rotated = kept
+    return rotated + [base]
+
+
+def _when(stamp: str) -> datetime | None:
+    """A record's timestamp. The logs are in the site's own time zone, which Django set as the process's;
+    not the current one, since a form's timezone.activate() leaks into whatever this thread serves next."""
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.get_default_timezone())
+    except ValueError:
+        return None
+
+
+def parse_since(value: Any) -> tuple[datetime | None, str]:
+    """``(moment, problem)`` for ``since``: "36h", "7d", "90m", or an ISO date or time. Blank is ``None``.
+
+    An ISO time without a zone is in the site's own, like the logs' stamps it was likely copied from."""
+    text = str(value or "").strip()
+    if not text:
+        return None, ""
+    relative = _RELATIVE.match(text.lower())
+    if relative:
+        minutes = int(relative.group(1)) * {"m": 1, "h": 60, "d": 1440}[relative.group(2)]
+        # Clamped before any arithmetic: "100000000d" is out of datetime's range.
+        return timezone.now() - timedelta(minutes=min(minutes, int(MAX_SINCE.total_seconds() // 60))), ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None, "When from? Like 24h, 7d, or a date such as 2026-11-02T12:22:00Z."
+    if timezone.is_naive(moment):
+        moment = moment.replace(tzinfo=timezone.get_default_timezone())
+    return max(moment, timezone.now() - MAX_SINCE), ""
+
+
+def _flag(params: dict[str, Any], key: str, default: bool = False) -> bool:
+    """A yes/no parameter by the palette's one rule; anything not clearly yes or no is the default."""
+    value = palette_actions._flag(params, key)
+    return default if value is None else value
+
+
+def _first_line(text: str) -> str:
+    """ "ERROR 2026-10-08 08:21:46,190 auctions.x.f:12 [r=… u=…] message" -> "auctions.x.f:12 message"."""
+    first = text.splitlines()[0] if text else ""
+    return _CONTEXT_TOKEN.sub("", first.split(" ", 3)[-1]).strip()
+
+
+def _exception_line(text: str) -> str:
+    """A traceback's last line, the exception itself, or ``""``."""
+    if "Traceback (most recent call last)" not in text:
+        return ""
+    for line in reversed(text.splitlines()):
+        if line.strip() and not line.startswith((" ", "\t")):
+            return line.strip()
+    return ""
+
+
+def record_kind(text: str) -> tuple[str, str, str]:
+    """``(fingerprint, kind, exception)``: what a record is, with what varies between occurrences out.
+
+    The level is part of it: one message logged as a WARNING on a retry and an ERROR on the last attempt
+    is two kinds, so the ERRORs are never filed under the warning."""
+    level = text.split(" ", 1)[0] if text else ""
+    kind = redact(_first_line(text))[:200]
+    exception = redact(_exception_line(text))[:200]
+    shape = _VARYING.sub("#", f"{level}\n{kind}\n{exception}")
+    return hashlib.sha1(shape.encode(), usedforsecurity=False).hexdigest()[:8], kind, exception
+
+
+#: The fingerprint of the group that holds every kind past :data:`MAX_KINDS`, one per log and level.
+OVERFLOW = "overflow"
+
+
+def _groups(names: list[str], since: datetime | None, older: bool, floor: int, contains: str = "", wanted: str = ""):
+    """Every matching record of ``names`` grouped by kind: ``{(log, fingerprint): group}``, and the records seen."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    # redact() and a hash per distinct (first line, exception), not per record: a week of one warning is
+    # tens of thousands of records and one kind.
+    kinds: dict[tuple[str, str, str], tuple[str, str, str]] = {}
+    seen = 0
+    for name in names:
+        for level, stamp, text in _records(_log_files(name, older, since)):
+            if _LEVELS.index(level) < floor:
+                continue
+            if since is not None:
+                when = _when(stamp)
+                if when is None or when < since:
+                    continue
+            if contains and contains not in text.lower():
+                continue
+            raw = (level, _first_line(text), _exception_line(text))
+            if raw not in kinds:
+                kinds[raw] = record_kind(text)
+            fingerprint, kind, exception = kinds[raw]
+            if wanted and not fingerprint.startswith(wanted):
+                continue
+            seen += 1
+            key = (name, fingerprint)
+            if key not in groups and len(groups) >= MAX_KINDS:
+                # Still counted, in one group per log and level, so a new error past the cap is never
+                # lost from the totals; its own text is in the logs.
+                fingerprint, kind, exception = OVERFLOW, f"(more kinds than one read keeps, {level})", ""
+                key = (name, f"{OVERFLOW}-{level}")
+            group = groups.get(key)
+            if group is None:
+                group = groups[key] = {
+                    "fingerprint": fingerprint,
+                    "log": name,
+                    "level": level,
+                    "kind": kind,
+                    "exception": exception,
+                    "times": 0,
+                    "first": stamp,
+                }
+            group["times"] += 1
+            group["last"] = stamp
+            group["_text"] = text
+    return groups, seen
 
 
 def read_logs(request, params: dict[str, Any]) -> dict[str, Any]:
-    """The newest records of one log, filtered, with credentials, addresses and emails taken out."""
+    """The newest records of one log or all of them, filtered and grouped by kind, with credentials,
+    addresses and emails taken out."""
     names = log_names()
     name = _str(params, "log", "django")
-    if name not in names:
-        return _need("Which log? " + (", ".join(names) or "There are none."))
+    if name != "all" and name not in names:
+        return _need("Which log? all, " + (", ".join(names) or "There are none."))
+    targets = names if name == "all" else [name]
     minimum = _str(params, "level").upper()
     if minimum and minimum not in _LEVELS:
         return _need("Which level? One of " + ", ".join(_LEVELS) + ".")
     floor = _LEVELS.index(minimum) if minimum else 0
+    since, problem = parse_since(params.get("since"))
+    if problem:
+        return _need(problem)
     contains = _str(params, "contains").lower()
+    wanted = _str(params, "fingerprint").lower()
     count = min(max(_int(params, "records", LOG_RECORDS) or 1, 1), MAX_LOG_RECORDS)
-    older = bool(params.get("include_rotated"))
-    kept: deque[str] = deque(maxlen=count)
-    for level, _stamp, text in _records(_log_files(name, older)):
-        if _LEVELS.index(level) < floor:
-            continue
-        if contains and contains not in text.lower():
-            continue
-        kept.append(text)
-    records = [redact(text) for text in kept]
-    # Whole records, oldest dropped first: half a traceback is worse than one fewer.
+    older = _flag(params, "include_rotated") or since is not None
+    if _flag(params, "kinds_only") or _flag(params, "group", True):
+        groups, seen = _groups(targets, since, older, floor, contains, wanted)
+        newest = sorted(groups.values(), key=lambda group: group["last"], reverse=True)[:count]
+        label = "all logs" if name == "all" else f"{name}.log"
+        summary = f"{seen} record{'s' if seen != 1 else ''} of {len(groups)} kind{'s' if len(groups) != 1 else ''} in {label}."
+        if _flag(params, "kinds_only"):
+            kinds = [{key: value for key, value in group.items() if key != "_text"} for group in newest]
+            return _ok(summary, log=name, kinds=kinds)
+        parts = [
+            f"--- {group['times']}x {group['log']}.log {group['fingerprint']} first {group['first']} last {group['last']}\n"
+            + redact(group["_text"])
+            for group in newest
+        ]
+        # Whole groups, oldest dropped first: half a traceback is worse than one fewer.
+        while len(parts) > 1 and sum(map(len, parts)) > LOG_CHARS:
+            parts.pop()
+        return _ok(summary, log=name, text="".join(parts)[:LOG_CHARS])
+    merged: list[tuple[str, str]] = []
+    for target in targets:
+        # Each log's newest ``count`` hold the newest ``count`` of them all, so memory stays bounded.
+        newest: deque[tuple[str, str]] = deque(maxlen=count)
+        for level, stamp, text in _records(_log_files(target, older, since)):
+            if _LEVELS.index(level) < floor:
+                continue
+            if since is not None and ((when := _when(stamp)) is None or when < since):
+                continue
+            if contains and contains not in text.lower():
+                continue
+            if wanted and not record_kind(text)[0].startswith(wanted):
+                continue
+            newest.append((stamp, (f"[{target}] " if name == "all" else "") + text))
+        merged.extend(newest)
+    merged.sort(key=lambda row: row[0])  # stable: one file's order holds within a second
+    kept = merged[-count:]
+    records = [redact(text) for _stamp, text in kept]
     while len(records) > 1 and sum(map(len, records)) > LOG_CHARS:
         records.pop(0)
     body = "".join(records)[-LOG_CHARS:]
-    return _ok(f"{len(records)} record{'s' if len(records) != 1 else ''} from {name}.log.", log=name, text=body)
+    label = "all logs" if name == "all" else f"{name}.log"
+    return _ok(f"{len(records)} record{'s' if len(records) != 1 else ''} from {label}.", log=name, text=body)
+
+
+def log_coverage() -> dict[str, Any]:
+    """Each log's oldest record, and the logs whose rotations are full, so the oldest is all there is."""
+    found: dict[str, Any] = {}
+    for name in log_names():
+        oldest = None
+        for path in _log_files(name, older=True):
+            if not path.exists():
+                continue
+            for _level, stamp, _text in _records([path]):
+                if stamp:
+                    oldest = stamp
+                    break
+            if oldest:
+                break
+        full = (_log_dir() / f"{name}.log.{_ROTATIONS}").exists()
+        found[name] = {"oldest": oldest, "rotations_full": full}
+    return found
 
 
 # --- site_health -------------------------------------------------------------------------------------
@@ -571,6 +765,8 @@ def _beat() -> dict[str, Any]:
 
 #: Disk or memory use, as a percentage, at which ``site_health`` stops saying ``ok``.
 HOST_WARN_PERCENT = 85
+#: Messages waiting in one Celery queue at which ``site_health`` says it is backed up.
+QUEUE_WARN = 100
 
 
 def _host() -> dict[str, Any]:
@@ -610,36 +806,58 @@ def _host() -> dict[str, Any]:
     return facts
 
 
-#: How far back ``site_health`` counts errors.
+#: How far back ``site_health`` counts errors when no ``since`` is given.
 ERROR_WINDOW = timedelta(hours=24)
-#: Distinct error lines ``site_health`` names.
+#: Distinct kinds ``site_health`` names, per level.
 ERROR_KINDS = 10
 
 
-def _recent_errors() -> dict[str, Any]:
-    """ERROR and CRITICAL records in ``django.log`` within :data:`ERROR_WINDOW`, grouped by their first line."""
-    # The log's timestamps are in the site's own time zone, which Django set as the process's. Not
-    # the current one: a form's timezone.activate() leaks into whatever this thread serves next.
-    zone = timezone.get_default_timezone()
-    since = timezone.localtime() - ERROR_WINDOW
-    kinds: dict[str, int] = {}
-    total = 0
-    for level, stamp, text in _records(_log_files("django", older=True)):
-        if level not in ("ERROR", "CRITICAL"):
-            continue
-        try:
-            when = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=zone)
-        except ValueError:
-            continue
-        if when < since:
-            continue
-        total += 1
-        first = text.splitlines()[0]
-        # "ERROR 2026-10-08 08:21:46,190 module.func:12 message" -> "module.func:12 message"
-        kind = redact(first.split(" ", 3)[-1].strip())[:200]
-        kinds[kind] = kinds.get(kind, 0) + 1
-    ranked = sorted(kinds.items(), key=lambda item: -item[1])[:ERROR_KINDS]
-    return {"total": total, "most_common": [{"error": kind, "times": times} for kind, times in ranked]}
+def _known(params: dict[str, Any]) -> set[str]:
+    value = params.get("known") or []
+    if not isinstance(value, (list, tuple)):
+        value = re.split(r"[\s,]+", str(value))
+    return {str(item).strip().lower()[:8] for item in value if str(item).strip()}
+
+
+def _log_problems(since: datetime, known: set[str]) -> dict[str, Any]:
+    """ERROR+ and WARNING records in every log since ``since``, grouped by kind, minus the ``known`` ones.
+
+    Every log, not just ``django.log``: that one only holds Django's own loggers. The site's code, every
+    Celery task, beat and the documents worker write to the ``root*`` logs. Slow-request warnings are
+    left out here; they have their own section.
+    """
+    groups, _seen = _groups(log_names(), since, older=True, floor=_LEVELS.index("WARNING"))
+    found: dict[str, Any] = {}
+    for label, levels in (("errors", ("ERROR", "CRITICAL")), ("warnings", ("WARNING",))):
+        rows = [
+            group
+            for group in groups.values()
+            if group["level"] in levels and not (label == "warnings" and _SLOW_REQUEST.search(group["_text"]))
+        ]
+        fresh = [group for group in rows if group["fingerprint"] not in known]
+        by_log: dict[str, int] = {}
+        for group in rows:
+            by_log[group["log"]] = by_log.get(group["log"], 0) + group["times"]
+        ranked = sorted(fresh, key=lambda group: -group["times"])[:ERROR_KINDS]
+        found[label] = {
+            "since": since.isoformat(),
+            "total": sum(group["times"] for group in rows),
+            "by_log": by_log,
+            "known_kinds_left_out": len(rows) - len(fresh),
+            "new_kinds": len(fresh),
+            "most_common": [
+                {
+                    "fingerprint": group["fingerprint"],
+                    "log": group["log"],
+                    "error": group["kind"],
+                    **({"exception": group["exception"]} if group["exception"] else {}),
+                    "times": group["times"],
+                    "last": group["last"],
+                }
+                for group in ranked
+            ],
+        }
+    return found
 
 
 #: Running queries ``site_health`` shows, longest first, and the characters of each it keeps.
@@ -739,46 +957,80 @@ def _deploy_window() -> dict[str, Any]:
     return {**window, "advice": deploy_window.summary(window)}
 
 
+def _plural(count: int, word: str, plural: str = "") -> str:
+    return f"{count} {word if count == 1 else (plural or word + 's')}"
+
+
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
-    """What is deployed and whether it is well: commit, migrations, queues, beat, recent errors, host,
-    when the host and containers last started, and whether now is a quiet time to deploy."""
-    from auctions import app_crashes, uptime
+    """What is deployed and whether it is well: commit, migrations, queues, beat and each periodic task,
+    errors and warnings in every log, app crashes, counts against a normal day, rows stuck in a state
+    they shouldn't stay in, host, database, slow requests, uptime, and whether now is a quiet time to deploy.
+
+    ``since`` widens or narrows the window (default the last day), ``known`` leaves out kinds already
+    dealt with, and ``brief`` returns only what is wrong, so a quiet week costs one line.
+    """
+    from auctions import app_crashes, site_checks, uptime
+
+    since, problem = parse_since(params.get("since"))
+    if problem:
+        return _need(problem)
+    since = since or timezone.now() - ERROR_WINDOW
+    known = _known(params)
+    brief = _flag(params, "brief")
+    hours = max(1, int((timezone.now() - since).total_seconds() // 3600))
 
     deployed = _deployed_commit()
     pending = _pending_migrations()
-    errors = _recent_errors()
-    crashes = app_crashes.recent_count()
+    problems = _log_problems(since, known)
+    errors, warnings = problems["errors"], problems["warnings"]
+    crashes = app_crashes.recent_count(hours=hours)
     host = _host()
     database = _database()
     slow = _slow_requests()
     window = _deploy_window()
     started = uptime.uptime()
-    facts = {
-        **deployed,
-        # Short: a full 40-character hash is exactly what redact() takes for a credential.
-        "commit": deployed["commit"][:12],
-        "pending_migrations": pending,
-        "queues": _queue_depths(),
-        "beat": _beat(),
-        "errors_last_24h": errors,
-        "app_crashes_last_24h": crashes,
-        **host,
-        **started,
-        "database": database,
-        "slow_requests_last_hour": slow,
-        "debug": settings.DEBUG,
-        "deploy_window": window,
-        "checked_at": timezone.now().isoformat(),
-    }
+    queues = _queue_depths()
+    beat = {**_beat(), **site_checks.periodic_tasks()}
+    rates = site_checks.rates()
+    stuck = site_checks.invariants(since)
+    coverage = log_coverage()
+    # A full set of rotations whose oldest record is newer than the window: older records are gone.
+    short = sorted(
+        name
+        for name, row in coverage.items()
+        if row["rotations_full"] and row["oldest"] and (_when(row["oldest"]) or since) > since
+    )
+
     summary = (
         f"{deployed['branch']} at {deployed['commit'][:10]}; "
-        f"{len(pending)} migration{'s' if len(pending) != 1 else ''} not applied; "
-        f"{errors['total']} error{'s' if errors['total'] != 1 else ''} logged in the last 24 hours"
+        f"{_plural(len(pending), 'migration')} not applied; "
+        f"{_plural(errors['total'], 'error')} logged since {timezone.localtime(since, timezone.get_default_timezone()):%Y-%m-%d %H:%M %Z}"
     )
+    if known and (errors["known_kinds_left_out"] or warnings["known_kinds_left_out"]):
+        summary += f" ({_plural(errors['new_kinds'], 'new kind')})"
     if crashes["crashes"]:
-        summary += f"; the app reported {crashes['crashes']} crash{'es' if crashes['crashes'] != 1 else ''}"
+        summary += f"; the app reported {_plural(crashes['crashes'], 'crash', 'crashes')}"
     full = [name for name in ("disk", "memory") if host[name].get("used_percent", 0) >= HOST_WARN_PERCENT]
     summary += f"; {' and '.join(full)} over {HOST_WARN_PERCENT}% used." if full else "."
+    if warnings["new_kinds"]:
+        summary += f" {_plural(warnings['new_kinds'], 'kind')} of warning{' not marked known' if known else ''}."
+    over_queue = {name: depth for name, depth in queues.items() if isinstance(depth, int) and depth > QUEUE_WARN}
+    if "error" in queues:
+        summary += f" The Celery broker didn't answer: {queues['error']}."
+    elif over_queue:
+        summary += (
+            " Celery queue backed up: " + ", ".join(f"{name} {depth}" for name, depth in over_queue.items()) + "."
+        )
+    if beat.get("overdue"):
+        summary += " Overdue periodic tasks: " + ", ".join(row["task"] for row in beat["overdue"]) + "."
+    if beat.get("failing"):
+        summary += " Periodic tasks whose last run failed: " + ", ".join(row["task"] for row in beat["failing"]) + "."
+    if rates.get("unusual"):
+        summary += " Unusual: " + "; ".join(rates["unusual"]) + "."
+    if stuck.get("problems"):
+        summary += " Stuck: " + "; ".join(stuck["problems"]) + "."
+    if short:
+        summary += f" These logs don't reach back to the window's start, so it isn't all read: {', '.join(short)}."
     if database.get("longest_seconds", 0) >= SLOW_QUERY_WARN_SECONDS:
         summary += (
             f" {database['queries_running']} database quer{'ies' if database['queries_running'] != 1 else 'y'} "
@@ -787,17 +1039,60 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     if slow["busiest"]:
         busiest = slow["busiest"][0]
         summary += (
-            f" {slow['total']} slow request{'s' if slow['total'] != 1 else ''} in the last hour, "
+            f" {_plural(slow['total'], 'slow request')} in the last hour, "
             f"most often {busiest['request']} ({busiest['times']})."
         )
     booted = uptime.host_booted()
     if booted and timezone.now() - booted < ERROR_WINDOW:
         summary += f" The server booted at {booted:%Y-%m-%d %H:%M} UTC."
     quiet = started["longest_without_page_views_24h"][0]
-    if quiet["minutes"] >= uptime.QUIET_WARN.total_seconds() // 60:
+    silent = quiet["minutes"] >= uptime.QUIET_WARN.total_seconds() // 60
+    if silent:
         summary += f" No page views for {quiet['minutes']} minutes from {quiet['from'][:16].replace('T', ' ')} UTC."
     if window["verdict"] != "quiet":
         summary += " " + window["advice"]
+
+    facts = {
+        **deployed,
+        # Short: a full 40-character hash is exactly what redact() takes for a credential.
+        "commit": deployed["commit"][:12],
+        "pending_migrations": pending,
+        "queues": queues,
+        "beat": beat,
+        "errors": errors,
+        "warnings": warnings,
+        "app_crashes": {**crashes, "hours": hours},
+        "rates_vs_usual": rates,
+        "stuck": stuck,
+        "log_coverage": coverage,
+        **host,
+        **started,
+        "database": database,
+        "slow_requests_last_hour": slow,
+        "debug": settings.DEBUG,
+        "deploy_window": window,
+        "checked_at": timezone.now().isoformat(),
+    }
+    if brief:
+        wrong = {
+            "pending_migrations": bool(pending),
+            "queues": "error" in queues or bool(over_queue),
+            "beat": bool(beat.get("overdue") or beat.get("failing") or "error" in beat),
+            "errors": bool(errors["new_kinds"]),
+            "warnings": bool(warnings["new_kinds"]),
+            "app_crashes": bool(crashes["crashes"]),
+            "rates_vs_usual": bool(rates.get("unusual")),
+            "stuck": bool(stuck.get("problems")),
+            "log_coverage": bool(short),
+            "disk": "disk" in full or "error" in host["disk"],
+            "memory": "memory" in full or "error" in host["memory"],
+            "database": "error" in database or database.get("longest_seconds", 0) >= SLOW_QUERY_WARN_SECONDS,
+            "slow_requests_last_hour": bool(slow["busiest"]),
+            "longest_without_page_views_24h": silent,
+            "deploy_window": window["verdict"] != "quiet",
+        }
+        keep = {"branch", "commit", "checked_at"} | {key for key, bad in wrong.items() if bad}
+        facts = {key: value for key, value in facts.items() if key in keep}
     return _ok(summary, **facts)
 
 
@@ -886,12 +1181,22 @@ def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
     from . import usage
 
     days = min(max(_int(params, "days", 7) or 7, 1), 90)
-    found = usage.report(days, conversations=min(max(_int(params, "conversations", 20) or 20, 1), 100))
     fence = palette_actions.untrusted_short
 
     def tool_name(name: str) -> str:
         # An agent chooses the name it calls, so one that isn't ours is its words.
         return name if palette_actions.get_action(name) or name in ADMIN_TOOLS else fence(name)
+
+    if _flag(params, "admin"):
+        mine = usage.admin_report(days)
+        for tool in mine["by_tool"]:
+            tool["tool"] = tool_name(tool["tool"])
+        summary = f"{mine['calls']} /mcp/admin/ tool calls in {days} days, {mine['chars']:,} characters of answers"
+        summary += (
+            f", most from {mine['by_tool'][0]['tool']} ({mine['by_tool'][0]['chars']:,})." if mine["by_tool"] else "."
+        )
+        return _ok(summary, **mine)
+    found = usage.report(days, conversations=min(max(_int(params, "conversations", 20) or 20, 1), 100))
 
     for client in found["by_client"]:
         client["client"] = fence(client["client"])  # an OAuth client names itself
@@ -1999,15 +2304,21 @@ ADMIN_TOOLS: dict[str, Action] = {
         Action(
             name="read_logs",
             description=(
-                "The newest records of one of the site's log files, a traceback kept with its line. "
-                "Keys, tokens, email addresses and public IP addresses are taken out before they "
-                "leave."
+                "Records from one of the site's log files, or all of them, a traceback kept with its "
+                "line. By default repeats of one kind (same first line and exception, numbers and ids "
+                "aside) come back once with a count, first and last time, and a fingerprint; pass "
+                "fingerprint= for that kind alone, kinds_only=true for just the list. Keys, tokens, "
+                "email addresses and public IP addresses are taken out before they leave."
             ),
             params={
-                "log": "string, optional, default django. django, root, or a service's: django-celery, root-beat…",
+                "log": "string, optional, default django. all, django, root, or a service's: django-celery, root-beat…",
                 "level": "string, optional. The lowest level to include: DEBUG, INFO, WARNING, ERROR, CRITICAL.",
+                "since": "string, optional. Only records since then: 24h, 7d, or an ISO time (no zone: the logs' own). Reads rotated files too.",
                 "contains": "string, optional. Only records containing this text, any case.",
-                "records": f"integer, optional, default {LOG_RECORDS}, at most {MAX_LOG_RECORDS}.",
+                "fingerprint": "string, optional. Only records of this kind (from an earlier call or site_health).",
+                "kinds_only": "boolean, optional, default false. Just the kinds and their counts, no text.",
+                "group": "boolean, optional, default true. false returns every record as written.",
+                "records": f"integer, optional, default {LOG_RECORDS}, at most {MAX_LOG_RECORDS}. Kinds when grouped.",
                 "include_rotated": "boolean, optional, default false. Also read the five older rotated files.",
             },
             danger=DANGER_SAFE,
@@ -2017,14 +2328,20 @@ ADMIN_TOOLS: dict[str, Action] = {
             name="site_health",
             description=(
                 "What is deployed and whether it is well: branch and commit, migrations not yet "
-                "applied, Celery queue depths, when beat last ran, the last 24 hours of logged "
-                "errors grouped by kind, the app crashes reported in that time, the server's disk, "
-                "memory and load, when the host booted and each container, the database and Redis "
-                "started, the longest stretches with no page views in the last day, the database's "
-                "running queries (longest first, literals removed), and the last hour's slow requests "
-                "grouped by path."
+                "applied, Celery queue depths, each periodic task that is overdue or whose last run "
+                "failed, errors and warnings from every log grouped by kind with fingerprints, the app "
+                "crashes reported, the last day's page views, signups, emails, bids and lots against the "
+                "same weekday's usual, online lots past their end still open and mail failed or stuck, "
+                "whether the logs reach back far enough, the server's disk, memory and load, when the "
+                "host, each container, the database and Redis started, the longest stretches with no "
+                "page views, the database's running queries (literals removed), and the last hour's "
+                "slow requests grouped by path."
             ),
-            params={},
+            params={
+                "since": "string, optional, default 24h. The window for errors, warnings, crashes and failed mail: 7d, or an ISO time.",
+                "known": "string, optional. Fingerprints already dealt with, comma-separated; left out of the kinds.",
+                "brief": "boolean, optional, default false. Only the sections with something wrong, plus the commit.",
+            },
             danger=DANGER_SAFE,
             resolver=site_health,
         ),
@@ -2066,10 +2383,12 @@ ADMIN_TOOLS: dict[str, Action] = {
                 "wrong (unknown tool, refused, error, a question asked back, nothing found) with how "
                 "often, recent conversations as the calls they made, /ai/ questions marked not helpful, "
                 "and skills agents asked for. People are numbered; what they typed is fenced and has no "
-                "contact details. /mcp/admin/ calls are not recorded."
+                "contact details. admin=true instead reports this endpoint's own calls: per tool, how "
+                "often, how it went, and how many characters its answers cost."
             ),
             params={
                 "days": "integer, optional, default 7, at most 90. How far back.",
+                "admin": "boolean, optional, default false. This endpoint's own calls and their size instead.",
                 "conversations": "integer, optional, default 20, at most 100. How many recent conversations to show.",
             },
             danger=DANGER_SAFE,

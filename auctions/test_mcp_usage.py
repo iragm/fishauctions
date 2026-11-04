@@ -202,10 +202,30 @@ class UsageReportTests(AdminEndpointCase):
         for query in found["ai_page"]["marked_not_helpful"]:
             self.assertTrue(query.startswith(palette_actions.UNTRUSTED_MARK_OPEN), query)
 
-    def test_the_admin_endpoint_is_not_recorded(self):
-        before = MCPCall.objects.count()
+    def test_the_admin_endpoint_is_recorded_flagged_and_left_out_of_the_report(self):
+        before = MCPCall.objects.filter(admin=False).count()
         self.call("my_context")
-        self.assertEqual(MCPCall.objects.count(), before)
+        self.assertEqual(MCPCall.objects.filter(admin=False).count(), before)
+        row = MCPCall.objects.get(admin=True, tool="my_context")
+        self.assertEqual(row.user, self.owner)
+        self.assertGreater(row.result_chars, 0)
+        found = self.call("mcp_usage")["structuredContent"]
+        # Only setUp's one call by a member's agent, not the owner's call just made.
+        (mine,) = [tool for tool in found["by_tool"] if tool["tool"] == "my_context"]
+        self.assertEqual(mine["calls"], 1)
+
+    def test_admin_true_says_what_each_admin_tool_costs(self):
+        self.call("my_context")
+        self.call("my_context")
+        self.call("site_health", {"brief": True})
+        result = self.call("mcp_usage", {"admin": True})
+        found = result["structuredContent"]
+        tools = {tool["tool"]: tool for tool in found["by_tool"]}
+        self.assertEqual(tools["my_context"]["calls"], 2)
+        self.assertEqual(tools["site_health"]["calls"], 1)
+        self.assertEqual(found["chars"], sum(tool["chars"] for tool in found["by_tool"]))
+        self.assertGreater(tools["my_context"]["average_chars"], 0)
+        self.assertIn("/mcp/admin/ tool calls in 7 days", result["content"][0]["text"])
 
     def test_only_the_owner_can_read_it(self):
         response = self.rpc("tools/call", {"name": "mcp_usage", "arguments": {}}, key=self.member_key)

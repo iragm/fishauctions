@@ -128,5 +128,5 @@ class ListAppCrashesTests(AdminEndpointCase):
 
     def test_site_health_counts_them(self):
         result = self.call("site_health")
-        self.assertEqual(result["structuredContent"]["app_crashes_last_24h"], {"crashes": 3, "bugs": 2})
+        self.assertEqual(result["structuredContent"]["app_crashes"], {"crashes": 3, "bugs": 2, "hours": 24})
         self.assertIn("the app reported 3 crashes", result["content"][0]["text"])
