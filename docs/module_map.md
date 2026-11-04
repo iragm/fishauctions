@@ -527,7 +527,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1644 lines)
+- **`test_mcp_admin.py`** (1737 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -895,7 +895,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2508 lines)
+- **`admin.py`** (2572 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (924 lines)
   The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
