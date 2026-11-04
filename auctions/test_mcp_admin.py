@@ -1257,6 +1257,33 @@ class GroupedLogsTests(AdminEndpointCase):
         self.assertIn("These logs don't reach back to the window's start", result["content"][0]["text"])
         self.assertIn("django", result["content"][0]["text"])
 
+    def test_a_warning_and_an_error_of_one_message_are_two_kinds(self):
+        stamp = _stamp(self.now)
+        Path(self.directory.name, "root-beat.log").write_text(
+            f"WARNING {stamp},000 a.b:1 Unable to set winner on lot 5\n"
+            f"ERROR {stamp},000 a.b:1 Unable to set winner on lot 6\n"
+        )
+        errors = self.call("site_health")["structuredContent"]["errors"]
+        self.assertEqual(errors["by_log"]["root-beat"], 1)
+
+    def test_kinds_past_the_cap_still_count(self):
+        with mock.patch("auctions.mcp.admin.MAX_KINDS", 1):
+            errors = self.call("site_health")["structuredContent"]["errors"]
+        self.assertEqual(errors["total"], 3)
+        self.assertIn("overflow", [kind["fingerprint"] for kind in errors["most_common"]])
+
+    def test_odd_since_and_known_are_answered_not_raised(self):
+        moment, problem = admin.parse_since("100000000d")
+        self.assertEqual(problem, "")
+        self.assertLessEqual(timezone.now() - moment, admin.MAX_SINCE + datetime.timedelta(seconds=5))
+        result = self.call("site_health", {"known": 5})
+        self.assertFalse(result["isError"], result)
+
+    def test_a_since_without_a_zone_is_the_logs_own(self):
+        naive = timezone.localtime(self.now, timezone.get_default_timezone()).replace(tzinfo=None)
+        moment, _problem = admin.parse_since(naive.isoformat())
+        self.assertLess(abs((moment - self.now).total_seconds()), 1)
+
     def test_the_request_context_doesnt_split_a_kind(self):
         first = admin.record_kind("ERROR 2026-10-08 08:00:00,000 a.b:1 [r=1a2b3c4d u=5] lot 12 broke\n")
         second = admin.record_kind("ERROR 2026-10-08 09:00:00,000 a.b:1 [t=endauctions] lot 99 broke\n")

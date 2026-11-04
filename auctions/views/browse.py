@@ -896,7 +896,12 @@ class AuctionNotifications(APIView):
                 distance = request.user.userdata.email_me_about_new_auctions_distance
             if not distance:
                 distance = 100
-            auctions, distances = nearby_auctions(latitude, longitude, distance, user=request.user)
+            # Nobody located: nothing is near them, and asking would raise on every visit.
+            auctions, distances = (
+                nearby_auctions(latitude, longitude, distance, user=request.user)
+                if latitude and longitude
+                else ([], [])
+            )
             new = len(auctions)
             if auctions:
                 name = str(auctions[0])

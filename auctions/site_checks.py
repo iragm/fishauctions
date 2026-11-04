@@ -8,11 +8,14 @@ closed; mail that failed or never left the queue.
 - :func:`periodic_tasks`: every enabled beat entry that is overdue on its own schedule, and every task
   whose newest run failed. Celery's results are ignored here (``ignore_result``), so the outcome of each
   run is kept in the cache by :func:`connect_celery`'s signal handlers.
-- :func:`rates`: the last day's counts against the same 24 hours one to four weeks back, so a weekend
-  is compared with weekends. Only the steady ones are judged; bids and lots follow the auction calendar.
+- :func:`rates`: the last day's page views, signups and emails against the same 24 hours one to four
+  weeks back, so a weekend is compared with weekends. Bids and lots aren't here: they follow the
+  auction calendar, and neither table has an index on its date to count them cheaply.
 - :func:`invariants`: counts of rows in a state they shouldn't stay in.
 
-Every check is a fixed count over an index or a cache read, and reports its own failure as its answer.
+Every check is a few bounded counts over an index (``auth_user`` is small enough without one) or a cache
+read, and reports its own failure as its answer. :func:`rates` is kept for a few minutes, since a
+routine may call ``site_health`` more than once a run.
 """
 
 from __future__ import annotations
@@ -26,7 +29,8 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-_TASK_KEY = "site_checks:task:{}"
+#: One key per outcome, never a read-modify-write: two runs finishing together can't erase each other.
+_TASK_KEY = "site_checks:task:{}:{}"
 #: How long a task's last outcome is kept. Longer than the slowest schedule worth watching.
 TASK_KEY_SECONDS = 60 * 60 * 24 * 40
 #: A task this late on its own schedule is overdue, at the least.
@@ -36,16 +40,14 @@ OVERDUE_GRACE = timedelta(minutes=15)
 # --- periodic tasks ----------------------------------------------------------------------------------
 
 
-def _record(name: str, field: str, error: str = "") -> None:
+def _record(name: str, outcome: str, error: str = "") -> None:
     if not name:
         return
-    key = _TASK_KEY.format(name)
+    values = {_TASK_KEY.format(name, outcome): timezone.now().isoformat()}
+    if outcome == "failed":
+        values[_TASK_KEY.format(name, "error")] = error[:200]
     try:
-        row = cache.get(key) or {}
-        row[field] = timezone.now().isoformat()
-        if error:
-            row["error"] = error[:200]
-        cache.set(key, row, timeout=TASK_KEY_SECONDS)
+        cache.set_many(values, timeout=TASK_KEY_SECONDS)
     except Exception:  # the task already ran; Redis being down must not fail it
         logger.debug("Couldn't record task outcome for %s", name, exc_info=True)
 
@@ -67,10 +69,13 @@ def connect_celery() -> None:
 
 
 def task_outcome(name: str) -> dict[str, str]:
+    """``{"ok": iso, "failed": iso, "error": name}``, whichever are known."""
+    keys = {field: _TASK_KEY.format(name, field) for field in ("ok", "failed", "error")}
     try:
-        return cache.get(_TASK_KEY.format(name)) or {}
+        found = cache.get_many(list(keys.values()))
     except Exception:
         return {}
+    return {field: found[key] for field, key in keys.items() if found.get(key)}
 
 
 def _grace(schedule) -> timedelta:
@@ -129,60 +134,64 @@ RATE_HIGH = 5.0
 
 
 def _counts(queryset, field: str, now) -> tuple[int, float]:
-    """The last day's count and the mean of the same day 1..BASELINE_WEEKS weeks back, in one query."""
-    from django.db.models import Count, Q
+    """The last day's count and the mean of the same day 1..BASELINE_WEEKS weeks back.
 
+    One bounded count per day, not one aggregate over the month: on ``PageView`` that reads five days of
+    the index instead of twenty-nine."""
     day = timedelta(days=1)
-    windows = {"now": (now - day, now)}
-    for week in range(1, BASELINE_WEEKS + 1):
-        end = now - timedelta(weeks=week)
-        windows[f"w{week}"] = (end - day, end)
-    earliest = min(start for start, _end in windows.values())
-    found = queryset.filter(**{f"{field}__gte": earliest}).aggregate(
-        **{
-            name: Count("pk", filter=Q(**{f"{field}__gte": start, f"{field}__lt": end}))
-            for name, (start, end) in windows.items()
-        }
-    )
-    baseline = sum(found[f"w{week}"] for week in range(1, BASELINE_WEEKS + 1)) / BASELINE_WEEKS
-    return found["now"], baseline
+
+    def count(end) -> int:
+        return queryset.filter(**{f"{field}__gte": end - day, f"{field}__lt": end}).count()
+
+    weeks = [count(now - timedelta(weeks=week)) for week in range(1, BASELINE_WEEKS + 1)]
+    return count(now), sum(weeks) / BASELINE_WEEKS
 
 
 def _sources():
     from django.contrib.auth.models import User
     from post_office.models import Email
 
-    from auctions.models import Bid, Lot, PageView
+    from auctions.models import PageView
 
-    # (name, queryset, field, judged)
+    # (name, queryset, field): PageView.date_start and Email.created are indexed; auth_user is small.
     return [
-        ("page_views", PageView.objects.all(), "date_start", True),
-        ("signups", User.objects.all(), "date_joined", True),
-        ("emails", Email.objects.all(), "created", True),
-        ("bids", Bid.objects.all(), "bid_time", False),
-        ("lots_added", Lot.objects.all(), "date_posted", False),
+        ("page_views", PageView.objects.all(), "date_start"),
+        ("signups", User.objects.all(), "date_joined"),
+        ("emails", Email.objects.all(), "created"),
     ]
+
+
+_RATES_KEY = "site_checks:rates"
+RATES_CACHE_SECONDS = 600
 
 
 def rates() -> dict[str, Any]:
     """The last 24 hours of each count against the same weekday's average; ``unusual`` names the outliers."""
+    try:
+        cached = cache.get(_RATES_KEY)
+    except Exception:
+        cached = None
+    if cached is not None:
+        return cached
     now = timezone.now()
     found: dict[str, Any] = {}
     unusual: list[str] = []
-    for name, queryset, field, judged in _sources():
+    for name, queryset, field in _sources():
         try:
             current, baseline = _counts(queryset, field, now)
         except Exception as exc:
             found[name] = {"error": f"{type(exc).__name__}"}
             continue
         found[name] = {"last_24h": current, "usual": round(baseline, 1)}
-        if not judged or baseline < RATE_MIN_BASELINE:
+        if baseline < RATE_MIN_BASELINE:
             continue
-        if current < baseline * RATE_LOW:
-            unusual.append(f"{name.replace('_', ' ')} {current} in 24 hours, usually {round(baseline)}")
-        elif current > baseline * RATE_HIGH:
+        if current < baseline * RATE_LOW or current > baseline * RATE_HIGH:
             unusual.append(f"{name.replace('_', ' ')} {current} in 24 hours, usually {round(baseline)}")
     found["unusual"] = unusual
+    try:
+        cache.set(_RATES_KEY, found, timeout=RATES_CACHE_SECONDS)
+    except Exception:
+        logger.debug("Couldn't cache the rates", exc_info=True)
     return found
 
 

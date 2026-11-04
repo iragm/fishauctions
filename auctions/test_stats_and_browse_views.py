@@ -370,7 +370,9 @@ class AuctionNotificationsTests(StandardTestCase):
         self.userB.userdata.distance_unit = "km"
         self.userB.userdata.save()
         self.client.force_login(self.userB)
-        data = self.client.post(self.url).json()
+        # Nobody located is the normal case, not a failure worth a warning on every poll.
+        with self.assertNoLogs("auctions.views.browse", level="WARNING"):
+            data = self.client.post(self.url).json()
         self.assertEqual(data["new"], "")
         self.assertEqual(data["distance_unit"], "km")
         self.assertEqual(data["distance"], round(self.userB.userdata.email_me_about_new_auctions_distance * 1.60934))

@@ -258,7 +258,7 @@ this only quotes its opening sentence.
   `SessionStore`
 - **`signals.py`** (1104 lines)
   Signal handlers for the auctions app.
-- **`site_checks.py`** (228 lines)
+- **`site_checks.py`** (237 lines)
   Checks for the site quietly not doing its job, which no error line would show. Read by ``site_health``.
   `connect_celery`, `task_outcome`, `periodic_tasks`, `rates`, `invariants`
 - **`site_setup.py`** (146 lines)
@@ -527,7 +527,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1580 lines)
+- **`test_mcp_admin.py`** (1607 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -643,7 +643,7 @@ this only quotes its opening sentence.
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
 - **`test_site_account_fixes.py`** (582 lines)
   Regression tests for a sweep of site and account fixes.
-- **`test_site_checks.py`** (186 lines)
+- **`test_site_checks.py`** (197 lines)
   The checks for the site quietly not doing its job (:mod:`auctions.site_checks`), and the log context
   `PeriodicTaskTests`, `RateTests`, `InvariantTests`, `LogContextTests`
 - **`test_site_config.py`** (782 lines)
@@ -673,7 +673,7 @@ this only quotes its opening sentence.
   `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
 - **`test_stats.py`** (1364 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
-- **`test_stats_and_browse_views.py`** (629 lines)
+- **`test_stats_and_browse_views.py`** (631 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
   `fake_cached_stats`, `AuctionStatsChartTests`, `RecommendedLotsTests`, `NoLotAuctionsTests`, `AuctionNotificationsTests`, `LotListViewTests`, `RenderAdTests`, `ClubMemberMergeAutocompleteTests`, `SiteAdminDashboardTests`, `UserAndLotChartTests`
 - **`test_support.py`** (57 lines)
@@ -895,7 +895,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2480 lines)
+- **`admin.py`** (2496 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (801 lines)
   The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
@@ -1045,7 +1045,7 @@ Every view on the site, split by the part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1087 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (956 lines)
+- **`browse.py`** (961 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (510 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.

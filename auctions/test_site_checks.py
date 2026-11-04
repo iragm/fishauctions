@@ -74,7 +74,14 @@ class PeriodicTaskTests(StandardTestCase):
         return admin.site_health(None, {})["summary"]
 
 
+@isolated_cache("site-checks-rates")
 class RateTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        from django.core.cache import cache
+
+        cache.clear()
+
     def test_counts_compare_the_last_day_with_the_same_day_weeks_back(self):
         now = timezone.now()
         User.objects.filter(pk=self.user.pk).update(date_joined=now - datetime.timedelta(hours=1))
@@ -90,9 +97,13 @@ class RateTests(StandardTestCase):
         with mock.patch("auctions.site_checks._counts", return_value=(3, 200.0)):
             found = site_checks.rates()
         self.assertIn("page views 3 in 24 hours, usually 200", found["unusual"])
-        # Bids and lots follow the auction calendar, so they're reported but never judged.
-        self.assertNotIn("bids 3 in 24 hours, usually 200", found["unusual"])
-        self.assertEqual(found["bids"], {"last_24h": 3, "usual": 200.0})
+        self.assertEqual(found["emails"], {"last_24h": 3, "usual": 200.0})
+
+    def test_it_is_kept_for_a_few_minutes(self):
+        with mock.patch("auctions.site_checks._counts", return_value=(3, 200.0)) as counted:
+            site_checks.rates()
+            site_checks.rates()
+        self.assertEqual(counted.call_count, 3)  # one per source, once
 
     def test_a_small_baseline_is_not_judged(self):
         with mock.patch("auctions.site_checks._counts", return_value=(0, 5.0)):

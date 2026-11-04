@@ -38,7 +38,6 @@ import shutil
 import uuid
 from collections import deque
 from datetime import datetime, timedelta
-from datetime import timezone as dt_timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -518,32 +517,30 @@ def _when(stamp: str) -> datetime | None:
 
 
 def parse_since(value: Any) -> tuple[datetime | None, str]:
-    """``(moment, problem)`` for ``since``: "36h", "7d", "90m", or an ISO date or time. Blank is ``None``."""
+    """``(moment, problem)`` for ``since``: "36h", "7d", "90m", or an ISO date or time. Blank is ``None``.
+
+    An ISO time without a zone is in the site's own, like the logs' stamps it was likely copied from."""
     text = str(value or "").strip()
     if not text:
         return None, ""
     relative = _RELATIVE.match(text.lower())
     if relative:
-        amount, unit = int(relative.group(1)), relative.group(2)
-        moment = (
-            timezone.now()
-            - {"m": timedelta(minutes=amount), "h": timedelta(hours=amount), "d": timedelta(days=amount)}[unit]
-        )
-    else:
-        try:
-            moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None, "When from? Like 24h, 7d, or a date such as 2026-11-02T12:22:00Z."
-        if timezone.is_naive(moment):
-            moment = moment.replace(tzinfo=dt_timezone.utc)
+        minutes = int(relative.group(1)) * {"m": 1, "h": 60, "d": 1440}[relative.group(2)]
+        # Clamped before any arithmetic: "100000000d" is out of datetime's range.
+        return timezone.now() - timedelta(minutes=min(minutes, int(MAX_SINCE.total_seconds() // 60))), ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None, "When from? Like 24h, 7d, or a date such as 2026-11-02T12:22:00Z."
+    if timezone.is_naive(moment):
+        moment = moment.replace(tzinfo=timezone.get_default_timezone())
     return max(moment, timezone.now() - MAX_SINCE), ""
 
 
 def _flag(params: dict[str, Any], key: str, default: bool = False) -> bool:
-    value = params.get(key, default)
-    if isinstance(value, str):
-        return value.strip().lower() not in ("", "0", "false", "no", "off")
-    return bool(value)
+    """A yes/no parameter by the palette's one rule; anything not clearly yes or no is the default."""
+    value = palette_actions._flag(params, key)
+    return default if value is None else value
 
 
 def _first_line(text: str) -> str:
@@ -563,16 +560,27 @@ def _exception_line(text: str) -> str:
 
 
 def record_kind(text: str) -> tuple[str, str, str]:
-    """``(fingerprint, kind, exception)``: what a record is, with what varies between occurrences out."""
+    """``(fingerprint, kind, exception)``: what a record is, with what varies between occurrences out.
+
+    The level is part of it: one message logged as a WARNING on a retry and an ERROR on the last attempt
+    is two kinds, so the ERRORs are never filed under the warning."""
+    level = text.split(" ", 1)[0] if text else ""
     kind = redact(_first_line(text))[:200]
     exception = redact(_exception_line(text))[:200]
-    shape = _VARYING.sub("#", f"{kind}\n{exception}")
+    shape = _VARYING.sub("#", f"{level}\n{kind}\n{exception}")
     return hashlib.sha1(shape.encode(), usedforsecurity=False).hexdigest()[:8], kind, exception
+
+
+#: The fingerprint of the group that holds every kind past :data:`MAX_KINDS`, one per log and level.
+OVERFLOW = "overflow"
 
 
 def _groups(names: list[str], since: datetime | None, older: bool, floor: int, contains: str = "", wanted: str = ""):
     """Every matching record of ``names`` grouped by kind: ``{(log, fingerprint): group}``, and the records seen."""
     groups: dict[tuple[str, str], dict[str, Any]] = {}
+    # redact() and a hash per distinct (first line, exception), not per record: a week of one warning is
+    # tens of thousands of records and one kind.
+    kinds: dict[tuple[str, str, str], tuple[str, str, str]] = {}
     seen = 0
     for name in names:
         for level, stamp, text in _records(_log_files(name, older, since)):
@@ -584,15 +592,21 @@ def _groups(names: list[str], since: datetime | None, older: bool, floor: int, c
                     continue
             if contains and contains not in text.lower():
                 continue
-            fingerprint, kind, exception = record_kind(text)
+            raw = (level, _first_line(text), _exception_line(text))
+            if raw not in kinds:
+                kinds[raw] = record_kind(text)
+            fingerprint, kind, exception = kinds[raw]
             if wanted and not fingerprint.startswith(wanted):
                 continue
             seen += 1
             key = (name, fingerprint)
+            if key not in groups and len(groups) >= MAX_KINDS:
+                # Still counted, in one group per log and level, so a new error past the cap is never
+                # lost from the totals; its own text is in the logs.
+                fingerprint, kind, exception = OVERFLOW, f"(more kinds than one read keeps, {level})", ""
+                key = (name, f"{OVERFLOW}-{level}")
             group = groups.get(key)
             if group is None:
-                if len(groups) >= MAX_KINDS:
-                    continue
                 group = groups[key] = {
                     "fingerprint": fingerprint,
                     "log": name,
@@ -644,9 +658,10 @@ def read_logs(request, params: dict[str, Any]) -> dict[str, Any]:
         while len(parts) > 1 and sum(map(len, parts)) > LOG_CHARS:
             parts.pop()
         return _ok(summary, log=name, text="".join(parts)[:LOG_CHARS])
-    kept: deque[tuple[str, str]] = deque(maxlen=count)
-    merged = []
+    merged: list[tuple[str, str]] = []
     for target in targets:
+        # Each log's newest ``count`` hold the newest ``count`` of them all, so memory stays bounded.
+        newest: deque[tuple[str, str]] = deque(maxlen=count)
         for level, stamp, text in _records(_log_files(target, older, since)):
             if _LEVELS.index(level) < floor:
                 continue
@@ -656,9 +671,10 @@ def read_logs(request, params: dict[str, Any]) -> dict[str, Any]:
                 continue
             if wanted and not record_kind(text)[0].startswith(wanted):
                 continue
-            merged.append((stamp, (f"[{target}] " if name == "all" else "") + text))
+            newest.append((stamp, (f"[{target}] " if name == "all" else "") + text))
+        merged.extend(newest)
     merged.sort(key=lambda row: row[0])  # stable: one file's order holds within a second
-    kept.extend(merged)
+    kept = merged[-count:]
     records = [redact(text) for _stamp, text in kept]
     while len(records) > 1 and sum(map(len, records)) > LOG_CHARS:
         records.pop(0)
@@ -798,8 +814,8 @@ ERROR_KINDS = 10
 
 def _known(params: dict[str, Any]) -> set[str]:
     value = params.get("known") or []
-    if isinstance(value, str):
-        value = re.split(r"[\s,]+", value)
+    if not isinstance(value, (list, tuple)):
+        value = re.split(r"[\s,]+", str(value))
     return {str(item).strip().lower()[:8] for item in value if str(item).strip()}
 
 
@@ -2285,7 +2301,7 @@ ADMIN_TOOLS: dict[str, Action] = {
             params={
                 "log": "string, optional, default django. all, django, root, or a service's: django-celery, root-beat…",
                 "level": "string, optional. The lowest level to include: DEBUG, INFO, WARNING, ERROR, CRITICAL.",
-                "since": "string, optional. Only records since then: 24h, 7d, or an ISO time. Reads rotated files too.",
+                "since": "string, optional. Only records since then: 24h, 7d, or an ISO time (no zone: the logs' own). Reads rotated files too.",
                 "contains": "string, optional. Only records containing this text, any case.",
                 "fingerprint": "string, optional. Only records of this kind (from an earlier call or site_health).",
                 "kinds_only": "boolean, optional, default false. Just the kinds and their counts, no text.",
