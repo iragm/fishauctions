@@ -908,6 +908,27 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.assertIsNone(self.saulosi.species)
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("6 saulosi")).species)
 
+    def test_moving_every_lot_forgets_the_wrong_answer_and_teaches_only_names_that_moved(self):
+        from auctions.models import SpeciesSearchCache
+        from auctions.species_matching import normalize
+
+        Lot.objects.filter(pk=self.saulosi.pk).update(species=self.aulonocara)
+        SpeciesSearchCache.objects.create(search_text=normalize("6 saulosi"), species=self.aulonocara, source="llm")
+        self.propose("change_lots_species", {"species": self.aulonocara.pk, "to": self.chindongo.pk})
+        self.approve()
+        self.saulosi.refresh_from_db()
+        self.assertEqual(self.saulosi.species, self.chindongo)
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text=normalize("6 saulosi")).exists())
+
+        AgentProposal.objects.all().delete()
+        self.propose(
+            "change_lots_species",
+            {"species": self.chindongo.pk, "to": "none", "lot_names": ["6 saulosi", "Neolamprologus brichardi"]},
+        )
+        self.approve()
+        self.assertTrue(SpeciesSearchCache.objects.filter(search_text=normalize("6 saulosi")).exists())
+        self.assertFalse(SpeciesSearchCache.objects.filter(search_text=normalize("Neolamprologus brichardi")).exists())
+
     def test_the_backlog_counts_what_a_person_settled_as_not_a_species(self):
         from auctions.species_admin import remember_not_a_species
 
@@ -930,7 +951,8 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.assertEqual([row["lot_name"] for row in settled["rows"]], ["«Sponge filter»"])
         open_names = self.data(self.call("species_dashboard", {"section": "gaps", "verdict": "never looked up"}))
         self.assertNotIn("«Sponge filter»", [row["lot_name"] for row in open_names["rows"]])
-        refused = self.data(self.call("species_dashboard", {"section": "pending", "verdict": "never_looked_up"}))
+        self.assertEqual(settled["total"], 1)
+        refused = self.data(self.call("species_dashboard", {"verdict": "never_looked_up"}))
         self.assertEqual(refused["status"], "needs_more_information")
 
     def test_the_backfill_can_skip_to_the_tail(self):

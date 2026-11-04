@@ -463,7 +463,7 @@ def _refilable(pks, species):
 
 
 def _refile(pks, species):
-    if pks:
+    if pks and species is not None:
         Lot.objects.filter(pk__in=pks).update(
             species_category_id=species.category_id,
             category_automatically_added=True,
@@ -485,22 +485,46 @@ def lots_on_species(species, names=None, auction_slug=None):
     return lots
 
 
-def move_lots(lots, to_species, *, names=(), set_category=False, teach=False, user=None):
-    """Put *to_species* (``None``: no species) on *lots*, which already carry another; ``(lots, refiled)``.
+def move_lots(lots, from_species, to_species, *, names=(), set_category=False, teach=False, user=None):
+    """Put *to_species* (``None``: no species) on *lots*, which carry *from_species*; returns
+    ``(lots, refiled, untaught)``.
 
     The fix for lots matched to the wrong species, where :func:`apply_species` only fills blanks.
-    ``update()``, not ``save()``, for the reason in the module docstring. *teach* remembers *names* as the
-    answer (or as not a species), for at most :data:`MAX_REMEMBERED` of them.
+    ``update()``, not ``save()``, for the reason in the module docstring. Whatever the site remembered
+    the moved lots' names to be *from_species* is forgotten, so the wrong answer isn't served to the next
+    lot. *teach* then remembers each of *names* that a lot actually carried as the new answer, at most
+    :data:`MAX_REMEMBERED`; *untaught* are those ``remember()`` refused (an unapproved species, a retired
+    pairing, a name the list answers exactly).
     """
-    pks = list(lots.values_list("pk", flat=True))
-    movable = _refilable(pks, to_species) if set_category and pks else []
+    moved = list(lots.values_list("pk", "lot_name"))
+    pks = [pk for pk, _ in moved]
+    movable = []
+    if set_category and pks and to_species is not None:
+        movable = _refilable(pks, to_species)
+        if from_species.category_id and from_species.category_id != to_species.category_id:
+            # Filed under the wrong species' category by the site, not by a person.
+            movable += list(
+                Lot.objects.filter(
+                    pk__in=pks, species_category_id=from_species.category_id, category_automatically_added=True
+                )
+                .exclude(pk__in=BapAward.objects.filter(lot__isnull=False).values("lot_id"))
+                .exclude(pk__in=movable)
+                .values_list("pk", flat=True)
+            )
     if pks:
         Lot.objects.filter(pk__in=pks).update(species=to_species)
-        _refile(movable, to_species)
+        if to_species is not None and to_species.category_id:
+            _refile(movable, to_species)
+    keys = {normalize(lot_name) for _, lot_name in moved} - {""}
+    if keys:
+        SpeciesSearchCache.objects.filter(search_text__in=list(keys), species=from_species).delete()
+    untaught = []
     if teach:
-        for name in list(names)[:MAX_REMEMBERED]:
-            remember(name, to_species, source="user", user=user)
-    return len(pks), len(movable)
+        carried = {normalize(lot_name) for _, lot_name in moved}
+        for name in [name for name in names if normalize(name) in carried][:MAX_REMEMBERED]:
+            if not remember(name, to_species, source="user", user=user):
+                untaught.append(name)
+    return len(pks), len(movable), untaught
 
 
 def remember_not_a_species(names, user=None):

@@ -104,7 +104,10 @@ def _lots(params: dict[str, Any]):
 
 
 def _gaps(limit, offset, verdict=None):
-    rows = species_admin.gap_rows(limit=offset + limit, verdict=verdict)
+    # Filtered, every name is read anyway, so the whole list is kept and counted.
+    rows = species_admin.gap_rows(limit=offset + limit if verdict is None else None, verdict=verdict)
+    total = len(rows) if verdict else None
+    rows = rows[offset : offset + limit]
     return [
         {
             "lot_name": untrusted_short(row["lot_name"]),
@@ -115,8 +118,8 @@ def _gaps(limit, offset, verdict=None):
             "verdict_detail": row["verdict_detail"],
             "answer": row["answer"],
         }
-        for row in rows[offset:]
-    ], None
+        for row in rows
+    ], total
 
 
 def _pending(limit, offset):
@@ -239,6 +242,9 @@ def species_dashboard(request, params: dict[str, Any]) -> dict[str, Any]:
     section = _str(params, "section", "summary").lower().replace(" ", "_")
     if section not in SECTIONS:
         return _need("Which section? One of: " + ", ".join(SECTIONS) + ".")
+    verdict = _str(params, "verdict").lower().replace(" ", "_") or None
+    if verdict and (section != "gaps" or verdict not in species_admin.VERDICTS):
+        return _need("verdict only filters the gaps section, and is one of: " + ", ".join(species_admin.VERDICTS) + ".")
     if section == "summary":
         numbers = _summary()
         settled = numbers["backlog_by_verdict"]["not_a_species_by_a_person"]["lots"]
@@ -368,6 +374,10 @@ def lots_by_species(request, params: dict[str, Any]) -> dict[str, Any]:
         lots = lots.filter(lot_name__icontains=name)
     auction = _str(params, "auction")
     if auction:
+        from auctions.models import Auction
+
+        if not Auction.objects.filter(slug=auction).exists():
+            return _error(f"No auction with slug {auction!r}.")
         lots = lots.filter(auction__slug=auction)
     grouped = lots.values("lot_name", "species").annotate(lots=Count("pk")).order_by("-lots", "lot_name")
     limit, offset = palette_actions._slice(params)
@@ -555,8 +565,10 @@ def change_lots_species(request, params: dict[str, Any]) -> dict[str, Any]:
     lots, to, names, problem = _move(params)
     if problem:
         return _error(problem)
-    count, refiled = species_admin.move_lots(
+    source = _species(params, "species")[0]
+    count, refiled, untaught = species_admin.move_lots(
         lots,
+        source,
         to,
         names=names,
         set_category=bool(palette_actions._flag(params, "set_category")),
@@ -566,6 +578,11 @@ def change_lots_species(request, params: dict[str, Any]) -> dict[str, Any]:
     summary = f"{count} lot(s) moved to {to.label if to else 'no species'}."
     if refiled:
         summary += f" {refiled} were filed under {to.category}."
+    if untaught:
+        summary += (
+            f" {len(untaught)} name(s) were not remembered as the new answer (a species not yet approved, a "
+            "retired pairing, or a name the list already answers), so they will be looked up again."
+        )
     return _ok(summary, lots=count, species=_echo(to) if to else None)
 
 
