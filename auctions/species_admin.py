@@ -47,6 +47,9 @@ MAX_CHOICES = 12
 #: Spellings taught to the matcher per decision; keeps the shared cache from bloating on one-offs.
 MAX_REMEMBERED = 20
 
+#: Names one "not a species" decision may cover: a reviewed batch of hardware, food and generic words.
+MAX_NOT_A_SPECIES = 1000
+
 #: Gap rows a sitting can get through; the tail is one-off names.
 GAP_LIMIT = 100
 
@@ -530,7 +533,7 @@ def move_lots(lots, from_species, to_species, *, names=(), set_category=False, t
 def remember_not_a_species(names, user=None):
     """Remember "not a species" for each spelling, so nothing asks about it again. Returns how many were
     written: a name the list answers exactly is never written (``remember()``)."""
-    return sum(bool(remember(name, None, source="user", user=user)) for name in names[:MAX_REMEMBERED])
+    return sum(bool(remember(name, None, source="user", user=user)) for name in names[:MAX_NOT_A_SPECIES])
 
 
 def review_groups(

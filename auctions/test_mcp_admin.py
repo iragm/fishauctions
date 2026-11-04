@@ -955,6 +955,39 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         refused = self.data(self.call("species_dashboard", {"verdict": "never_looked_up"}))
         self.assertEqual(refused["status"], "needs_more_information")
 
+    def test_the_approver_reads_names_not_numbers_and_batches_are_big(self):
+        from auctions.models import SpeciesSearchCache
+
+        rows = [
+            SpeciesSearchCache.objects.create(search_text=f"plant {n}", species=None, source="llm") for n in range(3)
+        ]
+        steps = [
+            {"tool": "forget_species_answer", "arguments": {"answers": [row.pk for row in rows]}},
+            {"tool": "remember_not_a_species", "arguments": {"lot_names": [f"heater {n}" for n in range(1000)]}},
+            {
+                "tool": "set_species_on_lot_names",
+                "arguments": {"species": self.chindongo.pk, "lot_names": ["6 saulosi"]},
+            },
+        ] + [{"tool": "approve_species", "arguments": {"species": self.tropheus.pk}}] * 100
+        self.assertFalse(self.call("propose_change", {"summary": "Big batch", "steps": steps})["isError"])
+        self.client.force_login(self.owner)
+        body = self.client.get(reverse("agent_proposals")).content.decode()
+        self.assertIn("“plant 1” (now: not a species, decided by the language model)", body)
+        self.assertIn("Chindongo saulosi on lots named “6 saulosi”", body)
+        self.assertIn("“heater 999”", body)
+        self.assertNotIn(f"answer: {rows[0].pk}", body)
+        self.assertNotIn("forget_species_answer", body)
+        self.approve()
+        self.assertFalse(SpeciesSearchCache.objects.filter(pk__in=[row.pk for row in rows]).exists())
+        self.assertTrue(SpeciesSearchCache.objects.filter(search_text="heater 999").exists())
+
+        AgentProposal.objects.all().delete()
+        mixed = [{"tool": "approve_species", "arguments": {"species": self.tropheus.pk}}] * 50 + [
+            {"tool": "trust_user", "arguments": {"user": self.user.username}}
+        ]
+        self.assertTrue(self.call("propose_change", {"summary": "Too many", "steps": mixed})["isError"])
+        self.assertTrue(self.propose("forget_species_answer", {"answers": [rows[0].pk]})["isError"])
+
     def test_the_backfill_can_skip_to_the_tail(self):
         skipped = self.data(self.call("species_backfill", {"pass": "automatic", "skip": 1000}))
         self.assertEqual(skipped["total"], 0)
