@@ -39,7 +39,7 @@ from django import forms
 from django.conf import settings
 from django.contrib.messages.storage.base import BaseStorage
 from django.core.cache import cache
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import FieldDoesNotExist, PermissionDenied
 from django.db import models, transaction
 from django.db.models import Q
 from django.forms import model_to_dict
@@ -3535,7 +3535,7 @@ def _settings_block(obj, names: tuple[str, ...]) -> list[dict[str, Any]]:
     for name in names:
         try:
             field = obj._meta.get_field(name)
-        except Exception:  # pragma: no cover - a renamed field shouldn't break an answer
+        except FieldDoesNotExist:  # pragma: no cover - a renamed field shouldn't break an answer
             continue
         value = getattr(obj, name, None)
         block.append(

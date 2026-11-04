@@ -89,9 +89,14 @@ _log_suffix = f"-{_log_service}" if _log_service else ""
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    # auctions.log_context: "[r=<request> u=<user pk>]" or "[t=<task>]" before the message, so lines
+    # from one request or task can be told apart. auctions.mcp.admin strips it before grouping.
+    "filters": {
+        "context": {"()": "auctions.log_context.ContextFilter"},
+    },
     "formatters": {
         "verbose": {
-            "format": "{levelname} {asctime} {module}.{funcName}:{lineno} {message}",
+            "format": "{levelname} {asctime} {name}.{funcName}:{lineno} {context}{message}",
             "style": "{",
         },
         "simple": {
@@ -105,6 +110,7 @@ LOGGING = {
             "formatter": "simple",
         },
         "django_file": {
+            "filters": ["context"],
             "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(LOG_DIR / f"django{_log_suffix}.log"),
@@ -113,6 +119,7 @@ LOGGING = {
             "formatter": "verbose",
         },
         "root_file": {
+            "filters": ["context"],
             "level": os.getenv("LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(LOG_DIR / f"root{_log_suffix}.log"),
@@ -260,7 +267,9 @@ ASGI_APPLICATION = "fishauctions.asgi.application"
 SLOW_REQUEST_SECONDS = float(os.getenv("SLOW_REQUEST_SECONDS") or 5)
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware",
-    "auctions.middleware.SlowRequestMiddleware",  # First, so it times everything below it
+    # First: every log line below it, the slow-request one included, carries this request's id.
+    "auctions.log_context.RequestContextMiddleware",
+    "auctions.middleware.SlowRequestMiddleware",  # So it times everything below it
     "django.middleware.security.SecurityMiddleware",
     "auctions.middleware.ContentSecurityPolicyMiddleware",  # Sets Content-Security-Policy
     "auctions.middleware.MobileAppMiddleware",  # Sets request.is_mobile_app from the User-Agent
@@ -268,6 +277,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "auctions.log_context.UserContextMiddleware",  # Adds the user's pk to this request's log lines
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",

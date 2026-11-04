@@ -11,7 +11,7 @@ from urllib.parse import quote_plus, unquote
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.db.models import (
     Count,
     IntegerField,
@@ -113,8 +113,10 @@ class MyLotReportView(LoginRequiredMixin, View):
                 cap_pts = award.cap_points or ""
                 points_reason = award.notes or ""
                 points_club = award.club_member.club.name if award.club_member_id and award.club_member.club_id else ""
+            except ObjectDoesNotExist:
+                pass  # no points awarded on this lot
             except Exception:
-                pass
+                logger.warning("Couldn't read lot %s's points award for the export", lot.pk, exc_info=True)
             writer.writerow(
                 [
                     lot.lot_number_display,
