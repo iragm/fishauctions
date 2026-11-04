@@ -605,25 +605,46 @@ def _the_next_word_names_something_else(text, common, user=None, club=None, seen
     return heads
 
 
-#: "Genus epithet" as a seller writes a scientific name: a capitalised word and a lower-case one with a
-#: Latin ending. Only consulted when nothing on the list has that genus (:func:`_names_an_unlisted_species`).
-_BINOMIAL = re.compile(r"\b([A-Z][a-z]{4,})\s+([a-z]{4,}(?:i|ae|us|a|is|um|es|ensis|oides))\b")
+#: Endings of a species epithet that English plurals rarely have ("guppies", "loaches" and "mollies" end
+#: in -es; "acara" in -a; neither is here).
+_EPITHET_ENDING = re.compile(r"(?:i|ae|us|um|is|oides|atus|ata|ella)$")
 
 
-def _names_an_unlisted_species(text, genus_hits, user=None, club=None):
-    """True when the lot name spells out a scientific name the list doesn't have ("Bluefin Krib -
-    Enigmatichromis lucanusi"). Then a common word elsewhere in it ("krib") is not an answer: the
-    seller said which fish it is, and it isn't the one that word names. A pair that is itself a common
-    name ("Pearl gourami") is not a scientific name.
+def _a_known_word(word, user=None, club=None):
+    """True when the list knows *word* (or its singular) as a genus, an epithet or a one-word name."""
+    forms = {word, singularize(word)}
+    species = visible_species(user, club)
+    return (
+        species.filter(Q(species__in=forms) | Q(common_name_normalized__in=forms)).exists()
+        or species.filter(genus__in={form.capitalize() for form in forms}).exists()
+        or visible_common_names(user, club).filter(name_normalized__in=forms).exists()
+    )
+
+
+def names_an_unlisted_species(text, user=None, club=None):
+    """True when the lot name spells out a scientific name the list doesn't have at all ("Bluefin Krib -
+    Enigmatichromis lucanusi"). Then a common word elsewhere in it ("krib") is not an answer: the seller
+    said which fish it is, and it isn't the one that word names.
+
+    Strict, because a false positive throws away a right answer: two adjacent words written "Genus
+    epithet", neither ignored nor known to the list as a genus, epithet or name, the second with an
+    epithet's ending. So an old genus
+    ("Pelmatochromis kribensis") or a misspelt one ("Apistograma cacatuoides") still matches by its
+    epithet, and "Female guppies" or "Pearl gourami" are never read as one.
     """
-    known = {species.genus.lower() for species in genus_hits}
-    for genus, epithet in _BINOMIAL.findall(text or ""):
-        if genus.lower() in known:
+    ignore = set(settings.IGNORE_WORDS) | _EXTRA_IGNORE_WORDS
+    raw = re.findall(r"[^\W\d_]+", text or "")
+    # Only a name written as one, "Genus epithet": in all capitals or all lower case, "Common
+    # Plecostomus" and "kribensis pelmatochromis" can't be told from it.
+    for typed_genus, typed_epithet in zip(raw, raw[1:]):
+        if not (typed_genus[:1].isupper() and typed_genus[1:].islower() and typed_epithet.islower()):
             continue
-        pair = normalize(f"{genus} {epithet}")
-        if visible_common_names(user, club).filter(name_normalized=pair).exists():
+        genus, epithet = normalize(typed_genus), normalize(typed_epithet)
+        if len(genus) < 6 or len(epithet) < 5 or not genus.isalpha() or not epithet.isalpha():
             continue
-        if visible_species(user, club).filter(common_name_normalized=pair).exists():
+        if genus in ignore or epithet in ignore or not _EPITHET_ENDING.search(epithet):
+            continue
+        if _a_known_word(epithet, user, club) or _a_known_word(genus, user, club):
             continue
         return True
     return False
@@ -640,8 +661,8 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
     *Single common name*: :func:`_single_word_matches`, only when nothing above matched.
     *Bare epithet*: the whole lot name is one epithet ("saulosi").
 
-    None of the last three answer when the name spells out a scientific name that isn't on the list
-    (:func:`_names_an_unlisted_species`).
+    :func:`suggest_species` doesn't ask this when the name spells out a scientific name that isn't on
+    the list (:func:`names_an_unlisted_species`).
 
     No loose substring matching: "sponge filter" would hit *Sponge frillgoby*. *category* only breaks ties.
     """
@@ -694,9 +715,6 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
         if 0 < len(in_trade) <= MAX_GENUS_MATCHES:
             return in_trade
         # Too broad to answer, so fall through: "male bettas" still reaches the common name "betta".
-    elif _names_an_unlisted_species(text, genus_hits[: LLM_SHORTLIST_SIZE * 2], user=user, club=club):
-        # The seller named a species we don't have; a common word in the name must not overrule it.
-        return []
 
     # A phrase that only described the fish named after it: that fish is the answer, unless two
     # phrases each described a different one.
@@ -1157,7 +1175,7 @@ def _is_somebody_elses_name(normalized, species, user=None, club=None):
 def suggest_species(text, user=None, use_llm=True, category=None, club=None, budget=None, record=True):
     """The one call views make: ``(species_list, source)`` for a typed lot name.
 
-    *source* (``cache``/``exact``/``search``/``llm``/``none``) is for debugging. An empty list is a
+    *source* (``cache``/``exact``/``unlisted``/``search``/``llm``/``none``) is for debugging. An empty list is a
     real answer. *budget* is whose model allowance is spent (:class:`LLMBudget`). *category* only
     re-orders (:func:`_rank`). *club* only widens visibility (:func:`visible_species`). ``record=False``
     with ``use_llm=False`` writes nothing: no hit is counted and a healed gap row isn't written back,
@@ -1199,7 +1217,11 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
                 SpeciesSearchCache.objects.filter(pk=cached.pk).update(species=remembered)
             return ([remembered] if remembered else []), "cache"
 
-    found = search_matches(text, category=category, user=user, club=club)
+    # The seller named a species the list lacks. A common word elsewhere in the name ("krib"), or a
+    # model picking from a shortlist that word fills, would print a different fish on the label: the
+    # search is skipped, and the model's species is kept only if the name says it.
+    unlisted = names_an_unlisted_species(text, user=user, club=club)
+    found = [] if unlisted else search_matches(text, category=category, user=user, club=club)
     if found:
         # The search can be wrong about a name, and the lots that retired a pairing said so.
         vetoed = rejected_species_ids(normalized)
@@ -1210,7 +1232,12 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
     if use_llm:
         # Round one; see identify().
         answer = identify(text, user=user, club=club, budget=budget)
-        if not answer.settled and answer.corrected_name and normalize(answer.corrected_name) != normalized:
+        if (
+            not unlisted
+            and not answer.settled
+            and answer.corrected_name
+            and normalize(answer.corrected_name) != normalized
+        ):
             # A corrected spelling with no species ("red ludwigia"): run it through exact and search.
             named = _rank(exact_matches(answer.corrected_name, user=user, club=club), category)
             corrected = named or search_matches(answer.corrected_name, category=category, user=user, club=club)
@@ -1239,15 +1266,25 @@ def suggest_species(text, user=None, use_llm=True, category=None, club=None, bud
                 # ...unless round two found a species.
                 second.scientific_name or ("" if second.species else answer.scientific_name),
             )
+        if unlisted:
+            # Only the fish the name spells out. What the model read it as is kept only if it is that
+            # fish too, so the gap is listed and heals to the right species when it is added.
+            typed = normalized.split()
+            if answer.species is not None and answer.species.species.lower() not in typed:
+                answer = Identification(None, answer.answered, answer.scientific_name)
+            read_as = answer.scientific_name.lower().split()
+            if not answer.species and (len(read_as) < 2 or read_as[1] not in typed):
+                answer = Identification(None, answer.answered, "")
         if answer.species is not None and _is_somebody_elses_name(normalized, answer.species, user=user, club=club):
             # The name is another club's scoped word; the model recognised it anyway. Answer
             # "no species" and remember nothing: one shared row can't be right for both clubs.
             answer = Identification()
         # Remember only when the model answered. A species or gap row needs one round (both are
         # recoverable); a bare negative needs both, because nothing walks it back.
-        if answer.answered and (answer.species or answer.scientific_name or confirmed):
+        # Never a bare negative for a name that spells out a species: it is one, just not ours yet.
+        if answer.answered and (answer.species or answer.scientific_name or (confirmed and not unlisted)):
             remember(text, answer.species, source="llm", scientific_name=answer.scientific_name)
         if answer.species:
             return [answer.species], "llm"
 
-    return [], "none"
+    return [], "unlisted" if unlisted else "none"

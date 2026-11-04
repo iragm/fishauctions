@@ -5123,6 +5123,7 @@ class UnlistedScientificNameTests(StandardTestCase):
         super().setUp()
         self.krib = make_species("Pelvicachromis", "pulcher", "Rainbow krib", extra_names=["krib"])
         make_species("Trichopodus", "leerii", "Pearl gourami")
+        self.guppy = make_species("Poecilia", "reticulata", "Guppy")
 
     def search(self, text):
         found, _source = suggest_species(text, use_llm=False, record=False)
@@ -5141,3 +5142,19 @@ class UnlistedScientificNameTests(StandardTestCase):
 
     def test_a_common_name_that_looks_latin_is_not_a_scientific_name(self):
         self.assertEqual([species.genus for species in self.search("Pearl gourami trio")], ["Trichopodus"])
+        self.assertEqual([species.genus for species in self.search("Assorted Pearl gouramis")], ["Trichopodus"])
+        self.assertEqual(self.search("6 guppies"), [self.guppy])
+
+    def test_an_old_or_misspelt_genus_is_not_an_unlisted_species(self):
+        from auctions.species_matching import names_an_unlisted_species
+
+        # Their epithet is on the list; Latin endings that span two names don't count either.
+        self.assertFalse(names_an_unlisted_species("Krib - Pelmatochromis pulcher"), "krib")
+        self.assertFalse(names_an_unlisted_species("Guppy - Poecilla reticulata"), "guppy")
+        self.assertFalse(names_an_unlisted_species("Kribensis Pelmatochromis"), "cased")
+        # Written in one case, it can't be told from a common name.
+        self.assertFalse(names_an_unlisted_species("COMMON PLECOSTOMUS"))
+
+    def test_the_source_says_why(self):
+        found, source = suggest_species("Bluefin Krib - Enigmatichromis lucanusi", use_llm=False, record=False)
+        self.assertEqual((found, source), ([], "unlisted"))
