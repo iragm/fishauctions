@@ -3,6 +3,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import beat_init, worker_ready
 
 # Constants
@@ -26,6 +27,8 @@ DOCUMENTS_QUEUE = "documents"
 app.conf.task_routes = {
     "auctions.tasks.index_document": {"queue": DOCUMENTS_QUEUE},
     "auctions.tasks.process_document_batch": {"queue": DOCUMENTS_QUEUE},
+    # Minutes long; on the main worker's two slots it would hold up endauctions.
+    "auctions.tasks.backup_database": {"queue": DOCUMENTS_QUEUE},
 }
 
 
@@ -87,6 +90,11 @@ app.conf.beat_schedule = {
     "auction_emails": {
         "task": "auctions.tasks.auction_emails",
         "schedule": 240.0,  # Run every 4 minutes
+    },
+    # Offsite backup of the core tables (auctions/backups.py), Sundays at 3:30 AM, near the traffic low.
+    "backup_database": {
+        "task": "auctions.tasks.backup_database",
+        "schedule": crontab(day_of_week=0, hour=3, minute=30),
     },
     # Send notifications about unread chats - every 24 hours
     "email_unseen_chats": {

@@ -17,7 +17,8 @@ differences, all enforced here or in the transport rather than by any client's a
   were management commands: palette shortcut candidates and Square sellers who must reconnect, and
   the auctions' untrusted creators for the scout's daily trust check.
 
-Two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
+:func:`backup_database` queues an offsite backup, which copies data out and changes none of it.
+Otherwise two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
 requests (``planned`` is what starts work, and only a person sets it), and a change to the site's data
 is a :class:`auctions.models.AgentProposal`: a list of registry writes, or
 :data:`APPROVAL_ONLY` changes that no assistant may make directly. Nothing in it runs until a person
@@ -46,6 +47,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 
@@ -63,7 +65,7 @@ INSTRUCTIONS = (
     "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
     "palette_shortcut_candidates, mcp_usage, square_reconnects and untrusted_auction_creators. Nothing here "
-    "changes the site. "
+    "changes the site; backup_database only copies its data offsite. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
     "code goes to suggest_feature, which adds it to the feature requests the owner plans from. "
@@ -2166,6 +2168,28 @@ def propose_change(request, params: dict[str, Any]) -> dict[str, Any]:
 SUGGESTIONS_PER_DAY = 20
 
 
+#: One asked-for backup per six hours: each is kept a week under a bucket lock, so a loop would pile them up.
+BACKUP_COOLDOWN_SECONDS = 6 * 60 * 60
+_BACKUP_KEY = "admin_mcp:backup_requested"
+
+
+def backup_database(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Queue an offsite backup of the core tables (``auctions.backups``). Copies data out; changes none."""
+    from auctions import backups
+    from auctions.tasks import backup_database as task
+
+    if backups.config() is None:
+        return _error("Offsite backups aren't configured on this server (the BACKUP_* settings).")
+    if not cache.add(_BACKUP_KEY, timezone.now().isoformat(), BACKUP_COOLDOWN_SECONDS):
+        return _error(f"A backup was asked for at {cache.get(_BACKUP_KEY)}; one per six hours.")
+    try:
+        transaction.on_commit(lambda: task.delay("manual"))
+    except Exception:
+        cache.delete(_BACKUP_KEY)
+        raise
+    return _ok("Backup queued; it lands under manual/ in a few minutes. site_health shows a failed run.")
+
+
 def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     """Put an idea in the feature request queue as the owner's own, status new. Builds nothing.
 
@@ -2424,6 +2448,17 @@ ADMIN_TOOLS: dict[str, Action] = {
             danger=DANGER_CONFIRM,
             idempotent=True,
             resolver=suggest_feature,
+        ),
+        Action(
+            name="backup_database",
+            description=(
+                "Back up the core tables offsite now: dumped, encrypted and uploaded to the backup "
+                "bucket under manual/. Run it before anything risky, such as a deploy. Changes nothing "
+                "on the site; one per six hours."
+            ),
+            params={},
+            danger=DANGER_CONFIRM,
+            resolver=backup_database,
         ),
         Action(
             name="propose_change",
