@@ -1173,6 +1173,10 @@ class GroupedLogsTests(AdminEndpointCase):
         override = override_settings(LOG_DIR=Path(self.directory.name))
         override.enable()
         self.addCleanup(override.disable)
+        # The test container may have started minutes ago; restarts are tested on their own.
+        restarts = mock.patch("auctions.mcp.admin._start_times", return_value=[])
+        self.restarts = restarts.start()
+        self.addCleanup(restarts.stop)
 
     def logs(self, **arguments):
         return self.call("read_logs", arguments)["structuredContent"]
@@ -1283,6 +1287,42 @@ class GroupedLogsTests(AdminEndpointCase):
         naive = timezone.localtime(self.now, timezone.get_default_timezone()).replace(tzinfo=None)
         moment, _problem = admin.parse_since(naive.isoformat())
         self.assertLess(abs((moment - self.now).total_seconds()), 1)
+
+    def test_records_around_a_restart_are_counted_but_not_new_kinds(self):
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=21)]
+        result = self.call("site_health")
+        errors = result["structuredContent"]["errors"]
+        self.assertEqual(errors["total"], 3)
+        self.assertEqual(errors["during_restart"], 1)
+        self.assertEqual(errors["by_log"], {"root": 1, "root-celery": 1})
+        self.assertNotIn("restart", [kind["fingerprint"] for kind in errors["most_common"]])
+        self.assertIn("(1 while a container restarted)", result["content"][0]["text"])
+
+    def test_a_restart_alone_leaves_brief_quiet_about_errors(self):
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=20)]
+        Path(self.directory.name, "root-celery.log").write_text("")
+        Path(self.directory.name, "root.log").write_text(
+            _traceback(
+                _stamp(self.now - datetime.timedelta(minutes=19)), "pubsub.receive:327", "Lost", "ConnectionError: x"
+            )
+        )
+        self.assertNotIn("errors", self.call("site_health", {"brief": True})["structuredContent"])
+
+    def test_one_message_about_many_paths_is_one_kind(self):
+        first = admin.record_kind(
+            "WARNING 2026-11-03 02:24:03,823 log.log_response:253 Forbidden (CSRF token missing.): /lots/1024/some-fish/\n"
+        )
+        second = admin.record_kind(
+            "WARNING 2026-11-04 03:49:04,920 log.log_response:253 Forbidden (CSRF token missing.): /\n"
+        )
+        third = admin.record_kind(
+            "WARNING 2026-11-04 03:49:04,920 log.log_response:253 Forbidden (CSRF cookie not set.): /\n"
+        )
+        self.assertEqual(first[0], second[0])
+        self.assertNotEqual(first[0], third[0])
+        self.assertIn("/lots/1024/some-fish/", first[1])  # the kind keeps the first path seen
+        # A ratio or a number with a slash isn't a path.
+        self.assertNotEqual(admin.record_kind("ERROR x y a.b:1 got 5/10 done\n")[1], "")
 
     def test_the_request_context_doesnt_split_a_kind(self):
         first = admin.record_kind("ERROR 2026-10-08 08:00:00,000 a.b:1 [r=1a2b3c4d u=5] lot 12 broke\n")
