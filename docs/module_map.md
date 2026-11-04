@@ -278,7 +278,7 @@ this only quotes its opening sentence.
 - **`species_categories.py`** (421 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
-- **`species_matching.py`** (1223 lines)
+- **`species_matching.py`** (1253 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1785 lines)
   The ``django_tables2`` tables behind every list on the site.
@@ -662,7 +662,7 @@ this only quotes its opening sentence.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
 - **`test_speakers.py`** (1366 lines)
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
-- **`test_species.py`** (5115 lines)
+- **`test_species.py`** (5143 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
 - **`test_species_search.py`** (188 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.

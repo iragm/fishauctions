@@ -605,6 +605,30 @@ def _the_next_word_names_something_else(text, common, user=None, club=None, seen
     return heads
 
 
+#: "Genus epithet" as a seller writes a scientific name: a capitalised word and a lower-case one with a
+#: Latin ending. Only consulted when nothing on the list has that genus (:func:`_names_an_unlisted_species`).
+_BINOMIAL = re.compile(r"\b([A-Z][a-z]{4,})\s+([a-z]{4,}(?:i|ae|us|a|is|um|es|ensis|oides))\b")
+
+
+def _names_an_unlisted_species(text, genus_hits, user=None, club=None):
+    """True when the lot name spells out a scientific name the list doesn't have ("Bluefin Krib -
+    Enigmatichromis lucanusi"). Then a common word elsewhere in it ("krib") is not an answer: the
+    seller said which fish it is, and it isn't the one that word names. A pair that is itself a common
+    name ("Pearl gourami") is not a scientific name.
+    """
+    known = {species.genus.lower() for species in genus_hits}
+    for genus, epithet in _BINOMIAL.findall(text or ""):
+        if genus.lower() in known:
+            continue
+        pair = normalize(f"{genus} {epithet}")
+        if visible_common_names(user, club).filter(name_normalized=pair).exists():
+            continue
+        if visible_species(user, club).filter(common_name_normalized=pair).exists():
+            continue
+        return True
+    return False
+
+
 def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=None):
     """Species the typed text genuinely names, ranked. Empty when nothing does.
 
@@ -615,6 +639,9 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
     after it names a different fish (:func:`_the_next_word_names_something_else`).
     *Single common name*: :func:`_single_word_matches`, only when nothing above matched.
     *Bare epithet*: the whole lot name is one epithet ("saulosi").
+
+    None of the last three answer when the name spells out a scientific name that isn't on the list
+    (:func:`_names_an_unlisted_species`).
 
     No loose substring matching: "sponge filter" would hit *Sponge frillgoby*. *category* only breaks ties.
     """
@@ -667,6 +694,9 @@ def search_matches(text, limit=MAX_SUGGESTIONS, category=None, user=None, club=N
         if 0 < len(in_trade) <= MAX_GENUS_MATCHES:
             return in_trade
         # Too broad to answer, so fall through: "male bettas" still reaches the common name "betta".
+    elif _names_an_unlisted_species(text, genus_hits[: LLM_SHORTLIST_SIZE * 2], user=user, club=club):
+        # The seller named a species we don't have; a common word in the name must not overrule it.
+        return []
 
     # A phrase that only described the fish named after it: that fish is the answer, unless two
     # phrases each described a different one.
