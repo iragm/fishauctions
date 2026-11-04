@@ -26,8 +26,10 @@
     <ol class="mb-3">
       {% for step in proposal.step_rows %}
       <li class="mb-1">
-        <strong>{{ step.label }}</strong> <code>{{ step.tool }}</code>
-        {% if step.arguments %}
+        <strong>{{ step.label }}</strong>
+        {% if step.description %}
+        <div class="small ms-2">{{ step.description }}</div>
+        {% elif step.arguments %}
         <ul class="list-unstyled small ms-2 mb-0">
           {% for key, value in step.arguments %}<li><span class="text-muted">{{ key }}:</span> {{ value }}</li>{% endfor %}
         </ul>

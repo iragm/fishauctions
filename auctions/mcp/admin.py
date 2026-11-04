@@ -2140,6 +2140,10 @@ MAX_PENDING = 25
 
 #: Steps one proposal may hold. A batch of species for a page of lots fits; a sweep of the site doesn't.
 MAX_STEPS = 50
+#: ... except one made only of the species list's steps, which the owner approves in batches of about a
+#: thousand names (each list step holds many), and its words.
+MAX_SPECIES_STEPS = 200
+MAX_SPECIES_CHARACTERS = 200_000
 
 
 def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
@@ -2151,8 +2155,13 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
             return [], "steps must be a list of {tool, arguments}."
     if not isinstance(raw, list) or not raw:
         return [], "steps must be a list of at least one {tool, arguments}."
-    if len(raw) > MAX_STEPS:
-        return [], f"One proposal holds at most {MAX_STEPS} steps; split it."
+    species_only = all(
+        isinstance(step, dict) and str(step.get("tool", "")).strip().lower() in admin_species.SPECIES_STEPS
+        for step in raw
+    )
+    most = MAX_SPECIES_STEPS if species_only else MAX_STEPS
+    if len(raw) > most:
+        return [], f"One proposal holds at most {most} steps; split it."
     steps = []
     for number, step in enumerate(raw, start=1):
         if not isinstance(step, dict):
@@ -2177,13 +2186,16 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
         if problem:
             return [], f"Step {number}: {problem}"
         steps.append({"tool": action.name, "arguments": arguments})
-    limit = (
-        MAX_TRANSCRIPTION_CHARACTERS
-        if all(step["tool"] == "save_transcription" for step in steps)
-        else MAX_STEPS_CHARACTERS
-    )
+    if all(step["tool"] == "save_transcription" for step in steps):
+        limit = MAX_TRANSCRIPTION_CHARACTERS
+    elif species_only:
+        limit = MAX_SPECIES_CHARACTERS
+    else:
+        limit = MAX_STEPS_CHARACTERS
     if len(json.dumps(steps, default=str)) > limit:
         return [], "Those steps are too long to read before approving; split them."
+    if species_only and (problem := admin_species.proposal_problem(steps)):
+        return [], problem
     return steps, ""
 
 
