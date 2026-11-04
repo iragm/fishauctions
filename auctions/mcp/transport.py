@@ -33,6 +33,8 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
+from auctions import log_context
+
 from . import admin, auth, protocol, tools, usage
 
 logger = logging.getLogger(__name__)
@@ -135,6 +137,7 @@ class MCPEndpointView(View):
 
         # Resolvers run as this credential's user; set only on this endpoint, not via middleware.
         request.user = credential.user
+        log_context.set_user(request)  # the middleware saw no user: MCP signs in here, not by session
         request.mcp_credential = credential
         request.assistant_surface = credential.label  # what the auction history says did this
         request.owner_reach = self.admin  # documents.transcribe: the owner's routine reads every club's scans
@@ -148,8 +151,8 @@ class MCPEndpointView(View):
         )
         started = time.monotonic()
         answer = protocol.handle(message, caller)
-        if not self.admin:
-            usage.record(request, credential, message, answer, started)
+        # /mcp/admin/ too, flagged: an audit of what the owner's agents read, and what each read costs.
+        usage.record(request, credential, message, answer, started, admin=self.admin)
         if answer is None:
             return HttpResponse(status=202)
         return _json(answer)

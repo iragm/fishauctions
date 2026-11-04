@@ -21,11 +21,6 @@ ignore = [
     "B904",  # raise ... from -- worth doing, but 25 pre-existing sites is its own change
     "B007",  # unused loop variable -- style
     "B017",  # assertRaises(Exception) -- two tests that mean it
-    # try/except/pass. 19 of these swallow an exception with no log line, which is worth going
-    # through one at a time (each needs a decision about what should happen instead) rather than
-    # papering over here. Left off so the rest of flake8-bandit can be on today.
-    "S110",
-    "S112",
 ]
 # `select`, not `extend-select`. Ruff 0.16.0 changed what its *default* selection is, so
 # `extend-select` -- which adds to that default -- silently pulled in RUF, PL, SIM, TRY and the
@@ -73,6 +68,9 @@ select = [
 exclude = ["*.md"]
 
 [lint.per-file-ignores]
+# try/except/pass outside tests swallows an error with no log line, so S110/S112 are on there: catch
+# the exception you expect, and log the rest. Tests use it to keep going past a failure on purpose.
+"auctions/test*.py" = ["S110", "S112"]
 # This file measures what touching a cached property costs, so reading one and discarding the
 # result is the test, not a mistake.
 "auctions/test_query_counts.py" = ["B018"]

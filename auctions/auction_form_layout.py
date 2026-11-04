@@ -28,6 +28,7 @@ from crispy_forms.bootstrap import PrependedAppendedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Div, Layout, Submit
 from django import forms
+from django.core.exceptions import FieldDoesNotExist
 
 # What a first auction needs decided. Everything else is behind the Advanced disclosure -- written
 # this way round so a new field defaults to hidden rather than to the first screen.
@@ -206,7 +207,7 @@ def advanced_fields_in_use(instance, advanced_names):
     for name in advanced_names:
         try:
             field = meta.get_field(name)
-        except Exception:
+        except FieldDoesNotExist:
             continue
         default = field.get_default() if field.has_default() else None
         if callable(default):

@@ -904,7 +904,7 @@ class AuctionNotifications(APIView):
                 slug = auctions[0].slug
                 distance = distances[0]
         except Exception:
-            pass
+            logger.warning("Couldn't look up auctions near this visitor", exc_info=True)
         if not new:
             new = ""
         # Convert distance to user's preferred unit

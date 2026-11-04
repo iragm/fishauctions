@@ -16,6 +16,7 @@ times moved) and a freeze (nothing moved, but the page views stop) apart, from `
 from __future__ import annotations
 
 import heapq
+import logging
 import os
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
@@ -24,6 +25,8 @@ from typing import Any
 
 from django.core.cache import cache
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 #: How far back the quiet stretch is looked for.
 QUIET_WINDOW = timedelta(hours=24)
@@ -70,7 +73,7 @@ def record_start(service: str) -> None:
     try:
         cache.set(_CACHE_KEY.format(service), _iso(container_started()), timeout=None)
     except Exception:  # a worker must start whether or not Redis is up
-        pass
+        logger.warning("Couldn't record the %s container's start time", service)
 
 
 def _celery_started() -> dict[str, Any]:
