@@ -1921,21 +1921,29 @@ class ClubAdminListTests(ClubSkillTestCase):
         self.assertIn("2 of", result["summary"])
 
     def test_who_can_run_the_clubs_auctions(self):
-        _result, rows = self._rows()
-        self.assertEqual(
-            rows["«Club Admin»"]["auctions"],
-            [
-                {
-                    "auction": self.online_auction.title,
-                    "auction_slug": self.online_auction.slug,
-                    "right": "auction admin",
-                }
-            ],
+        """As ``Auction.permission_check`` answers it: a club admin runs them all, a TOS admin needs an account."""
+        AuctionTOS.objects.create(
+            auction=self.online_auction, name="Paper Pete", is_admin=True, pickup_location=self.location
         )
+        _result, rows = self._rows()
+        self.assertTrue(rows["«Club Admin»"]["runs_every_club_auction"])
+        self.assertNotIn("auctions", rows["«Club Admin»"])
         creator = rows[f"«{self.user.username}»"]
         self.assertEqual(creator["permissions"], [])
-        self.assertEqual(creator["auctions"][0]["right"], "created it")
+        self.assertEqual(
+            creator["auctions"],
+            [{"auction": self.online_auction.title, "auction_slug": self.online_auction.slug, "right": "created it"}],
+        )
+        self.assertNotIn("«Paper Pete»", rows, "an admin row with no account can run nothing")
         self.assertNotIn(self.in_person_auction.title, json.dumps(rows), "not one of this club's auctions")
+
+    def test_a_tos_admin_without_club_rights_is_listed(self):
+        ClubMember.objects.filter(pk=self.club_admin.pk).update(permission_admin=False, permission_view=True)
+        boss = User.objects.create_superuser("audit_boss2", "boss2@example.com", "pw")
+        result = self._run("list_club_admins", {"club": self.club.name}, user=boss)
+        rows = {row["name"]: row for row in result["people"]}
+        self.assertEqual(rows["«Club Admin»"]["permissions"], ["view"])
+        self.assertEqual(rows["«Club Admin»"]["auctions"][0]["right"], "auction admin")
 
     def test_only_a_club_admin_may_ask(self):
         ClubMember.objects.create(club=self.club, user=self.user, name="Viewer", permission_view=True)

@@ -5324,9 +5324,14 @@ _ADMIN_AUCTIONS_PER_ROW = 10
 
 def list_club_admins(request, params: dict[str, Any]) -> dict[str, Any]:
     """Everyone who holds a permission in a club right now, each with every flag they hold, plus the people
-    who can run one of the club's auctions (its creator, or ``AuctionTOS.is_admin``). An audit, so it
-    reads current rows only: a removed member holds nothing. Gated like ``ClubMemberPermissionsView``,
-    on ``permission_admin``, the one permission that can change what it lists.
+    who can run one of the club's auctions. An audit, so it reads current rows only: a removed member
+    holds nothing. Gated like ``ClubMemberPermissionsView``, on ``permission_admin``, the one permission
+    that can change what it lists.
+
+    Auction rights follow ``Auction.permission_check``: ``permission_admin`` or
+    ``permission_manage_auctions`` runs every club auction, otherwise its creator or an
+    ``AuctionTOS.is_admin`` row *with an account*. A flag on a row with no account grants nothing,
+    which is why an audit row says ``has_an_account`` though ``list_club_members`` rows don't.
     """
     from django.contrib.auth.models import User
 
@@ -5347,28 +5352,25 @@ def list_club_admins(request, params: dict[str, Any]) -> dict[str, Any]:
         any_permission |= Q(**{flag: True})
     staff = list(ClubMember.objects.filter(club=club, is_deleted=False).filter(any_permission).order_by("name", "pk"))
 
+    # user pk -> {auction pk: (date_start, title, slug, right)}; newest first once sorted.
+    run_by: dict[int, dict[int, tuple]] = {}
     auctions = Auction.objects.filter(club=club, is_deleted=False)
-    run_by: dict[Any, list] = {}  # user pk, or ("tos", pk) for a participant with no account
-    names: dict[Any, str] = {}
-    for auction in auctions.filter(created_by__isnull=False).order_by("-date_start"):
-        run_by.setdefault(auction.created_by_id, []).append((auction, "created it"))
-    admins = (
-        AuctionTOS.objects.filter(auction__in=auctions, is_admin=True)
-        .select_related("auction")
-        .order_by("-auction__date_start", "pk")
-    )
-    for tos in admins:
-        key = tos.user_id or ("tos", tos.pk)
-        if any(auction.pk == tos.auction_id for auction, _ in run_by.get(key, [])):
-            continue
-        run_by.setdefault(key, []).append((tos.auction, "auction admin"))
-        names.setdefault(key, tos.name or "")
+    for pk, creator, start, title, slug in auctions.filter(created_by__isnull=False).values_list(
+        "pk", "created_by_id", "date_start", "title", "slug"
+    ):
+        run_by.setdefault(creator, {})[pk] = (start, title, slug, "created it")
+    for creator, pk, start, title, slug in (
+        AuctionTOS.objects.filter(auction__in=auctions, is_admin=True, user__isnull=False)
+        .values_list("user_id", "auction_id", "auction__date_start", "auction__title", "auction__slug")
+        .order_by()
+    ):
+        run_by.setdefault(creator, {}).setdefault(pk, (start, title, slug, "auction admin"))
 
-    def auction_rights(key):
-        held = run_by.pop(key, [])
+    def auction_rights(account_pk):
+        held = sorted(run_by.pop(account_pk, {}).values(), key=lambda entry: entry[0], reverse=True)
         return len(held), [
-            {"auction": auction.title, "auction_slug": auction.slug, "right": right}
-            for auction, right in held[:_ADMIN_AUCTIONS_PER_ROW]
+            {"auction": title, "auction_slug": slug, "right": right}
+            for _start, title, slug, right in held[:_ADMIN_AUCTIONS_PER_ROW]
         ]
 
     rows = []
@@ -5382,30 +5384,24 @@ def list_club_admins(request, params: dict[str, Any]) -> dict[str, Any]:
         }
         if member.user_id:
             count, held = auction_rights(member.user_id)
-            if count:
+            if member.permission_admin or member.permission_manage_auctions:
+                row["runs_every_club_auction"] = True
+            elif count:
                 row.update(auctions_they_can_run=count, auctions=held)
         rows.append(row)
     members_by_user = {
         member.user_id: member
-        for member in ClubMember.objects.filter(
-            club=club, is_deleted=False, user_id__in=[k for k in run_by if isinstance(k, int)]
-        )
+        for member in ClubMember.objects.filter(club=club, is_deleted=False, user_id__in=list(run_by))
     }
-    users = {u.pk: u for u in User.objects.filter(pk__in=[k for k in run_by if isinstance(k, int)])}
-    for key in list(run_by):
-        member = members_by_user.get(key) if isinstance(key, int) else None
-        account = users.get(key) if isinstance(key, int) else None
-        if member:
-            name = member.name or member.email or ""
-        elif account:
-            name = account.get_full_name() or account.username
-        else:
-            name = names.get(key, "")
-        count, held = auction_rights(key)
+    accounts = User.objects.filter(pk__in=list(run_by)).order_by("username")
+    for account in accounts:
+        member = members_by_user.get(account.pk)
+        name = (member.name or member.email) if member else (account.get_full_name() or account.username)
+        count, held = auction_rights(account.pk)
         rows.append(
             {
-                "name": untrusted_short(name) or "(no name)",
-                "has_an_account": account is not None,
+                "name": untrusted_short(name or "") or "(no name)",
+                "has_an_account": True,
                 "club_admin": False,
                 "permissions": [],
                 "auctions_they_can_run": count,
