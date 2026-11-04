@@ -1,8 +1,8 @@
-"""The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
+"""The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
 
 Everything on the species gaps page and in ``manage.py backfill_lot_species``, for an agent that can't
-press a button or answer a prompt. The reads, :func:`species_dashboard` and :func:`species_backfill`,
-write nothing (``record=False`` keeps even the cache's hit counter still). Each change is an
+press a button or answer a prompt, plus fixing lots matched to the wrong species. The reads,
+:func:`species_dashboard`, :func:`species_backfill` and :func:`lots_by_species`, write nothing (``record=False`` keeps even the cache's hit counter still). Each change is an
 ``APPROVAL_ONLY`` step for :func:`auctions.mcp.admin.propose_change`: it runs only when a person
 approves it, through the same :mod:`auctions.species_admin` function the page's button calls, and each
 is checked once when proposed (:data:`PROPOSAL_CHECKS`) so a bad number reaches the agent while it can
@@ -103,20 +103,23 @@ def _lots(params: dict[str, Any]):
 # --- reads ------------------------------------------------------------------------------------------
 
 
-def _gaps(limit, offset):
-    rows = species_admin.gap_rows(limit=offset + limit)
+def _gaps(limit, offset, verdict=None):
+    # Filtered, every name is read anyway, so the whole list is kept and counted.
+    rows = species_admin.gap_rows(limit=offset + limit if verdict is None else None, verdict=verdict)
+    total = len(rows) if verdict else None
+    rows = rows[offset : offset + limit]
     return [
         {
             "lot_name": untrusted_short(row["lot_name"]),
             "lots": row["lots"],
             "bred": row["bred"],
             "newest": row["newest"].date().isoformat() if row["newest"] else None,
-            "verdict": row["verdict"],
+            "verdict": row["verdict_key"],
             "verdict_detail": row["verdict_detail"],
             "answer": row["answer"],
         }
-        for row in rows[offset:]
-    ], None
+        for row in rows
+    ], total
 
 
 def _pending(limit, offset):
@@ -229,6 +232,7 @@ def _summary() -> dict[str, Any]:
         "missing_from_the_list": cache.filter(species__isnull=True).exclude(scientific_name="").count(),
         "retired": SpeciesNameRejection.objects.count(),
         "duplicate_pairs": len(species_admin.duplicate_pairs(limit=1000)),
+        "backlog_by_verdict": species_admin.backlog(),
     }
 
 
@@ -238,17 +242,25 @@ def species_dashboard(request, params: dict[str, Any]) -> dict[str, Any]:
     section = _str(params, "section", "summary").lower().replace(" ", "_")
     if section not in SECTIONS:
         return _need("Which section? One of: " + ", ".join(SECTIONS) + ".")
+    verdict = _str(params, "verdict").lower().replace(" ", "_") or None
+    if verdict and (section != "gaps" or verdict not in species_admin.VERDICTS):
+        return _need("verdict only filters the gaps section, and is one of: " + ", ".join(species_admin.VERDICTS) + ".")
     if section == "summary":
         numbers = _summary()
+        settled = numbers["backlog_by_verdict"]["not_a_species_by_a_person"]["lots"]
         return _ok(
-            f"{numbers['lots_without_species']} lots have no species ({numbers['percent_done']}% done); "
+            f"{numbers['lots_without_species']} lots have no species ({numbers['percent_done']}% done), "
+            f"{settled} of them settled as not a species by a person; "
             f"{numbers['pending']} species waiting for approval, {numbers['duplicate_pairs']} possible "
             f"duplicate pairs, {numbers['retired']} retired pairings.",
             **numbers,
         )
     limit, offset = palette_actions._slice(params)
+    verdict = _str(params, "verdict").lower().replace(" ", "_") or None
+    if verdict and (section != "gaps" or verdict not in species_admin.VERDICTS):
+        return _need("verdict only filters the gaps section, and is one of: " + ", ".join(species_admin.VERDICTS) + ".")
     rows, total = {
-        "gaps": _gaps,
+        "gaps": lambda limit, offset: _gaps(limit, offset, verdict),
         "pending": _pending,
         "remembered": _remembered,
         "not_a_species": _not_a_species,
@@ -276,11 +288,12 @@ def species_backfill(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return _error(problem)
     scan = max(1, min(_int(params, "scan") or DEFAULT_SCAN, MAX_SCAN))
+    skip = max(0, _int(params, "skip") or 0)
     limit, offset = palette_actions._slice(params)
     which = _str(params, "pass", "automatic").lower()
     if which == "automatic":
         matches = []
-        for row in species_admin.name_counts(lots, scan):
+        for row in species_admin.name_counts(lots, scan, skip=skip):
             species, source = species_admin.automatic_answer(row["lot_name"], record=False)
             if species is not None:
                 matches.append((row, species, source))
@@ -294,11 +307,13 @@ def species_backfill(request, params: dict[str, Any]) -> dict[str, Any]:
             }
             for row, species, source in matches[offset : offset + limit]
         ]
-        result = {"pass": which, "names_scanned": scan, "matches": found, "total": total}
+        result = {"pass": which, "names_skipped": skip, "names_scanned": scan, "matches": found, "total": total}
         if offset + limit < total:
             result["next_offset"] = offset + limit
         return _ok(
-            f"{total} of the {scan} commonest lot names without a species match exactly one species."
+            f"{total} of {scan} lot names without a species"
+            + (f" (after the {skip} commonest)" if skip else " (the commonest)")
+            + " match exactly one species."
             + palette_actions._showing(total, limit, offset)
             + " Propose backfill_species with their lot_names to set them.",
             **result,
@@ -309,6 +324,7 @@ def species_backfill(request, params: dict[str, Any]) -> dict[str, Any]:
             include_unmatched=bool(palette_actions._flag(params, "include_unmatched")),
             min_lots=max(1, _int(params, "min_lots") or 2),
             scan=scan,
+            skip=skip,
             record=False,
         )
         total = len(groups)
@@ -323,7 +339,7 @@ def species_backfill(request, params: dict[str, Any]) -> dict[str, Any]:
             }
             for group in groups[offset : offset + limit]
         ]
-        result = {"pass": which, "names_scanned": scan, "questions": questions, "total": total}
+        result = {"pass": which, "names_skipped": skip, "names_scanned": scan, "questions": questions, "total": total}
         if offset + limit < total:
             result["next_offset"] = offset + limit
         return _ok(
@@ -333,6 +349,55 @@ def species_backfill(request, params: dict[str, Any]) -> dict[str, Any]:
             **result,
         )
     return _need("Which pass? automatic or review.")
+
+
+def lots_by_species(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Lot names already carrying a species, grouped by name and species, commonest first: what to read
+    before proposing change_lots_species. By species number, by part of a name, or both."""
+    from django.db.models import Count
+
+    from auctions.models import Lot, Species
+
+    _superuser(request)
+    species = None
+    if params.get("species") not in (None, ""):
+        species, problem = _species(params)
+        if problem:
+            return _error(problem)
+    name = _str(params, "name")
+    if species is None and not name:
+        return _need("Which lots? Give a species number, part of a lot name, or both.")
+    lots = Lot.objects.filter(is_deleted=False, species__isnull=False)
+    if species is not None:
+        lots = lots.filter(species=species)
+    if name:
+        lots = lots.filter(lot_name__icontains=name)
+    auction = _str(params, "auction")
+    if auction:
+        from auctions.models import Auction
+
+        if not Auction.objects.filter(slug=auction).exists():
+            return _error(f"No auction with slug {auction!r}.")
+        lots = lots.filter(auction__slug=auction)
+    grouped = lots.values("lot_name", "species").annotate(lots=Count("pk")).order_by("-lots", "lot_name")
+    limit, offset = palette_actions._slice(params)
+    total = grouped.count()
+    page = list(grouped[offset : offset + limit])
+    found = {row.pk: row for row in Species.objects.filter(pk__in={row["species"] for row in page})}
+    rows = [
+        {"lot_name": untrusted_short(row["lot_name"]), "lots": row["lots"], "species": _echo(found[row["species"]])}
+        for row in page
+        if row["species"] in found
+    ]
+    result = {"rows": rows, "total": total}
+    if offset + limit < total:
+        result["next_offset"] = offset + limit
+    return _ok(
+        f"{total} lot name and species pairs."
+        + palette_actions._showing(total, limit, offset)
+        + " Propose change_lots_species to move any of them to another species.",
+        **result,
+    )
 
 
 # --- changes a proposal makes -------------------------------------------------------------------------
@@ -460,6 +525,67 @@ def set_species_on_lot_names(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(summary, lots=count, species=_echo(species))
 
 
+def _to_species(params):
+    """The species lots move to: ``(species, "")``, ``(None, "")`` for "no species", or ``(None, why not)``."""
+    raw = params.get("to")
+    if raw is None or (isinstance(raw, str) and raw.strip().lower() in ("", "none", "null", "no species")):
+        if "to" not in params:
+            return None, "to must be a species number, or none to take the species off."
+        return None, ""
+    return _species(params, "to")
+
+
+def _move(params):
+    """``(lots, to, names, "")`` for a change_lots_species step, or ``(None, None, [], why not)``."""
+    source, problem = _species(params, "species")
+    if problem:
+        return None, None, [], problem
+    to, problem = _to_species(params)
+    if problem:
+        return None, None, [], problem
+    if to is not None and to.pk == source.pk:
+        return None, None, [], "species and to are the same species."
+    names = []
+    if params.get("lot_names") not in (None, "", []):
+        names, problem = _lot_names(params, species_admin.MAX_REMEMBERED)
+        if problem:
+            return None, None, [], problem
+    try:
+        lots = species_admin.lots_on_species(source, names, _str(params, "auction") or None)
+    except LookupError as error:
+        return None, None, [], str(error)
+    if not names and not _str(params, "auction") and to is None:
+        return None, None, [], "Taking a species off every lot needs lot_names or an auction."
+    return lots, to, names, ""
+
+
+def change_lots_species(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Find the lots with one species and give them another, or none: the fix for a wrong match."""
+    _superuser(request)
+    lots, to, names, problem = _move(params)
+    if problem:
+        return _error(problem)
+    source = _species(params, "species")[0]
+    count, refiled, untaught = species_admin.move_lots(
+        lots,
+        source,
+        to,
+        names=names,
+        set_category=bool(palette_actions._flag(params, "set_category")),
+        teach=bool(names) and palette_actions._flag(params, "remember") is not False,
+        user=request.user,
+    )
+    summary = f"{count} lot(s) moved to {to.label if to else 'no species'}."
+    if refiled:
+        summary += f" {refiled} were filed under {to.category}."
+    if untaught:
+        summary += (
+            f" {len(untaught)} name(s) were not remembered as the new answer (a species not yet approved, a "
+            "retired pairing, or a name the list already answers), so they will be looked up again."
+        )
+    return _ok(summary, lots=count, species=_echo(to) if to else None)
+
+
 def remember_not_a_species(request, params: dict[str, Any]) -> dict[str, Any]:
     """The reviewed pass's "not a species": nothing asks about these names again."""
     _superuser(request)
@@ -575,6 +701,29 @@ APPROVAL_ONLY: list[Action] = [
         confirm_template="Remember as not a species",
         resolver=remember_not_a_species,
     ),
+    Action(
+        name="change_lots_species",
+        description=(
+            "Fix lots matched to the wrong species: every lot carrying species, or only those called one "
+            "of lot_names, gets to instead (none takes the species off). Named lot names are remembered "
+            "as the new answer. Read lots_by_species first."
+        ),
+        params={
+            "species": "integer, required. The species number the lots carry now.",
+            "to": "integer or none, required. The species number they should carry, or none for no species.",
+            "lot_names": (
+                f"array of string, optional. Only lots called one of these, exactly as lots_by_species gave "
+                f"them, at most {species_admin.MAX_REMEMBERED}. Default: every lot with the species."
+            ),
+            "auction": "string, optional. Only lots in this auction, by slug.",
+            "set_category": _SET_CATEGORY,
+            "remember": "boolean, optional, default true. false moves the lots without teaching the matcher.",
+        },
+        danger=DANGER_CONFIRM,
+        idempotent=True,
+        confirm_template="Change the species on lots",
+        resolver=change_lots_species,
+    ),
 ]
 
 
@@ -590,6 +739,7 @@ PROPOSAL_CHECKS = {
         _species(arguments)[1] or _lot_names(arguments, species_admin.MAX_REMEMBERED)[1] or _lots(arguments)[1]
     ),
     "remember_not_a_species": lambda arguments: _lot_names(arguments, species_admin.MAX_REMEMBERED)[1],
+    "change_lots_species": lambda arguments: _move(arguments)[3],
 }
 
 READS: list[Action] = [
@@ -601,6 +751,10 @@ READS: list[Action] = [
         ),
         params={
             "section": "string, optional, default summary. " + ", ".join(SECTIONS) + ".",
+            "verdict": (
+                "string, optional. gaps only: just the names with this verdict, read from every name, not "
+                "only the commonest. One of: " + ", ".join(species_admin.VERDICTS) + "."
+            ),
             "limit": "integer, optional, default 15.",
             "offset": "integer, optional, default 0.",
         },
@@ -619,6 +773,7 @@ READS: list[Action] = [
             "pass": "string, optional, default automatic. automatic or review.",
             "auction": _AUCTION,
             "scan": f"integer, optional, default {DEFAULT_SCAN}, at most {MAX_SCAN}. How many of the commonest names to match.",
+            "skip": "integer, optional, default 0. Start the scan this many names down the list, to reach the tail.",
             "include_unmatched": "boolean, optional, default false. review: also names nothing matches, usually a new species.",
             "min_lots": "integer, optional, default 2. review: ignore names on fewer lots.",
             "limit": "integer, optional, default 15.",
@@ -626,5 +781,21 @@ READS: list[Action] = [
         },
         danger=DANGER_SAFE,
         resolver=species_backfill,
+    ),
+    Action(
+        name="lots_by_species",
+        description=(
+            "Lots that already carry a species, grouped by lot name and species, commonest first: by species "
+            "number, by part of a lot name, or both. Read before proposing change_lots_species."
+        ),
+        params={
+            "species": "integer, optional. Only lots with this species number.",
+            "name": "string, optional. Only lot names containing this.",
+            "auction": "string, optional. Only lots in this auction, by slug.",
+            "limit": "integer, optional, default 15.",
+            "offset": "integer, optional, default 0.",
+        },
+        danger=DANGER_SAFE,
+        resolver=lots_by_species,
     ),
 ]
