@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, species_dashboard and species_backfill for the species list's upkeep, "
+    "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
     "palette_shortcut_candidates, mcp_usage, square_reconnects and untrusted_auction_creators. Nothing here "
     "changes the site. "

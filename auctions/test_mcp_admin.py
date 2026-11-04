@@ -739,7 +739,8 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         listed = self.listed()
         self.assertIn("species_dashboard", listed)
         self.assertIn("species_backfill", listed)
-        for name in ("species_dashboard", "species_backfill"):
+        self.assertIn("lots_by_species", listed)
+        for name in ("species_dashboard", "species_backfill", "lots_by_species"):
             response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url="/mcp/")
             self.assertIn("error", json.loads(response.content))
 
@@ -866,6 +867,76 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.propose("remember_not_a_species", {"lot_names": ["Sponge filter"]})
         self.approve()
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
+
+    def test_lots_on_the_wrong_species_are_found_and_moved(self):
+        from auctions.models import SpeciesSearchCache
+        from auctions.species_matching import normalize
+
+        Lot.objects.filter(pk=self.saulosi.pk).update(species=self.aulonocara)
+        data, writes = self.writes_during("lots_by_species", {"species": self.aulonocara.pk})
+        self.assertEqual(writes, [])
+        self.assertEqual(
+            [(row["lots"], row["species"]["species_id"]) for row in data["rows"]], [(1, self.aulonocara.pk)]
+        )
+        self.assertEqual(self.data(self.call("lots_by_species", {"name": "saulosi"}))["total"], 1)
+        self.assertEqual(self.data(self.call("lots_by_species", {}))["status"], "needs_more_information")
+
+        for arguments in (
+            {"species": self.aulonocara.pk, "to": self.aulonocara.pk},
+            {"species": self.aulonocara.pk},
+            {"species": self.aulonocara.pk, "to": None},
+            {"species": self.aulonocara.pk, "to": 999999},
+            {"species": self.aulonocara.pk, "to": self.chindongo.pk, "auction": "no-such-auction"},
+        ):
+            with self.subTest(arguments=arguments):
+                self.assertTrue(self.propose("change_lots_species", arguments)["isError"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+        self.propose(
+            "change_lots_species",
+            {"species": self.aulonocara.pk, "to": self.chindongo.pk, "lot_names": data["rows"][0]["lot_name"]},
+        )
+        self.assertIn("1 lot(s) moved", self.approve().results[0]["said"])
+        self.saulosi.refresh_from_db()
+        self.assertEqual(self.saulosi.species, self.chindongo)
+        self.assertEqual(SpeciesSearchCache.objects.get(search_text=normalize("6 saulosi")).species, self.chindongo)
+
+        AgentProposal.objects.all().delete()
+        self.propose("change_lots_species", {"species": self.chindongo.pk, "to": "none", "lot_names": ["6 saulosi"]})
+        self.approve()
+        self.saulosi.refresh_from_db()
+        self.assertIsNone(self.saulosi.species)
+        self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("6 saulosi")).species)
+
+    def test_the_backlog_counts_what_a_person_settled_as_not_a_species(self):
+        from auctions.species_admin import remember_not_a_species
+
+        filter_lot = Lot.objects.create(
+            lot_name="Sponge filter",
+            auction=self.online_auction,
+            user=self.user,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            reserve_price=5,
+            date_end=self.lot.date_end,
+        )
+        Lot.objects.filter(pk=filter_lot.pk).update(species=None)
+        remember_not_a_species(["Sponge filter"], user=self.owner)
+        backlog = self.data(self.call("species_dashboard", {}))["backlog_by_verdict"]
+        self.assertEqual(backlog["not_a_species_by_a_person"], {"lots": 1, "names": 1})
+        self.assertGreaterEqual(backlog["never_looked_up"]["lots"], 2)
+
+        settled = self.data(self.call("species_dashboard", {"section": "gaps", "verdict": "not_a_species_by_a_person"}))
+        self.assertEqual([row["lot_name"] for row in settled["rows"]], ["«Sponge filter»"])
+        open_names = self.data(self.call("species_dashboard", {"section": "gaps", "verdict": "never looked up"}))
+        self.assertNotIn("«Sponge filter»", [row["lot_name"] for row in open_names["rows"]])
+        refused = self.data(self.call("species_dashboard", {"section": "pending", "verdict": "never_looked_up"}))
+        self.assertEqual(refused["status"], "needs_more_information")
+
+    def test_the_backfill_can_skip_to_the_tail(self):
+        skipped = self.data(self.call("species_backfill", {"pass": "automatic", "skip": 1000}))
+        self.assertEqual(skipped["total"], 0)
+        self.assertEqual(skipped["names_skipped"], 1000)
 
 
 class FeatureRequestTests(AdminEndpointCase):

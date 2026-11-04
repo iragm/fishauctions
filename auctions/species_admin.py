@@ -10,8 +10,10 @@ the three can drift from the others:
   name with no language model (:func:`automatic_answer`); the reviewed one groups the names it can't
   settle into questions (:func:`review_groups`) for a person to answer with :func:`apply_species` or
   :func:`remember_not_a_species`;
-* **what there is to do** (:func:`gap_rows`, :func:`duplicate_pairs`, :func:`status`), read by the page,
-  the command's ``--status`` and the admin endpoint.
+* **what there is to do** (:func:`gap_rows`, :func:`backlog`, :func:`duplicate_pairs`, :func:`status`),
+  read by the page, the command's ``--status`` and the admin endpoint;
+* **fixing a wrong species** (:func:`lots_on_species`, :func:`move_lots`): lots already carrying one
+  species moved to another, or to none.
 
 Backfill writes with ``update()``, never ``save()``: a lot's category comes from its species, and moving
 categories can flip a lot between BAP tracks while an existing ``BapAward`` reflects the old one.
@@ -74,11 +76,49 @@ def lots_with_species():
     return Lot.objects.filter(species__isnull=False, is_deleted=False, auction__use_scientific_name=True)
 
 
-def gap_rows(limit=GAP_LIMIT):
+#: What the matcher last said about a lot name, as :func:`gap_rows` and :func:`backlog` name it.
+VERDICTS = {
+    "never_looked_up": "never looked up",
+    "matches_a_species": "matches a species",
+    "missing_from_the_list": "missing from the list",
+    "not_a_species_by_the_model": "not a species, decided by the language model",
+    "not_a_species_by_a_person": "not a species, chosen by a person",
+}
+
+
+def verdict_of(cache_row):
+    """``(key, verdict, detail)`` for a lot name's remembered answer, or for none."""
+    if cache_row is None:
+        return "never_looked_up", "never looked up", ""
+    if cache_row.species_id:
+        # Resolves now; these lots predate it or the seller declined.
+        return "matches_a_species", "matches a species", cache_row.species.label
+    if cache_row.is_a_gap:
+        # Identified but not on the list: a row for the curated CSV, and the cache row heals on import.
+        return "missing_from_the_list", "missing from the list", cache_row.scientific_name
+    if cache_row.source == "llm":
+        return "not_a_species_by_the_model", "not a species", "decided by the language model"
+    return "not_a_species_by_a_person", "not a species", "chosen by a person"
+
+
+def _remembered_answers(keys):
+    """``{search_text: SpeciesSearchCache}`` for these normalised names, in chunks MariaDB takes."""
+    keys = list(keys)
+    found = {}
+    for start in range(0, len(keys), 2000):
+        for cache_row in SpeciesSearchCache.objects.filter(search_text__in=keys[start : start + 2000]).select_related(
+            "species"
+        ):
+            found[cache_row.search_text] = cache_row
+    return found
+
+
+def gap_rows(limit=GAP_LIMIT, verdict=None):
     """Lot names with no species, one row per normalised name, with the matcher's last verdict on it.
 
     It doesn't guess which are hardware; each field is evidence (breeder claims, the verdict) and the
-    reader judges. Only names of stopwords and numbers are dropped. Breeder claims first.
+    reader judges. Only names of stopwords and numbers are dropped. Breeder claims first. *verdict*, a
+    :data:`VERDICTS` key, keeps only those rows, and then every name is read rather than the commonest.
     """
     rows = (
         missing_lots()
@@ -90,8 +130,10 @@ def gap_rows(limit=GAP_LIMIT):
             bred=Count("pk", filter=Q(i_bred_this_fish=True)),
             newest=Max("date_posted"),
         )
-        .order_by("-lots", "-newest")[: limit * 3]
+        .order_by("-lots", "-newest")
     )
+    if verdict is None:
+        rows = rows[: limit * 3]
     # Merged in Python: the normalisation is Python.
     merged = {}
     for row in rows:
@@ -107,31 +149,37 @@ def gap_rows(limit=GAP_LIMIT):
         entry["bred"] += row["bred"]
         entry["newest"] = max(entry["newest"], row["newest"]) if row["newest"] else entry["newest"]
 
-    verdicts = {
-        cache_row.search_text: cache_row
-        for cache_row in SpeciesSearchCache.objects.filter(search_text__in=list(merged)).select_related("species")
-    }
+    verdicts = _remembered_answers(merged)
     for key, entry in merged.items():
-        verdict = verdicts.get(key)
-        entry["answer"] = verdict.pk if verdict else None
-        if verdict is None:
-            entry["verdict"] = "never looked up"
-            entry["verdict_detail"] = ""
-        elif verdict.species_id:
-            # Resolves now; these lots predate it or the seller declined.
-            entry["verdict"] = "matches a species"
-            entry["verdict_detail"] = verdict.species.label
-        elif verdict.is_a_gap:
-            # Identified but not on the list: a row for the curated CSV, and the cache row heals on import.
-            entry["verdict"] = "missing from the list"
-            entry["verdict_detail"] = verdict.scientific_name
-        elif verdict.source == "llm":
-            entry["verdict"] = "not a species"
-            entry["verdict_detail"] = "decided by the language model"
-        else:
-            entry["verdict"] = "not a species"
-            entry["verdict_detail"] = "chosen by a person"
-    return sorted(merged.values(), key=lambda entry: (-entry["bred"], -entry["lots"]))[:limit]
+        cache_row = verdicts.get(key)
+        entry["answer"] = cache_row.pk if cache_row else None
+        entry["verdict_key"], entry["verdict"], entry["verdict_detail"] = verdict_of(cache_row)
+    entries = [entry for entry in merged.values() if verdict is None or entry["verdict_key"] == verdict]
+    return sorted(entries, key=lambda entry: (-entry["bred"], -entry["lots"]))[:limit]
+
+
+def backlog():
+    """Lots with no species and their distinct names, by what the matcher last said about the name.
+
+    ``not_a_species_by_a_person`` is the settled part: those lots are hardware, food or mixed bags and
+    stay without a species on purpose. Everything else is still to do. ``no_species_words`` are names of
+    counts and adjectives only ("3 bags"), which nothing could match.
+    """
+    tallies = {key: {"lots": 0, "names": 0} for key in (*VERDICTS, "no_species_words")}
+    by_key = defaultdict(int)
+    for row in missing_lots().exclude(lot_name="").values("lot_name").annotate(lots=Count("pk")).order_by():
+        key = normalize(row["lot_name"]) if base_words(row["lot_name"]) else ""
+        if not key:
+            tallies["no_species_words"]["lots"] += row["lots"]
+            tallies["no_species_words"]["names"] += 1
+            continue
+        by_key[key] += row["lots"]
+    answers = _remembered_answers(by_key)
+    for key, lots in by_key.items():
+        kind = verdict_of(answers.get(key))[0]
+        tallies[kind]["lots"] += lots
+        tallies[kind]["names"] += 1
+    return tallies
 
 
 def attach_votes(rows):
@@ -362,13 +410,15 @@ class NameGroup:
         return [name for name, _ in self.spellings]
 
 
-def name_counts(lots, limit=None):
-    """``[{lot_name, count, bred}, ...]``, commonest first, so a limit spends on the big names."""
+def name_counts(lots, limit=None, skip=0):
+    """``[{lot_name, count, bred}, ...]``, commonest first, so a limit spends on the big names. *skip*
+    passes over that many of the commonest first, to reach the tail."""
     rows = list(
         lots.values("lot_name")
         .annotate(count=Count("pk"), bred=Count("pk", filter=Q(i_bred_this_fish=True)))
         .order_by("-count", "lot_name")
     )
+    rows = rows[skip:]
     return rows[:limit] if limit else rows
 
 
@@ -388,27 +438,68 @@ def apply_species(lots, species, names, *, set_category=False, teach=False, user
     pks = list(lots.filter(lot_name__in=names).values_list("pk", flat=True))
     if not pks:
         return 0, 0
-    movable = []
-    uncategorized = Category.objects.filter(name="Uncategorized").values_list("pk", flat=True).first()
-    if set_category and species.category_id and species.category_id != uncategorized:
-        movable = list(
-            Lot.objects.filter(pk__in=pks)
-            .filter(Q(species_category__isnull=True) | Q(species_category__name="Uncategorized"))
-            .exclude(pk__in=BapAward.objects.filter(lot__isnull=False).values("lot_id"))
-            .values_list("pk", flat=True)
-        )
+    movable = _refilable(pks, species) if set_category else []
     if dry_run:
         return len(pks), len(movable)
     Lot.objects.filter(pk__in=pks).update(species=species)
-    if movable:
-        Lot.objects.filter(pk__in=movable).update(
+    _refile(movable, species)
+    if teach:
+        for name in names[:MAX_REMEMBERED]:
+            remember(name, species, source="user", user=user)
+    return len(pks), len(movable)
+
+
+def _refilable(pks, species):
+    """Of these lots, the Uncategorized ones with no breeder award that *species*' category could take."""
+    uncategorized = Category.objects.filter(name="Uncategorized").values_list("pk", flat=True).first()
+    if species is None or not species.category_id or species.category_id == uncategorized:
+        return []
+    return list(
+        Lot.objects.filter(pk__in=pks)
+        .filter(Q(species_category__isnull=True) | Q(species_category__name="Uncategorized"))
+        .exclude(pk__in=BapAward.objects.filter(lot__isnull=False).values("lot_id"))
+        .values_list("pk", flat=True)
+    )
+
+
+def _refile(pks, species):
+    if pks:
+        Lot.objects.filter(pk__in=pks).update(
             species_category_id=species.category_id,
             category_automatically_added=True,
             category_checked=True,
         )
+
+
+def lots_on_species(species, names=None, auction_slug=None):
+    """Lots (not deleted) carrying *species*, optionally only those named *names* or in one auction.
+    ``LookupError`` for a slug that names no auction."""
+    lots = Lot.objects.filter(species=species, is_deleted=False)
+    if auction_slug:
+        if not Auction.objects.filter(slug=auction_slug).exists():
+            msg = f"No auction with slug {auction_slug!r}."
+            raise LookupError(msg)
+        lots = lots.filter(auction__slug=auction_slug)
+    if names:
+        lots = lots.filter(lot_name__in=names)
+    return lots
+
+
+def move_lots(lots, to_species, *, names=(), set_category=False, teach=False, user=None):
+    """Put *to_species* (``None``: no species) on *lots*, which already carry another; ``(lots, refiled)``.
+
+    The fix for lots matched to the wrong species, where :func:`apply_species` only fills blanks.
+    ``update()``, not ``save()``, for the reason in the module docstring. *teach* remembers *names* as the
+    answer (or as not a species), for at most :data:`MAX_REMEMBERED` of them.
+    """
+    pks = list(lots.values_list("pk", flat=True))
+    movable = _refilable(pks, to_species) if set_category and pks else []
+    if pks:
+        Lot.objects.filter(pk__in=pks).update(species=to_species)
+        _refile(movable, to_species)
     if teach:
-        for name in names[:MAX_REMEMBERED]:
-            remember(name, species, source="user", user=user)
+        for name in list(names)[:MAX_REMEMBERED]:
+            remember(name, to_species, source="user", user=user)
     return len(pks), len(movable)
 
 
@@ -418,16 +509,18 @@ def remember_not_a_species(names, user=None):
     return sum(bool(remember(name, None, source="user", user=user)) for name in names[:MAX_REMEMBERED])
 
 
-def review_groups(lots, *, include_unmatched=False, min_lots=2, scan=5000, limit=None, record=True, progress=None):
+def review_groups(
+    lots, *, include_unmatched=False, min_lots=2, scan=5000, skip=0, limit=None, record=True, progress=None
+):
     """The questions the automatic pass leaves, biggest first.
 
     Runs the matcher over the *scan* commonest names (``0`` for all) and keeps those with several
     candidates, plus those with none when *include_unmatched*, grouped into :class:`NameGroup`. Groups
-    on fewer than *min_lots* lots are dropped: a one-off is not yet a pattern. *progress* is called with
-    ``(done, total)`` every thousand names.
+    on fewer than *min_lots* lots are dropped: a one-off is not yet a pattern. *skip* starts the scan
+    that many names down the list. *progress* is called with ``(done, total)`` every thousand names.
     """
     groups = {}
-    rows = name_counts(lots, scan or None)
+    rows = name_counts(lots, scan or None, skip=skip)
     for scanned, row in enumerate(rows, start=1):
         if progress and scanned % 1000 == 0:
             progress(scanned, len(rows))
