@@ -198,6 +198,9 @@ class ClubBapLotSerializer(serializers.ModelSerializer):
     lot_id = serializers.IntegerField(source="pk", read_only=True)
     # Always a string (int or "101-1" depending on numbering).
     lot_number_display = serializers.CharField(read_only=True)
+    # What the lot's label and the auction's pages call it, for an audit trail a person can read.
+    auction_name = serializers.CharField(source="auction.title", read_only=True, default="")
+    auction_slug = serializers.CharField(source="auction.slug", read_only=True, default="")
     seller_name = serializers.SerializerMethodField()
     seller_email = serializers.SerializerMethodField()
     winner_name = serializers.ReadOnlyField()
@@ -257,6 +260,8 @@ class ClubBapLotSerializer(serializers.ModelSerializer):
         model = Lot
         fields = [
             "lot_id",
+            "auction_name",
+            "auction_slug",
             "lot_number_display",
             "lot_name",
             "quantity",

@@ -70,9 +70,9 @@ class ApiKeyThrottle(SimpleRateThrottle):
     def get_cache_key(self, request, view):
         api_key = getattr(request, "api_key", None)
         if not api_key:
-            from auctions.client_ip import client_ip
+            from auctions.client_ip import rate_limit_address
 
-            return f"throttle_api_key_anon_{client_ip(request) or 'unknown'}"
+            return f"throttle_api_key_anon_{rate_limit_address(request)}"
         if api_key.rate_limit:
             self.num_requests = api_key.rate_limit
             self.duration = 3600

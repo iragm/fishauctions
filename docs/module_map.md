@@ -93,9 +93,9 @@ this only quotes its opening sentence.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
 - **`brevo.py`** (573 lines)
   One-way Django -> Brevo sync for clubs, built like auctions/mailchimp.py.
-- **`client_ip.py`** (82 lines)
+- **`client_ip.py`** (111 lines)
   Where a request came from, for the things that count per address.
-  `client_ip`
+  `client_ip`, `rate_limit_address`, `address_bucket`
 - **`cloudflare_cache.py`** (70 lines)
   Purging a file out of Cloudflare's edge cache.
   `enabled`, `purge_urls`
@@ -223,7 +223,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (16892 lines)
+- **`palette_actions.py`** (17023 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -244,14 +244,14 @@ this only quotes its opening sentence.
 - **`queryset_annotations.py`** (223 lines)
   Queryset builders that answer a question about many rows at once.
   `nearby_auctions`, `add_tos_info`, `add_tos_distance_info`
-- **`rate_limit.py`** (51 lines)
+- **`rate_limit.py`** (52 lines)
   Per-address limits on the public forms and beacons, counted in Redis.
   `over_the_limit`
 - **`recurrence.py`** (151 lines)
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
 - **`routing.py`** (9 lines)
-- **`serializers.py`** (854 lines)
+- **`serializers.py`** (859 lines)
   DRF serializers for the club API.
 - **`services.py`** (1646 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
@@ -385,7 +385,7 @@ this only quotes its opening sentence.
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
 - **`test_club_announcements.py`** (1136 lines)
   Tests for club announcements, the website-integration snippets, and the embeds.
-- **`test_club_api_read.py`** (1446 lines)
+- **`test_club_api_read.py`** (1450 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
 - **`test_club_events.py`** (3083 lines)
@@ -614,7 +614,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (164 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3230 lines)
+- **`test_palette_skills.py`** (3304 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -643,10 +643,10 @@ this only quotes its opening sentence.
 - **`test_reverify_email.py`** (255 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`, `TrustedBounceTopicTests`
-- **`test_security.py`** (596 lines)
+- **`test_security.py`** (616 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
-- **`test_site_account_fixes.py`** (582 lines)
+- **`test_site_account_fixes.py`** (592 lines)
   Regression tests for a sweep of site and account fixes.
 - **`test_site_checks.py`** (197 lines)
   The checks for the site quietly not doing its job (:mod:`auctions.site_checks`), and the log context

@@ -80,3 +80,32 @@ def client_ip(request) -> str:
     if real:
         return real
     return (meta.get("REMOTE_ADDR") or "").strip()
+
+
+def rate_limit_address(request) -> str:
+    """The caller's address as a rate limit counts it: an IPv6 address by its /64, ``"unknown"`` when
+    nothing says.
+
+    One IPv6 subscriber is handed a whole /64 and may use any address in it, so keying a limit on the
+    full address gave every request from a rotating caller a fresh budget. An IPv4 address arriving
+    in IPv6 form (``::ffff:203.0.113.9``) counts as the IPv4 address it is.
+    """
+    return address_bucket(client_ip(request))
+
+
+@lru_cache(maxsize=2048)
+def address_bucket(address: str) -> str:
+    """``address`` reduced to what one caller controls; see :func:`rate_limit_address`."""
+    address = (address or "").strip()
+    if not address:
+        return "unknown"
+    try:
+        parsed = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return address
+    if parsed.version == 6:
+        mapped = parsed.ipv4_mapped
+        if mapped is not None:
+            return str(mapped)
+        return str(ipaddress.ip_network(f"{parsed}/64", strict=False))
+    return str(parsed)

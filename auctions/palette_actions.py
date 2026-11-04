@@ -5318,6 +5318,117 @@ def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: How many of one person's auctions a ``list_club_admins`` row names; the count says the rest.
+_ADMIN_AUCTIONS_PER_ROW = 10
+
+
+def list_club_admins(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Everyone who holds a permission in a club right now, each with every flag they hold, plus the people
+    who can run one of the club's auctions. An audit, so it reads current rows only: a removed member
+    holds nothing. Gated like ``ClubMemberPermissionsView``, on ``permission_admin``, the one permission
+    that can change what it lists.
+
+    Auction rights follow ``Auction.permission_check``: ``permission_admin`` or
+    ``permission_manage_auctions`` runs every club auction, otherwise its creator or an
+    ``AuctionTOS.is_admin`` row *with an account*. A flag on a row with no account grants nothing,
+    which is why an audit row says ``has_an_account`` though ``list_club_members`` rows don't.
+    """
+    from django.contrib.auth.models import User
+
+    from .models import Auction
+    from .views import CLUB_PERMISSION_FIELDS, check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem and user.is_superuser and _str(params, "club"):
+        club = _any_club(_str(params, "club"))
+        problem = None if club else problem
+    if problem:
+        return problem
+    if not check_club_permission(user, club, "permission_admin"):
+        return _error(f"Only {club.name}'s club admins can see who holds permissions there.")
+    any_permission = Q()
+    for flag in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{flag: True})
+    staff = list(ClubMember.objects.filter(club=club, is_deleted=False).filter(any_permission).order_by("name", "pk"))
+
+    # user pk -> {auction pk: (date_start, title, slug, right)}; newest first once sorted.
+    run_by: dict[int, dict[int, tuple]] = {}
+    auctions = Auction.objects.filter(club=club, is_deleted=False)
+    for pk, creator, start, title, slug in auctions.filter(created_by__isnull=False).values_list(
+        "pk", "created_by_id", "date_start", "title", "slug"
+    ):
+        run_by.setdefault(creator, {})[pk] = (start, title, slug, "created it")
+    for creator, pk, start, title, slug in (
+        AuctionTOS.objects.filter(auction__in=auctions, is_admin=True, user__isnull=False)
+        .values_list("user_id", "auction_id", "auction__date_start", "auction__title", "auction__slug")
+        .order_by()
+    ):
+        run_by.setdefault(creator, {}).setdefault(pk, (start, title, slug, "auction admin"))
+
+    def auction_rights(account_pk):
+        held = sorted(run_by.pop(account_pk, {}).values(), key=lambda entry: entry[0], reverse=True)
+        return len(held), [
+            {"auction": title, "auction_slug": slug, "right": right}
+            for _start, title, slug, right in held[:_ADMIN_AUCTIONS_PER_ROW]
+        ]
+
+    rows = []
+    for member in staff:
+        flags = [flag for flag in CLUB_PERMISSION_FIELDS if getattr(member, flag)]
+        row: dict[str, Any] = {
+            "name": untrusted_short(member.name or member.email or "") or "(no name)",
+            "has_an_account": bool(member.user_id),
+            "club_admin": member.permission_admin,
+            "permissions": [flag.removeprefix("permission_") for flag in flags],
+        }
+        if member.user_id:
+            count, held = auction_rights(member.user_id)
+            if member.permission_admin or member.permission_manage_auctions:
+                row["runs_every_club_auction"] = True
+            elif count:
+                row.update(auctions_they_can_run=count, auctions=held)
+        rows.append(row)
+    members_by_user = {
+        member.user_id: member
+        for member in ClubMember.objects.filter(club=club, is_deleted=False, user_id__in=list(run_by))
+    }
+    accounts = User.objects.filter(pk__in=list(run_by)).order_by("username")
+    for account in accounts:
+        member = members_by_user.get(account.pk)
+        name = (member.name or member.email) if member else (account.get_full_name() or account.username)
+        count, held = auction_rights(account.pk)
+        rows.append(
+            {
+                "name": untrusted_short(name or "") or "(no name)",
+                "has_an_account": True,
+                "club_admin": False,
+                "permissions": [],
+                "auctions_they_can_run": count,
+                "auctions": held,
+            }
+        )
+    limit, offset = _slice(params)
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    holders = sum(1 for row in rows if row["permissions"])
+    return {
+        "found": bool(total),
+        "club": club.name,
+        "people": page,
+        "count": total,
+        "showing": len(page),
+        "offset": offset,
+        "summary": (
+            f"{holders} of {club.name}'s members hold a club permission"
+            f"{f', and {total - holders} more can run one of its auctions' if total > holders else ''}."
+            f"{_showing(total, limit, offset)}"
+        ),
+        "followups": _member_followups(club, None),
+        **_about(club=club),
+    }
+
+
 def _user_coordinates(user):
     """Where to search from. Returns ``(latitude, longitude, problem_or_None)``."""
     userdata = getattr(user, "userdata", None)
@@ -14445,6 +14556,26 @@ register(
         },
         danger=DANGER_SAFE,
         resolver=list_club_members,
+        lookup=True,
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="list_club_admins",
+        description=(
+            "Everyone with any admin or staff permission in a club right now, each with every "
+            "permission they hold, and who can run the club's auctions. The answer to 'who are "
+            "our admins?', 'who can send announcements?' or an audit of the club's access. "
+            "Club admins only."
+        ),
+        params={
+            "club": "string, optional. Club name. See my_context. Site admins may name any club.",
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=list_club_admins,
         lookup=True,
         needs=NEEDS_CLUB_ADMIN,
     )
