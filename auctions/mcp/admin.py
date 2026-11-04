@@ -39,6 +39,7 @@ import shutil
 import uuid
 from collections import deque
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -457,6 +458,11 @@ MAX_KINDS = 2000
 #: auctions.log_context's "[r=1a2b3c4d u=42] " / "[t=endauctions] ".
 _CONTEXT_TOKEN = re.compile(r"\[(?:r|t)=[^\]]*\] ?")
 _VARYING = re.compile(r"0x[0-9a-fA-F]+|\b[0-9a-fA-F]{8,}\b|\d+")
+#: Django's own line for a 4xx answer: "Forbidden (CSRF token missing.): /lots/…", "Not Found: /x.php".
+#: Bots hit a thousand pages, so the path is dropped from the fingerprint of these alone (the kind's text
+#: keeps the first path seen). Never for a 500 ("Internal Server Error: /x" is logged at ERROR): which
+#: page broke is the point, and two pages failing alike are still two problems.
+_CLIENT_ERROR_PATH = re.compile(r"^(WARNING\n\S*log_response:# [^\n]*?: )/\S*$", re.MULTILINE)
 _RELATIVE = re.compile(r"^(\d+)\s*([mhd])$")
 
 
@@ -569,16 +575,44 @@ def record_kind(text: str) -> tuple[str, str, str]:
     level = text.split(" ", 1)[0] if text else ""
     kind = redact(_first_line(text))[:200]
     exception = redact(_exception_line(text))[:200]
-    shape = _VARYING.sub("#", f"{level}\n{kind}\n{exception}")
+    shape = _CLIENT_ERROR_PATH.sub(r"\1/…", _VARYING.sub("#", f"{level}\n{kind}\n{exception}"))
     return hashlib.sha1(shape.encode(), usedforsecurity=False).hexdigest()[:8], kind, exception
 
 
 #: The fingerprint of the group that holds every kind past :data:`MAX_KINDS`, one per log and level.
 OVERFLOW = "overflow"
+#: A deploy restarts every container, and while it does the others lose Redis or the database for a few
+#: seconds and say so. Only a lost connection, from a minute before a start (the old container going) to
+#: three after it, is filed under the restart; anything else is its own kind, since a deploy is exactly
+#: when new code first breaks.
+RESTART_BEFORE = timedelta(minutes=1)
+RESTART_AFTER = timedelta(minutes=3)
+_LOST_CONNECTION = re.compile(
+    r"ConnectionError|ConnectionRefusedError|ConnectionResetError|TimeoutError|gaierror|"
+    r"Temporary failure in name resolution|OperationalError: \((?:2002|2003|2006|2013)\b|"
+    r"InterfaceError|BrokenPipeError"
+)
 
 
-def _groups(names: list[str], since: datetime | None, older: bool, floor: int, contains: str = "", wanted: str = ""):
-    """Every matching record of ``names`` grouped by kind: ``{(log, fingerprint): group}``, and the records seen."""
+def _during_restart(when: datetime | None, exception: str, restarts) -> bool:
+    if not when or not _LOST_CONNECTION.search(exception):
+        return False
+    return any(start - RESTART_BEFORE <= when <= start + RESTART_AFTER for start in restarts)
+
+
+def _groups(
+    names: list[str],
+    since: datetime | None,
+    older: bool,
+    floor: int,
+    contains: str = "",
+    wanted: str = "",
+    restarts=(),
+):
+    """Every matching record of ``names`` grouped by kind: ``{(log, fingerprint): group}``, and the records seen.
+
+    With ``restarts`` (container start times), a lost connection logged around one is still its own kind,
+    but its group is marked ``during_restart`` (:func:`_during_restart`)."""
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     # redact() and a hash per distinct (first line, exception), not per record: a week of one warning is
     # tens of thousands of records and one kind.
@@ -588,10 +622,9 @@ def _groups(names: list[str], since: datetime | None, older: bool, floor: int, c
         for level, stamp, text in _records(_log_files(name, older, since)):
             if _LEVELS.index(level) < floor:
                 continue
-            if since is not None:
-                when = _when(stamp)
-                if when is None or when < since:
-                    continue
+            when = _when(stamp) if since is not None or restarts else None
+            if since is not None and (when is None or when < since):
+                continue
             if contains and contains not in text.lower():
                 continue
             raw = (level, _first_line(text), _exception_line(text))
@@ -601,12 +634,13 @@ def _groups(names: list[str], since: datetime | None, older: bool, floor: int, c
             if wanted and not fingerprint.startswith(wanted):
                 continue
             seen += 1
-            key = (name, fingerprint)
+            restarting = bool(restarts) and _during_restart(when, exception, restarts)
+            key = (name, fingerprint, restarting)
             if key not in groups and len(groups) >= MAX_KINDS:
                 # Still counted, in one group per log and level, so a new error past the cap is never
                 # lost from the totals; its own text is in the logs.
                 fingerprint, kind, exception = OVERFLOW, f"(more kinds than one read keeps, {level})", ""
-                key = (name, f"{OVERFLOW}-{level}")
+                key = (name, f"{OVERFLOW}-{level}", restarting)
             group = groups.get(key)
             if group is None:
                 group = groups[key] = {
@@ -617,6 +651,7 @@ def _groups(names: list[str], since: datetime | None, older: bool, floor: int, c
                     "exception": exception,
                     "times": 0,
                     "first": stamp,
+                    **({"during_restart": True} if restarting else {}),
                 }
             group["times"] += 1
             group["last"] = stamp
@@ -821,14 +856,26 @@ def _known(params: dict[str, Any]) -> set[str]:
     return {str(item).strip().lower()[:8] for item in value if str(item).strip()}
 
 
-def _log_problems(since: datetime, known: set[str]) -> dict[str, Any]:
+def _kind_row(group: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fingerprint": group["fingerprint"],
+        "log": group["log"],
+        "error": group["kind"],
+        **({"exception": group["exception"]} if group["exception"] else {}),
+        "times": group["times"],
+        "last": group["last"],
+    }
+
+
+def _log_problems(since: datetime, known: set[str], restarts=()) -> dict[str, Any]:
     """ERROR+ and WARNING records in every log since ``since``, grouped by kind, minus the ``known`` ones.
 
     Every log, not just ``django.log``: that one only holds Django's own loggers. The site's code, every
     Celery task, beat and the documents worker write to the ``root*`` logs. Slow-request warnings are
-    left out here; they have their own section.
+    left out here; they have their own section. Records from around a container start (``restarts``) are
+    counted in the total and listed under ``during_restart`` with their fingerprints, but never as new kinds.
     """
-    groups, _seen = _groups(log_names(), since, older=True, floor=_LEVELS.index("WARNING"))
+    groups, _seen = _groups(log_names(), since, older=True, floor=_LEVELS.index("WARNING"), restarts=restarts)
     found: dict[str, Any] = {}
     for label, levels in (("errors", ("ERROR", "CRITICAL")), ("warnings", ("WARNING",))):
         rows = [
@@ -836,28 +883,26 @@ def _log_problems(since: datetime, known: set[str]) -> dict[str, Any]:
             for group in groups.values()
             if group["level"] in levels and not (label == "warnings" and _SLOW_REQUEST.search(group["_text"]))
         ]
-        fresh = [group for group in rows if group["fingerprint"] not in known]
         by_log: dict[str, int] = {}
         for group in rows:
             by_log[group["log"]] = by_log.get(group["log"], 0) + group["times"]
+        restarting = [group for group in rows if group.get("during_restart")]
+        rows = [group for group in rows if not group.get("during_restart")]
+        fresh = [group for group in rows if group["fingerprint"] not in known]
         ranked = sorted(fresh, key=lambda group: -group["times"])[:ERROR_KINDS]
         found[label] = {
             "since": since.isoformat(),
-            "total": sum(group["times"] for group in rows),
+            "total": sum(by_log.values()),
             "by_log": by_log,
             "known_kinds_left_out": len(rows) - len(fresh),
             "new_kinds": len(fresh),
-            "most_common": [
-                {
-                    "fingerprint": group["fingerprint"],
-                    "log": group["log"],
-                    "error": group["kind"],
-                    **({"exception": group["exception"]} if group["exception"] else {}),
-                    "times": group["times"],
-                    "last": group["last"],
-                }
-                for group in ranked
-            ],
+            "most_common": [_kind_row(group) for group in ranked],
+            "during_restart": {
+                "times": sum(group["times"] for group in restarting),
+                "kinds": [
+                    _kind_row(group) for group in sorted(restarting, key=lambda group: -group["times"])[:ERROR_KINDS]
+                ],
+            },
         }
     return found
 
@@ -959,6 +1004,23 @@ def _deploy_window() -> dict[str, Any]:
     return {**window, "advice": deploy_window.summary(window)}
 
 
+def _start_times(started: dict[str, Any]) -> list[datetime]:
+    """Every container's, the database's and Redis's start time out of :func:`auctions.uptime.uptime`."""
+    stamps = [
+        *started.get("containers_started", {}).values(),
+        started.get("database_started"),
+        started.get("redis_started"),
+    ]
+    found = []
+    for stamp in stamps:
+        try:
+            moment = datetime.fromisoformat(stamp)
+        except (TypeError, ValueError):
+            continue  # None, or an {"error": ...} a container's start couldn't be read as
+        found.append(moment.replace(tzinfo=dt_timezone.utc) if timezone.is_naive(moment) else moment)
+    return found
+
+
 def _plural(count: int, word: str, plural: str = "") -> str:
     return f"{count} {word if count == 1 else (plural or word + 's')}"
 
@@ -981,16 +1043,16 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     brief = _flag(params, "brief")
     hours = max(1, int((timezone.now() - since).total_seconds() // 3600))
 
+    started = uptime.uptime()
     deployed = _deployed_commit()
     pending = _pending_migrations()
-    problems = _log_problems(since, known)
+    problems = _log_problems(since, known, restarts=_start_times(started))
     errors, warnings = problems["errors"], problems["warnings"]
     crashes = app_crashes.recent_count(hours=hours)
     host = _host()
     database = _database()
     slow = _slow_requests()
     window = _deploy_window()
-    started = uptime.uptime()
     queues = _queue_depths()
     beat = {**_beat(), **site_checks.periodic_tasks()}
     rates = site_checks.rates()
@@ -1008,6 +1070,8 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         f"{_plural(len(pending), 'migration')} not applied; "
         f"{_plural(errors['total'], 'error')} logged since {timezone.localtime(since, timezone.get_default_timezone()):%Y-%m-%d %H:%M %Z}"
     )
+    if errors["during_restart"]["times"]:
+        summary += f" ({errors['during_restart']['times']} lost connections while a container restarted)"
     if known and (errors["known_kinds_left_out"] or warnings["known_kinds_left_out"]):
         summary += f" ({_plural(errors['new_kinds'], 'new kind')})"
     if crashes["crashes"]:
@@ -2078,6 +2142,10 @@ MAX_PENDING = 25
 
 #: Steps one proposal may hold. A batch of species for a page of lots fits; a sweep of the site doesn't.
 MAX_STEPS = 50
+#: ... except one made only of the species list's steps, which the owner approves in batches of about a
+#: thousand names (each list step holds many), and its words.
+MAX_SPECIES_STEPS = 200
+MAX_SPECIES_CHARACTERS = 200_000
 
 
 def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
@@ -2089,8 +2157,13 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
             return [], "steps must be a list of {tool, arguments}."
     if not isinstance(raw, list) or not raw:
         return [], "steps must be a list of at least one {tool, arguments}."
-    if len(raw) > MAX_STEPS:
-        return [], f"One proposal holds at most {MAX_STEPS} steps; split it."
+    species_only = all(
+        isinstance(step, dict) and str(step.get("tool", "")).strip().lower() in admin_species.SPECIES_STEPS
+        for step in raw
+    )
+    most = MAX_SPECIES_STEPS if species_only else MAX_STEPS
+    if len(raw) > most:
+        return [], f"One proposal holds at most {most} steps; split it."
     steps = []
     for number, step in enumerate(raw, start=1):
         if not isinstance(step, dict):
@@ -2115,13 +2188,16 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
         if problem:
             return [], f"Step {number}: {problem}"
         steps.append({"tool": action.name, "arguments": arguments})
-    limit = (
-        MAX_TRANSCRIPTION_CHARACTERS
-        if all(step["tool"] == "save_transcription" for step in steps)
-        else MAX_STEPS_CHARACTERS
-    )
+    if all(step["tool"] == "save_transcription" for step in steps):
+        limit = MAX_TRANSCRIPTION_CHARACTERS
+    elif species_only:
+        limit = MAX_SPECIES_CHARACTERS
+    else:
+        limit = MAX_STEPS_CHARACTERS
     if len(json.dumps(steps, default=str)) > limit:
         return [], "Those steps are too long to read before approving; split them."
+    if species_only and (problem := admin_species.proposal_problem(steps)):
+        return [], problem
     return steps, ""
 
 

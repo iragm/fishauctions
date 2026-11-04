@@ -37,6 +37,9 @@ SECTIONS = {
 #: Names one ``backfill_species`` step may name: what fits on one approval and in one request.
 MAX_BACKFILL_NAMES = 200
 
+#: Remembered answers one ``forget_species_answer`` step may forget.
+MAX_FORGET = 1000
+
 #: Names the read runs the matcher over by default, and at most. Commonest first, so a few hundred
 #: names covers most lots; every one is several queries on production.
 DEFAULT_SCAN = 500
@@ -403,12 +406,32 @@ def lots_by_species(request, params: dict[str, Any]) -> dict[str, Any]:
 # --- changes a proposal makes -------------------------------------------------------------------------
 
 
-def _cache_row(params):
+def _cache_rows(params):
+    """``(rows, "")`` for a step's ``answer`` or ``answers``, or ``([], why not)``. Every number must still
+    name a remembered answer, so a typo is caught when proposed."""
     from auctions.models import SpeciesSearchCache
 
-    number = _int(params, "answer")
-    row = SpeciesSearchCache.objects.filter(pk=number).first() if number is not None else None
-    return row, "" if row else "There is no remembered answer with that number (species_dashboard's answer)."
+    raw = params.get("answers")
+    if raw in (None, "", []):
+        raw = [params.get("answer")] if params.get("answer") not in (None, "") else []
+    if not isinstance(raw, list):
+        raw = [raw]
+    numbers = []
+    for value in raw:
+        number = _int({"n": value}, "n")
+        if number is None:
+            return [], "answer / answers must be answer numbers from species_dashboard."
+        numbers.append(number)
+    numbers = list(dict.fromkeys(numbers))
+    if not numbers:
+        return [], "Which answer? Give answer, or answers as a list, from species_dashboard."
+    if len(numbers) > MAX_FORGET:
+        return [], f"At most {MAX_FORGET} answers in one step; split it."
+    rows = list(SpeciesSearchCache.objects.filter(pk__in=numbers).select_related("species"))
+    missing = sorted(set(numbers) - {row.pk for row in rows})
+    if missing:
+        return [], f"There is no remembered answer number {missing[0]} (species_dashboard's answer)."
+    return rows, ""
 
 
 def _rejection(params):
@@ -457,11 +480,13 @@ def dismiss_species_duplicate(request, params: dict[str, Any]) -> dict[str, Any]
 def forget_species_answer(request, params: dict[str, Any]) -> dict[str, Any]:
     """The gaps page's Forget."""
     _superuser(request)
-    row, problem = _cache_row(params)
+    rows, problem = _cache_rows(params)
     if problem:
         return _error(problem)
-    name = species_admin.forget(row)
-    return _ok(f"Forgot the remembered answer for {untrusted_short(name)}. It will be looked up again.")
+    names = [species_admin.forget(row) for row in rows]
+    if len(names) == 1:
+        return _ok(f"Forgot the remembered answer for {untrusted_short(names[0])}. It will be looked up again.")
+    return _ok(f"Forgot {len(names)} remembered answers. They will be looked up again.")
 
 
 def allow_species_pairing_again(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -589,10 +614,10 @@ def change_lots_species(request, params: dict[str, Any]) -> dict[str, Any]:
 def remember_not_a_species(request, params: dict[str, Any]) -> dict[str, Any]:
     """The reviewed pass's "not a species": nothing asks about these names again."""
     _superuser(request)
-    names, problem = _lot_names(params, species_admin.MAX_REMEMBERED)
+    names, problem = _lot_names(params, species_admin.MAX_NOT_A_SPECIES)
     if problem:
         return _error(problem)
-    written = species_admin.remember_not_a_species(names, user=request.user)
+    written = species_admin.remember_not_a_species(names, user=request.user, most=species_admin.MAX_NOT_A_SPECIES)
     summary = f"Remembered {written} name(s) as not a species."
     if written < len(names):
         summary += " The others name a species exactly, so the list answers them and nothing was remembered."
@@ -641,7 +666,10 @@ APPROVAL_ONLY: list[Action] = [
     Action(
         name="forget_species_answer",
         description="Forget what the site remembers a lot name to be, species or not, so it is worked out again.",
-        params={"answer": "integer, required. The answer number from species_dashboard."},
+        params={
+            "answer": "integer. One answer number from species_dashboard.",
+            "answers": f"array of integer. Several answer numbers instead, at most {MAX_FORGET}.",
+        },
         danger=DANGER_CONFIRM,
         confirm_template="Forget a remembered species answer",
         resolver=forget_species_answer,
@@ -695,7 +723,7 @@ APPROVAL_ONLY: list[Action] = [
     Action(
         name="remember_not_a_species",
         description="Answer a backfill question with not a species (hardware, food, a mixed bag), so it isn't asked again.",
-        params={"lot_names": f"{_LOT_NAMES}, at most {species_admin.MAX_REMEMBERED}."},
+        params={"lot_names": f"{_LOT_NAMES}, at most {species_admin.MAX_NOT_A_SPECIES}."},
         danger=DANGER_CONFIRM,
         idempotent=True,
         confirm_template="Remember as not a species",
@@ -732,13 +760,13 @@ PROPOSAL_CHECKS = {
     "approve_species": lambda arguments: _species(arguments)[1],
     "merge_species": lambda arguments: _species(arguments, "keep")[1] or _species(arguments, "duplicate")[1],
     "dismiss_species_duplicate": lambda arguments: _species(arguments)[1],
-    "forget_species_answer": lambda arguments: _cache_row(arguments)[1],
+    "forget_species_answer": lambda arguments: _cache_rows(arguments)[1],
     "allow_species_pairing_again": lambda arguments: _rejection(arguments)[1],
     "backfill_species": lambda arguments: _lot_names(arguments, MAX_BACKFILL_NAMES)[1] or _lots(arguments)[1],
     "set_species_on_lot_names": lambda arguments: (
         _species(arguments)[1] or _lot_names(arguments, species_admin.MAX_REMEMBERED)[1] or _lots(arguments)[1]
     ),
-    "remember_not_a_species": lambda arguments: _lot_names(arguments, species_admin.MAX_REMEMBERED)[1],
+    "remember_not_a_species": lambda arguments: _lot_names(arguments, species_admin.MAX_NOT_A_SPECIES)[1],
     "change_lots_species": lambda arguments: _move(arguments)[3],
 }
 
@@ -799,3 +827,98 @@ READS: list[Action] = [
         resolver=lots_by_species,
     ),
 ]
+
+
+#: The species list's own steps. A proposal made only of these may be bigger (``admin.MAX_SPECIES_STEPS``).
+SPECIES_STEPS = frozenset(action.name for action in APPROVAL_ONLY)
+
+
+def _names_text(names) -> str:
+    # Sellers' words, fenced as everywhere on this endpoint: agents read this page too.
+    return ", ".join(untrusted_short(name) for name in names)
+
+
+def _species_text(params, key="species") -> str:
+    species = _species(params, key)[0]
+    return species.label if species else "(a species that no longer exists)"
+
+
+def _work(step) -> int:
+    """Names or answers one step acts on, for the cap on a whole proposal (:data:`MAX_PROPOSAL_ITEMS`)."""
+    arguments = step.get("arguments") or {}
+    if not isinstance(arguments, dict):
+        return 1
+    items = arguments.get("lot_names") or arguments.get("answers") or []
+    return len(items) if isinstance(items, list) else 1
+
+
+#: Names and answers one proposal of species steps may touch: about a thousand, which the owner reads
+#: in one sitting and one approval runs within a request.
+MAX_PROPOSAL_ITEMS = 1200
+
+
+def proposal_problem(steps) -> str:
+    """Why a proposal of species steps is too much for one approval, or ``""``."""
+    total = sum(_work(step) for step in steps)
+    if total > MAX_PROPOSAL_ITEMS:
+        return f"Those steps name {total} lot names and answers; one proposal takes at most {MAX_PROPOSAL_ITEMS}. Split it."
+    return ""
+
+
+def describe_step(tool: str, arguments: dict[str, Any]) -> str | None:
+    """One step of a proposal as the approver reads it: names, not numbers. ``None`` for a step that isn't
+    the species list's, so the page shows its arguments instead."""
+    from auctions.models import SpeciesNameRejection, SpeciesSearchCache
+
+    if tool not in SPECIES_STEPS:
+        return None
+    auction = _str(arguments, "auction")
+    where = f" in auction {auction}" if auction else ""
+    category = " and file them under its category" if palette_actions._flag(arguments, "set_category") else ""
+    teaches = palette_actions._flag(arguments, "remember") is not False
+    if tool == "approve_species":
+        return f"Approve {_species_text(arguments)} for everyone."
+    if tool == "merge_species":
+        return (
+            f"Merge {_species_text(arguments, 'duplicate')} into {_species_text(arguments, 'keep')} "
+            "(its lots and names move over; not reversible)."
+        )
+    if tool == "dismiss_species_duplicate":
+        return f"{_species_text(arguments)} is not a duplicate."
+    if tool == "forget_species_answer":
+        raw = arguments.get("answers") or [arguments.get("answer")]
+        numbers = [_int({"n": value}, "n") for value in (raw if isinstance(raw, list) else [raw])]
+        rows = list(
+            SpeciesSearchCache.objects.filter(pk__in=[n for n in numbers if n is not None]).select_related("species")
+        )
+        said = []
+        for row in rows:
+            _key, verdict, detail = species_admin.verdict_of(row)
+            remembered = row.species.label if row.species_id else ", ".join(filter(None, (verdict, detail)))
+            said.append(f"{untrusted_short(row.search_text)} (now: {remembered})")
+        gone = len(set(numbers)) - len(rows)
+        text = "Look these up again: " + (", ".join(said) or "nothing") + "."
+        if gone:
+            text += f" {gone} of the answers no longer exist, so this step will fail."
+        return text
+    if tool == "allow_species_pairing_again":
+        row = SpeciesNameRejection.objects.filter(pk=_int(arguments, "pairing")).select_related("species").first()
+        if row is None:
+            return "Allow a retired pairing again (it no longer exists)."
+        return f"Let {untrusted_short(row.search_text)} match {row.species.label} again."
+    names = _lot_names(arguments, species_admin.MAX_NOT_A_SPECIES)[0]
+    if tool == "backfill_species":
+        return f"Give the one matching species to lots{where} named {_names_text(names)}{category}."
+    if tool == "set_species_on_lot_names":
+        taught = ", and teach the matcher these names" if teaches else ""
+        return f"{_species_text(arguments)} on lots{where} named {_names_text(names)}{category}{taught}."
+    if tool == "remember_not_a_species":
+        return f"Not a species, never looked up again: {_names_text(names)}."
+    if tool == "change_lots_species":
+        to, problem = _to_species(arguments)
+        target = "(a species that no longer exists)" if problem else (to.label if to else "no species")
+        named = arguments.get("lot_names") not in (None, "", [])
+        which = f"named {_names_text(names)}" if named else "(all of them)"
+        taught = ", and teach the matcher these names" if named and teaches else ""
+        return f"Lots with {_species_text(arguments)}{where} {which} change to {target}{category}{taught}."
+    return None
