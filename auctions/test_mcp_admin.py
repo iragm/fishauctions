@@ -972,9 +972,9 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.assertFalse(self.call("propose_change", {"summary": "Big batch", "steps": steps})["isError"])
         self.client.force_login(self.owner)
         body = self.client.get(reverse("agent_proposals")).content.decode()
-        self.assertIn("“plant 1” (now: not a species, decided by the language model)", body)
-        self.assertIn("Chindongo saulosi on lots named “6 saulosi”", body)
-        self.assertIn("“heater 999”", body)
+        self.assertIn("«plant 1» (now: not a species, decided by the language model)", body)
+        self.assertIn("Chindongo saulosi on lots named «6 saulosi», and teach the matcher", body)
+        self.assertIn("«heater 999»", body)
         self.assertNotIn(f"answer: {rows[0].pk}", body)
         self.assertNotIn("forget_species_answer", body)
         self.approve()
@@ -987,6 +987,10 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         ]
         self.assertTrue(self.call("propose_change", {"summary": "Too many", "steps": mixed})["isError"])
         self.assertTrue(self.propose("forget_species_answer", {"answers": [rows[0].pk]})["isError"])
+        too_many = [
+            {"tool": "remember_not_a_species", "arguments": {"lot_names": [f"pump {n}" for n in range(700)]}}
+        ] * 2
+        self.assertTrue(self.call("propose_change", {"summary": "Too many names", "steps": too_many})["isError"])
 
     def test_the_backfill_can_skip_to_the_tail(self):
         skipped = self.data(self.call("species_backfill", {"pass": "automatic", "skip": 1000}))

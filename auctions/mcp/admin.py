@@ -1825,6 +1825,8 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
         limit = MAX_STEPS_CHARACTERS
     if len(json.dumps(steps, default=str)) > limit:
         return [], "Those steps are too long to read before approving; split them."
+    if species_only and (problem := admin_species.proposal_problem(steps)):
+        return [], problem
     return steps, ""
 
 
