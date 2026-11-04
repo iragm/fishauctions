@@ -265,7 +265,7 @@ this only quotes its opening sentence.
 - **`speaker_topics.py`** (200 lines)
   The speaker directory's fixed topic vocabulary.
   `canonical_topic_name`, `topic_needs_review`, `ensure_speaker_topics`
-- **`species_admin.py`** (543 lines)
+- **`species_admin.py`** (567 lines)
   The species list's upkeep: every superuser decision about it, written once.
 - **`species_categories.py`** (421 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
@@ -521,7 +521,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1421 lines)
+- **`test_mcp_admin.py`** (1443 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -888,7 +888,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 - **`admin.py`** (2177 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_species.py`** (784 lines)
+- **`admin_species.py`** (801 lines)
   The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
 - **`auth.py`** (385 lines)
   Who is calling ``/mcp/``, and what they may do.
