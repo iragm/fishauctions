@@ -549,6 +549,13 @@ THUMBNAIL_ALIASES = {
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
 
+# Offsite database backup (auctions/backups.py); it does nothing unless all five are set.
+BACKUP_S3_ENDPOINT = os.environ.get("BACKUP_S3_ENDPOINT", "")
+BACKUP_S3_BUCKET = os.environ.get("BACKUP_S3_BUCKET", "")
+BACKUP_S3_ACCESS_KEY_ID = os.environ.get("BACKUP_S3_ACCESS_KEY_ID", "")
+BACKUP_S3_SECRET_ACCESS_KEY = os.environ.get("BACKUP_S3_SECRET_ACCESS_KEY", "")
+BACKUP_AGE_RECIPIENT = os.environ.get("BACKUP_AGE_RECIPIENT", "")
+
 # Cloudflare Images: when account id, API token and hash are all set, migrated images are served
 # from Cloudflare using variants that mirror THUMBNAIL_ALIASES (auctions/cloudflare_images.py).
 CLOUDFLARE_IMAGES_ACCOUNT_ID = os.environ.get("CLOUDFLARE_IMAGES_ACCOUNT_ID", "")

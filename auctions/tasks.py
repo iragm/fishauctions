@@ -1141,6 +1141,17 @@ def auction_emails(self):
     call_command("auction_emails")
 
 
+@shared_task(bind=True, ignore_result=True, soft_time_limit=3600, time_limit=3660)
+def backup_database(self, reason="weekly"):
+    """Dump, encrypt and upload the core tables offsite (``backups.run``). Weekly, or from the admin MCP.
+
+    Routed to the documents worker (one task at a time), so a long dump never holds up endauctions.
+    A no-op until configured."""
+    from auctions import backups
+
+    backups.run(reason)
+
+
 @shared_task(bind=True, ignore_result=True)
 def refresh_help_stats(self):
     """Count the numbers the help guides quote (``help_stats.refresh``). Daily, or when a guide finds none."""

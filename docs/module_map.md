@@ -86,6 +86,8 @@ this only quotes its opening sentence.
   The post-auction survey: "How was <auction>?", two buttons, and a box for anything else.
 - **`authentication.py`** (79 lines)
   `APIKeyAuthentication`, `OptionalAPIKeyAuthentication`, `ApiKeyThrottle`
+- **`backups.py`** (277 lines)
+  Nightly offsite backup of the core tables: dumped, gzipped, encrypted with ``age``, uploaded to R2.
 - **`bidding.py`** (437 lines)
   Bidding logic for lots.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
@@ -280,7 +282,7 @@ this only quotes its opening sentence.
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`tables.py`** (1785 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1878 lines)
+- **`tasks.py`** (1889 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -350,6 +352,9 @@ this only quotes its opening sentence.
 - **`test_auctiontos.py`** (672 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
+- **`test_backups.py`** (221 lines)
+  Tests for the nightly offsite backup (auctions/backups.py).
+  `TableSplitTests`, `KeysTests`, `RunTests`, `AdminToolTests`, `DumpTests`, `UploadTests`
 - **`test_bap_lots.py`** (1409 lines)
   The breeder award program: which lots are eligible, and the pages that award points.
 - **`test_bid_recorder_accuracy.py`** (35 lines)
@@ -800,6 +805,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`backfill_lot_species.py`** (384 lines)
   Attach a species to lots that predate the species list.
   `Command`
+- **`backup_database.py`** (35 lines)
+  Back up the core tables to R2 now, or print which tables would be dumped. See auctions/backups.py.
+  `Command`
 - **`change_assistant.py`** (29 lines)
   `Command`
 - **`change_paypal.py`** (28 lines)
@@ -895,7 +903,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2572 lines)
+- **`admin.py`** (2607 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (924 lines)
   The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
@@ -1150,7 +1158,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (265 lines)
+- **`celery.py`** (273 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
@@ -1159,7 +1167,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1296 lines)
+- **`settings.py`** (1303 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

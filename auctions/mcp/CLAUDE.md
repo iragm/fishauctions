@@ -57,6 +57,8 @@ there to approve.
   dropped at any depth, emails, phones, keys and public IPs scrubbed), because the agents reading
   here also read strangers' text and may push to a public repo. No resources, no prompts. Pictures
   (`read_waiting_page`'s scans) pass unscrubbed: transcribing them is the owner's daily routine.
+- `backup_database` queues an offsite backup (`auctions/backups.py`), at most one per six hours: it copies
+  data out and changes none of it.
 - The two tools that write only fill queues a person decides: `suggest_feature` adds a feature request
   (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
   `/admin-dashboard/proposals/` changes data. Approve runs

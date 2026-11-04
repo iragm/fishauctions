@@ -161,8 +161,8 @@ class NothingWritesTests(AdminEndpointCase):
     def test_only_reads_are_listed_however_much_the_token_could_write(self):
         listed = self.listed()
         writes = {name for name, tool in listed.items() if not tool["annotations"]["readOnlyHint"]}
-        # Both write only into a queue the owner decides.
-        self.assertEqual(writes, {"propose_change", "suggest_feature"})
+        # Two write only into a queue the owner decides; backup_database copies data out.
+        self.assertEqual(writes, {"backup_database", "propose_change", "suggest_feature"})
         for name in admin.ADMIN_TOOLS:
             self.assertIn(name, listed)
         self.assertIn("describe_auction", listed)
