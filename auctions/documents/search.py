@@ -41,11 +41,10 @@ _STOPWORDS = frozenset(
 
 
 def can_use_library(user) -> bool:
-    """Whether ``user`` has the library at all: ``UserData.library_enabled``, ticked per account in the admin.
-    Without it the pages 404 and the ``/mcp/`` tools are neither offered nor run.
+    """Whether ``user`` has the library: every signed-in account. ``UserData.library_enabled`` is left
+    over from the beta and ignored. Signed out, only web documents can be read.
     """
-    userdata = getattr(user, "userdata", None) if getattr(user, "is_authenticated", False) else None
-    return bool(userdata and userdata.library_enabled)
+    return bool(getattr(user, "is_authenticated", False))
 
 
 def visible_documents(user):

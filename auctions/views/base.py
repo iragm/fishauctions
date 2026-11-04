@@ -333,12 +333,12 @@ def _recalculate_invoices(invoices):
 
 
 def browser_timezone(request):
-    """The ``user_timezone`` cookie if it names a real timezone, else the site's. Forms activate it, and
-    an unknown name raised ZoneInfoNotFoundError on every form that read it.
+    """The zone forms read and write dates in: :func:`~auctions.context_processors.resolve_timezone`, else
+    the site's. Forms activate it, and an unknown name raised ZoneInfoNotFoundError on every form that read it.
     """
-    from auctions.context_processors import _safe_timezone
+    from auctions.context_processors import resolve_timezone
 
-    return _safe_timezone(request.COOKIES.get("user_timezone")) or settings.TIME_ZONE
+    return resolve_timezone(request, settings.TIME_ZONE)
 
 
 def safe_next_url(request, default):

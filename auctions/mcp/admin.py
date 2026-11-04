@@ -1404,7 +1404,6 @@ def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
 USER_FEATURES = {
     "paypal": ("paypal_enabled", "PayPal"),
     "square": ("square_enabled", "Square"),
-    "library": ("library_enabled", "the library"),
     "voice_cloud": ("voice_cloud_enabled", "listening through OpenAI"),
     "club_auctions": ("can_create_club_auctions", "creating auctions"),
 }
@@ -1468,7 +1467,7 @@ def _features_problem(params: dict[str, Any]) -> str:
 
 
 def set_user_features(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Turn PayPal, Square, the library, cloud listening or auction creation on or off for one account."""
+    """Turn PayPal, Square, cloud listening or auction creation on or off for one account."""
     if not request.user.is_superuser:
         raise PermissionDenied
     problem = _features_problem(params)
@@ -1603,14 +1602,13 @@ APPROVAL_ONLY: dict[str, Action] = {
         Action(
             name="set_user_features",
             description=(
-                "Turn features on or off for one account: PayPal, Square, the library, listening through "
+                "Turn features on or off for one account: PayPal, Square, listening through "
                 "OpenAI on Set lot winners, and creating auctions. Name only the ones to change."
             ),
             params={
                 "user": "string, required. The account's username, or its number.",
                 "paypal": "boolean, optional. Let them connect PayPal and take payments through it.",
                 "square": "boolean, optional. Let them connect Square and take payments through it.",
-                "library": "boolean, optional. Show them /library/ and its tools.",
                 "voice_cloud": "boolean, optional. Let them listen through OpenAI on Set lot winners.",
                 "club_auctions": "boolean, optional. Let them create auctions.",
             },

@@ -13,10 +13,9 @@ import tempfile
 import zipfile
 from unittest import mock
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import AnonymousUser, User
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core.management import call_command
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
@@ -39,7 +38,6 @@ from auctions.models import (
     DocumentFeedback,
     DocumentImageText,
     Species,
-    UserData,
 )
 from auctions.test_support import isolated_cache
 
@@ -142,10 +140,6 @@ class LibraryTestCase(TestCase):
         cls.member = User.objects.create_user("member", "member@example.com", "x")
         cls.outsider = User.objects.create_user("outsider", "outsider@example.com", "x")
         cls.staff = User.objects.create_superuser("staff", "staff@example.com", "x")
-        # Through the cached instance, which run_as hands the tools: a queryset update wouldn't reach it.
-        for user in (cls.owner, cls.member, cls.outsider, cls.staff):
-            user.userdata.library_enabled = True
-            user.userdata.save(update_fields=["library_enabled"])
         cls.club = Club.objects.create(name="Fish Club", abbreviation="FC")
         ClubMember.objects.create(club=cls.club, user=cls.owner, name="Owner", permission_edit_club=True)
         ClubMember.objects.create(club=cls.club, user=cls.member, name="Member")
@@ -718,15 +712,13 @@ class ResourceTests(LibraryTestCase):
         self.assertEqual((template.action, arguments), ("read_document", {"document": "12"}))
         self.assertEqual(template.extra["length"], palette_actions.READ_DOCUMENT_MAX_CHARS)
 
-    def test_only_somebody_with_the_library_is_shown_the_template(self):
+    def test_only_somebody_signed_in_is_shown_the_template(self):
         def offered(user):
             return {row["uriTemplate"] for row in resources.template_descriptors(user)}
 
         self.assertIn("document://{document}", offered(self.owner))
-        self.owner.userdata.library_enabled = False
-        self.owner.userdata.save(update_fields=["library_enabled"])
-        self.assertNotIn("document://{document}", offered(self.owner))
         self.assertNotIn("document://{document}", offered(None))
+        self.assertNotIn("document://{document}", offered(AnonymousUser()))
 
 
 class LifecycleTests(LibraryTestCase):
@@ -1038,7 +1030,9 @@ class TidyTests(LibraryTestCase):
 
 @override_settings(SINGLE_CLUB_MODE=False, ENABLE_CLUB_FINDER=True)
 class AccessTests(LibraryTestCase):
-    """The library is on per account (``UserData.library_enabled``). Without it, it isn't there at all."""
+    """Every signed-in account has the library. ``UserData.library_enabled`` is left over from the beta
+    and ignored: switching it off changes nothing.
+    """
 
     TOOLS = {
         "search_documents",
@@ -1051,7 +1045,7 @@ class AccessTests(LibraryTestCase):
 
     def setUp(self):
         super().setUp()
-        for user in (self.member, self.staff):
+        for user in (self.owner, self.member, self.staff):
             user.userdata.library_enabled = False
             user.userdata.save(update_fields=["library_enabled"])
 
@@ -1061,16 +1055,18 @@ class AccessTests(LibraryTestCase):
         request.palette_page = {}
         return palette_actions.run_action(request, name, params)
 
-    def test_the_pages_are_not_found(self):
+    def test_the_pages_are_there_with_the_flag_off(self):
         document = self.document(visibility=Visibility.PUBLIC)
         self.client.force_login(self.member)
         for url in (reverse("library"), document.get_absolute_url(), reverse("document_file", args=[document.pk])):
-            self.assertEqual(self.client.get(url).status_code, 404, url)
-        upload = SimpleUploadedFile("care.txt", b"Feed daphnia twice a day.")
-        self.assertEqual(self.client.post(reverse("library_add"), {"file": upload}).status_code, 404)
-        self.assertFalse(Document.objects.filter(owner=self.member).exists())
+            self.assertEqual(self.client.get(url).status_code, 200, url)
 
-    def test_nothing_links_to_it(self):
+    def test_signed_out_gets_no_library_page(self):
+        response = self.client.get(reverse("library"))
+        self.assertEqual(response.status_code, 302)
+        self.assertNotContains(self.client.get(reverse("help")), f'href="{reverse("library")}"')
+
+    def test_links_with_the_flag_off(self):
         """The menu, the club's sidebar and the clubs guide."""
         sidebar_link = reverse("library") + "?club=" + self.club.slug
         guide = reverse("help_guide", kwargs={"slug": "clubs"})
@@ -1078,47 +1074,36 @@ class AccessTests(LibraryTestCase):
         self.client.force_login(self.owner)
         self.assertContains(self.client.get(club_page), sidebar_link)
         self.assertContains(self.client.get(guide), 'id="library"')
-        self.owner.userdata.library_enabled = False
-        self.owner.userdata.save(update_fields=["library_enabled"])
-        for page in (club_page, guide):
-            self.assertNotContains(self.client.get(page), reverse("library"), msg_prefix=page)
+        self.assertContains(self.client.get(reverse("help")), f'href="{reverse("library")}"')
 
-    def test_the_tools_are_neither_offered_nor_run(self):
+    def test_the_tools_are_offered_and_run_with_the_flag_off(self):
         document = self.document(visibility=Visibility.PUBLIC)
-        for user in (self.member, self.staff):
-            self.assertFalse(self.TOOLS & {action.name for action in palette_actions.actions_for(user)})
-        self.assertTrue(self.TOOLS <= {action.name for action in palette_actions.actions_for(self.owner)})
-        self.assertIn("error", self.run_as(self.member, "read_document", document=str(document.pk)))
-        self.assertIn("error", self.run_as(self.member, "add_document", title="T", text="words"))
-        self.assertFalse(Document.objects.filter(owner=self.member).exists())
+        for user in (self.owner, self.member, self.staff):
+            self.assertTrue(self.TOOLS <= {action.name for action in palette_actions.actions_for(user)})
+        self.assertNotIn("error", self.run_as(self.member, "read_document", document=str(document.pk)))
         self.assertTrue(self.run_as(self.owner, "search_documents", query="microworms")["found"])
 
-    def test_nor_its_recipes_or_its_page_in_the_palette(self):
+    def test_signed_out_gets_no_tools(self):
+        document = self.document(visibility=Visibility.PUBLIC)
+        anonymous = AnonymousUser()
+        self.assertIn("error", self.run_as(anonymous, "read_document", document=str(document.pk)))
+        self.assertIn("error", self.run_as(anonymous, "add_document", title="T", text="words"))
+        self.assertFalse(Document.objects.filter(title="T").exists())
+
+    def test_its_recipes_and_its_page_in_the_palette(self):
         self.assertTrue(prompts.LIBRARY_PROMPTS <= set(prompts.BY_NAME))
-        offered = {descriptor["name"] for descriptor in prompts.descriptors(self.owner)}
+        offered = {descriptor["name"] for descriptor in prompts.descriptors(self.member)}
         self.assertTrue(prompts.LIBRARY_PROMPTS <= offered)
         self.assertFalse(
-            prompts.LIBRARY_PROMPTS & {descriptor["name"] for descriptor in prompts.descriptors(self.member)}
+            prompts.LIBRARY_PROMPTS & {descriptor["name"] for descriptor in prompts.descriptors(AnonymousUser())}
         )
-        self.assertNotIn("library", [route.key for route in palette_routes._permitted_routes(self.member)])
+        self.assertIn("library", [route.key for route in palette_routes._permitted_routes(self.member)])
         request = RequestFactory().get("/")
         request.palette_page = {}
         request.user = self.member
-        self.assertIn("error", palette_routes.resolve_route(request, palette_routes.ROUTES["library"], {}))
-        request.user = self.owner
         self.assertEqual(
             palette_routes.resolve_route(request, palette_routes.ROUTES["library"], {})["url"], reverse("library")
         )
-
-    def test_new_accounts_follow_the_setting_and_a_command_sets_everyone(self):
-        for setting in (False, True):
-            with override_settings(LIBRARY_ENABLED_FOR_USERS=setting):
-                user = User.objects.create_user(f"new{setting}", f"new{setting}@example.com", "x")
-            self.assertEqual(user.userdata.library_enabled, setting)
-        call_command("change_library", "on", stdout=io.StringIO())
-        self.assertFalse(UserData.objects.filter(library_enabled=False).exists())
-        call_command("change_library", "off", stdout=io.StringIO())
-        self.assertFalse(UserData.objects.filter(library_enabled=True).exists())
 
 
 def _picture_bytes(kind="JPEG", size=(300, 200), exif=None) -> bytes:
@@ -1184,8 +1169,6 @@ class PictureTests(LibraryTestCase):
         )
         # Signed by a club admin who has since stopped being one.
         admin = User.objects.create_user("admin2", "admin2@example.com", "x")
-        admin.userdata.library_enabled = True
-        admin.userdata.save(update_fields=["library_enabled"])
         membership = ClubMember.objects.create(club=self.club, user=admin, name="A", permission_edit_club=True)
         url = self.link(document, admin)
         self.assertEqual(self.client.get(url).status_code, 200)
@@ -1335,10 +1318,9 @@ class ListTests(LibraryTestCase):
             self.client.get(reverse("help")), f'<a class="nav-link" href="{reverse("library")}">Library</a>'
         )
         self.assertIn("Library", drawer(self.member))
-        self.member.userdata.library_enabled = False
-        self.member.userdata.save(update_fields=["library_enabled"])
+        self.client.logout()
         self.assertNotContains(self.client.get(reverse("help")), f'href="{reverse("library")}"')
-        self.assertNotIn("Library", drawer(self.member))
+        self.assertNotIn("Library", drawer(AnonymousUser()))
 
 
 class AddPageTests(LibraryTestCase):
@@ -1438,14 +1420,13 @@ class WebVisibilityTests(LibraryTestCase):
         document = self.document(name="IMG_private_name.md", visibility=Visibility.WEB)
         self.assertNotContains(self.client.get(document.get_absolute_url()), "IMG_private_name")
 
-    def test_an_account_without_the_library_reads_only_web_documents(self):
+    def test_signed_out_reads_only_web_documents(self):
         web = self.document(name="w.md", visibility=Visibility.WEB)
         public = self.document(name="p.md", text="# Other\n\nText.", visibility=Visibility.PUBLIC)
-        self.member.userdata.library_enabled = False
-        self.member.userdata.save(update_fields=["library_enabled"])
-        self.client.force_login(self.member)
         self.assertEqual(self.client.get(web.get_absolute_url()).status_code, 200)
-        self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 404)
+        self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 302)
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(public.get_absolute_url()).status_code, 200)
 
 
 class MarkdownTests(LibraryTestCase):

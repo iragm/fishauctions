@@ -88,7 +88,7 @@ from .email_routing import (
     sender_with_display_name,
 )
 from .friction_models import AbandonedBid, FormFailure  # noqa: F401
-from .helper_functions import bin_data, get_currency_symbol, static_html
+from .helper_functions import bin_data, get_currency_symbol, placed_timezone, static_html
 from .html_sanitize import sanitize_summernote_html
 from .model_caching import CachedPropertiesMixin, InvalidatesRelatedCache
 
@@ -4948,7 +4948,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     @property
     def timezone(self):
         try:
-            return pytz_timezone(self.created_by.userdata.timezone)
+            return pytz_timezone(placed_timezone(self.created_by.userdata.timezone) or settings.TIME_ZONE)
         except Exception:
             return pytz_timezone(settings.TIME_ZONE)
 
@@ -7897,9 +7897,10 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     @property
     def timezone(self):
         try:
-            return pytz_timezone(self.user.userdata.timezone)
+            zone = placed_timezone(self.user.userdata.timezone)
         except Exception:
-            return self.auction.timezone
+            zone = None
+        return pytz_timezone(zone) if zone else self.auction.timezone
 
     @property
     def pickup_time_as_localized_string(self):

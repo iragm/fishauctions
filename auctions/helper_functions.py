@@ -1,6 +1,8 @@
 """Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML."""
 
+import functools
 import re
+import zoneinfo
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -28,6 +30,46 @@ def scrub_emails(text):
     if not text:
         return text
     return EMAIL_IN_TEXT_RE.sub("[email redacted]", str(text))
+
+
+# What a browser reports when it won't or can't say where it is: an OS clock left on UTC, or
+# Firefox's and Tor's fingerprinting protection. Shown to that browser, never saved over a real zone.
+UNPLACED_TIMEZONES = frozenset(
+    {
+        "UTC",
+        "Etc/UTC",
+        "UCT",
+        "Etc/UCT",
+        "Universal",
+        "Etc/Universal",
+        "Zulu",
+        "Etc/Zulu",
+        "GMT",
+        "Etc/GMT",
+        "GMT0",
+        "Etc/GMT0",
+        "GMT+0",
+        "Etc/GMT+0",
+        "GMT-0",
+        "Etc/GMT-0",
+        "Greenwich",
+        "Etc/Greenwich",
+        "Factory",
+    }
+)
+
+
+@functools.cache
+def known_timezones():
+    """``zoneinfo.available_timezones()``, read once: each call walks the tzdata tree on disk."""
+    return frozenset(zoneinfo.available_timezones())
+
+
+def placed_timezone(name):
+    """``name`` if it's a real IANA zone that says where someone is, else None (UTC and friends are None)."""
+    if name and name not in UNPLACED_TIMEZONES and name in known_timezones():
+        return name
+    return None
 
 
 def cookie_coordinates(request):

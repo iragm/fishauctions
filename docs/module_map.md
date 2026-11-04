@@ -119,7 +119,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (506 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (368 lines)
+- **`context_processors.py`** (377 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -175,11 +175,11 @@ this only quotes its opening sentence.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
 - **`help_guides.py`** (1009 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
-- **`help_stats.py`** (1076 lines)
+- **`help_stats.py`** (1079 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
-- **`helper_functions.py`** (162 lines)
+- **`helper_functions.py`** (204 lines)
   Small helpers with no home of their own: email scrubbing, currency symbols, histogram bins, cookies, fixed HTML.
-  `static_html`, `scrub_emails`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
+  `static_html`, `scrub_emails`, `known_timezones`, `placed_timezone`, `cookie_coordinates`, `get_currency_symbol`, `bin_data`
 - **`history.py`** (148 lines)
   What an edit changed, in a form a query can answer.
   `is_secret_field`, `jsonable`, `truncate`, `changed_field_summary`, `record_club_history`, `field_label`
@@ -201,7 +201,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15352 lines)
+- **`models.py`** (15353 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -438,7 +438,7 @@ this only quotes its opening sentence.
 - **`test_dmca.py`** (472 lines)
   What the DMCA safe harbour needs to be true, checked.
   `AgentConfigurationTests`, `DmcaPageTests`, `NoticeIntakeTests`, `NoticeRoutingTests`, `ReportContentTests`, `StrikeTests`, `TakedownRemovesTheMaterialTests`, `MobileConfigTests`, `ImageSourceLabelTests`, `AccountDeletionTests`
-- **`test_documents.py`** (1807 lines)
+- **`test_documents.py`** (1788 lines)
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
@@ -521,9 +521,9 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1354 lines)
+- **`test_mcp_admin.py`** (1350 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_permissions.py`** (727 lines)
+- **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
 - **`test_mcp_resources.py`** (350 lines)
@@ -603,7 +603,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (164 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3233 lines)
+- **`test_palette_skills.py`** (3230 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -692,6 +692,9 @@ this only quotes its opening sentence.
 - **`test_tenancy.py`** (413 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
+- **`test_timezones.py`** (85 lines)
+  A saved or cookie timezone of UTC is a browser that didn't know where it was, and must not stick.
+  `TimezoneTests`
 - **`test_untrusted_text.py`** (114 lines)
   Text somebody typed reaches the page as text, and ``?next=`` never leaves the site.
   `LiteralHTMLTests`, `BulkSellQueryTests`, `InvoiceRenewalToggleTests`, `SafeNextUrlTests`, `ChatTests`, `MissingObjectTests`
@@ -760,7 +763,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`render.py`** (58 lines)
   A document's Markdown as the HTML its page shows, with its own pictures placed where the text puts them.
   `to_html`
-- **`search.py`** (339 lines)
+- **`search.py`** (338 lines)
   Who sees which document, the ranked passages for a question, and the web page's written answer.
 - **`stitch.py`** (478 lines)
   Put a pile of page pictures back together into articles.
@@ -779,7 +782,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`auction_emails.py`** (359 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
-- **`auction_promos.py`** (334 lines)
+- **`auction_promos.py`** (335 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
 - **`auctiontos_notifications.py`** (308 lines)
@@ -789,8 +792,6 @@ The library: documents people upload, read into text, and searched from ``/libra
   Attach a species to lots that predate the species list.
   `Command`
 - **`change_assistant.py`** (29 lines)
-  `Command`
-- **`change_library.py`** (25 lines)
   `Command`
 - **`change_paypal.py`** (28 lines)
   `Command`
@@ -885,7 +886,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2179 lines)
+- **`admin.py`** (2177 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (630 lines)
   The species list's upkeep on ``/mcp/admin/``: two reads, and eight changes only a proposal makes.
@@ -1070,7 +1071,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`discord.py`** (972 lines)
   Discord: verifying signatures, answering interactions, and syncing roles.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
-- **`documents.py`** (640 lines)
+- **`documents.py`** (635 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.

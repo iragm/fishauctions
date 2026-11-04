@@ -44,6 +44,7 @@ from django.utils import timezone
 from post_office import mail
 
 from auctions.filters import get_recommended_lots
+from auctions.helper_functions import placed_timezone
 from auctions.models import (
     Auction,
     AuctionCampaign,
@@ -120,7 +121,7 @@ def auctions_to_promote(now):
 
 def user_timezone(userdata):
     try:
-        return zoneinfo.ZoneInfo(userdata.timezone or settings.TIME_ZONE)
+        return zoneinfo.ZoneInfo(placed_timezone(userdata.timezone) or settings.TIME_ZONE)
     except (zoneinfo.ZoneInfoNotFoundError, ValueError):
         return zoneinfo.ZoneInfo(settings.TIME_ZONE)
 
