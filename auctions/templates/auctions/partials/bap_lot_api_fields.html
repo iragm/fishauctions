@@ -13,6 +13,7 @@ No context required.
         <td><code>lot_id</code></td>
         <td>This site's permanent id for the lot. It never changes and is never reused, so use it as your idempotency key &mdash; if you've already awarded points for a <code>lot_id</code>, skip it when it shows up in a later pull.</td>
       </tr>
+      <tr><td><code>auction_name</code> / <code>auction_slug</code></td><td>The auction the lot was in: its name as people see it, and the short name in its web address.</td></tr>
       <tr><td><code>lot_number_display</code></td><td>The number printed on the lot, always a string. Looks like <code>"12"</code> or <code>"101-1"</code> depending on how the auction numbers lots, and is only unique within one auction &mdash; don't key on it.</td></tr>
       <tr><td><code>lot_name</code></td><td>What the seller called the lot.</td></tr>
       <tr><td><code>quantity</code></td><td>How many fish/plants were in the lot. Clubs can require a minimum here (see <code>low_quantity</code> below).</td></tr>

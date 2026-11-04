@@ -520,6 +520,26 @@ class ClientIpTestCase(TestCase):
         request = RequestFactory().get("/", REMOTE_ADDR="198.51.100.4")
         self.assertEqual(get_adapter().get_client_ip(request), "198.51.100.4")
 
+    def test_an_ipv6_caller_is_counted_by_their_64(self):
+        """One subscriber gets a whole /64 and may use any address in it."""
+        from auctions.client_ip import address_bucket, rate_limit_address
+
+        first = RequestFactory().get("/", HTTP_X_REAL_IP="2001:db8:1:2:aaaa::1")
+        rotated = RequestFactory().get("/", HTTP_X_REAL_IP="2001:db8:1:2:ffff:1234:5678:9")
+        neighbour = RequestFactory().get("/", HTTP_X_REAL_IP="2001:db8:1:3::1")
+        self.assertEqual(rate_limit_address(first), "2001:db8:1:2::/64")
+        self.assertEqual(rate_limit_address(first), rate_limit_address(rotated))
+        self.assertNotEqual(rate_limit_address(first), rate_limit_address(neighbour))
+        self.assertEqual(address_bucket("2001:DB8:1:2::1%eth0"), "2001:db8:1:2::/64")
+
+    def test_an_ipv4_caller_keeps_their_own_address(self):
+        from auctions.client_ip import address_bucket, rate_limit_address
+
+        self.assertEqual(rate_limit_address(RequestFactory().get("/", **self.HEADERS)), "203.0.113.9")
+        self.assertEqual(address_bucket("::ffff:203.0.113.9"), "203.0.113.9")
+        self.assertEqual(address_bucket(""), "unknown")
+        self.assertEqual(address_bucket("not-an-address"), "not-an-address")
+
 
 class TableCellMarkupTests(StandardTestCase):
     """A table cell that builds markup has to say it is markup, or the table prints it as text.

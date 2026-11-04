@@ -579,6 +579,18 @@
         "destructive_justification": "It overwrites any rating or comment the same person left on that lot before, and the result is public."
       }
     },
+    "list_club_admins": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (everyone with any admin or staff permission in a club right now, each with every permission they hold, and who can run the club's).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
     "list_club_events": {
       "annotations": {
         "readOnlyHint": true,

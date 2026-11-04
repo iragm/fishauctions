@@ -283,6 +283,8 @@ class ClubBapLotAPITests(TestCase):
         self.assertEqual(
             sorted(lot.keys()),
             [
+                "auction_name",
+                "auction_slug",
                 "bap_auto_reason",
                 "bap_award",
                 "bap_eligible",
@@ -309,6 +311,8 @@ class ClubBapLotAPITests(TestCase):
             ],
         )
         self.assertEqual(lot["lot_number_display"], str(self.recent_lot.lot_number_display))
+        self.assertEqual(lot["auction_name"], self.recent_lot.auction.title)
+        self.assertEqual(lot["auction_slug"], self.recent_lot.auction.slug)
         self.assertEqual(lot["quantity"], 6)
         self.assertEqual(lot["seller_name"], "Mike Smith")
         self.assertEqual(lot["seller_email"], "mike@example.com")

@@ -5318,6 +5318,121 @@ def list_club_members(request, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: How many of one person's auctions a ``list_club_admins`` row names; the count says the rest.
+_ADMIN_AUCTIONS_PER_ROW = 10
+
+
+def list_club_admins(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Everyone who holds a permission in a club right now, each with every flag they hold, plus the people
+    who can run one of the club's auctions (its creator, or ``AuctionTOS.is_admin``). An audit, so it
+    reads current rows only: a removed member holds nothing. Gated like ``ClubMemberPermissionsView``,
+    on ``permission_admin``, the one permission that can change what it lists.
+    """
+    from django.contrib.auth.models import User
+
+    from .models import Auction
+    from .views import CLUB_PERMISSION_FIELDS, check_club_permission
+
+    user = request.user
+    club, problem = _club_or_problem(request, params)
+    if problem and user.is_superuser and _str(params, "club"):
+        club = _any_club(_str(params, "club"))
+        problem = None if club else problem
+    if problem:
+        return problem
+    if not check_club_permission(user, club, "permission_admin"):
+        return _error(f"Only {club.name}'s club admins can see who holds permissions there.")
+    any_permission = Q()
+    for flag in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{flag: True})
+    staff = list(ClubMember.objects.filter(club=club, is_deleted=False).filter(any_permission).order_by("name", "pk"))
+
+    auctions = Auction.objects.filter(club=club, is_deleted=False)
+    run_by: dict[Any, list] = {}  # user pk, or ("tos", pk) for a participant with no account
+    names: dict[Any, str] = {}
+    for auction in auctions.filter(created_by__isnull=False).order_by("-date_start"):
+        run_by.setdefault(auction.created_by_id, []).append((auction, "created it"))
+    admins = (
+        AuctionTOS.objects.filter(auction__in=auctions, is_admin=True)
+        .select_related("auction")
+        .order_by("-auction__date_start", "pk")
+    )
+    for tos in admins:
+        key = tos.user_id or ("tos", tos.pk)
+        if any(auction.pk == tos.auction_id for auction, _ in run_by.get(key, [])):
+            continue
+        run_by.setdefault(key, []).append((tos.auction, "auction admin"))
+        names.setdefault(key, tos.name or "")
+
+    def auction_rights(key):
+        held = run_by.pop(key, [])
+        return len(held), [
+            {"auction": auction.title, "auction_slug": auction.slug, "right": right}
+            for auction, right in held[:_ADMIN_AUCTIONS_PER_ROW]
+        ]
+
+    rows = []
+    for member in staff:
+        flags = [flag for flag in CLUB_PERMISSION_FIELDS if getattr(member, flag)]
+        row: dict[str, Any] = {
+            "name": untrusted_short(member.name or member.email or "") or "(no name)",
+            "has_an_account": bool(member.user_id),
+            "club_admin": member.permission_admin,
+            "permissions": [flag.removeprefix("permission_") for flag in flags],
+        }
+        if member.user_id:
+            count, held = auction_rights(member.user_id)
+            if count:
+                row.update(auctions_they_can_run=count, auctions=held)
+        rows.append(row)
+    members_by_user = {
+        member.user_id: member
+        for member in ClubMember.objects.filter(
+            club=club, is_deleted=False, user_id__in=[k for k in run_by if isinstance(k, int)]
+        )
+    }
+    users = {u.pk: u for u in User.objects.filter(pk__in=[k for k in run_by if isinstance(k, int)])}
+    for key in list(run_by):
+        member = members_by_user.get(key) if isinstance(key, int) else None
+        account = users.get(key) if isinstance(key, int) else None
+        if member:
+            name = member.name or member.email or ""
+        elif account:
+            name = account.get_full_name() or account.username
+        else:
+            name = names.get(key, "")
+        count, held = auction_rights(key)
+        rows.append(
+            {
+                "name": untrusted_short(name) or "(no name)",
+                "has_an_account": account is not None,
+                "club_admin": False,
+                "permissions": [],
+                "auctions_they_can_run": count,
+                "auctions": held,
+            }
+        )
+    limit, offset = _slice(params)
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    holders = sum(1 for row in rows if row["permissions"])
+    return {
+        "found": bool(total),
+        "club": club.name,
+        "people": page,
+        "count": total,
+        "showing": len(page),
+        "offset": offset,
+        "summary": (
+            f"{holders} of {club.name}'s members hold a club permission"
+            f"{f', and {total - holders} more can run one of its auctions' if total > holders else ''}."
+            f"{_showing(total, limit, offset)}"
+        ),
+        "followups": _member_followups(club, None),
+        **_about(club=club),
+    }
+
+
 def _user_coordinates(user):
     """Where to search from. Returns ``(latitude, longitude, problem_or_None)``."""
     userdata = getattr(user, "userdata", None)
@@ -14445,6 +14560,26 @@ register(
         },
         danger=DANGER_SAFE,
         resolver=list_club_members,
+        lookup=True,
+        needs=NEEDS_CLUB_ADMIN,
+    )
+)
+
+register(
+    Action(
+        name="list_club_admins",
+        description=(
+            "Everyone with any admin or staff permission in a club right now, each with every "
+            "permission they hold, and who can run the club's auctions. The answer to 'who are "
+            "our admins?', 'who can send announcements?' or an audit of the club's access. "
+            "Club admins only."
+        ),
+        params={
+            "club": "string, optional. Club name. See my_context. Site admins may name any club.",
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=list_club_admins,
         lookup=True,
         needs=NEEDS_CLUB_ADMIN,
     )

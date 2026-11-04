@@ -16,6 +16,8 @@ from django.apps import apps
 from django.core.cache import cache
 from django.utils import timezone
 
+from auctions.client_ip import rate_limit_address
+
 logger = logging.getLogger(__name__)
 
 #: Requests per hour by default. Must exceed :data:`DEFAULT_WRITE_BUDGET`, since writes are
@@ -258,13 +260,6 @@ DCR_REGISTRATIONS_PER_HOUR = 24
 DCR_WINDOW_SECONDS = 3600
 
 
-def client_ip(request) -> str:
-    """The caller's address; see :mod:`auctions.client_ip`. ``"unknown"`` keys one shared bucket."""
-    from auctions.client_ip import client_ip as _client_ip
-
-    return _client_ip(request) or "unknown"
-
-
 def throttle_registration(view):
     """Rate-limit OAuth client registration per address, wrapping the toolkit's DCR view in
     ``fishauctions/urls.py``.
@@ -277,7 +272,7 @@ def throttle_registration(view):
     def guarded(request, *args, **kwargs):
         if request.method not in ("POST", "PUT", "DELETE"):
             return view(request, *args, **kwargs)
-        key = f"mcp-dcr-{client_ip(request)}"
+        key = f"mcp-dcr-{rate_limit_address(request)}"
         count = cache.get_or_set(key, 0, timeout=DCR_WINDOW_SECONDS)
         if count >= DCR_REGISTRATIONS_PER_HOUR:
             logger.warning("Refused a dynamic client registration from %s: over the hourly limit", key)
