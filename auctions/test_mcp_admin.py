@@ -1293,10 +1293,29 @@ class GroupedLogsTests(AdminEndpointCase):
         result = self.call("site_health")
         errors = result["structuredContent"]["errors"]
         self.assertEqual(errors["total"], 3)
-        self.assertEqual(errors["during_restart"], 1)
-        self.assertEqual(errors["by_log"], {"root": 1, "root-celery": 1})
-        self.assertNotIn("restart", [kind["fingerprint"] for kind in errors["most_common"]])
-        self.assertIn("(1 while a container restarted)", result["content"][0]["text"])
+        self.assertEqual(errors["by_log"], {"root": 2, "root-celery": 1})
+        self.assertEqual(errors["during_restart"]["times"], 1)
+        (restarting,) = errors["during_restart"]["kinds"]
+        self.assertEqual(restarting["exception"], "ConnectionError: redis:6379 gone")
+        # The same kind outside the window is still a kind of its own, under the same fingerprint.
+        self.assertEqual([kind["fingerprint"] for kind in errors["most_common"]].count(restarting["fingerprint"]), 1)
+        self.assertIn("(1 lost connections while a container restarted)", result["content"][0]["text"])
+
+    def test_a_new_error_at_a_restart_is_still_a_new_kind(self):
+        """A deploy is when new code first breaks: only a lost connection is put down to the restart."""
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=11)]
+        errors = self.call("site_health")["structuredContent"]["errors"]
+        self.assertEqual(errors["during_restart"]["times"], 0)
+        self.assertIn(
+            "ValueError: bad lot #", [kind.get("exception", "").replace("7", "#") for kind in errors["most_common"]]
+        )
+
+    def test_what_the_old_process_logged_well_before_the_start_isnt_the_restart(self):
+        # The lost connections are at -30 and -20 minutes.
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=23)]  # -20 is 3 minutes after it
+        self.assertEqual(self.call("site_health")["structuredContent"]["errors"]["during_restart"]["times"], 1)
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=18)]  # -20 is 2 minutes before it
+        self.assertEqual(self.call("site_health")["structuredContent"]["errors"]["during_restart"]["times"], 0)
 
     def test_a_restart_alone_leaves_brief_quiet_about_errors(self):
         self.restarts.return_value = [self.now - datetime.timedelta(minutes=20)]
@@ -1321,14 +1340,48 @@ class GroupedLogsTests(AdminEndpointCase):
         self.assertEqual(first[0], second[0])
         self.assertNotEqual(first[0], third[0])
         self.assertIn("/lots/1024/some-fish/", first[1])  # the kind keeps the first path seen
-        # A ratio or a number with a slash isn't a path.
-        self.assertNotEqual(admin.record_kind("ERROR x y a.b:1 got 5/10 done\n")[1], "")
+
+        # Only Django's own 4xx line: a 500's page, an outside URL and a file path stay part of the kind.
+        def fingerprint(line):
+            return admin.record_kind(line + "\n")[0]
+
+        self.assertNotEqual(
+            fingerprint("ERROR 2026-11-04 03:49:04,920 log.log_response:253 Internal Server Error: /checkout/"),
+            fingerprint("ERROR 2026-11-04 03:49:04,920 log.log_response:253 Internal Server Error: /invoices/"),
+        )
+        self.assertNotEqual(
+            fingerprint("WARNING 2026-11-04 03:49:04,920 services.x:9 404 for url: https://api.squareup.com/v2/a"),
+            fingerprint("WARNING 2026-11-04 03:49:04,920 services.x:9 404 for url: https://www.fishbase.se/a"),
+        )
+        self.assertNotEqual(
+            fingerprint("WARNING 2026-11-04 03:49:04,920 a.b:1 can't write /app/logs/django.log"),
+            fingerprint("WARNING 2026-11-04 03:49:04,920 a.b:1 can't write /app/privatefiles/a.pdf"),
+        )
+        self.assertEqual(
+            fingerprint(
+                "WARNING 2026-11-04 03:49:04,920 django.request.log_response:253 [r=1a2b3c4d] Not Found: /a.php"
+            ),
+            fingerprint("WARNING 2026-11-05 01:00:00,000 django.request.log_response:248 Not Found: /wp/b.php"),
+        )
 
     def test_the_request_context_doesnt_split_a_kind(self):
         first = admin.record_kind("ERROR 2026-10-08 08:00:00,000 a.b:1 [r=1a2b3c4d u=5] lot 12 broke\n")
         second = admin.record_kind("ERROR 2026-10-08 09:00:00,000 a.b:1 [t=endauctions] lot 99 broke\n")
         self.assertEqual(first[0], second[0])
         self.assertEqual(first[1], "a.b:1 lot 12 broke")
+
+
+class StartTimesTests(SimpleTestCase):
+    def test_start_times_are_read_from_whatever_uptime_returns(self):
+        times = admin._start_times(
+            {
+                "containers_started": {"django": "2026-11-04T10:47:11+00:00", "error": "TimeoutError: x"},
+                "database_started": None,
+                "redis_started": "2026-11-04T10:47:00",
+            }
+        )
+        self.assertEqual(len(times), 2)
+        self.assertTrue(all(moment.tzinfo for moment in times))
 
 
 class SiteHealthTests(AdminEndpointCase):
