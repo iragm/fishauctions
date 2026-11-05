@@ -3,6 +3,7 @@ anything (:mod:`auctions.mcp.admin`); plus the feature requests both ends of it 
 
 import datetime
 import json
+import os
 import secrets
 import tempfile
 from collections import namedtuple
@@ -160,8 +161,8 @@ class NothingWritesTests(AdminEndpointCase):
     def test_only_reads_are_listed_however_much_the_token_could_write(self):
         listed = self.listed()
         writes = {name for name, tool in listed.items() if not tool["annotations"]["readOnlyHint"]}
-        # Both write only into a queue the owner decides.
-        self.assertEqual(writes, {"propose_change", "suggest_feature"})
+        # Two write only into a queue the owner decides; backup_database copies data out.
+        self.assertEqual(writes, {"backup_database", "propose_change", "suggest_feature"})
         for name in admin.ADMIN_TOOLS:
             self.assertIn(name, listed)
         self.assertIn("describe_auction", listed)
@@ -732,6 +733,7 @@ class SpeciesUpkeepTests(AdminEndpointCase):
             if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
             and "oauth2_provider" not in query["sql"]
             and "django_session" not in query["sql"]
+            and "auctions_mcpcall" not in query["sql"]  # the endpoint's own audit row, not the tool's
         ]
         return self.data(result), writes
 
@@ -955,6 +957,43 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         refused = self.data(self.call("species_dashboard", {"verdict": "never_looked_up"}))
         self.assertEqual(refused["status"], "needs_more_information")
 
+    def test_the_approver_reads_names_not_numbers_and_batches_are_big(self):
+        from auctions.models import SpeciesSearchCache
+
+        rows = [
+            SpeciesSearchCache.objects.create(search_text=f"plant {n}", species=None, source="llm") for n in range(3)
+        ]
+        steps = [
+            {"tool": "forget_species_answer", "arguments": {"answers": [row.pk for row in rows]}},
+            {"tool": "remember_not_a_species", "arguments": {"lot_names": [f"heater {n}" for n in range(1000)]}},
+            {
+                "tool": "set_species_on_lot_names",
+                "arguments": {"species": self.chindongo.pk, "lot_names": ["6 saulosi"]},
+            },
+        ] + [{"tool": "approve_species", "arguments": {"species": self.tropheus.pk}}] * 100
+        self.assertFalse(self.call("propose_change", {"summary": "Big batch", "steps": steps})["isError"])
+        self.client.force_login(self.owner)
+        body = self.client.get(reverse("agent_proposals")).content.decode()
+        self.assertIn("«plant 1» (now: not a species, decided by the language model)", body)
+        self.assertIn("Chindongo saulosi on lots named «6 saulosi», and teach the matcher", body)
+        self.assertIn("«heater 999»", body)
+        self.assertNotIn(f"answer: {rows[0].pk}", body)
+        self.assertNotIn("forget_species_answer", body)
+        self.approve()
+        self.assertFalse(SpeciesSearchCache.objects.filter(pk__in=[row.pk for row in rows]).exists())
+        self.assertTrue(SpeciesSearchCache.objects.filter(search_text="heater 999").exists())
+
+        AgentProposal.objects.all().delete()
+        mixed = [{"tool": "approve_species", "arguments": {"species": self.tropheus.pk}}] * 50 + [
+            {"tool": "trust_user", "arguments": {"user": self.user.username}}
+        ]
+        self.assertTrue(self.call("propose_change", {"summary": "Too many", "steps": mixed})["isError"])
+        self.assertTrue(self.propose("forget_species_answer", {"answers": [rows[0].pk]})["isError"])
+        too_many = [
+            {"tool": "remember_not_a_species", "arguments": {"lot_names": [f"pump {n}" for n in range(700)]}}
+        ] * 2
+        self.assertTrue(self.call("propose_change", {"summary": "Too many names", "steps": too_many})["isError"])
+
     def test_the_backfill_can_skip_to_the_tail(self):
         skipped = self.data(self.call("species_backfill", {"pass": "automatic", "skip": 1000}))
         self.assertEqual(skipped["total"], 0)
@@ -1118,7 +1157,10 @@ class ReadLogsTests(AdminEndpointCase):
         self.assertNotIn("hunter2", text)
 
     def test_contains_filters_records(self):
-        self.assertEqual(self.logs(contains="SLOW")["text"].strip(), "WARNING 2026-10-08 08:02:00,000 views.z:3 slow")
+        self.assertEqual(
+            self.logs(contains="SLOW", group=False)["text"].strip(), "WARNING 2026-10-08 08:02:00,000 views.z:3 slow"
+        )
+        self.assertTrue(self.logs(contains="SLOW")["text"].endswith("WARNING 2026-10-08 08:02:00,000 views.z:3 slow\n"))
 
     def test_only_the_files_logging_writes_can_be_named(self):
         for name in ("not-a-log", "../django", "/etc/passwd"):
@@ -1127,13 +1169,265 @@ class ReadLogsTests(AdminEndpointCase):
                 self.assertIn("needs_more_information", result["content"][0]["text"])
 
 
+def _stamp(moment) -> str:
+    """A record's timestamp as settings.LOGGING writes it, in the site's own time zone."""
+    return timezone.localtime(moment, timezone.get_default_timezone()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _traceback(stamp, where, message, exception, context=""):
+    return (
+        f"ERROR {stamp},000 {where} {context}{message}\n"
+        "Traceback (most recent call last):\n"
+        '  File "x.py", line 1, in y\n'
+        f"{exception}\n"
+    )
+
+
+class GroupedLogsTests(AdminEndpointCase):
+    """read_logs groups repeats, reads every log, and reads only what is new."""
+
+    def setUp(self):
+        super().setUp()
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.now = timezone.now()
+        recent = [_stamp(self.now - datetime.timedelta(minutes=minutes)) for minutes in (30, 20, 10)]
+        old = _stamp(self.now - datetime.timedelta(days=3))
+        Path(self.directory.name, "root.log").write_text(
+            _traceback(old, "pubsub.receive:327", "Lost lot 12", "ConnectionError: redis:6379 gone")
+            + _traceback(
+                recent[0], "pubsub.receive:327", "Lost lot 34", "ConnectionError: redis:6379 gone", "[r=1a2b3c4d u=5] "
+            )
+            + _traceback(
+                recent[1], "pubsub.receive:327", "Lost lot 56", "ConnectionError: redis:6379 gone", "[r=9f8e7d6c] "
+            )
+            + f"WARNING {recent[2]},000 auctions.views.x:3 something odd\n"
+        )
+        Path(self.directory.name, "root-celery.log").write_text(
+            _traceback(recent[2], "celery.app.trace:1", "Task endauctions raised", "ValueError: bad lot 7")
+        )
+        Path(self.directory.name, "django.log").write_text(f"INFO {recent[0]},000 django.x:1 fine\n")
+        override = override_settings(LOG_DIR=Path(self.directory.name))
+        override.enable()
+        self.addCleanup(override.disable)
+        # The test container may have started minutes ago; restarts are tested on their own.
+        restarts = mock.patch("auctions.mcp.admin._start_times", return_value=[])
+        self.restarts = restarts.start()
+        self.addCleanup(restarts.stop)
+
+    def logs(self, **arguments):
+        return self.call("read_logs", arguments)["structuredContent"]
+
+    def test_repeats_of_one_kind_come_back_once_with_a_count(self):
+        found = self.logs(log="root", level="ERROR")
+        self.assertEqual(found["text"].count("Traceback"), 1)
+        self.assertIn("--- 3x root.log", found["text"])
+        self.assertIn(
+            "3 records of 1 kind", self.call("read_logs", {"log": "root", "level": "ERROR"})["content"][0]["text"]
+        )
+
+    def test_group_false_returns_every_record(self):
+        self.assertEqual(self.logs(log="root", level="ERROR", group=False)["text"].count("Traceback"), 3)
+
+    def test_kinds_only_and_fingerprint(self):
+        kinds = self.logs(log="all", level="ERROR", kinds_only=True)["kinds"]
+        self.assertEqual({kind["log"] for kind in kinds}, {"root", "root-celery"})
+        celery = next(kind for kind in kinds if kind["log"] == "root-celery")
+        self.assertEqual(celery["exception"], "ValueError: bad lot 7")
+        self.assertNotIn("_text", celery)
+        one = self.logs(log="all", fingerprint=celery["fingerprint"])
+        self.assertIn("Task endauctions raised", one["text"])
+        self.assertNotIn("redis", one["text"])
+
+    def test_since_reads_only_whats_new(self):
+        found = self.logs(log="root", level="ERROR", since="1h", kinds_only=True)["kinds"]
+        self.assertEqual(found[0]["times"], 2)
+        found = self.logs(
+            log="root", level="ERROR", since=(self.now - datetime.timedelta(days=4)).isoformat(), kinds_only=True
+        )
+        self.assertEqual(found["kinds"][0]["times"], 3)
+
+    def test_a_bad_since_is_asked_about(self):
+        result = self.call("read_logs", {"since": "last tuesday"})
+        self.assertIn("needs_more_information", result["content"][0]["text"])
+
+    def test_all_logs_ungrouped_says_which_log(self):
+        text = self.logs(log="all", level="ERROR", group=False, since="1h")["text"]
+        self.assertIn("[root-celery] ERROR", text)
+        self.assertIn("[root] ERROR", text)
+
+    def test_a_rotated_file_older_than_since_is_not_read(self):
+        rotated = Path(self.directory.name, "root.log.1")
+        rotated.write_text("ERROR 2020-01-01 00:00:00,000 x.y:1 ancient\n")
+        long_ago = (self.now - datetime.timedelta(days=10)).timestamp()
+        os.utime(rotated, (long_ago, long_ago))
+        self.assertNotIn(rotated, admin._log_files("root", True, self.now - datetime.timedelta(days=1)))
+        self.assertIn(rotated, admin._log_files("root", True))
+
+    def test_site_health_counts_errors_in_every_log(self):
+        """The blind spot: django.log holds only Django's own loggers, so the site's errors went uncounted."""
+        result = self.call("site_health")
+        errors = result["structuredContent"]["errors"]
+        self.assertEqual(errors["total"], 3)
+        self.assertEqual(errors["by_log"], {"root": 2, "root-celery": 1})
+        self.assertIn("3 errors logged since", result["content"][0]["text"])
+        warnings = result["structuredContent"]["warnings"]
+        self.assertEqual(warnings["most_common"][0]["error"], "auctions.views.x:3 something odd")
+
+    def test_known_kinds_are_left_out(self):
+        errors = self.call("site_health")["structuredContent"]["errors"]
+        known = ",".join(kind["fingerprint"] for kind in errors["most_common"])
+        result = self.call("site_health", {"known": known})
+        self.assertEqual(result["structuredContent"]["errors"]["new_kinds"], 0)
+        self.assertEqual(result["structuredContent"]["errors"]["known_kinds_left_out"], 2)
+        self.assertIn("(0 new kinds)", result["content"][0]["text"])
+
+    def test_brief_returns_only_what_is_wrong(self):
+        brief = self.call("site_health", {"brief": True})["structuredContent"]
+        self.assertIn("errors", brief)
+        self.assertIn("commit", brief)
+        for fine in ("disk", "memory", "queues", "pending_migrations", "rates_vs_usual", "log_coverage"):
+            self.assertNotIn(fine, brief)
+
+    def test_a_log_that_no_longer_reaches_back_is_named(self):
+        for index in range(1, 6):
+            Path(self.directory.name, f"django.log.{index}").write_text(
+                f"INFO {_stamp(self.now)},000 django.x:1 newest\n"
+            )
+        result = self.call("site_health", {"since": "2d"})
+        self.assertIn("These logs don't reach back to the window's start", result["content"][0]["text"])
+        self.assertIn("django", result["content"][0]["text"])
+
+    def test_a_warning_and_an_error_of_one_message_are_two_kinds(self):
+        stamp = _stamp(self.now)
+        Path(self.directory.name, "root-beat.log").write_text(
+            f"WARNING {stamp},000 a.b:1 Unable to set winner on lot 5\n"
+            f"ERROR {stamp},000 a.b:1 Unable to set winner on lot 6\n"
+        )
+        errors = self.call("site_health")["structuredContent"]["errors"]
+        self.assertEqual(errors["by_log"]["root-beat"], 1)
+
+    def test_kinds_past_the_cap_still_count(self):
+        with mock.patch("auctions.mcp.admin.MAX_KINDS", 1):
+            errors = self.call("site_health")["structuredContent"]["errors"]
+        self.assertEqual(errors["total"], 3)
+        self.assertIn("overflow", [kind["fingerprint"] for kind in errors["most_common"]])
+
+    def test_odd_since_and_known_are_answered_not_raised(self):
+        moment, problem = admin.parse_since("100000000d")
+        self.assertEqual(problem, "")
+        self.assertLessEqual(timezone.now() - moment, admin.MAX_SINCE + datetime.timedelta(seconds=5))
+        result = self.call("site_health", {"known": 5})
+        self.assertFalse(result["isError"], result)
+
+    def test_a_since_without_a_zone_is_the_logs_own(self):
+        naive = timezone.localtime(self.now, timezone.get_default_timezone()).replace(tzinfo=None)
+        moment, _problem = admin.parse_since(naive.isoformat())
+        self.assertLess(abs((moment - self.now).total_seconds()), 1)
+
+    def test_records_around_a_restart_are_counted_but_not_new_kinds(self):
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=21)]
+        result = self.call("site_health")
+        errors = result["structuredContent"]["errors"]
+        self.assertEqual(errors["total"], 3)
+        self.assertEqual(errors["by_log"], {"root": 2, "root-celery": 1})
+        self.assertEqual(errors["during_restart"]["times"], 1)
+        (restarting,) = errors["during_restart"]["kinds"]
+        self.assertEqual(restarting["exception"], "ConnectionError: redis:6379 gone")
+        # The same kind outside the window is still a kind of its own, under the same fingerprint.
+        self.assertEqual([kind["fingerprint"] for kind in errors["most_common"]].count(restarting["fingerprint"]), 1)
+        self.assertIn("(1 lost connections while a container restarted)", result["content"][0]["text"])
+
+    def test_a_new_error_at_a_restart_is_still_a_new_kind(self):
+        """A deploy is when new code first breaks: only a lost connection is put down to the restart."""
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=11)]
+        errors = self.call("site_health")["structuredContent"]["errors"]
+        self.assertEqual(errors["during_restart"]["times"], 0)
+        self.assertIn(
+            "ValueError: bad lot #", [kind.get("exception", "").replace("7", "#") for kind in errors["most_common"]]
+        )
+
+    def test_what_the_old_process_logged_well_before_the_start_isnt_the_restart(self):
+        # The lost connections are at -30 and -20 minutes.
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=23)]  # -20 is 3 minutes after it
+        self.assertEqual(self.call("site_health")["structuredContent"]["errors"]["during_restart"]["times"], 1)
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=18)]  # -20 is 2 minutes before it
+        self.assertEqual(self.call("site_health")["structuredContent"]["errors"]["during_restart"]["times"], 0)
+
+    def test_a_restart_alone_leaves_brief_quiet_about_errors(self):
+        self.restarts.return_value = [self.now - datetime.timedelta(minutes=20)]
+        Path(self.directory.name, "root-celery.log").write_text("")
+        Path(self.directory.name, "root.log").write_text(
+            _traceback(
+                _stamp(self.now - datetime.timedelta(minutes=19)), "pubsub.receive:327", "Lost", "ConnectionError: x"
+            )
+        )
+        self.assertNotIn("errors", self.call("site_health", {"brief": True})["structuredContent"])
+
+    def test_one_message_about_many_paths_is_one_kind(self):
+        first = admin.record_kind(
+            "WARNING 2026-11-03 02:24:03,823 log.log_response:253 Forbidden (CSRF token missing.): /lots/1024/some-fish/\n"
+        )
+        second = admin.record_kind(
+            "WARNING 2026-11-04 03:49:04,920 log.log_response:253 Forbidden (CSRF token missing.): /\n"
+        )
+        third = admin.record_kind(
+            "WARNING 2026-11-04 03:49:04,920 log.log_response:253 Forbidden (CSRF cookie not set.): /\n"
+        )
+        self.assertEqual(first[0], second[0])
+        self.assertNotEqual(first[0], third[0])
+        self.assertIn("/lots/1024/some-fish/", first[1])  # the kind keeps the first path seen
+
+        # Only Django's own 4xx line: a 500's page, an outside URL and a file path stay part of the kind.
+        def fingerprint(line):
+            return admin.record_kind(line + "\n")[0]
+
+        self.assertNotEqual(
+            fingerprint("ERROR 2026-11-04 03:49:04,920 log.log_response:253 Internal Server Error: /checkout/"),
+            fingerprint("ERROR 2026-11-04 03:49:04,920 log.log_response:253 Internal Server Error: /invoices/"),
+        )
+        self.assertNotEqual(
+            fingerprint("WARNING 2026-11-04 03:49:04,920 services.x:9 404 for url: https://api.squareup.com/v2/a"),
+            fingerprint("WARNING 2026-11-04 03:49:04,920 services.x:9 404 for url: https://www.fishbase.se/a"),
+        )
+        self.assertNotEqual(
+            fingerprint("WARNING 2026-11-04 03:49:04,920 a.b:1 can't write /app/logs/django.log"),
+            fingerprint("WARNING 2026-11-04 03:49:04,920 a.b:1 can't write /app/privatefiles/a.pdf"),
+        )
+        self.assertEqual(
+            fingerprint(
+                "WARNING 2026-11-04 03:49:04,920 django.request.log_response:253 [r=1a2b3c4d] Not Found: /a.php"
+            ),
+            fingerprint("WARNING 2026-11-05 01:00:00,000 django.request.log_response:248 Not Found: /wp/b.php"),
+        )
+
+    def test_the_request_context_doesnt_split_a_kind(self):
+        first = admin.record_kind("ERROR 2026-10-08 08:00:00,000 a.b:1 [r=1a2b3c4d u=5] lot 12 broke\n")
+        second = admin.record_kind("ERROR 2026-10-08 09:00:00,000 a.b:1 [t=endauctions] lot 99 broke\n")
+        self.assertEqual(first[0], second[0])
+        self.assertEqual(first[1], "a.b:1 lot 12 broke")
+
+
+class StartTimesTests(SimpleTestCase):
+    def test_start_times_are_read_from_whatever_uptime_returns(self):
+        times = admin._start_times(
+            {
+                "containers_started": {"django": "2026-11-04T10:47:11+00:00", "error": "TimeoutError: x"},
+                "database_started": None,
+                "redis_started": "2026-11-04T10:47:00",
+            }
+        )
+        self.assertEqual(len(times), 2)
+        self.assertTrue(all(moment.tzinfo for moment in times))
+
+
 class SiteHealthTests(AdminEndpointCase):
     def test_it_says_what_is_deployed_and_what_is_not_migrated(self):
         result = self.call("site_health")
         self.assertFalse(result["isError"], result)
         facts = result["structuredContent"]
         self.assertEqual(facts["pending_migrations"], [])
-        for key in ("branch", "commit", "queues", "beat", "errors_last_24h"):
+        for key in ("branch", "commit", "queues", "beat", "errors", "warnings", "rates_vs_usual", "stuck"):
             self.assertIn(key, facts)
         self.assertNotIn("redacted", facts["commit"])
 

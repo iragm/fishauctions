@@ -9,6 +9,11 @@ class AuctionsConfig(AppConfig):
         # signing algorithm; auctions.signals is the rest of the site's.
         import auctions.mcp.oidc  # noqa: F401
         import auctions.signals  # noqa: F401
+        from auctions import log_context, site_checks
+
+        # A worker's log lines name their task, and each task's last outcome is kept for site_health.
+        log_context.connect_celery()
+        site_checks.connect_celery()
 
         self._require_ads_txt()
 

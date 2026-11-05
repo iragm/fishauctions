@@ -354,6 +354,16 @@ if [[ "$response" != "y" ]]; then
     exit 0
 fi
 
+# Offsite backup of the core tables before anything changes (auctions/backups.py), from the running
+# containers. The snapshot is already taken, so a failed backup warns and the deploy goes on.
+# Run in the django container that is up now, so BACKUP_* settings added to .env since it started
+# arrive with the next deploy, not this one. Bounded, so a stuck dump can't hold the deploy.
+if [ -n "$(docker ps -q --filter name=^django$)" ]; then
+    if ! timeout 1800 docker exec django python3 manage.py backup_database --reason deploy --if-configured; then
+        echo "Warning: the pre-deploy offsite backup failed (see above); deploying anyway."
+    fi
+fi
+
 git restore .
 # A plain `git pull` silently deploys whatever branch is checked out. Pin the ref (override with
 # DEPLOY_BRANCH), and use --ff-only so a diverged branch fails instead of merging on the server.

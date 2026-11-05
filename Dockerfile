@@ -98,7 +98,8 @@ WORKDIR $APP_HOME
 # manylinux wheel, so resolving/building it needs the compiler + MySQL headers.
 # (To slim the prod image later, move that pip-compile step to the builder/dev
 # stage.) libheif-dev + libpango* back pyheif/weasyprint; default-mysql-client and
-# nano are ops conveniences; netcat is a lightweight connectivity check.
+# age make the nightly backup (auctions/backups.py); nano is an ops convenience;
+# netcat is a lightweight connectivity check.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     netcat-traditional \
@@ -106,6 +107,7 @@ RUN apt-get update && \
     pkg-config \
     default-libmysqlclient-dev \
     default-mysql-client \
+    age \
     nano \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \

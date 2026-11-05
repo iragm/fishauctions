@@ -322,6 +322,17 @@ class CommandPaletteReportView(View):
         return JsonResponse({"recorded": recorded})
 
 
+def _argument_text(value):
+    """A proposal argument as a person reads it: a list as a comma-separated line, never JSON."""
+    if isinstance(value, list):
+        return ", ".join(_argument_text(item) for item in value)
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return str(value)
+
+
 class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
     """Changes an agent on ``/mcp/admin/`` proposed, each waiting for Approve or Reject.
 
@@ -363,6 +374,7 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         from auctions.mcp.admin import step_action
+        from auctions.mcp.admin_species import describe_step
 
         context = super().get_context_data(**kwargs)
         rows = AgentProposal.objects.select_related("proposed_by", "decided_by")
@@ -375,11 +387,11 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
                 arguments = step.get("arguments") or {}
                 proposal.step_rows.append(
                     {
-                        "tool": step.get("tool"),
                         "label": (action.confirm_template if action else "") or step.get("tool"),
+                        # Names, not row numbers, for the species list's steps.
+                        "description": describe_step(action.name, arguments) if action else None,
                         "arguments": [
-                            (key, json.dumps(value) if not isinstance(value, str) else value)
-                            for key, value in arguments.items()
+                            (key.replace("_", " "), _argument_text(value)) for key, value in arguments.items()
                         ],
                     }
                 )

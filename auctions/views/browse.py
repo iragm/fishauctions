@@ -896,7 +896,12 @@ class AuctionNotifications(APIView):
                 distance = request.user.userdata.email_me_about_new_auctions_distance
             if not distance:
                 distance = 100
-            auctions, distances = nearby_auctions(latitude, longitude, distance, user=request.user)
+            # Nobody located: nothing is near them, and asking would raise on every visit.
+            auctions, distances = (
+                nearby_auctions(latitude, longitude, distance, user=request.user)
+                if latitude and longitude
+                else ([], [])
+            )
             new = len(auctions)
             if auctions:
                 name = str(auctions[0])
@@ -904,7 +909,7 @@ class AuctionNotifications(APIView):
                 slug = auctions[0].slug
                 distance = distances[0]
         except Exception:
-            pass
+            logger.warning("Couldn't look up auctions near this visitor", exc_info=True)
         if not new:
             new = ""
         # Convert distance to user's preferred unit

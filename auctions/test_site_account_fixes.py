@@ -126,6 +126,16 @@ class BeaconBudgetTests(StandardTestCase):
             self.assertFalse(rate_limit.over_the_limit(RequestFactory().post("/"), "pageview", 3, 60))
         expired.touch.assert_called_once()
 
+    def test_rotating_inside_one_ipv6_64_shares_one_budget(self):
+        bucket = f"v6-test-{uuid.uuid4()}"
+        spent = [
+            rate_limit.over_the_limit(RequestFactory().post("/", REMOTE_ADDR=f"2001:db8:5:6::{n:x}"), bucket, 3, 60)
+            for n in range(1, 6)
+        ]
+        self.assertEqual(spent, [False, False, False, True, True])
+        elsewhere = RequestFactory().post("/", REMOTE_ADDR="2001:db8:5:7::1")
+        self.assertFalse(rate_limit.over_the_limit(elsewhere, bucket, 3, 60))
+
     def test_every_request_counts_once(self):
         request, bucket = RequestFactory().post("/", REMOTE_ADDR="10.0.0.9"), f"count-test-{uuid.uuid4()}"
         spent = [rate_limit.over_the_limit(request, bucket, 3, 60) for _ in range(5)]
