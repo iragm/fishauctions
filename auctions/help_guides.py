@@ -785,7 +785,7 @@ def rule_fields() -> list[str]:
     """Every setting on an auction's rules pages, in form order."""
     from auctions.forms import AuctionCustomFieldsForm, AuctionEditForm
 
-    fields = list(AuctionEditForm.base_fields)
+    fields = [name for name in AuctionEditForm.base_fields if name not in AuctionEditForm.ACTIONS]
     fields += [name for name in AuctionCustomFieldsForm.base_fields if name not in fields]
     return fields
 

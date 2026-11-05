@@ -58,6 +58,12 @@ function update_self_checkin_field() {
     toggleCol('#div_id_send_club_welcome_letter', club_val && managed);
 }
 $('#id_manage_users_through_club').on('change', update_self_checkin_field);
+// Letting people in only means anything once approval is off (AuctionUpdate.form_valid).
+function update_waiting_sellers_field() {
+    toggleCol('#div_id_let_waiting_sellers_sell', !$('#id_only_approved_sellers').is(':checked'));
+}
+$('#id_only_approved_sellers').on('change', update_waiting_sellers_field);
+$(update_waiting_sellers_field);
 function update_alternate_split_fields() {
     var club_val = $('#id_club').val();
     var $mode = $('#id_alternate_split_mode');
