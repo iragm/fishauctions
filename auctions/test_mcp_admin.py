@@ -327,14 +327,22 @@ class ProposalTests(AdminEndpointCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
 
-    def test_an_approved_proposal_can_never_plan_a_request(self):
-        # Planned starts a build; an agent's wording reaching it through one careless click must not.
+    def test_an_approved_proposal_plans_a_request(self):
+        # The owner's Approve is the owner planning it.
         self.propose(
             [{"tool": "set_request_status", "arguments": {"request": self.request_row.pk, "status": "planned"}}]
         )
         proposal = AgentProposal.objects.get()
         self.client.force_login(self.owner)
         self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        self.request_row.refresh_from_db()
+        self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_PLANNED)
+        self.assertEqual(proposal.steps[0]["tool"], "set_request_status")
+
+    def test_proposing_a_plan_runs_nothing_until_approved(self):
+        self.propose(
+            [{"tool": "set_request_status", "arguments": {"request": self.request_row.pk, "status": "planned"}}]
+        )
         self.request_row.refresh_from_db()
         self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_NEW)
 

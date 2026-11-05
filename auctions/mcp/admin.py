@@ -19,7 +19,7 @@ differences, all enforced here or in the transport rather than by any client's a
 
 :func:`backup_database` queues an offsite backup, which copies data out and changes none of it.
 Otherwise two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
-requests (``planned`` is what starts work, and only a person sets it), and a change to the site's data
+requests (``planned`` is what starts work, and only a person's approval sets it), and a change to the site's data
 is a :class:`auctions.models.AgentProposal`: a list of registry writes, or
 :data:`APPROVAL_ONLY` changes that no assistant may make directly. Nothing in it runs until a person
 presses Approve on ``/admin-dashboard/proposals/`` (:func:`apply_proposal`), as that person, through
@@ -1382,12 +1382,10 @@ def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
     spoken = {label.lower(): value for value, label in AssistantSkillRequest.STATUS_CHOICES}
     status = _str(params, "status").lower()
     status = spoken.get(status, status)
-    if status == AssistantSkillRequest.STATUS_PLANNED:
-        # Planned starts a build, so only the owner's own decision sets it -- never
-        # an approved proposal, whose wording (and note) an agent wrote.
-        return _error("Only the owner plans a request.")
+    # Planned starts a build. It runs only from an approved proposal, as the person who pressed
+    # Approve: that press is the owner planning it (Ira, 2026-11-05).
     if status not in statuses:
-        return _need("Which status? One of: new, done, declined.")
+        return _need("Which status? One of: new, planned, done, declined.")
     row = AssistantSkillRequest.objects.filter(pk=_int(params, "request")).first()
     if row is None:
         return _error("There is no feature request with that number.")
@@ -1914,12 +1912,12 @@ APPROVAL_ONLY: dict[str, Action] = {
         Action(
             name="set_request_status",
             description=(
-                "Move a feature request to new, done or declined, optionally replacing the owner's note on "
-                "it. Never planned: only the owner plans."
+                "Move a feature request to new, planned, done or declined, optionally replacing the owner's "
+                "note on it. Planned starts a build once the owner approves the proposal."
             ),
             params={
                 "request": "integer, required. The request number from list_feature_requests.",
-                "status": "string, required. new, done or declined.",
+                "status": "string, required. new, planned, done or declined.",
                 "note": "string, optional. Replaces the owner's private note on it.",
                 "target": "string, optional. site, app or both: which repository building it changes.",
             },
@@ -2269,8 +2267,8 @@ def backup_database(request, params: dict[str, Any]) -> dict[str, Any]:
 def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     """Put an idea in the feature request queue as the owner's own, status new. Builds nothing.
 
-    The queue's other writes need the owner too: ``planned`` is what starts work, and only a person
-    sets it. Never edits a request already there, so what the owner planned is what gets built.
+    The queue's other writes need the owner too: ``planned`` is what starts work, and only an approved
+    proposal sets it. Never edits a request already there, so what the owner planned is what gets built.
     """
     from auctions.models import AssistantSkillRequest
 
