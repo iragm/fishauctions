@@ -420,7 +420,7 @@ this only quotes its opening sentence.
 - **`test_club_settings.py`** (690 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
-- **`test_club_users.py`** (1487 lines)
+- **`test_club_users.py`** (1488 lines)
   Managing people through a club rather than through an auction, and the bid API.
   `ManageUsersThroughClubTests`, `PlaceBidApiTests`
 - **`test_clubs.py`** (1379 lines)
@@ -532,7 +532,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1785 lines)
+- **`test_mcp_admin.py`** (1787 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
