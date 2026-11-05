@@ -1339,6 +1339,11 @@ class GroupedLogsTests(AdminEndpointCase):
         for fine in ("disk", "memory", "queues", "pending_migrations", "rates_vs_usual", "log_coverage"):
             self.assertNotIn(fine, brief)
 
+    def test_a_site_without_offsite_backups_is_told_so(self):
+        result = self.call("site_health", {"brief": True})
+        self.assertIn("No offsite backups", result["content"][0]["text"])
+        self.assertFalse(result["structuredContent"]["offsite_backups"]["configured"])
+
     def test_a_log_that_no_longer_reaches_back_is_named(self):
         for index in range(1, 6):
             Path(self.directory.name, f"django.log.{index}").write_text(

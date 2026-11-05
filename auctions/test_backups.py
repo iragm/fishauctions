@@ -78,6 +78,17 @@ class RunTests(SimpleTestCase):
         cache.delete(backups.RUNNING_KEY)
         self.addCleanup(cache.delete, backups.RUNNING_KEY)
 
+    @override_settings(**{**CONFIGURED, "BACKUP_S3_BUCKET": ""})
+    def test_warning_names_what_is_missing(self):
+        self.assertEqual(backups.missing(), ["BACKUP_S3_BUCKET"])
+        self.assertIn("BACKUP_S3_BUCKET not set", backups.warning())
+        with self.assertLogs("auctions.backups", "WARNING"):
+            self.assertIsNone(backups.run())
+
+    @override_settings(**CONFIGURED)
+    def test_no_warning_when_configured(self):
+        self.assertEqual(backups.warning(), "")
+
     def test_unconfigured_does_nothing(self):
         with mock.patch.object(backups, "write_sealed") as dump:
             self.assertIsNone(backups.run())
@@ -125,10 +136,10 @@ class RunTests(SimpleTestCase):
             with self.assertRaisesMessage(CommandError, "dump exited 2"):
                 call_command("backup_database", stdout=io.StringIO())
 
-    def test_command_if_configured_skips_quietly(self):
-        out = io.StringIO()
-        call_command("backup_database", "--reason", "deploy", "--if-configured", stdout=out)
-        self.assertIn("skipped", out.getvalue())
+    def test_command_if_configured_warns_and_succeeds(self):
+        err = io.StringIO()
+        call_command("backup_database", "--reason", "deploy", "--if-configured", stdout=io.StringIO(), stderr=err)
+        self.assertIn("No offsite backups", err.getvalue())
         with self.assertRaises(CommandError):
             call_command("backup_database", stdout=io.StringIO())
 

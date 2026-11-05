@@ -28,8 +28,7 @@ class Command(BaseCommand):
             raise CommandError(str(exc)) from exc
         if result is None:
             if options["if_configured"]:
-                self.stdout.write("Backup not configured; skipped.")
+                self.stderr.write(f"Warning: {backups.warning()}")
                 return
-            msg = "Not configured: set every BACKUP_* setting (see .env.example)."
-            raise CommandError(msg)
+            raise CommandError(backups.warning())
         self.stdout.write(f"Uploaded {result['bytes']} bytes to {', '.join(result['keys'])}.")

@@ -1033,7 +1033,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     ``since`` widens or narrows the window (default the last day), ``known`` leaves out kinds already
     dealt with, and ``brief`` returns only what is wrong, so a quiet week costs one line.
     """
-    from auctions import app_crashes, site_checks, uptime
+    from auctions import app_crashes, backups, site_checks, uptime
 
     since, problem = parse_since(params.get("since"))
     if problem:
@@ -1117,6 +1117,9 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f" No page views for {quiet['minutes']} minutes from {quiet['from'][:16].replace('T', ' ')} UTC."
     if window["verdict"] != "quiet":
         summary += " " + window["advice"]
+    no_backups = backups.warning()
+    if no_backups:
+        summary += " " + no_backups
 
     facts = {
         **deployed,
@@ -1137,6 +1140,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "slow_requests_last_hour": slow,
         "debug": settings.DEBUG,
         "deploy_window": window,
+        "offsite_backups": {"configured": not no_backups, "missing": backups.missing()},
         "checked_at": timezone.now().isoformat(),
     }
     if brief:
@@ -1156,6 +1160,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
             "slow_requests_last_hour": bool(slow["busiest"]),
             "longest_without_page_views_24h": silent,
             "deploy_window": window["verdict"] != "quiet",
+            "offsite_backups": bool(no_backups),
         }
         keep = {"branch", "commit", "checked_at"} | {key for key, bad in wrong.items() if bad}
         facts = {key: value for key, value in facts.items() if key in keep}
