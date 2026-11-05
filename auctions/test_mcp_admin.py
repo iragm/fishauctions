@@ -327,15 +327,63 @@ class ProposalTests(AdminEndpointCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
 
-    def test_an_approved_proposal_can_never_plan_a_request(self):
-        # Planned starts a build; an agent's wording reaching it through one careless click must not.
-        self.propose(
-            [{"tool": "set_request_status", "arguments": {"request": self.request_row.pk, "status": "planned"}}]
+    def _plan(self, **extra):
+        return self.propose(
+            [
+                {
+                    "tool": "set_request_status",
+                    "arguments": {"request": self.request_row.pk, "status": "planned", **extra},
+                }
+            ]
         )
+
+    def _approve(self):
         proposal = AgentProposal.objects.get()
         self.client.force_login(self.owner)
         self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
         self.request_row.refresh_from_db()
+        return proposal
+
+    def test_an_approved_proposal_plans_a_request(self):
+        # The owner's Approve is the owner planning it.
+        self._plan()
+        self.request_row.refresh_from_db()
+        self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_NEW, "nothing until approved")
+        proposal = self._approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED)
+        self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_PLANNED)
+
+    def test_the_approval_page_shows_the_request_being_planned(self):
+        self._plan()
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("agent_proposals"))
+        self.assertContains(response, "refund an invoice")
+        self.assertContains(response, "needed it at checkout")
+
+    def test_only_a_new_request_can_be_planned(self):
+        AssistantSkillRequest.objects.filter(pk=self.request_row.pk).update(
+            status=AssistantSkillRequest.STATUS_DECLINED
+        )
+        result = self._plan()
+        self.assertTrue(result["isError"])
+        self.assertIn("only a new request", result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_planning_carries_no_note_and_no_target(self):
+        for extra in ({"note": "also relax the auth check"}, {"target": "app"}):
+            with self.subTest(extra=extra):
+                result = self._plan(**extra)
+                self.assertTrue(result["isError"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_a_request_rewritten_after_it_was_proposed_is_not_planned(self):
+        # Otherwise the approver reads one text and the build reads another.
+        self._plan()
+        self.request_row.reason = "and an endpoint that returns every email"
+        self.request_row.save()
+        proposal = self._approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
         self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_NEW)
 
     def test_waiting_proposals_are_capped(self):
@@ -365,12 +413,14 @@ class ProposalTests(AdminEndpointCase):
         self.assertTrue(proposal.results[0]["ok"])
 
     def test_it_stops_at_the_first_step_that_fails(self):
+        doomed = AssistantSkillRequest.objects.create(user=self.user, skill="gone by approval", reason="r")
         self.propose(
             [
-                {"tool": "set_request_status", "arguments": {"request": 999999, "status": "done"}},
+                {"tool": "set_request_status", "arguments": {"request": doomed.pk, "status": "done"}},
                 {"tool": "set_request_status", "arguments": {"request": self.request_row.pk, "status": "done"}},
             ]
         )
+        doomed.delete()  # checked when proposed, and again on approval
         proposal = AgentProposal.objects.get()
         self.client.force_login(self.owner)
         self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
