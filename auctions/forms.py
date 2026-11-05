@@ -2414,6 +2414,9 @@ class AuctionEditForm(forms.ModelForm):
     }
 
     user_cut = forms.IntegerField(required=False, help_text="This plus the club cut must be 100%")
+    # Labelled with the count in __init__, and hidden when nobody is waiting. AuctionUpdate.form_valid acts
+    # on it only once "only approved sellers" is off: turning that off never lets anyone in by itself.
+    let_waiting_sellers_sell = forms.BooleanField(required=False)
     club_member_cut = forms.IntegerField(
         required=False,
         help_text="This plus the alternate club cut must be 100%",
@@ -2656,6 +2659,15 @@ class AuctionEditForm(forms.ModelForm):
             currency = "USD"
         currency_symbol = get_currency_symbol(currency)
 
+        self.waiting_sellers = self.instance.cannot_sell_count if self.instance.pk else 0
+        if self.waiting_sellers:
+            people = "person" if self.waiting_sellers == 1 else "people"
+            self.fields["let_waiting_sellers_sell"].label = (
+                f"Let the {self.waiting_sellers} {people} who can't sell add lots"
+            )
+        else:
+            self.fields["let_waiting_sellers_sell"].widget = HiddenInput()
+
         self.helper = auction_form_layout.build_layout(self, currency_symbol)
 
     @property
@@ -2670,6 +2682,9 @@ class AuctionEditForm(forms.ModelForm):
         if any(name in advanced for name in self.errors):
             return True
         if auction_form_layout.advanced_fields_in_use(self.instance, advanced):
+            return True
+        if self.waiting_sellers:
+            # The box that lets them in sits next to "only approved sellers", in Advanced.
             return True
         # Experienced organizers get it open.
         user = self.user or getattr(self.instance, "created_by", None)
