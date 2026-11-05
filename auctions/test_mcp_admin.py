@@ -792,7 +792,7 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.assertIn("species_dashboard", listed)
         self.assertIn("species_backfill", listed)
         self.assertIn("lots_by_species", listed)
-        for name in ("species_dashboard", "species_backfill", "lots_by_species"):
+        for name in ("species_dashboard", "species_backfill", "lots_by_species", "find_species"):
             response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url="/mcp/")
             self.assertIn("error", json.loads(response.content))
 
@@ -919,6 +919,50 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.propose("remember_not_a_species", {"lot_names": ["Sponge filter"]})
         self.approve()
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
+
+    def test_find_species_reads_the_list_past_a_misspelt_genus(self):
+        self.assertIn("find_species", self.listed())
+        data, writes = self.writes_during("find_species", {"name": "Tropheuss duboisi"})
+        self.assertEqual(writes, [])
+        self.assertEqual([row["species_id"] for row in data["rows"]], [self.tropheus.pk])
+        by_common = self.data(self.call("find_species", {"name": "sunshine"}))
+        self.assertEqual([row["species_id"] for row in by_common["rows"]], [self.aulonocara.pk])
+        by_genus = self.data(self.call("find_species", {"name": "chindongo"}))
+        self.assertEqual(by_genus["total"], 1)
+        self.assertEqual(self.data(self.call("find_species", {"name": "Nothing here"}))["total"], 0)
+        self.assertEqual(self.data(self.call("find_species", {"name": "ab"}))["status"], "needs_more_information")
+
+    def test_a_missing_species_is_added_with_its_genus_family_and_category(self):
+        from auctions.models import Category, Species
+
+        cichlids = Category.objects.create(name="Lake Tanganyika cichlids")
+        Species.objects.filter(pk=self.tropheus.pk).update(family="Cichlidae", order="Cichliformes", category=cichlids)
+        listed = self.propose("add_species", {"scientific_name": "Tropheus duboisi"})
+        self.assertTrue(listed["isError"])
+        self.assertIn(f"species {self.tropheus.pk}", listed["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+        many = [{"tool": "add_species", "arguments": {"scientific_name": f"Tropheus nova{n}"}} for n in range(40)]
+        many += [{"tool": "remember_not_a_species", "arguments": {"lot_names": [f"net {n}"]}} for n in range(20)]
+        self.assertFalse(self.call("propose_change", {"summary": "Missing species", "steps": many})["isError"])
+        AgentProposal.objects.all().delete()
+        twice = [{"tool": "add_species", "arguments": {"scientific_name": "Tropheus nova"}}] * 2
+        self.assertTrue(self.call("propose_change", {"summary": "Missing species", "steps": twice})["isError"])
+        self.assertTrue(
+            self.propose("add_species", {"scientific_name": "Tropheus nova", "category": "No such"})["isError"]
+        )
+
+        self.data(self.propose("add_species", {"scientific_name": "Tropheus moorii"}))
+        self.approve()
+        added = Species.objects.get(genus="Tropheus", species="moorii")
+        self.assertEqual((added.family, added.order, added.category_id), ("Cichlidae", "Cichliformes", cichlids.pk))
+        self.assertTrue(added.approved)
+
+        AgentProposal.objects.all().delete()
+        self.data(self.propose("add_species", {"scientific_name": "Ricordea yuma", "saltwater": True}))
+        self.approve()
+        coral = Species.objects.get(genus="Ricordea")
+        self.assertEqual((coral.saltwater, coral.freshwater, coral.family), (True, False, ""))
 
     def test_lots_on_the_wrong_species_are_found_and_moved(self):
         from auctions.models import SpeciesSearchCache

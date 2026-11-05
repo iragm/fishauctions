@@ -223,7 +223,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17023 lines)
+- **`palette_actions.py`** (17064 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -532,7 +532,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1792 lines)
+- **`test_mcp_admin.py`** (1836 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -903,10 +903,10 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2664 lines)
+- **`admin.py`** (2665 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_species.py`** (924 lines)
-  The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
+- **`admin_species.py`** (1012 lines)
+  The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
 - **`auth.py`** (385 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
