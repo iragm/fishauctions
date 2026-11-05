@@ -157,6 +157,7 @@ def build_layout(form, currency_symbol):
             col("allow_additional_lots_as_donation", "col-md-4"),
             col("only_approved_sellers", "col-md-4"),
             col("let_waiting_sellers_sell", "col-md-4"),
+            col("waiting_sellers_seen"),
             col("only_approved_bidders", "col-md-4"),
             col("copy_users_when_copying_this_auction", "col-md-4"),
             col("use_seller_dash_lot_numbering", "col-md-4"),

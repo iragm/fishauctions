@@ -680,6 +680,8 @@ class LetWaitingSellersSellTests(StandardTestCase):
         super().setUp()
         self.auction = self.online_auction
         self.auction.only_approved_sellers = True
+        # Saving the rules form wants bidding to end in the future.
+        self.auction.date_end = (timezone.now() + datetime.timedelta(days=7)).replace(microsecond=0)
         self.auction.save()
         self.waiting = AuctionTOS.objects.create(auction=self.auction, pickup_location=self.location)
         self.waiting.refresh_from_db()
@@ -715,6 +717,7 @@ class LetWaitingSellersSellTests(StandardTestCase):
             "minimum_bid": a.minimum_bid,
             "tax": a.tax,
         }
+        data["waiting_sellers_seen"] = a.cannot_sell_count
         data.update(overrides)
         return {k: v for k, v in data.items() if v is not False}
 
@@ -736,10 +739,31 @@ class LetWaitingSellersSellTests(StandardTestCase):
 
     def test_ticking_it_with_approval_off_lets_them_sell_and_says_so(self):
         response = self.client.post(self.url, data=self.form_data(let_waiting_sellers_sell="on"))
-        self.assertEqual(response.status_code, 302, getattr(response, "context", None) and response.context["form"].errors)
+        self.assertEqual(
+            response.status_code, 302, getattr(response, "context", None) and response.context["form"].errors
+        )
         self.assertTrue(self.selling())
         self.assertTrue(
             AuctionHistory.objects.filter(auction=self.auction, applies_to="USERS", action__startswith="Let ").exists()
+        )
+
+    def test_a_changed_count_lets_nobody_in(self):
+        seen = self.auction.cannot_sell_count
+        AuctionTOS.objects.create(auction=self.auction, pickup_location=self.location)
+        response = self.client.post(
+            self.url, data=self.form_data(let_waiting_sellers_sell="on", waiting_sellers_seen=seen), follow=True
+        )
+        self.assertContains(response, "nobody was let in")
+        self.assertFalse(self.selling())
+
+    def test_ticking_the_box_writes_no_rules_history(self):
+        self.auction.only_approved_sellers = False
+        self.auction.save()
+        self.client.post(self.url, data=self.form_data(let_waiting_sellers_sell="on"))
+        self.assertFalse(
+            AuctionHistory.objects.filter(
+                auction=self.auction, changed_fields__has_key="let_waiting_sellers_sell"
+            ).exists()
         )
 
     def test_approval_off_without_the_box_changes_nobody(self):

@@ -8946,7 +8946,9 @@ def _auction_setting_fields(form):
     return {
         name: field
         for name, field in form.fields.items()
-        if name not in _AUCTION_SETTINGS_NOT_SPOKEN and not isinstance(field, forms.DateTimeField)
+        if name not in _AUCTION_SETTINGS_NOT_SPOKEN
+        and name not in getattr(form, "ACTIONS", ())
+        and not isinstance(field, forms.DateTimeField)
     }
 
 

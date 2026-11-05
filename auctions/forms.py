@@ -45,6 +45,7 @@ from django.forms import (
 from django.template.defaultfilters import pluralize
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.functional import cached_property
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 from django_recaptcha.fields import ReCaptchaField
@@ -2417,6 +2418,16 @@ class AuctionEditForm(forms.ModelForm):
     # Labelled with the count in __init__, and hidden when nobody is waiting. AuctionUpdate.form_valid acts
     # on it only once "only approved sellers" is off: turning that off never lets anyone in by itself.
     let_waiting_sellers_sell = forms.BooleanField(required=False)
+    # The count the admin saw; a different count at save time lets nobody in.
+    waiting_sellers_seen = forms.IntegerField(required=False, widget=HiddenInput())
+
+    #: One-off actions, not settings: no history, no palette setting, no help-guide rule.
+    ACTIONS = ("let_waiting_sellers_sell", "waiting_sellers_seen")
+
+    @cached_property
+    def changed_data(self):
+        return [name for name in super().changed_data if name not in self.ACTIONS]
+
     club_member_cut = forms.IntegerField(
         required=False,
         help_text="This plus the alternate club cut must be 100%",
@@ -2660,11 +2671,12 @@ class AuctionEditForm(forms.ModelForm):
         currency_symbol = get_currency_symbol(currency)
 
         self.waiting_sellers = self.instance.cannot_sell_count if self.instance.pk else 0
+        self.fields["waiting_sellers_seen"].initial = self.waiting_sellers
         if self.waiting_sellers:
             people = "person" if self.waiting_sellers == 1 else "people"
-            self.fields["let_waiting_sellers_sell"].label = (
-                f"Let the {self.waiting_sellers} {people} who can't sell add lots"
-            )
+            self.fields[
+                "let_waiting_sellers_sell"
+            ].label = f"Let the {self.waiting_sellers} {people} who can't sell add lots"
         else:
             self.fields["let_waiting_sellers_sell"].widget = HiddenInput()
 
