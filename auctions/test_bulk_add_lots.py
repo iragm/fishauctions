@@ -64,6 +64,18 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_admin_bypass_notes_say_why_in_plain_words(self):
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(
+            reverse(
+                "bulk_add_lots_auto",
+                kwargs={"slug": self.in_person_auction.slug, "bidder_number": self.in_person_buyer.bidder_number},
+            )
+        )
+        self.assertContains(response, "This auction allows 3 lots per person, but you can add more because")
+        self.assertContains(response, "but you can add lots for them because you're an admin.")
+        self.assertNotContains(response, "Admin: Bypassing")
+
     def test_bulk_add_lots_shows_required_custom_dropdown_indicator(self):
         self.in_person_auction.use_custom_dropdown_field = "required"
         self.in_person_auction.custom_dropdown_name = "Habitat"

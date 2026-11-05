@@ -4585,8 +4585,11 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     def save(self, *args, **kwargs):
         previous_club_id = None
+        was_only_approved_sellers = False
         if self.pk:
-            previous_club_id = Auction.objects.filter(pk=self.pk).values_list("club_id", flat=True).first()
+            previous = Auction.objects.filter(pk=self.pk).values_list("club_id", "only_approved_sellers").first()
+            if previous:
+                previous_club_id, was_only_approved_sellers = previous
         self.date_start = self.fix_year(self.date_start)
         self.lot_submission_start_date = self.fix_year(self.lot_submission_start_date)
         self.lot_submission_end_date = self.fix_year(self.lot_submission_end_date)
@@ -4597,6 +4600,16 @@ class Auction(CachedPropertiesMixin, models.Model):
         super().save(*args, **kwargs)
         if previous_club_id is None and self.club_id:
             self.backfill_club_money()
+        if was_only_approved_sellers and not self.only_approved_sellers:
+            self.let_waiting_sellers_sell()
+
+    def let_waiting_sellers_sell(self):
+        """Turning off "only approved sellers" lets everyone already in the auction sell. Without this, people
+        who joined while it was on stay unable to add lots, and the setting that blocks them is gone from the
+        page. A club member the club itself stopped from selling stays stopped."""
+        AuctionTOS.objects.filter(auction=self, selling_allowed=False).exclude(
+            clubmember__selling_allowed=False
+        ).update(selling_allowed=True)
 
     def backfill_club_money(self):
         """Reconcile the club ledger for this auction's invoices. ``save`` calls it when a club is attached;

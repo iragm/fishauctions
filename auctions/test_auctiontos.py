@@ -670,3 +670,112 @@ class AuctionTOSMergeViewTests(StandardTestCase):
         self.assertEqual(self.online_tos.name, "Merged Winner")
         self.assertIsNone(self.online_tos.possible_duplicate_id)
         self.assertFalse(AuctionTOS.objects.filter(pk=self.source_tos.pk).exists())
+
+
+class OnlyApprovedSellersTurnedOffTests(StandardTestCase):
+    """Turning off "only approved sellers" lets the people who joined while it was on sell."""
+
+    def setUp(self):
+        super().setUp()
+        self.auction = self.in_person_auction
+        self.auction.only_approved_sellers = True
+        self.auction.save()
+        self.waiting = AuctionTOS.objects.create(auction=self.auction, pickup_location=self.in_person_location)
+        self.waiting.refresh_from_db()
+        # Created while vetting is on, so it can't sell yet.
+        self.assertFalse(self.waiting.selling_allowed)
+
+    def test_turning_it_off_lets_them_sell(self):
+        self.auction.only_approved_sellers = False
+        self.auction.save()
+        self.waiting.refresh_from_db()
+        self.assertTrue(self.waiting.selling_allowed)
+
+    def test_other_saves_leave_them_waiting(self):
+        self.auction.title = "Renamed"
+        self.auction.save()
+        self.waiting.refresh_from_db()
+        self.assertFalse(self.waiting.selling_allowed)
+
+    def test_other_auctions_are_untouched(self):
+        self.online_tos.selling_allowed = False
+        self.online_tos.save()
+        self.auction.only_approved_sellers = False
+        self.auction.save()
+        self.online_tos.refresh_from_db()
+        self.assertFalse(self.online_tos.selling_allowed)
+
+    def test_a_club_member_the_club_stopped_stays_stopped(self):
+        club = Club.objects.create(name="Vetting Club")
+        member = ClubMember.objects.create(club=club, name="Stopped", selling_allowed=False)
+        AuctionTOS.objects.filter(pk=self.waiting.pk).update(clubmember=member)
+        self.auction.only_approved_sellers = False
+        self.auction.save()
+        self.waiting.refresh_from_db()
+        self.assertFalse(self.waiting.selling_allowed)
+
+
+class LetWaitingSellersSellMigrationTests(StandardTestCase):
+    """0520: auctions that turned vetting off earlier, by their history."""
+
+    def run_migration(self):
+        import importlib
+
+        from django.apps import apps
+
+        importlib.import_module("auctions.migrations.0520_let_waiting_sellers_sell").let_waiting_sellers_sell(
+            apps, None
+        )
+
+    def setUp(self):
+        super().setUp()
+        self.auction = self.in_person_auction
+        self.auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=3)
+        self.auction.save()
+        AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(selling_allowed=False)
+
+    def selling(self):
+        self.in_person_buyer.refresh_from_db()
+        return self.in_person_buyer.selling_allowed
+
+    def test_history_of_turning_it_off_lets_them_sell(self):
+        AuctionHistory.objects.create(
+            auction=self.auction,
+            applies_to="RULES",
+            action="Edited only approved sellers",
+            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
+        )
+        self.run_migration()
+        self.assertTrue(self.selling())
+
+    def test_no_such_history_leaves_them_stopped(self):
+        AuctionHistory.objects.create(
+            auction=self.auction,
+            applies_to="RULES",
+            action="Edited title",
+            changed_fields={"title": {"from": "a", "to": "b"}},
+        )
+        self.run_migration()
+        self.assertFalse(self.selling())
+
+    def test_finished_lot_submission_is_left_alone(self):
+        AuctionHistory.objects.create(
+            auction=self.auction,
+            applies_to="RULES",
+            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
+        )
+        Auction.objects.filter(pk=self.auction.pk).update(
+            lot_submission_end_date=timezone.now() - datetime.timedelta(days=1)
+        )
+        self.run_migration()
+        self.assertFalse(self.selling())
+
+    def test_still_vetting_is_left_alone(self):
+        AuctionHistory.objects.create(
+            auction=self.auction,
+            applies_to="RULES",
+            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
+        )
+        Auction.objects.filter(pk=self.auction.pk).update(only_approved_sellers=True)
+        self.run_migration()
+        self.assertFalse(self.selling())
