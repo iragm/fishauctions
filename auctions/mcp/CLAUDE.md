@@ -63,11 +63,13 @@ there to approve.
   (new; `planned` starts work), and `propose_change` → `AgentProposal` → Approve on
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes, a library transcription) and
-  `admin.APPROVAL_ONLY` (feature request status, never `planned`; adding a club, its details, admins and interests, an account's features (PayPal, Square, library), a club's outreach
+  `admin.APPROVAL_ONLY` (feature request status; adding a club, its details, admins and interests, an account's features (PayPal, Square, library), a club's outreach
   stage, trusting a user, filing an auction under a club, merging two accounts, a palette shortcut;
   the species list's upkeep from `admin_species`) can be proposed, checked again at approval.
-  `planned` starts a build, so only the owner sets it (the project chat's decision cards,
-  or Django admin), and a request can't be edited once decided.
+  `planned` starts a build, so only the owner sets it (the project chat's decision cards, Django
+  admin, or approving a proposal whose step plans a `new` request with no note or target, shown with
+  its text, and refused if the request changed after it was proposed), and a request can't be edited
+  once decided.
 - **Species upkeep** (`admin_species.py`): `species_dashboard` and `species_backfill` read the gaps page
   and `backfill_lot_species` as data with the numbers a step names; every button and every review answer
   is an `APPROVAL_ONLY` step calling the same `auctions.species_admin` function the page and command

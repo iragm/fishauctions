@@ -1372,23 +1372,57 @@ def untrusted_auction_creators(request, params: dict[str, Any]) -> dict[str, Any
 # --- changes that only a proposal makes --------------------------------------------------------------
 
 
+def _request_status_problem(params: dict[str, Any], row=None) -> str:
+    """Why this ``set_request_status`` step can't run, or ``""``.
+
+    ``planned`` starts a build, and the build reads the request as its spec, so a step that plans one
+    only moves a ``new`` request and carries no note or target: what the approver read on the
+    approval page is what gets built.
+    """
+    from auctions.models import AssistantSkillRequest
+
+    status = _request_status(params)
+    if status not in dict(AssistantSkillRequest.STATUS_CHOICES):
+        return "Which status? One of: new, planned, done, declined."
+    if row is None:
+        row = AssistantSkillRequest.objects.filter(pk=_int(params, "request")).first()
+    if row is None:
+        return "There is no feature request with that number."
+    if status == AssistantSkillRequest.STATUS_PLANNED:
+        if row.status != AssistantSkillRequest.STATUS_NEW:
+            return f"Request {row.pk} is {row.get_status_display().lower()}; only a new request can be planned."
+        if "note" in params or "target" in params:
+            return "A step that plans a request changes nothing else on it: no note, no target."
+    return ""
+
+
+def _request_status(params: dict[str, Any]) -> str:
+    from auctions.models import AssistantSkillRequest
+
+    spoken = {label.lower(): value for value, label in AssistantSkillRequest.STATUS_CHOICES}
+    status = _str(params, "status").lower()
+    return spoken.get(status, status)
+
+
 def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Move one feature request between its four states, with an optional note to the owner's self."""
+    """Move one feature request between its four states, with an optional note to the owner's self.
+
+    Runs only from an approved proposal, as the person who pressed Approve, and that press is what
+    plans a request. A request edited after the proposal was made isn't planned: the approver read
+    the older text.
+    """
     from auctions.models import AssistantSkillRequest
 
     if not request.user.is_superuser:
         raise PermissionDenied
-    statuses = dict(AssistantSkillRequest.STATUS_CHOICES)
-    spoken = {label.lower(): value for value, label in AssistantSkillRequest.STATUS_CHOICES}
-    status = _str(params, "status").lower()
-    status = spoken.get(status, status)
-    # Planned starts a build. It runs only from an approved proposal, as the person who pressed
-    # Approve: that press is the owner planning it (Ira, 2026-11-05).
-    if status not in statuses:
-        return _need("Which status? One of: new, planned, done, declined.")
     row = AssistantSkillRequest.objects.filter(pk=_int(params, "request")).first()
-    if row is None:
-        return _error("There is no feature request with that number.")
+    problem = _request_status_problem(params, row)
+    if problem:
+        return _need(problem) if problem.startswith("Which status") else _error(problem)
+    status = _request_status(params)
+    proposed_at = getattr(request, "proposal_created", None)
+    if status == AssistantSkillRequest.STATUS_PLANNED and (proposed_at is None or row.updatedon > proposed_at):
+        return _error(f"Request {row.pk} changed after this was proposed; propose planning it again.")
     row.status = status
     fields = ["status", "updatedon"]
     if "note" in params:
@@ -1913,7 +1947,8 @@ APPROVAL_ONLY: dict[str, Action] = {
             name="set_request_status",
             description=(
                 "Move a feature request to new, planned, done or declined, optionally replacing the owner's "
-                "note on it. Planned starts a build once the owner approves the proposal."
+                "note on it. Planned starts a build once the owner approves: only a new request, alone in "
+                "its step, with no note or target."
             ),
             params={
                 "request": "integer, required. The request number from list_feature_requests.",
@@ -2096,6 +2131,7 @@ APPROVAL_ONLY: dict[str, Action] = {
 #: while somebody is still there to answer it rather than on the approval page. Each runs again,
 #: inside the change itself, on approval.
 PROPOSAL_CHECKS = {
+    "set_request_status": _request_status_problem,
     "add_club": lambda arguments: club_onboarding.club_fields(arguments)[1],
     "make_club_admin": lambda arguments: _club_and_account(arguments)[2],
     "set_user_features": _features_problem,
@@ -2296,6 +2332,22 @@ def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def describe_step(tool: str, arguments: dict[str, Any]) -> str | None:
+    """One proposal step as the approver reads it, or ``None`` to show its arguments. A step that plans a
+    request shows the request itself, since its text is what gets built."""
+    from auctions.models import AssistantSkillRequest
+
+    if tool == "set_request_status" and isinstance(arguments, dict):
+        row = AssistantSkillRequest.objects.filter(pk=_int(arguments, "request")).first()
+        if row is None:
+            return None
+        text = f"Request {row.pk} ({row.get_status_display().lower()}): {palette_actions.untrusted_short(row.skill)}"
+        if row.reason:
+            text += f" — {palette_actions.untrusted_short(row.reason[:500])}"
+        return f"{text} → {_request_status(arguments) or '?'}"
+    return admin_species.describe_step(tool, arguments)
+
+
 def apply_proposal(proposal, request) -> None:
     """Run an approved proposal's steps in order, as ``request.user``, stopping at the first that fails.
 
@@ -2307,6 +2359,8 @@ def apply_proposal(proposal, request) -> None:
     request.palette_page = {}
     # The reach the proposing agent read with on this endpoint (documents.transcribe.owner_reach).
     request.owner_reach = True
+    # What set_request_status compares a request's last edit against.
+    request.proposal_created = proposal.createdon
     request.assistant_surface = f"{proposal.surface or 'an assistant'}, approved by {request.user.username}"[:100]
     results = []
     status = AgentProposal.STATUS_APPLIED

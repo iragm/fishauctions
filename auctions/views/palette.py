@@ -373,8 +373,7 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
         return redirect(reverse("agent_proposals"))
 
     def get_context_data(self, **kwargs):
-        from auctions.mcp.admin import step_action
-        from auctions.mcp.admin_species import describe_step
+        from auctions.mcp.admin import describe_step, step_action
 
         context = super().get_context_data(**kwargs)
         rows = AgentProposal.objects.select_related("proposed_by", "decided_by")
@@ -388,7 +387,7 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
                 proposal.step_rows.append(
                     {
                         "label": (action.confirm_template if action else "") or step.get("tool"),
-                        # Names, not row numbers, for the species list's steps.
+                        # Names, not row numbers, for the species list's and the request queue's steps.
                         "description": describe_step(action.name, arguments) if action else None,
                         "arguments": [
                             (key.replace("_", " "), _argument_text(value)) for key, value in arguments.items()
