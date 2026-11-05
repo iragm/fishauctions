@@ -230,7 +230,8 @@ app.conf.beat_schedule = {
 def use_django_logging(**kwargs):
     """Keep settings.LOGGING in workers and beat. Without a receiver Celery replaces the root logger's
     handlers with its own stderr one, so root-celery.log, root-documents.log and root-beat.log never
-    got a line and a task's success or failure was readable nowhere but ``docker logs``."""
+    got a line and a task's success or failure was readable nowhere but ``docker logs``. Levels come from
+    LOG_LEVEL, not ``--loglevel``. The worker's two children share one file, as gunicorn's workers do."""
     from logging.config import dictConfig
 
     from django.conf import settings

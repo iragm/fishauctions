@@ -102,9 +102,10 @@ class PeriodicTaskTests(StandardTestCase):
         sender = mock.Mock()
         sender.name = "auctions.tasks.backup_database"
         site_checks._task_failed(sender=sender, exception=OSError("disk full"))
-        result = admin.site_health(None, {"brief": True})
-        self.assertTrue(result["offsite_backups"]["failing"])
-        self.assertIn("The last backup failed", result["summary"])
+        self.assertTrue(admin.site_health(None, {"brief": True})["offsite_backups"]["failing"])
+        # A deploy's backup is a command, not a task: its success clears the failure too.
+        cache.set(backups.LAST_KEY, {"keys": ["deploy/y.sql.gz.age"], "bytes": 9, "at": "2999-01-01T00:00:00+00:00"})
+        self.assertFalse(admin.site_health(None, {})["offsite_backups"]["failing"])
 
     def test_site_health_names_them(self):
         self.task("dead", 120)

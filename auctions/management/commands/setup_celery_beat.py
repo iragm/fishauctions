@@ -113,6 +113,9 @@ class Command(BaseCommand):
                     self.stdout.write(f"  - Skipped (no changes): {task_name}")
                     skipped_count += 1
 
+        # The unparseable rows the old crontab lookup left ("{30}"), once nothing points at them.
+        CrontabSchedule.objects.filter(minute__startswith="{", periodictask__isnull=True).delete()
+
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("Summary:"))
         self.stdout.write(self.style.SUCCESS(f"  Created: {created_count}"))

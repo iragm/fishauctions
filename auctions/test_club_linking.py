@@ -24,7 +24,7 @@ from auctions.club_matching import (
     similarity,
     suggest_clubs,
 )
-from auctions.models import Auction, Club, ClubMember
+from auctions.models import Auction, Club, ClubHistory, ClubMember
 from auctions.services import CONTACT_GATE_NEEDS_PHONE, missing_contact_info, readable_list
 from auctions.tests import StandardTestCase, give_contact_info
 
@@ -511,6 +511,31 @@ class MakeClubAdminButtonTests(StandardTestCase):
         self.assertNotIn("can_make_club_admin", page.context)
         self._press(self.online_auction)  # a stale page's button
         self.assertFalse(ClubMember.objects.filter(club=self.club, user=self.user).exists())
+
+    def test_granting_the_auctions_club_files_nothing_else_and_says_so(self):
+        """Filing the creator's clubless auctions only happens into their account club."""
+        filed = Club.objects.create(name="Filing Society")
+        self.online_auction.club = filed
+        self.online_auction.save()
+        clubless = Auction.objects.filter(created_by=self.user, club__isnull=True, is_deleted=False)
+        before = clubless.count()
+        response = self.client.post(
+            reverse("auction_page_action", kwargs={"slug": self.online_auction.slug}),
+            {"action": "make_creator_club_admin"},
+            follow=True,
+        )
+        self.assertEqual(clubless.count(), before)
+        text = " ".join(str(message) for message in response.context["messages"])
+        self.assertNotIn("assigned", text)
+        self.assertFalse(ClubHistory.objects.filter(club=filed, action__contains="assigning").exists())
+
+    def test_an_organizer_the_club_gave_only_some_roles_is_not_offered_admin(self):
+        filed = Club.objects.create(name="Filing Society")
+        self.online_auction.club = filed
+        self.online_auction.save()
+        ClubMember.objects.create(club=filed, user=self.user, name="Organizer", permission_manage_auctions=True)
+        page = self.client.get(self.online_auction.get_absolute_url())
+        self.assertNotIn("can_make_club_admin", page.context)
 
     def test_a_clubless_auction_names_the_account_club(self):
         page = self.client.get(self.online_auction.get_absolute_url())

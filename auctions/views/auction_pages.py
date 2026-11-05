@@ -807,8 +807,14 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
             return
         creator = self.auction.created_by
         creator_club = offer[0]
-        # Count before saving: granting permission_admin files these auctions via a signal.
-        assigned_count = Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False).count()
+        # Count before saving: granting permission_admin files these auctions via a signal, but only into
+        # the creator's account club (signals._associate_auctions_for_member), so only then are they filed.
+        files_clubless = creator_club == getattr(creator.userdata, "club", None)
+        assigned_count = (
+            Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False).count()
+            if files_clubless
+            else 0
+        )
         # Shared with the unlinked auctions page and the link_auction_to_club proposal.
         note = "via the auction admin panel" + (
             f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
@@ -828,10 +834,13 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
 def creator_club_admin_offer(auction):
     """The club the superuser "make creator club admin" button grants, as ``(club, source)``, or ``None``.
 
-    An auction filed under a club offers that club only, and only while the creator isn't its admin yet.
-    A clubless auction falls back to the creator's account club, which may be stale, so ``source`` says
-    which one it is; that offer stays while the auction still needs filing. Page and POST both read this.
+    An auction filed under a club offers that club only, and only while the creator holds no role there:
+    a club that gave its organizer only "manage auctions" chose not to make them an admin. A clubless
+    auction falls back to the creator's account club, which may be stale, so ``source`` says which one it
+    is; that offer stays while the auction still needs filing. Page and POST both read this.
     """
+    from .base import CLUB_PERMISSION_FIELDS
+
     creator = auction.created_by
     if not creator:
         return None
@@ -841,9 +850,12 @@ def creator_club_admin_offer(auction):
         club, source = getattr(getattr(creator, "userdata", None), "club", None), "account club"
         if club is None:
             return None
-    creator_is_admin = club.members.filter(user=creator, permission_admin=True, is_deleted=False).exists()
-    if creator_is_admin and auction.club_id:
-        return None
+    if auction.club_id:
+        roles = Q()
+        for field in CLUB_PERMISSION_FIELDS:
+            roles |= Q(**{field: True})
+        if club.members.filter(roles, user=creator, is_deleted=False).exists():
+            return None
     return club, source
 
 

@@ -406,7 +406,7 @@ this only quotes its opening sentence.
 - **`test_club_ledger.py`** (1118 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
   `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (533 lines)
+- **`test_club_linking.py`** (558 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_member_history.py`** (72 lines)
@@ -532,7 +532,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1855 lines)
+- **`test_mcp_admin.py`** (1869 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -648,7 +648,7 @@ this only quotes its opening sentence.
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
 - **`test_site_account_fixes.py`** (592 lines)
   Regression tests for a sweep of site and account fixes.
-- **`test_site_checks.py`** (255 lines)
+- **`test_site_checks.py`** (256 lines)
   The checks for the site quietly not doing its job (:mod:`auctions.site_checks`), and the log context
   `PeriodicTaskTests`, `RateTests`, `InvariantTests`, `LogContextTests`, `SetupCeleryBeatTests`
 - **`test_site_config.py`** (782 lines)
@@ -876,7 +876,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`set_user_location.py`** (193 lines)
   `Command`
-- **`setup_celery_beat.py`** (127 lines)
+- **`setup_celery_beat.py`** (130 lines)
   Create the PeriodicTask rows django-celery-beat reads, from the beat_schedule in
   `Command`
 - **`split_speaker_talks.py`** (174 lines)
@@ -903,7 +903,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2690 lines)
+- **`admin.py`** (2697 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
@@ -1044,7 +1044,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1134 lines)
+- **`auction_pages.py`** (1146 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
@@ -1158,7 +1158,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (285 lines)
+- **`celery.py`** (286 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)

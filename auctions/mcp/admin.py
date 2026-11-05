@@ -1030,11 +1030,13 @@ def _backup_outcome() -> dict[str, Any]:
     from auctions import backups, site_checks
 
     outcome = site_checks.task_outcome("auctions.tasks.backup_database")
-    found: dict[str, Any] = {"last": backups.last() or None}
+    last = backups.last()
+    found: dict[str, Any] = {"last": last or None}
     if outcome.get("failed"):
         found["failed_at"] = outcome["failed"]
         found["error"] = outcome.get("error", "")
-        found["failing"] = outcome["failed"] > outcome.get("ok", "")
+        # A deploy's backup runs as a command, not a task, so its success is only in ``last``.
+        found["failing"] = outcome["failed"] > max(outcome.get("ok", ""), last.get("at", ""))
     return found
 
 
@@ -1134,8 +1136,6 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     if no_backups:
         summary += " " + no_backups
     offsite = {"configured": not no_backups, "missing": backups.missing(), **_backup_outcome()}
-    if offsite.get("failing"):
-        summary += f" The last backup failed at {offsite['failed_at'][:16].replace('T', ' ')} UTC ({offsite.get('error') or 'unknown error'})."
 
     facts = {
         **deployed,
@@ -1690,28 +1690,35 @@ def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
     club, user, problem = _club_and_account(params)
     if problem:
         return _error(problem)
+    all_roles = palette_actions._flag(params, "all_roles")
     if palette_actions._flag(params, "admin") is False:
-        from auctions.views import CLUB_PERMISSION_FIELDS
+        from auctions.views.base import CLUB_PERMISSION_FIELDS
 
-        # all_roles also clears the narrower roles a mistaken grant or a later edit left behind.
-        fields = CLUB_PERMISSION_FIELDS if palette_actions._flag(params, "all_roles") else ("permission_admin",)
-        members = ClubMember.objects.filter(club=club, user=user, is_deleted=False)
-        member = next((row for row in members if any(getattr(row, field) for field in fields)), None)
-        if member is None:
+        # all_roles also clears the narrower roles a mistaken grant or a later edit left behind. Every
+        # live row: nothing makes (club, user) unique, and check_club_permission reads any of them.
+        fields = CLUB_PERMISSION_FIELDS if all_roles else ("permission_admin",)
+        members = [
+            row
+            for row in ClubMember.objects.filter(club=club, user=user, is_deleted=False)
+            if any(getattr(row, field) for field in fields)
+        ]
+        if not members:
             return _ok(f"{user.username} had none of those roles in {club.name}.")
-        removed = [field for field in fields if getattr(member, field)]
-        for field in removed:
-            setattr(member, field, False)
-        member.save()
-        what = "admin permissions" if removed == ["permission_admin"] else "all club roles"
-        ClubHistory.objects.create(
-            club=club,
-            user=request.user,
-            action=f"Removed {what} from {member.name} through an approved proposal.",
-            applies_to="MEMBERS",
-            member=member,
-        )
+        what = "all club roles" if all_roles else "admin permissions"
+        for member in members:
+            for field in fields:
+                setattr(member, field, False)
+            member.save()
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Removed {what} from {member.name} through an approved proposal.",
+                applies_to="MEMBERS",
+                member=member,
+            )
         return _ok(f"{user.username} no longer has {what} in {club.name}.")
+    if all_roles:
+        return _error("all_roles removes roles, so it needs admin false.")
     if not services.ensure_club_admin(club, user, note="through an approved proposal", actor=request.user):
         return _ok(f"{user.username} was already an admin of {club.name}.")
     return _ok(f"{user.username} is now an admin of {club.name}.")
@@ -2078,7 +2085,7 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "club": "string, required. The club's number, or its exact name.",
                 "user": "string, required. The account's username, or its number.",
                 "admin": "boolean, optional, default true. false removes their admin rights.",
-                "all_roles": "boolean, optional, default false. With admin false, removes every club role, not only admin.",
+                "all_roles": "boolean, optional, default false. Needs admin false; removes every club role, not only admin.",
             },
             danger=DANGER_CONFIRM,
             idempotent=True,

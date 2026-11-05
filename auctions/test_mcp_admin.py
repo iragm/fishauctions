@@ -605,6 +605,20 @@ class AdminJobProposalTests(AdminEndpointCase):
         member.refresh_from_db()
         self.assertFalse(member.permission_money or member.permission_view)
 
+    def test_removing_admin_clears_every_row_and_all_roles_alone_is_refused(self):
+        from auctions.mcp import admin
+        from auctions.models import ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        for name in ("Imported", "Linked"):
+            ClubMember.objects.create(club=club, user=self.userB, name=name, permission_admin=True)
+        request = mock.Mock(user=self.owner)
+        admin.make_club_admin(request, {"club": club.pk, "user": self.userB.pk, "admin": False})
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.userB, permission_admin=True).exists())
+        result = admin.make_club_admin(request, {"club": club.pk, "user": self.userB.pk, "all_roles": True})
+        self.assertIn("needs admin false", result["error"])
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.userB, permission_admin=True).exists())
+
     def test_a_club_is_corrected_and_moved(self):
         from auctions.models import ClubHistory, GeneralInterest
 
