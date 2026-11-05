@@ -86,7 +86,7 @@ this only quotes its opening sentence.
   The post-auction survey: "How was <auction>?", two buttons, and a box for anything else.
 - **`authentication.py`** (79 lines)
   `APIKeyAuthentication`, `OptionalAPIKeyAuthentication`, `ApiKeyThrottle`
-- **`backups.py`** (277 lines)
+- **`backups.py`** (302 lines)
   Nightly offsite backup of the core tables: dumped, gzipped, encrypted with ``age``, uploaded to R2.
 - **`bidding.py`** (437 lines)
   Bidding logic for lots.
@@ -352,7 +352,7 @@ this only quotes its opening sentence.
 - **`test_auctiontos.py`** (672 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
   `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
-- **`test_backups.py`** (221 lines)
+- **`test_backups.py`** (232 lines)
   Tests for the nightly offsite backup (auctions/backups.py).
   `TableSplitTests`, `KeysTests`, `RunTests`, `AdminToolTests`, `DumpTests`, `UploadTests`
 - **`test_bap_lots.py`** (1409 lines)
@@ -532,7 +532,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1787 lines)
+- **`test_mcp_admin.py`** (1792 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -805,7 +805,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`backfill_lot_species.py`** (384 lines)
   Attach a species to lots that predate the species list.
   `Command`
-- **`backup_database.py`** (35 lines)
+- **`backup_database.py`** (34 lines)
   Back up the core tables to R2 now, or print which tables would be dumped. See auctions/backups.py.
   `Command`
 - **`change_assistant.py`** (29 lines)
@@ -903,7 +903,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2659 lines)
+- **`admin.py`** (2664 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (924 lines)
   The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
