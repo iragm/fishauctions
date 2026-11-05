@@ -455,8 +455,9 @@ class UnlinkedAuctionsPageTests(StandardTestCase):
 class MakeClubAdminButtonTests(StandardTestCase):
     """The "Make X admin of Y" button beside "Trust this user" on the auction page.
 
-    Offered in two situations (``can_make_club_admin`` is an OR): the creator is not an admin of their
-    club, or the auction has no club. The second is the trap -- filing clubless auctions is normally a
+    Which club is ``creator_club_admin_offer``'s: the auction's own when it has one (offered only while the
+    creator isn't its admin), else the creator's account club, offered while the auction is clubless. That
+    last case is the trap -- filing clubless auctions is normally a
     side effect of saving the ``ClubMember``, and there is no save to make when they are already an admin.
     """
 
@@ -488,6 +489,32 @@ class MakeClubAdminButtonTests(StandardTestCase):
         self._press(self.online_auction)
         self.online_auction.refresh_from_db()
         self.assertEqual(self.online_auction.club, self.club)
+
+    def test_an_auction_filed_under_a_club_offers_that_club_not_the_account_club(self):
+        """Request #16: the button on club B's auction once granted admin of the creator's stale club A."""
+        filed = Club.objects.create(name="Filing Society")
+        self.online_auction.club = filed
+        self.online_auction.save()
+        page = self.client.get(self.online_auction.get_absolute_url())
+        self.assertEqual(page.context["creator_club"], filed)
+        self.assertContains(page, "admin of Filing Society (auction&#x27;s club)")
+        self._press(self.online_auction)
+        self.assertTrue(ClubMember.objects.get(club=filed, user=self.user).permission_admin)
+        self.assertFalse(ClubMember.objects.filter(club=self.club, user=self.user).exists())
+
+    def test_no_button_when_the_creator_already_admins_the_auctions_club(self):
+        filed = Club.objects.create(name="Filing Society")
+        self.online_auction.club = filed
+        self.online_auction.save()
+        ClubMember.objects.create(club=filed, user=self.user, name="Already", permission_admin=True)
+        page = self.client.get(self.online_auction.get_absolute_url())
+        self.assertNotIn("can_make_club_admin", page.context)
+        self._press(self.online_auction)  # a stale page's button
+        self.assertFalse(ClubMember.objects.filter(club=self.club, user=self.user).exists())
+
+    def test_a_clubless_auction_names_the_account_club(self):
+        page = self.client.get(self.online_auction.get_absolute_url())
+        self.assertContains(page, "admin of Creator&#x27;s Society (account club)")
 
     def test_an_ordinary_user_cannot_press_it(self):
         self.client.login(username="no_lots", password="testpassword")

@@ -586,6 +586,25 @@ class AdminJobProposalTests(AdminEndpointCase):
         result = self.propose("make_club_admin", {"club": "No such club", "user": self.userB.pk}, "Bad")
         self.assertTrue(result["isError"])
 
+    def test_all_roles_clears_the_narrower_roles_too(self):
+        from auctions.models import ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        ClubMember.objects.create(
+            club=club, user=self.userB, name="B", permission_admin=True, permission_money=True, permission_view=True
+        )
+        self.propose("make_club_admin", {"club": club.pk, "user": self.userB.pk, "admin": False}, "Admin only")
+        self.approve()
+        member = ClubMember.objects.get(club=club, user=self.userB)
+        self.assertFalse(member.permission_admin)
+        self.assertTrue(member.permission_money)
+        self.propose(
+            "make_club_admin", {"club": club.pk, "user": self.userB.pk, "admin": False, "all_roles": True}, "All"
+        )
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        member.refresh_from_db()
+        self.assertFalse(member.permission_money or member.permission_view)
+
     def test_a_club_is_corrected_and_moved(self):
         from auctions.models import ClubHistory, GeneralInterest
 

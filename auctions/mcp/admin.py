@@ -1025,6 +1025,19 @@ def _plural(count: int, word: str, plural: str = "") -> str:
     return f"{count} {word if count == 1 else (plural or word + 's')}"
 
 
+def _backup_outcome() -> dict[str, Any]:
+    """The newest backup's keys, size and time, and whether a later run failed (any reason, any queue)."""
+    from auctions import backups, site_checks
+
+    outcome = site_checks.task_outcome("auctions.tasks.backup_database")
+    found: dict[str, Any] = {"last": backups.last() or None}
+    if outcome.get("failed"):
+        found["failed_at"] = outcome["failed"]
+        found["error"] = outcome.get("error", "")
+        found["failing"] = outcome["failed"] > outcome.get("ok", "")
+    return found
+
+
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     """What is deployed and whether it is well: commit, migrations, queues, beat and each periodic task,
     errors and warnings in every log, app crashes, counts against a normal day, rows stuck in a state
@@ -1120,6 +1133,9 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     no_backups = backups.warning()
     if no_backups:
         summary += " " + no_backups
+    offsite = {"configured": not no_backups, "missing": backups.missing(), **_backup_outcome()}
+    if offsite.get("failing"):
+        summary += f" The last backup failed at {offsite['failed_at'][:16].replace('T', ' ')} UTC ({offsite.get('error') or 'unknown error'})."
 
     facts = {
         **deployed,
@@ -1140,7 +1156,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "slow_requests_last_hour": slow,
         "debug": settings.DEBUG,
         "deploy_window": window,
-        "offsite_backups": {"configured": not no_backups, "missing": backups.missing()},
+        "offsite_backups": offsite,
         "checked_at": timezone.now().isoformat(),
     }
     if brief:
@@ -1160,7 +1176,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
             "slow_requests_last_hour": bool(slow["busiest"]),
             "longest_without_page_views_24h": silent,
             "deploy_window": window["verdict"] != "quiet",
-            "offsite_backups": bool(no_backups),
+            "offsite_backups": bool(no_backups or offsite.get("failing")),
         }
         keep = {"branch", "commit", "checked_at"} | {key for key, bad in wrong.items() if bad}
         facts = {key: value for key, value in facts.items() if key in keep}
@@ -1675,19 +1691,27 @@ def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return _error(problem)
     if palette_actions._flag(params, "admin") is False:
-        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False, permission_admin=True).first()
+        from auctions.views import CLUB_PERMISSION_FIELDS
+
+        # all_roles also clears the narrower roles a mistaken grant or a later edit left behind.
+        fields = CLUB_PERMISSION_FIELDS if palette_actions._flag(params, "all_roles") else ("permission_admin",)
+        members = ClubMember.objects.filter(club=club, user=user, is_deleted=False)
+        member = next((row for row in members if any(getattr(row, field) for field in fields)), None)
         if member is None:
-            return _ok(f"{user.username} wasn't an admin of {club.name}.")
-        member.permission_admin = False
+            return _ok(f"{user.username} had none of those roles in {club.name}.")
+        removed = [field for field in fields if getattr(member, field)]
+        for field in removed:
+            setattr(member, field, False)
         member.save()
+        what = "admin permissions" if removed == ["permission_admin"] else "all club roles"
         ClubHistory.objects.create(
             club=club,
             user=request.user,
-            action=f"Removed admin permissions from {member.name} through an approved proposal.",
+            action=f"Removed {what} from {member.name} through an approved proposal.",
             applies_to="MEMBERS",
             member=member,
         )
-        return _ok(f"{user.username} is no longer an admin of {club.name}.")
+        return _ok(f"{user.username} no longer has {what} in {club.name}.")
     if not services.ensure_club_admin(club, user, note="through an approved proposal", actor=request.user):
         return _ok(f"{user.username} was already an admin of {club.name}.")
     return _ok(f"{user.username} is now an admin of {club.name}.")
@@ -2054,6 +2078,7 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "club": "string, required. The club's number, or its exact name.",
                 "user": "string, required. The account's username, or its number.",
                 "admin": "boolean, optional, default true. false removes their admin rights.",
+                "all_roles": "boolean, optional, default false. With admin false, removes every club role, not only admin.",
             },
             danger=DANGER_CONFIRM,
             idempotent=True,
