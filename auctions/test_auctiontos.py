@@ -685,17 +685,32 @@ class OnlyApprovedSellersTurnedOffTests(StandardTestCase):
         # Created while vetting is on, so it can't sell yet.
         self.assertFalse(self.waiting.selling_allowed)
 
-    def test_turning_it_off_lets_them_sell(self):
+    def selling(self):
+        self.waiting.refresh_from_db()
+        return self.waiting.selling_allowed
+
+    def test_turning_it_off_lets_them_sell_and_says_so(self):
         self.auction.only_approved_sellers = False
         self.auction.save()
-        self.waiting.refresh_from_db()
-        self.assertTrue(self.waiting.selling_allowed)
+        self.assertTrue(self.selling())
+        self.assertTrue(
+            AuctionHistory.objects.filter(
+                auction=self.auction, applies_to="USERS", action__startswith="Let 1 person sell"
+            ).exists()
+        )
 
     def test_other_saves_leave_them_waiting(self):
         self.auction.title = "Renamed"
         self.auction.save()
-        self.waiting.refresh_from_db()
-        self.assertFalse(self.waiting.selling_allowed)
+        self.assertFalse(self.selling())
+
+    def test_a_stale_partial_save_leaves_them_waiting(self):
+        stale = Auction.objects.get(pk=self.auction.pk)
+        stale.only_approved_sellers = False
+        stale.title = "Renamed"
+        stale.save(update_fields=["title"])
+        self.assertFalse(self.selling())
+        self.assertTrue(Auction.objects.get(pk=self.auction.pk).only_approved_sellers)
 
     def test_other_auctions_are_untouched(self):
         self.online_tos.selling_allowed = False
@@ -705,26 +720,35 @@ class OnlyApprovedSellersTurnedOffTests(StandardTestCase):
         self.online_tos.refresh_from_db()
         self.assertFalse(self.online_tos.selling_allowed)
 
-    def test_a_club_member_the_club_stopped_stays_stopped(self):
+    def test_a_club_member_made_while_vetting_can_sell_here_and_keeps_their_club_record(self):
         club = Club.objects.create(name="Vetting Club")
-        member = ClubMember.objects.create(club=club, name="Stopped", selling_allowed=False)
+        member = ClubMember.objects.create(club=club, name="Waiting", selling_allowed=False)
         AuctionTOS.objects.filter(pk=self.waiting.pk).update(clubmember=member)
         self.auction.only_approved_sellers = False
         self.auction.save()
-        self.waiting.refresh_from_db()
-        self.assertFalse(self.waiting.selling_allowed)
+        self.assertTrue(self.selling())
+        member.refresh_from_db()
+        self.assertFalse(member.selling_allowed)
 
 
 class LetWaitingSellersSellMigrationTests(StandardTestCase):
     """0520: auctions that turned vetting off earlier, by their history."""
 
+    migration = "0520_let_waiting_sellers_sell"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        cls.historical_apps = MigrationExecutor(connection).loader.project_state(("auctions", cls.migration)).apps
+
     def run_migration(self):
         import importlib
 
-        from django.apps import apps
-
-        importlib.import_module("auctions.migrations.0520_let_waiting_sellers_sell").let_waiting_sellers_sell(
-            apps, None
+        importlib.import_module(f"auctions.migrations.{self.migration}").let_waiting_sellers_sell(
+            self.historical_apps, None
         )
 
     def setUp(self):
@@ -734,19 +758,25 @@ class LetWaitingSellersSellMigrationTests(StandardTestCase):
         self.auction.save()
         AuctionTOS.objects.filter(pk=self.in_person_buyer.pk).update(selling_allowed=False)
 
+    def switched_off(self, when=None):
+        row = AuctionHistory.objects.create(
+            auction=self.auction,
+            applies_to="RULES",
+            action="Edited Rules, only approved sellers",
+            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
+        )
+        if when:
+            AuctionHistory.objects.filter(pk=row.pk).update(timestamp=when)
+
     def selling(self):
         self.in_person_buyer.refresh_from_db()
         return self.in_person_buyer.selling_allowed
 
     def test_history_of_turning_it_off_lets_them_sell(self):
-        AuctionHistory.objects.create(
-            auction=self.auction,
-            applies_to="RULES",
-            action="Edited only approved sellers",
-            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
-        )
+        self.switched_off()
         self.run_migration()
         self.assertTrue(self.selling())
+        self.assertTrue(AuctionHistory.objects.filter(auction=self.auction, applies_to="USERS").exists())
 
     def test_no_such_history_leaves_them_stopped(self):
         AuctionHistory.objects.create(
@@ -758,12 +788,19 @@ class LetWaitingSellersSellMigrationTests(StandardTestCase):
         self.run_migration()
         self.assertFalse(self.selling())
 
+    def test_joined_after_the_switch_stays_stopped(self):
+        self.switched_off(when=timezone.now() - datetime.timedelta(days=400))
+        self.run_migration()
+        self.assertFalse(self.selling())
+
+    def test_no_end_date_still_takes_lots(self):
+        self.switched_off()
+        Auction.objects.filter(pk=self.auction.pk).update(lot_submission_end_date=None)
+        self.run_migration()
+        self.assertTrue(self.selling())
+
     def test_finished_lot_submission_is_left_alone(self):
-        AuctionHistory.objects.create(
-            auction=self.auction,
-            applies_to="RULES",
-            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
-        )
+        self.switched_off()
         Auction.objects.filter(pk=self.auction.pk).update(
             lot_submission_end_date=timezone.now() - datetime.timedelta(days=1)
         )
@@ -771,11 +808,7 @@ class LetWaitingSellersSellMigrationTests(StandardTestCase):
         self.assertFalse(self.selling())
 
     def test_still_vetting_is_left_alone(self):
-        AuctionHistory.objects.create(
-            auction=self.auction,
-            applies_to="RULES",
-            changed_fields={"only_approved_sellers": {"from": True, "to": False}},
-        )
+        self.switched_off()
         Auction.objects.filter(pk=self.auction.pk).update(only_approved_sellers=True)
         self.run_migration()
         self.assertFalse(self.selling())

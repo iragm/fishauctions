@@ -624,6 +624,7 @@ function updateAdminBypassWarning() {
 
 // Function to update admin bypass selling warning
 const SELLING_BYPASS_TITLE = 'Not allowed to sell, added because you\'re an admin';
+const TOS_CANNOT_SELL = {% if tos.selling_allowed %}false{% else %}true{% endif %};
 function updateAdminBypassSellingWarning() {
     const warning = document.getElementById('admin-bypass-selling-warning');
     if (!warning) return;
@@ -632,7 +633,7 @@ function updateAdminBypassSellingWarning() {
     const hasBypass = Array.from(document.querySelectorAll('.lot-row[data-lot-id] .lot-number-badge'))
         .some(badge => badge.title === SELLING_BYPASS_TITLE);
 
-    if (hasBypass) {
+    if (hasBypass || TOS_CANNOT_SELL) {
         warning.style.display = 'inline';
     } else {
         warning.style.display = 'none';

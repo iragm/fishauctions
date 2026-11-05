@@ -206,7 +206,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15359 lines)
+- **`models.py`** (15381 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -349,9 +349,9 @@ this only quotes its opening sentence.
 - **`test_auction_views.py`** (776 lines)
   Auction pages an admin edits: permissions, the edit form, custom fields and cloning.
   `AuctionViewPermissionTests`, `AuctionEditViewTests`, `AuctionCustomFieldsViewTests`, `AuctionCloneCustomFieldsTests`, `PayPalFormFieldVisibilityTests`, `LotListViewTests`, `MyLotsViewTests`, `AuctionUsersViewTests`, `MovingAnOnlineAuctionsEndTests`
-- **`test_auctiontos.py`** (672 lines)
+- **`test_auctiontos.py`** (814 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
-  `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
+  `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`, `OnlyApprovedSellersTurnedOffTests`, `LetWaitingSellersSellMigrationTests`
 - **`test_backups.py`** (232 lines)
   Tests for the nightly offsite backup (auctions/backups.py).
   `TableSplitTests`, `KeysTests`, `RunTests`, `AdminToolTests`, `DumpTests`, `UploadTests`
@@ -365,7 +365,7 @@ this only quotes its opening sentence.
 - **`test_blank_email.py`** (49 lines)
   An account with no email address matches nobody by email.
   `BlankEmailTests`
-- **`test_bulk_add_lots.py`** (1259 lines)
+- **`test_bulk_add_lots.py`** (1271 lines)
   The bulk add-lots table, its per-row save, and the CSV import view.
   `BulkAddLotsAutoTests`, `UpdateAuctionStatsCommandTestCase`, `LotsByUserViewTest`, `ImportLotsFromCSVViewTests`
 - **`test_bulk_import_views.py`** (590 lines)
