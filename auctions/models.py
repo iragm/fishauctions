@@ -4191,7 +4191,7 @@ class Auction(CachedPropertiesMixin, models.Model):
     )
     online_bidding = models.CharField(max_length=20, choices=ONLINE_BIDDING_OPTIONS, blank=False, default="allow")
     only_approved_sellers = models.BooleanField(default=False)
-    only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
+    only_approved_sellers.help_text = "Require admin approval before users can add lots.  Turning this on doesn't change anyone who already joined; turning it off lets everyone sell."
     only_approved_bidders = models.BooleanField(default=False)
     only_approved_bidders.help_text = "Require admin approval before users can bid.  This only applies to new users: Users that you manually add and users who have a paid invoice in a past auctions will be allowed to bid."
     require_phone_number = models.BooleanField(default=False)
@@ -4585,8 +4585,11 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     def save(self, *args, **kwargs):
         previous_club_id = None
+        was_only_approved_sellers = False
         if self.pk:
-            previous_club_id = Auction.objects.filter(pk=self.pk).values_list("club_id", flat=True).first()
+            previous = Auction.objects.filter(pk=self.pk).values_list("club_id", "only_approved_sellers").first()
+            if previous:
+                previous_club_id, was_only_approved_sellers = previous
         self.date_start = self.fix_year(self.date_start)
         self.lot_submission_start_date = self.fix_year(self.lot_submission_start_date)
         self.lot_submission_end_date = self.fix_year(self.lot_submission_end_date)
@@ -4597,6 +4600,25 @@ class Auction(CachedPropertiesMixin, models.Model):
         super().save(*args, **kwargs)
         if previous_club_id is None and self.club_id:
             self.backfill_club_money()
+        update_fields = kwargs.get("update_fields")
+        # A save of other columns from a stale instance must not act on an old in-memory value.
+        if update_fields is None or "only_approved_sellers" in update_fields:
+            if was_only_approved_sellers and not self.only_approved_sellers:
+                self.let_waiting_sellers_sell()
+
+    def let_waiting_sellers_sell(self):
+        """Turning off "only approved sellers" lets everyone already in the auction sell. Without this, people
+        who joined while it was on stay unable to add lots, and the setting that blocks them is gone from the
+        page. Their ``ClubMember`` is left alone: other auctions keep their own permissions.
+
+        Waiting and refused look the same (``selling_allowed=False``), so a refused seller can sell too; the
+        Users history says how many, and the admin can stop anyone again from their row."""
+        released = AuctionTOS.objects.filter(auction=self, selling_allowed=False).update(selling_allowed=True)
+        if released:
+            self.create_history(
+                applies_to="USERS",
+                action=f"Let {released} {'person' if released == 1 else 'people'} sell: only approved sellers was turned off",
+            )
 
     def backfill_club_money(self):
         """Reconcile the club ledger for this auction's invoices. ``save`` calls it when a club is attached;
