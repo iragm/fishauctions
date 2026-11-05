@@ -78,6 +78,9 @@ SUFFIX = ".sql.gz.age"
 #: Held while a backup runs, so a weekly, a deploy and an asked-for run never overlap.
 RUNNING_KEY = "backups:running"
 RUNNING_SECONDS = 2 * 60 * 60
+#: The newest successful run, for ``site_health``. Kept longer than the weekly gap plus a missed week.
+LAST_KEY = "backups:last"
+LAST_SECONDS = 60 * 60 * 24 * 40
 
 #: Why a backup ran; each is its own prefix in the bucket, so each can have its own retention.
 REASONS = ("weekly", "deploy", "manual")
@@ -299,4 +302,17 @@ def run(reason: str = "manual", now: datetime | None = None) -> dict | None:
     finally:
         cache.delete(RUNNING_KEY)
     logger.info("Backup uploaded to %s (%s bytes)", ", ".join(object_keys), size)
-    return {"keys": object_keys, "bytes": size, "tables_with_rows": with_rows, "tables_schema_only": schema_only}
+    result = {"keys": object_keys, "bytes": size, "tables_with_rows": with_rows, "tables_schema_only": schema_only}
+    try:
+        cache.set(LAST_KEY, {**result, "at": timezone.now().isoformat()}, LAST_SECONDS)
+    except Exception:  # uploaded already; Redis being down must not fail the run
+        logger.warning("Couldn't record the backup in the cache", exc_info=True)
+    return result
+
+
+def last() -> dict:
+    """The newest successful run (``keys``, ``bytes``, ``at``...), or ``{}`` when none is known."""
+    try:
+        return cache.get(LAST_KEY) or {}
+    except Exception:
+        return {}

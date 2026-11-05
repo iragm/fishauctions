@@ -106,9 +106,10 @@ def periodic_tasks() -> dict[str, Any]:
             since = task.last_run_at or task.date_changed
             late = -schedule.remaining_estimate(since)
         except Exception as exc:
-            overdue.append({"task": task.name, "error": f"{type(exc).__name__}"})
-            continue
-        if late > _grace(schedule):
+            # Can't tell lateness; the failure check below still runs.
+            overdue.append({"task": task.name, "error": f"{type(exc).__name__}: {exc}"[:200]})
+            late = None
+        if late is not None and late > _grace(schedule):
             overdue.append(
                 {
                     "task": task.name,

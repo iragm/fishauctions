@@ -801,12 +801,20 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
         return redirect(self.auction.get_absolute_url())
 
     def _make_creator_club_admin(self, request):
-        creator = self.auction.created_by
-        creator_club = getattr(creator.userdata, "club", None)
-        if not creator_club:
+        offer = creator_club_admin_offer(self.auction)
+        if offer is None:
+            # The page was stale: the creator is already an admin and nothing is left to file.
             return
-        # Count before saving: granting permission_admin files these auctions via a signal.
-        assigned_count = Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False).count()
+        creator = self.auction.created_by
+        creator_club = offer[0]
+        # Count before saving: granting permission_admin files these auctions via a signal, but only into
+        # the creator's account club (signals._associate_auctions_for_member), so only then are they filed.
+        files_clubless = creator_club == getattr(creator.userdata, "club", None)
+        assigned_count = (
+            Auction.objects.filter(created_by=creator, club__isnull=True, is_deleted=False).count()
+            if files_clubless
+            else 0
+        )
         # Shared with the unlinked auctions page and the link_auction_to_club proposal.
         note = "via the auction admin panel" + (
             f", assigning {assigned_count} auction(s) to the club" if assigned_count else ""
@@ -821,6 +829,34 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
             f"{creator.username} is now an admin of {creator_club.name}"
             + (f" and {assigned_count} auction(s) assigned to club" if assigned_count else ""),
         )
+
+
+def creator_club_admin_offer(auction):
+    """The club the superuser "make creator club admin" button grants, as ``(club, source)``, or ``None``.
+
+    An auction filed under a club offers that club only, and only while the creator holds no role there:
+    a club that gave its organizer only "manage auctions" chose not to make them an admin. A clubless
+    auction falls back to the creator's account club, which may be stale, so ``source`` says which one it
+    is; that offer stays while the auction still needs filing. Page and POST both read this.
+    """
+    from .base import CLUB_PERMISSION_FIELDS
+
+    creator = auction.created_by
+    if not creator:
+        return None
+    if auction.club_id:
+        club, source = auction.club, "auction's club"
+    else:
+        club, source = getattr(getattr(creator, "userdata", None), "club", None), "account club"
+        if club is None:
+            return None
+    if auction.club_id:
+        roles = Q()
+        for field in CLUB_PERMISSION_FIELDS:
+            roles |= Q(**{field: True})
+        if club.members.filter(roles, user=creator, is_deleted=False).exists():
+            return None
+    return club, source
 
 
 class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
@@ -886,17 +922,12 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 or check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
             )
         )
-        # Superusers: offer "make club admin" if the creator isn't one yet, or the auction has no club.
-        if self.request.user.is_superuser and self.auction.created_by:
-            creator_club = getattr(self.auction.created_by.userdata, "club", None)
-            if creator_club:
-                creator_is_admin = creator_club.members.filter(
-                    user=self.auction.created_by, permission_admin=True, is_deleted=False
-                ).exists()
-                auction_needs_club = not self.auction.club
-                if not creator_is_admin or auction_needs_club:
-                    context["can_make_club_admin"] = True
-                    context["creator_club"] = creator_club
+        # Superusers: offer "make club admin"; see creator_club_admin_offer for which club.
+        if self.request.user.is_superuser:
+            offer = creator_club_admin_offer(self.auction)
+            if offer:
+                context["can_make_club_admin"] = True
+                context["creator_club"], context["creator_club_source"] = offer
         if self.auction.closed:
             context["ended"] = True
             messages.info(
