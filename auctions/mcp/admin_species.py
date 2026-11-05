@@ -1,8 +1,8 @@
-"""The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
+"""The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
 
 Everything on the species gaps page and in ``manage.py backfill_lot_species``, for an agent that can't
 press a button or answer a prompt, plus fixing lots matched to the wrong species. The reads,
-:func:`species_dashboard`, :func:`species_backfill` and :func:`lots_by_species`, write nothing (``record=False`` keeps even the cache's hit counter still). Each change is an
+:func:`species_dashboard`, :func:`species_backfill`, :func:`lots_by_species` and :func:`find_species`, write nothing (``record=False`` keeps even the cache's hit counter still). Each change is an
 ``APPROVAL_ONLY`` step for :func:`auctions.mcp.admin.propose_change`: it runs only when a person
 approves it, through the same :mod:`auctions.species_admin` function the page's button calls, and each
 is checked once when proposed (:data:`PROPOSAL_CHECKS`) so a bad number reaches the agent while it can
@@ -403,6 +403,40 @@ def lots_by_species(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def find_species(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Search the species list itself, for the number a step names: by scientific name, genus, common name or
+    a name it answers to. Written for what the matcher can't settle (a misspelt or renamed fish, a genus
+    with no row yet), so it reads every row, approved or not, and never asks the language model."""
+    from django.db.models import Q
+
+    from auctions.models import Species
+
+    _superuser(request)
+    text = " ".join(_str(params, "name").split())
+    if len(text) < 3:
+        return _need("Which species? Give at least three letters of a scientific or common name.")
+    words = text.split()
+    match = Q(scientific_name__icontains=text) | Q(common_name__icontains=text) | Q(common_names__name__icontains=text)
+    if len(words) > 1:
+        # "Gymnocorys ternetzi": the epithet within a genus that starts the same way.
+        match |= Q(genus__istartswith=words[0][:4], species__iexact=words[1])
+    found = Species.objects.filter(match).distinct().order_by("trade_rank", "scientific_name", "variety")
+    limit, offset = palette_actions._slice(params)
+    total = found.count()
+    rows = [
+        {**_echo(species), "family": species.family or None, "saltwater": species.saltwater}
+        for species in found.select_related("category")[offset : offset + limit]
+    ]
+    result = {"rows": rows, "total": total}
+    if offset + limit < total:
+        result["next_offset"] = offset + limit
+    if not total:
+        return _ok(
+            f"Nothing on the species list matches «{text}». Propose add_species if it is a real species.", **result
+        )
+    return _ok(f"{total} species match." + palette_actions._showing(total, limit, offset), **result)
+
+
 # --- changes a proposal makes -------------------------------------------------------------------------
 
 
@@ -756,6 +790,22 @@ APPROVAL_ONLY: list[Action] = [
 
 
 #: Checked when proposed; each runs again inside the change on approval.
+def _already_listed(arguments) -> str:
+    """Why an ``add_species`` step would fail on approval, the list having it or no such category, or ``""``: a failed
+    step stops every step after it, so this is said while the proposal can still be split."""
+    from auctions.models import Category
+    from auctions.species_matching import species_already_named, split_scientific_name
+
+    category = _str(arguments, "category")
+    if category and not Category.objects.filter(name__iexact=category).exists():
+        return f"There is no category called {untrusted_short(category)}."
+    typed = _str(arguments, "scientific_name") or _str(arguments, "species")
+    if not typed or _str(arguments, "variety") or _str(arguments, "strain"):
+        return ""
+    clash = species_already_named(*split_scientific_name(typed))
+    return f"{clash.label} is already on the list as species {clash.pk}." if clash else ""
+
+
 PROPOSAL_CHECKS = {
     "approve_species": lambda arguments: _species(arguments)[1],
     "merge_species": lambda arguments: _species(arguments, "keep")[1] or _species(arguments, "duplicate")[1],
@@ -768,7 +818,13 @@ PROPOSAL_CHECKS = {
     ),
     "remember_not_a_species": lambda arguments: _lot_names(arguments, species_admin.MAX_NOT_A_SPECIES)[1],
     "change_lots_species": lambda arguments: _move(arguments)[3],
+    "add_species": _already_listed,
 }
+
+
+#: Steps a proposal of the species list's own may also hold, beside :data:`SPECIES_STEPS`: adding a
+#: missing species, and the name a lot calls it by.
+SPECIES_LIST_WRITES = frozenset({"add_species", "name_a_species"})
 
 READS: list[Action] = [
     Action(
@@ -826,6 +882,22 @@ READS: list[Action] = [
         danger=DANGER_SAFE,
         resolver=lots_by_species,
     ),
+    Action(
+        name="find_species",
+        description=(
+            "Search the species list for a species number: by scientific name, genus, common name or any "
+            "name the species answers to, approved or not, with no language model. A two-word name also "
+            "finds the same epithet in a genus spelt alike. Read before proposing add_species, to be sure "
+            "the species isn't there already under a near spelling."
+        ),
+        params={
+            "name": "string, required. At least three letters.",
+            "limit": "integer, optional, default 15.",
+            "offset": "integer, optional, default 0.",
+        },
+        danger=DANGER_SAFE,
+        resolver=find_species,
+    ),
 ]
 
 
@@ -857,11 +929,27 @@ def _work(step) -> int:
 MAX_PROPOSAL_ITEMS = 1200
 
 
+#: ``add_species`` steps in one proposal: each is a form, a save and a genus-wide rank rebuild.
+MAX_ADDED_SPECIES = 50
+
+
 def proposal_problem(steps) -> str:
-    """Why a proposal of species steps is too much for one approval, or ``""``."""
+    """Why a proposal of species steps is too much for one approval, or ``""``. Two steps adding one name
+    would fail the second, stopping the rest, so that is refused here too."""
     total = sum(_work(step) for step in steps)
     if total > MAX_PROPOSAL_ITEMS:
         return f"Those steps name {total} lot names and answers; one proposal takes at most {MAX_PROPOSAL_ITEMS}. Split it."
+    added = [
+        " ".join((_str(step["arguments"], "scientific_name") or _str(step["arguments"], "species")).lower().split())
+        + "|"
+        + _str(step["arguments"], "variety").lower()
+        for step in steps
+        if step["tool"] == "add_species"
+    ]
+    if len(added) > MAX_ADDED_SPECIES:
+        return f"One proposal adds at most {MAX_ADDED_SPECIES} species; split it."
+    if len(set(added)) < len(added):
+        return "Two steps add the same species; the second would fail on approval and stop the rest."
     return ""
 
 

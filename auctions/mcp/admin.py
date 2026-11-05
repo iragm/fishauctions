@@ -2197,7 +2197,8 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
     if not isinstance(raw, list) or not raw:
         return [], "steps must be a list of at least one {tool, arguments}."
     species_only = all(
-        isinstance(step, dict) and str(step.get("tool", "")).strip().lower() in admin_species.SPECIES_STEPS
+        isinstance(step, dict)
+        and str(step.get("tool", "")).strip().lower() in admin_species.SPECIES_STEPS | admin_species.SPECIES_LIST_WRITES
         for step in raw
     )
     most = MAX_SPECIES_STEPS if species_only else MAX_STEPS
