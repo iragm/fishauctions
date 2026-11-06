@@ -4598,6 +4598,24 @@ class Auction(CachedPropertiesMixin, models.Model):
         if previous_club_id is None and self.club_id:
             self.backfill_club_money()
 
+    @property
+    def cannot_sell_count(self):
+        """How many people in this auction can't sell: the count the rules form offers to let in."""
+        return AuctionTOS.objects.filter(auction=self, selling_allowed=False).count()
+
+    def let_waiting_sellers_sell(self, user=None):
+        """Let everyone in this auction who can't sell, sell. Only on an admin's say-so, from the rules form
+        once "only approved sellers" is off: waiting and refused look the same (``selling_allowed=False``),
+        and the clubs that vet sellers care about their refusals. Their ``ClubMember`` is left alone."""
+        released = AuctionTOS.objects.filter(auction=self, selling_allowed=False).update(selling_allowed=True)
+        if released:
+            self.create_history(
+                applies_to="USERS",
+                user=user,
+                action=f"Let {released} {'person' if released == 1 else 'people'} sell who couldn't",
+            )
+        return released
+
     def backfill_club_money(self):
         """Reconcile the club ledger for this auction's invoices. ``save`` calls it when a club is attached;
         bulk ``update(club=...)`` callers must call it themselves. Idempotent.

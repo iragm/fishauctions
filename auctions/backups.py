@@ -20,7 +20,8 @@ set once in the R2 dashboard:
 
 Configured by ``BACKUP_S3_ENDPOINT``, ``BACKUP_S3_BUCKET``, ``BACKUP_S3_ACCESS_KEY_ID``,
 ``BACKUP_S3_SECRET_ACCESS_KEY`` and ``BACKUP_AGE_RECIPIENT`` (see ``.env.example``). With any of them
-unset the nightly task does nothing, so dev and staging need none of it. A failed run raises, which
+unset nothing is backed up and nothing breaks: each run logs a "No offsite backups" warning, the deploy
+goes on, and ``site_health`` says so. A failed run raises, which
 ``site_health`` reports as a failing periodic task.
 
 Restoring (snapshot prod first, as for any prod change). Load into an empty database, so tables from
@@ -77,6 +78,9 @@ SUFFIX = ".sql.gz.age"
 #: Held while a backup runs, so a weekly, a deploy and an asked-for run never overlap.
 RUNNING_KEY = "backups:running"
 RUNNING_SECONDS = 2 * 60 * 60
+#: The newest successful run, for ``site_health``. Kept longer than the weekly gap plus a missed week.
+LAST_KEY = "backups:last"
+LAST_SECONDS = 60 * 60 * 24 * 40
 
 #: Why a backup ran; each is its own prefix in the bucket, so each can have its own retention.
 REASONS = ("weekly", "deploy", "manual")
@@ -95,6 +99,29 @@ class Config:
     recipient: str
 
 
+#: The settings a backup needs, in the order a warning names them.
+SETTINGS = (
+    "BACKUP_S3_ENDPOINT",
+    "BACKUP_S3_BUCKET",
+    "BACKUP_S3_ACCESS_KEY_ID",
+    "BACKUP_S3_SECRET_ACCESS_KEY",
+    "BACKUP_AGE_RECIPIENT",
+)
+
+
+def missing() -> list[str]:
+    """The backup settings left unset; empty when backups are configured."""
+    return [name for name in SETTINGS if not getattr(settings, name, "")]
+
+
+def warning() -> str:
+    """One line saying backups are off and why, or "" when they're on. Self-hosted sites often run without."""
+    unset = missing()
+    if not unset:
+        return ""
+    return f"No offsite backups: {', '.join(unset)} not set (see .env.example)."
+
+
 def config() -> Config | None:
     """The backup's settings, or None when any is unset."""
     values = Config(
@@ -104,7 +131,8 @@ def config() -> Config | None:
         secret_access_key=getattr(settings, "BACKUP_S3_SECRET_ACCESS_KEY", ""),
         recipient=getattr(settings, "BACKUP_AGE_RECIPIENT", ""),
     )
-    return values if all(vars(values).values()) else None
+    # missing() is the one test of "configured", so the warning and the backup never disagree.
+    return None if missing() else values
 
 
 def schema_only_tables() -> list[str]:
@@ -255,7 +283,7 @@ def run(reason: str = "manual", now: datetime | None = None) -> dict | None:
     """Back up now. None when not configured; raises :class:`BackupError` (or boto's) on failure."""
     cfg = config()
     if cfg is None:
-        logger.info("Backup skipped: BACKUP_* settings are not all set")
+        logger.warning(warning())
         return None
     if not cfg.recipient.startswith("age1"):
         msg = "BACKUP_AGE_RECIPIENT is not an age public key (age1...)"
@@ -274,4 +302,17 @@ def run(reason: str = "manual", now: datetime | None = None) -> dict | None:
     finally:
         cache.delete(RUNNING_KEY)
     logger.info("Backup uploaded to %s (%s bytes)", ", ".join(object_keys), size)
-    return {"keys": object_keys, "bytes": size, "tables_with_rows": with_rows, "tables_schema_only": schema_only}
+    result = {"keys": object_keys, "bytes": size, "tables_with_rows": with_rows, "tables_schema_only": schema_only}
+    try:
+        cache.set(LAST_KEY, {**result, "at": timezone.now().isoformat()}, LAST_SECONDS)
+    except Exception:  # uploaded already; Redis being down must not fail the run
+        logger.warning("Couldn't record the backup in the cache", exc_info=True)
+    return result
+
+
+def last() -> dict:
+    """The newest successful run (``keys``, ``bytes``, ``at``...), or ``{}`` when none is known."""
+    try:
+        return cache.get(LAST_KEY) or {}
+    except Exception:
+        return {}

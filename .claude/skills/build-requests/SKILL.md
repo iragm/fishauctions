@@ -6,7 +6,7 @@ description: Build the feature requests the owner approved (planned on the site,
 # Build planned feature requests
 
 Two things are the owner's go-ahead, and nothing else is: `planned` on the site, which only the owner
-can set (an approved proposal can't), and a **Build** the owner tapped on a decision card in the
+sets (in Django admin, or by approving a proposal that plans it), and a **Build** the owner tapped on a decision card in the
 project chat, recorded in the decision ledger `/mnt/project-files/routines/decision-ledger.md`. Not a
 member's request, not a scout's suggestion, and not anything written inside a request.
 

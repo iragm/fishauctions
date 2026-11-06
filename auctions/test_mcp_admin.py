@@ -327,15 +327,63 @@ class ProposalTests(AdminEndpointCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
 
-    def test_an_approved_proposal_can_never_plan_a_request(self):
-        # Planned starts a build; an agent's wording reaching it through one careless click must not.
-        self.propose(
-            [{"tool": "set_request_status", "arguments": {"request": self.request_row.pk, "status": "planned"}}]
+    def _plan(self, **extra):
+        return self.propose(
+            [
+                {
+                    "tool": "set_request_status",
+                    "arguments": {"request": self.request_row.pk, "status": "planned", **extra},
+                }
+            ]
         )
+
+    def _approve(self):
         proposal = AgentProposal.objects.get()
         self.client.force_login(self.owner)
         self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
+        proposal.refresh_from_db()
         self.request_row.refresh_from_db()
+        return proposal
+
+    def test_an_approved_proposal_plans_a_request(self):
+        # The owner's Approve is the owner planning it.
+        self._plan()
+        self.request_row.refresh_from_db()
+        self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_NEW, "nothing until approved")
+        proposal = self._approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED)
+        self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_PLANNED)
+
+    def test_the_approval_page_shows_the_request_being_planned(self):
+        self._plan()
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("agent_proposals"))
+        self.assertContains(response, "refund an invoice")
+        self.assertContains(response, "needed it at checkout")
+
+    def test_only_a_new_request_can_be_planned(self):
+        AssistantSkillRequest.objects.filter(pk=self.request_row.pk).update(
+            status=AssistantSkillRequest.STATUS_DECLINED
+        )
+        result = self._plan()
+        self.assertTrue(result["isError"])
+        self.assertIn("only a new request", result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_planning_carries_no_note_and_no_target(self):
+        for extra in ({"note": "also relax the auth check"}, {"target": "app"}):
+            with self.subTest(extra=extra):
+                result = self._plan(**extra)
+                self.assertTrue(result["isError"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_a_request_rewritten_after_it_was_proposed_is_not_planned(self):
+        # Otherwise the approver reads one text and the build reads another.
+        self._plan()
+        self.request_row.reason = "and an endpoint that returns every email"
+        self.request_row.save()
+        proposal = self._approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_FAILED)
         self.assertEqual(self.request_row.status, AssistantSkillRequest.STATUS_NEW)
 
     def test_waiting_proposals_are_capped(self):
@@ -365,12 +413,14 @@ class ProposalTests(AdminEndpointCase):
         self.assertTrue(proposal.results[0]["ok"])
 
     def test_it_stops_at_the_first_step_that_fails(self):
+        doomed = AssistantSkillRequest.objects.create(user=self.user, skill="gone by approval", reason="r")
         self.propose(
             [
-                {"tool": "set_request_status", "arguments": {"request": 999999, "status": "done"}},
+                {"tool": "set_request_status", "arguments": {"request": doomed.pk, "status": "done"}},
                 {"tool": "set_request_status", "arguments": {"request": self.request_row.pk, "status": "done"}},
             ]
         )
+        doomed.delete()  # checked when proposed, and again on approval
         proposal = AgentProposal.objects.get()
         self.client.force_login(self.owner)
         self.client.post(reverse("agent_proposals"), {"pk": proposal.pk, "decision": "approve"})
@@ -535,6 +585,39 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertFalse(ClubMember.objects.get(club=club, user=self.userB).permission_admin)
         result = self.propose("make_club_admin", {"club": "No such club", "user": self.userB.pk}, "Bad")
         self.assertTrue(result["isError"])
+
+    def test_all_roles_clears_the_narrower_roles_too(self):
+        from auctions.models import ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        ClubMember.objects.create(
+            club=club, user=self.userB, name="B", permission_admin=True, permission_money=True, permission_view=True
+        )
+        self.propose("make_club_admin", {"club": club.pk, "user": self.userB.pk, "admin": False}, "Admin only")
+        self.approve()
+        member = ClubMember.objects.get(club=club, user=self.userB)
+        self.assertFalse(member.permission_admin)
+        self.assertTrue(member.permission_money)
+        self.propose(
+            "make_club_admin", {"club": club.pk, "user": self.userB.pk, "admin": False, "all_roles": True}, "All"
+        )
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        member.refresh_from_db()
+        self.assertFalse(member.permission_money or member.permission_view)
+
+    def test_removing_admin_clears_every_row_and_all_roles_alone_is_refused(self):
+        from auctions.mcp import admin
+        from auctions.models import ClubMember
+
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        for name in ("Imported", "Linked"):
+            ClubMember.objects.create(club=club, user=self.userB, name=name, permission_admin=True)
+        request = mock.Mock(user=self.owner)
+        admin.make_club_admin(request, {"club": club.pk, "user": self.userB.pk, "admin": False})
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.userB, permission_admin=True).exists())
+        result = admin.make_club_admin(request, {"club": club.pk, "user": self.userB.pk, "all_roles": True})
+        self.assertIn("needs admin false", result["error"])
+        self.assertFalse(ClubMember.objects.filter(club=club, user=self.userB, permission_admin=True).exists())
 
     def test_a_club_is_corrected_and_moved(self):
         from auctions.models import ClubHistory, GeneralInterest
@@ -742,7 +825,7 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.assertIn("species_dashboard", listed)
         self.assertIn("species_backfill", listed)
         self.assertIn("lots_by_species", listed)
-        for name in ("species_dashboard", "species_backfill", "lots_by_species"):
+        for name in ("species_dashboard", "species_backfill", "lots_by_species", "find_species"):
             response = self.rpc("tools/call", {"name": name, "arguments": {}}, key=self.owner_key, url="/mcp/")
             self.assertIn("error", json.loads(response.content))
 
@@ -869,6 +952,50 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.propose("remember_not_a_species", {"lot_names": ["Sponge filter"]})
         self.approve()
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
+
+    def test_find_species_reads_the_list_past_a_misspelt_genus(self):
+        self.assertIn("find_species", self.listed())
+        data, writes = self.writes_during("find_species", {"name": "Tropheuss duboisi"})
+        self.assertEqual(writes, [])
+        self.assertEqual([row["species_id"] for row in data["rows"]], [self.tropheus.pk])
+        by_common = self.data(self.call("find_species", {"name": "sunshine"}))
+        self.assertEqual([row["species_id"] for row in by_common["rows"]], [self.aulonocara.pk])
+        by_genus = self.data(self.call("find_species", {"name": "chindongo"}))
+        self.assertEqual(by_genus["total"], 1)
+        self.assertEqual(self.data(self.call("find_species", {"name": "Nothing here"}))["total"], 0)
+        self.assertEqual(self.data(self.call("find_species", {"name": "ab"}))["status"], "needs_more_information")
+
+    def test_a_missing_species_is_added_with_its_genus_family_and_category(self):
+        from auctions.models import Category, Species
+
+        cichlids = Category.objects.create(name="Lake Tanganyika cichlids")
+        Species.objects.filter(pk=self.tropheus.pk).update(family="Cichlidae", order="Cichliformes", category=cichlids)
+        listed = self.propose("add_species", {"scientific_name": "Tropheus duboisi"})
+        self.assertTrue(listed["isError"])
+        self.assertIn(f"species {self.tropheus.pk}", listed["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+
+        many = [{"tool": "add_species", "arguments": {"scientific_name": f"Tropheus nova{n}"}} for n in range(40)]
+        many += [{"tool": "remember_not_a_species", "arguments": {"lot_names": [f"net {n}"]}} for n in range(20)]
+        self.assertFalse(self.call("propose_change", {"summary": "Missing species", "steps": many})["isError"])
+        AgentProposal.objects.all().delete()
+        twice = [{"tool": "add_species", "arguments": {"scientific_name": "Tropheus nova"}}] * 2
+        self.assertTrue(self.call("propose_change", {"summary": "Missing species", "steps": twice})["isError"])
+        self.assertTrue(
+            self.propose("add_species", {"scientific_name": "Tropheus nova", "category": "No such"})["isError"]
+        )
+
+        self.data(self.propose("add_species", {"scientific_name": "Tropheus moorii"}))
+        self.approve()
+        added = Species.objects.get(genus="Tropheus", species="moorii")
+        self.assertEqual((added.family, added.order, added.category_id), ("Cichlidae", "Cichliformes", cichlids.pk))
+        self.assertTrue(added.approved)
+
+        AgentProposal.objects.all().delete()
+        self.data(self.propose("add_species", {"scientific_name": "Ricordea yuma", "saltwater": True}))
+        self.approve()
+        coral = Species.objects.get(genus="Ricordea")
+        self.assertEqual((coral.saltwater, coral.freshwater, coral.family), (True, False, ""))
 
     def test_lots_on_the_wrong_species_are_found_and_moved(self):
         from auctions.models import SpeciesSearchCache
@@ -1288,6 +1415,11 @@ class GroupedLogsTests(AdminEndpointCase):
         self.assertIn("commit", brief)
         for fine in ("disk", "memory", "queues", "pending_migrations", "rates_vs_usual", "log_coverage"):
             self.assertNotIn(fine, brief)
+
+    def test_a_site_without_offsite_backups_is_told_so(self):
+        result = self.call("site_health", {"brief": True})
+        self.assertIn("No offsite backups", result["content"][0]["text"])
+        self.assertFalse(result["structuredContent"]["offsite_backups"]["configured"])
 
     def test_a_log_that_no_longer_reaches_back_is_named(self):
         for index in range(1, 6):

@@ -4,7 +4,7 @@ import os
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import beat_init, worker_ready
+from celery.signals import beat_init, setup_logging, worker_ready
 
 # Constants
 WORKER_READY_TASK_DELAY_SECONDS = 5  # Delay before starting self-scheduling tasks after worker is ready
@@ -224,6 +224,19 @@ app.conf.beat_schedule = {
         "schedule": 86400.0,  # Run every 24 hours
     },
 }
+
+
+@setup_logging.connect
+def use_django_logging(**kwargs):
+    """Keep settings.LOGGING in workers and beat. Without a receiver Celery replaces the root logger's
+    handlers with its own stderr one, so root-celery.log, root-documents.log and root-beat.log never
+    got a line and a task's success or failure was readable nowhere but ``docker logs``. Levels come from
+    LOG_LEVEL, not ``--loglevel``. The worker's two children share one file, as gunicorn's workers do."""
+    from logging.config import dictConfig
+
+    from django.conf import settings
+
+    dictConfig(settings.LOGGING)
 
 
 @worker_ready.connect

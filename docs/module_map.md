@@ -76,7 +76,7 @@ this only quotes its opening sentence.
 - **`ar_mapping.py`** (945 lines)
   AR lot-location solver: bearing-dominant 2D bundle adjustment.
   `solve_positions`, `update_positions_for_auction`
-- **`auction_form_layout.py`** (224 lines)
+- **`auction_form_layout.py`** (226 lines)
   The layout of ``AuctionEditForm``: what an organizer sees first, and what is behind *Advanced*.
   `build_layout`, `advanced_fields_in_use`
 - **`auction_nav.py`** (235 lines)
@@ -86,7 +86,7 @@ this only quotes its opening sentence.
   The post-auction survey: "How was <auction>?", two buttons, and a box for anything else.
 - **`authentication.py`** (79 lines)
   `APIKeyAuthentication`, `OptionalAPIKeyAuthentication`, `ApiKeyThrottle`
-- **`backups.py`** (277 lines)
+- **`backups.py`** (318 lines)
   Nightly offsite backup of the core tables: dumped, gzipped, encrypted with ``age``, uploaded to R2.
 - **`bidding.py`** (437 lines)
   Bidding logic for lots.
@@ -159,7 +159,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6632 lines)
+- **`forms.py`** (6659 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -206,7 +206,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15359 lines)
+- **`models.py`** (15377 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -223,7 +223,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17023 lines)
+- **`palette_actions.py`** (17066 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -260,7 +260,7 @@ this only quotes its opening sentence.
   `SessionStore`
 - **`signals.py`** (1104 lines)
   Signal handlers for the auctions app.
-- **`site_checks.py`** (237 lines)
+- **`site_checks.py`** (238 lines)
   Checks for the site quietly not doing its job, which no error line would show. Read by ``site_health``.
   `connect_celery`, `task_outcome`, `periodic_tasks`, `rates`, `invariants`
 - **`site_setup.py`** (146 lines)
@@ -349,10 +349,10 @@ this only quotes its opening sentence.
 - **`test_auction_views.py`** (776 lines)
   Auction pages an admin edits: permissions, the edit form, custom fields and cloning.
   `AuctionViewPermissionTests`, `AuctionEditViewTests`, `AuctionCustomFieldsViewTests`, `AuctionCloneCustomFieldsTests`, `PayPalFormFieldVisibilityTests`, `LotListViewTests`, `MyLotsViewTests`, `AuctionUsersViewTests`, `MovingAnOnlineAuctionsEndTests`
-- **`test_auctiontos.py`** (672 lines)
+- **`test_auctiontos.py`** (797 lines)
   ``AuctionTOS``: the admin filter over it, feedback, and merging two participants.
-  `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`
-- **`test_backups.py`** (221 lines)
+  `LotAdminFilterTests`, `FeedbackTestCase`, `AuctionHistoryTestCase`, `MergeAuctionTOSTests`, `AuctionTOSMergeViewTests`, `LetWaitingSellersSellTests`
+- **`test_backups.py`** (235 lines)
   Tests for the nightly offsite backup (auctions/backups.py).
   `TableSplitTests`, `KeysTests`, `RunTests`, `AdminToolTests`, `DumpTests`, `UploadTests`
 - **`test_bap_lots.py`** (1409 lines)
@@ -365,7 +365,7 @@ this only quotes its opening sentence.
 - **`test_blank_email.py`** (49 lines)
   An account with no email address matches nobody by email.
   `BlankEmailTests`
-- **`test_bulk_add_lots.py`** (1259 lines)
+- **`test_bulk_add_lots.py`** (1271 lines)
   The bulk add-lots table, its per-row save, and the CSV import view.
   `BulkAddLotsAutoTests`, `UpdateAuctionStatsCommandTestCase`, `LotsByUserViewTest`, `ImportLotsFromCSVViewTests`
 - **`test_bulk_import_views.py`** (590 lines)
@@ -406,7 +406,7 @@ this only quotes its opening sentence.
 - **`test_club_ledger.py`** (1118 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
   `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (506 lines)
+- **`test_club_linking.py`** (558 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_member_history.py`** (72 lines)
@@ -420,7 +420,7 @@ this only quotes its opening sentence.
 - **`test_club_settings.py`** (690 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
-- **`test_club_users.py`** (1487 lines)
+- **`test_club_users.py`** (1488 lines)
   Managing people through a club rather than through an auction, and the bid API.
   `ManageUsersThroughClubTests`, `PlaceBidApiTests`
 - **`test_clubs.py`** (1379 lines)
@@ -532,7 +532,7 @@ this only quotes its opening sentence.
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
 - **`test_mcp.py`** (1575 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1737 lines)
+- **`test_mcp_admin.py`** (1869 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
@@ -648,9 +648,9 @@ this only quotes its opening sentence.
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
 - **`test_site_account_fixes.py`** (592 lines)
   Regression tests for a sweep of site and account fixes.
-- **`test_site_checks.py`** (197 lines)
+- **`test_site_checks.py`** (256 lines)
   The checks for the site quietly not doing its job (:mod:`auctions.site_checks`), and the log context
-  `PeriodicTaskTests`, `RateTests`, `InvariantTests`, `LogContextTests`
+  `PeriodicTaskTests`, `RateTests`, `InvariantTests`, `LogContextTests`, `SetupCeleryBeatTests`
 - **`test_site_config.py`** (782 lines)
   Site-wide configuration: currency, email fields, locations, demo data and defaults.
   `CurrencyCustomizationTests`, `AuctionEmailFieldsTest`, `UserLocationUpdateTests`, `LoadDemoDataTests`, `EnsureSiteDefaultsCommandTests`, `AdminReadonlyFieldsTests`
@@ -805,7 +805,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`backfill_lot_species.py`** (384 lines)
   Attach a species to lots that predate the species list.
   `Command`
-- **`backup_database.py`** (35 lines)
+- **`backup_database.py`** (34 lines)
   Back up the core tables to R2 now, or print which tables would be dumped. See auctions/backups.py.
   `Command`
 - **`change_assistant.py`** (29 lines)
@@ -876,7 +876,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`set_user_location.py`** (193 lines)
   `Command`
-- **`setup_celery_beat.py`** (128 lines)
+- **`setup_celery_beat.py`** (130 lines)
   Create the PeriodicTask rows django-celery-beat reads, from the beat_schedule in
   `Command`
 - **`split_speaker_talks.py`** (174 lines)
@@ -903,10 +903,10 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2607 lines)
+- **`admin.py`** (2697 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_species.py`** (924 lines)
-  The species list's upkeep on ``/mcp/admin/``: three reads, and nine changes only a proposal makes.
+- **`admin_species.py`** (1012 lines)
+  The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
 - **`auth.py`** (385 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
@@ -1040,13 +1040,13 @@ Every view on the site, split by the part of it the view belongs to.
   `AdminSetupChecklistView`
 - **`ajax.py`** (833 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
-- **`auction_admin.py`** (1265 lines)
+- **`auction_admin.py`** (1273 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1115 lines)
+- **`auction_pages.py`** (1146 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
-  `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
+  `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
@@ -1113,7 +1113,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (572 lines)
+- **`palette.py`** (571 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
 - **`payments.py`** (1187 lines)
   Connecting PayPal and Square accounts and taking payments through them.
@@ -1158,9 +1158,9 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (273 lines)
+- **`celery.py`** (286 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
-  `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
+  `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
   Celery Beat scheduler working around a django-celery-beat 2.8.1 bug.
   `FixedDatabaseScheduler`

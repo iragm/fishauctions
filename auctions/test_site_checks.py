@@ -6,6 +6,7 @@ import logging
 from unittest import mock
 
 from django.contrib.auth.models import AnonymousUser, User
+from django.core.cache import cache
 from django.http import HttpResponse
 from django.test import RequestFactory, SimpleTestCase
 from django.utils import timezone
@@ -62,6 +63,49 @@ class PeriodicTaskTests(StandardTestCase):
         ):
             site_checks._task_succeeded(sender=sender)
         self.assertEqual(site_checks.periodic_tasks()["failing"], [])
+
+    def test_a_schedule_that_cannot_be_read_is_still_checked_for_failures(self):
+        """The weekly backup's crontab once raised here, which skipped its failure check entirely."""
+        self.task("backup", 0, task="auctions.tasks.backup_database")
+        sender = mock.Mock()
+        sender.name = "auctions.tasks.backup_database"
+        site_checks._task_failed(sender=sender, exception=OSError("disk full"))
+        with mock.patch.object(PeriodicTask, "schedule", new_callable=mock.PropertyMock, side_effect=ValueError("bad")):
+            found = site_checks.periodic_tasks()
+        self.assertEqual(found["overdue"], [{"task": "backup", "error": "ValueError: bad"}])
+        self.assertEqual([row["task"] for row in found["failing"]], ["backup"])
+
+    def test_the_weekly_backup_crontab_is_judged(self):
+        """The real beat entry, as the database scheduler stores it: a crontab in the site's time zone."""
+        from django_celery_beat.models import CrontabSchedule
+
+        crontab = CrontabSchedule.objects.create(minute="30", hour="3", day_of_week="0", timezone="America/New_York")
+        PeriodicTask.objects.create(
+            name="backup_database",
+            task="auctions.tasks.backup_database",
+            crontab=crontab,
+            last_run_at=timezone.now() - datetime.timedelta(days=30),
+        )
+        found = site_checks.periodic_tasks()
+        self.assertEqual([row["task"] for row in found["overdue"]], ["backup_database"])
+        self.assertNotIn("error", found["overdue"][0])
+
+    def test_site_health_shows_the_last_backup_and_a_later_failure(self):
+        from auctions import backups
+        from auctions.mcp import admin
+
+        self.addCleanup(cache.delete, backups.LAST_KEY)
+        cache.set(backups.LAST_KEY, {"keys": ["manual/x.sql.gz.age"], "bytes": 9, "at": "2026-11-05T10:00:00"})
+        offsite = admin.site_health(None, {})["offsite_backups"]
+        self.assertEqual(offsite["last"]["keys"], ["manual/x.sql.gz.age"])
+        self.assertNotIn("failing", offsite)
+        sender = mock.Mock()
+        sender.name = "auctions.tasks.backup_database"
+        site_checks._task_failed(sender=sender, exception=OSError("disk full"))
+        self.assertTrue(admin.site_health(None, {"brief": True})["offsite_backups"]["failing"])
+        # A deploy's backup is a command, not a task: its success clears the failure too.
+        cache.set(backups.LAST_KEY, {"keys": ["deploy/y.sql.gz.age"], "bytes": 9, "at": "2999-01-01T00:00:00+00:00"})
+        self.assertFalse(admin.site_health(None, {})["offsite_backups"]["failing"])
 
     def test_site_health_names_them(self):
         self.task("dead", 120)
@@ -195,3 +239,18 @@ class LogContextTests(SimpleTestCase):
         handler = settings.LOGGING["handlers"]["root_file"]
         self.assertIn("context", handler["filters"])
         self.assertIn("{context}{message}", settings.LOGGING["formatters"]["verbose"]["format"])
+
+
+class SetupCeleryBeatTests(StandardTestCase):
+    def test_every_crontab_it_stores_parses(self):
+        """It once stored a crontab's expanded sets ("{30}"), which beat and site_health couldn't read."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        call_command("setup_celery_beat", stdout=StringIO())
+        call_command("setup_celery_beat", stdout=StringIO())  # a second run relinks nothing
+        backup = PeriodicTask.objects.get(name="backup_database")
+        self.assertEqual((backup.crontab.minute, backup.crontab.hour, backup.crontab.day_of_week), ("30", "3", "0"))
+        for task in PeriodicTask.objects.filter(crontab__isnull=False):
+            task.schedule.remaining_estimate(timezone.now())

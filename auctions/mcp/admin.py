@@ -19,7 +19,7 @@ differences, all enforced here or in the transport rather than by any client's a
 
 :func:`backup_database` queues an offsite backup, which copies data out and changes none of it.
 Otherwise two tools write, and only into a queue a person decides: :func:`suggest_feature` adds to the feature
-requests (``planned`` is what starts work, and only a person sets it), and a change to the site's data
+requests (``planned`` is what starts work, and only a person's approval sets it), and a change to the site's data
 is a :class:`auctions.models.AgentProposal`: a list of registry writes, or
 :data:`APPROVAL_ONLY` changes that no assistant may make directly. Nothing in it runs until a person
 presses Approve on ``/admin-dashboard/proposals/`` (:func:`apply_proposal`), as that person, through
@@ -1025,6 +1025,21 @@ def _plural(count: int, word: str, plural: str = "") -> str:
     return f"{count} {word if count == 1 else (plural or word + 's')}"
 
 
+def _backup_outcome() -> dict[str, Any]:
+    """The newest backup's keys, size and time, and whether a later run failed (any reason, any queue)."""
+    from auctions import backups, site_checks
+
+    outcome = site_checks.task_outcome("auctions.tasks.backup_database")
+    last = backups.last()
+    found: dict[str, Any] = {"last": last or None}
+    if outcome.get("failed"):
+        found["failed_at"] = outcome["failed"]
+        found["error"] = outcome.get("error", "")
+        # A deploy's backup runs as a command, not a task, so its success is only in ``last``.
+        found["failing"] = outcome["failed"] > max(outcome.get("ok", ""), last.get("at", ""))
+    return found
+
+
 def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     """What is deployed and whether it is well: commit, migrations, queues, beat and each periodic task,
     errors and warnings in every log, app crashes, counts against a normal day, rows stuck in a state
@@ -1033,7 +1048,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
     ``since`` widens or narrows the window (default the last day), ``known`` leaves out kinds already
     dealt with, and ``brief`` returns only what is wrong, so a quiet week costs one line.
     """
-    from auctions import app_crashes, site_checks, uptime
+    from auctions import app_crashes, backups, site_checks, uptime
 
     since, problem = parse_since(params.get("since"))
     if problem:
@@ -1117,6 +1132,10 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         summary += f" No page views for {quiet['minutes']} minutes from {quiet['from'][:16].replace('T', ' ')} UTC."
     if window["verdict"] != "quiet":
         summary += " " + window["advice"]
+    no_backups = backups.warning()
+    if no_backups:
+        summary += " " + no_backups
+    offsite = {"configured": not no_backups, "missing": backups.missing(), **_backup_outcome()}
 
     facts = {
         **deployed,
@@ -1137,6 +1156,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
         "slow_requests_last_hour": slow,
         "debug": settings.DEBUG,
         "deploy_window": window,
+        "offsite_backups": offsite,
         "checked_at": timezone.now().isoformat(),
     }
     if brief:
@@ -1156,6 +1176,7 @@ def site_health(request, params: dict[str, Any]) -> dict[str, Any]:
             "slow_requests_last_hour": bool(slow["busiest"]),
             "longest_without_page_views_24h": silent,
             "deploy_window": window["verdict"] != "quiet",
+            "offsite_backups": bool(no_backups or offsite.get("failing")),
         }
         keep = {"branch", "commit", "checked_at"} | {key for key, bad in wrong.items() if bad}
         facts = {key: value for key, value in facts.items() if key in keep}
@@ -1372,25 +1393,57 @@ def untrusted_auction_creators(request, params: dict[str, Any]) -> dict[str, Any
 # --- changes that only a proposal makes --------------------------------------------------------------
 
 
+def _request_status_problem(params: dict[str, Any], row=None) -> str:
+    """Why this ``set_request_status`` step can't run, or ``""``.
+
+    ``planned`` starts a build, and the build reads the request as its spec, so a step that plans one
+    only moves a ``new`` request and carries no note or target: what the approver read on the
+    approval page is what gets built.
+    """
+    from auctions.models import AssistantSkillRequest
+
+    status = _request_status(params)
+    if status not in dict(AssistantSkillRequest.STATUS_CHOICES):
+        return "Which status? One of: new, planned, done, declined."
+    if row is None:
+        row = AssistantSkillRequest.objects.filter(pk=_int(params, "request")).first()
+    if row is None:
+        return "There is no feature request with that number."
+    if status == AssistantSkillRequest.STATUS_PLANNED:
+        if row.status != AssistantSkillRequest.STATUS_NEW:
+            return f"Request {row.pk} is {row.get_status_display().lower()}; only a new request can be planned."
+        if "note" in params or "target" in params:
+            return "A step that plans a request changes nothing else on it: no note, no target."
+    return ""
+
+
+def _request_status(params: dict[str, Any]) -> str:
+    from auctions.models import AssistantSkillRequest
+
+    spoken = {label.lower(): value for value, label in AssistantSkillRequest.STATUS_CHOICES}
+    status = _str(params, "status").lower()
+    return spoken.get(status, status)
+
+
 def set_request_status(request, params: dict[str, Any]) -> dict[str, Any]:
-    """Move one feature request between its four states, with an optional note to the owner's self."""
+    """Move one feature request between its four states, with an optional note to the owner's self.
+
+    Runs only from an approved proposal, as the person who pressed Approve, and that press is what
+    plans a request. A request edited after the proposal was made isn't planned: the approver read
+    the older text.
+    """
     from auctions.models import AssistantSkillRequest
 
     if not request.user.is_superuser:
         raise PermissionDenied
-    statuses = dict(AssistantSkillRequest.STATUS_CHOICES)
-    spoken = {label.lower(): value for value, label in AssistantSkillRequest.STATUS_CHOICES}
-    status = _str(params, "status").lower()
-    status = spoken.get(status, status)
-    if status == AssistantSkillRequest.STATUS_PLANNED:
-        # Planned starts a build, so only the owner's own decision sets it -- never
-        # an approved proposal, whose wording (and note) an agent wrote.
-        return _error("Only the owner plans a request.")
-    if status not in statuses:
-        return _need("Which status? One of: new, done, declined.")
     row = AssistantSkillRequest.objects.filter(pk=_int(params, "request")).first()
-    if row is None:
-        return _error("There is no feature request with that number.")
+    problem = _request_status_problem(params, row)
+    if problem:
+        return _need(problem) if problem.startswith("Which status") else _error(problem)
+    status = _request_status(params)
+    proposed_at = getattr(request, "proposal_created", None)
+    if status == AssistantSkillRequest.STATUS_PLANNED and (proposed_at is None or row.updatedon > proposed_at):
+        return _error(f"Request {row.pk} changed after this was proposed; propose planning it again.")
     row.status = status
     fields = ["status", "updatedon"]
     if "note" in params:
@@ -1637,20 +1690,35 @@ def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
     club, user, problem = _club_and_account(params)
     if problem:
         return _error(problem)
+    all_roles = palette_actions._flag(params, "all_roles")
     if palette_actions._flag(params, "admin") is False:
-        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False, permission_admin=True).first()
-        if member is None:
-            return _ok(f"{user.username} wasn't an admin of {club.name}.")
-        member.permission_admin = False
-        member.save()
-        ClubHistory.objects.create(
-            club=club,
-            user=request.user,
-            action=f"Removed admin permissions from {member.name} through an approved proposal.",
-            applies_to="MEMBERS",
-            member=member,
-        )
-        return _ok(f"{user.username} is no longer an admin of {club.name}.")
+        from auctions.views.base import CLUB_PERMISSION_FIELDS
+
+        # all_roles also clears the narrower roles a mistaken grant or a later edit left behind. Every
+        # live row: nothing makes (club, user) unique, and check_club_permission reads any of them.
+        fields = CLUB_PERMISSION_FIELDS if all_roles else ("permission_admin",)
+        members = [
+            row
+            for row in ClubMember.objects.filter(club=club, user=user, is_deleted=False)
+            if any(getattr(row, field) for field in fields)
+        ]
+        if not members:
+            return _ok(f"{user.username} had none of those roles in {club.name}.")
+        what = "all club roles" if all_roles else "admin permissions"
+        for member in members:
+            for field in fields:
+                setattr(member, field, False)
+            member.save()
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Removed {what} from {member.name} through an approved proposal.",
+                applies_to="MEMBERS",
+                member=member,
+            )
+        return _ok(f"{user.username} no longer has {what} in {club.name}.")
+    if all_roles:
+        return _error("all_roles removes roles, so it needs admin false.")
     if not services.ensure_club_admin(club, user, note="through an approved proposal", actor=request.user):
         return _ok(f"{user.username} was already an admin of {club.name}.")
     return _ok(f"{user.username} is now an admin of {club.name}.")
@@ -1914,12 +1982,13 @@ APPROVAL_ONLY: dict[str, Action] = {
         Action(
             name="set_request_status",
             description=(
-                "Move a feature request to new, done or declined, optionally replacing the owner's note on "
-                "it. Never planned: only the owner plans."
+                "Move a feature request to new, planned, done or declined, optionally replacing the owner's "
+                "note on it. Planned starts a build once the owner approves: only a new request, alone in "
+                "its step, with no note or target."
             ),
             params={
                 "request": "integer, required. The request number from list_feature_requests.",
-                "status": "string, required. new, done or declined.",
+                "status": "string, required. new, planned, done or declined.",
                 "note": "string, optional. Replaces the owner's private note on it.",
                 "target": "string, optional. site, app or both: which repository building it changes.",
             },
@@ -2016,6 +2085,7 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "club": "string, required. The club's number, or its exact name.",
                 "user": "string, required. The account's username, or its number.",
                 "admin": "boolean, optional, default true. false removes their admin rights.",
+                "all_roles": "boolean, optional, default false. Needs admin false; removes every club role, not only admin.",
             },
             danger=DANGER_CONFIRM,
             idempotent=True,
@@ -2098,6 +2168,7 @@ APPROVAL_ONLY: dict[str, Action] = {
 #: while somebody is still there to answer it rather than on the approval page. Each runs again,
 #: inside the change itself, on approval.
 PROPOSAL_CHECKS = {
+    "set_request_status": _request_status_problem,
     "add_club": lambda arguments: club_onboarding.club_fields(arguments)[1],
     "make_club_admin": lambda arguments: _club_and_account(arguments)[2],
     "set_user_features": _features_problem,
@@ -2158,7 +2229,8 @@ def _steps(raw: Any) -> tuple[list[dict[str, Any]], str]:
     if not isinstance(raw, list) or not raw:
         return [], "steps must be a list of at least one {tool, arguments}."
     species_only = all(
-        isinstance(step, dict) and str(step.get("tool", "")).strip().lower() in admin_species.SPECIES_STEPS
+        isinstance(step, dict)
+        and str(step.get("tool", "")).strip().lower() in admin_species.SPECIES_STEPS | admin_species.SPECIES_LIST_WRITES
         for step in raw
     )
     most = MAX_SPECIES_STEPS if species_only else MAX_STEPS
@@ -2269,8 +2341,8 @@ def backup_database(request, params: dict[str, Any]) -> dict[str, Any]:
 def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     """Put an idea in the feature request queue as the owner's own, status new. Builds nothing.
 
-    The queue's other writes need the owner too: ``planned`` is what starts work, and only a person
-    sets it. Never edits a request already there, so what the owner planned is what gets built.
+    The queue's other writes need the owner too: ``planned`` is what starts work, and only an approved
+    proposal sets it. Never edits a request already there, so what the owner planned is what gets built.
     """
     from auctions.models import AssistantSkillRequest
 
@@ -2298,6 +2370,22 @@ def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def describe_step(tool: str, arguments: dict[str, Any]) -> str | None:
+    """One proposal step as the approver reads it, or ``None`` to show its arguments. A step that plans a
+    request shows the request itself, since its text is what gets built."""
+    from auctions.models import AssistantSkillRequest
+
+    if tool == "set_request_status" and isinstance(arguments, dict):
+        row = AssistantSkillRequest.objects.filter(pk=_int(arguments, "request")).first()
+        if row is None:
+            return None
+        text = f"Request {row.pk} ({row.get_status_display().lower()}): {palette_actions.untrusted_short(row.skill)}"
+        if row.reason:
+            text += f" — {palette_actions.untrusted_short(row.reason[:500])}"
+        return f"{text} → {_request_status(arguments) or '?'}"
+    return admin_species.describe_step(tool, arguments)
+
+
 def apply_proposal(proposal, request) -> None:
     """Run an approved proposal's steps in order, as ``request.user``, stopping at the first that fails.
 
@@ -2309,6 +2397,8 @@ def apply_proposal(proposal, request) -> None:
     request.palette_page = {}
     # The reach the proposing agent read with on this endpoint (documents.transcribe.owner_reach).
     request.owner_reach = True
+    # What set_request_status compares a request's last edit against.
+    request.proposal_created = proposal.createdon
     request.assistant_surface = f"{proposal.surface or 'an assistant'}, approved by {request.user.username}"[:100]
     results = []
     status = AgentProposal.STATUS_APPLIED

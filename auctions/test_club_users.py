@@ -380,9 +380,10 @@ class ManageUsersThroughClubTests(TestCase):
             **self._auction_form_data(),
             "manage_users_through_club": "checkin",
             "online_bidding": "allow",
-            "date_online_bidding_starts": (self.auction.date_start - datetime.timedelta(days=3)).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
+            # Noon, so the form never reads an hour the clocks went back through as ambiguous.
+            "date_online_bidding_starts": (self.auction.date_start - datetime.timedelta(days=3))
+            .replace(hour=12, minute=0, second=0)
+            .strftime("%Y-%m-%d %H:%M:%S"),
             "date_online_bidding_ends": self.auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
         }
         response = self.client.post(reverse("edit_auction", kwargs={"slug": self.auction.slug}), data=data, follow=True)

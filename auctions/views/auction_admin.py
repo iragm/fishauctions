@@ -307,6 +307,8 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
         was_promoted = self.get_object().promote_this_auction
+        let_waiting_in = form.cleaned_data.get("let_waiting_sellers_sell")
+        waiting_seen = form.cleaned_data.get("waiting_sellers_seen")
         try:
             form = super().form_valid(form)
         except ValidationError as exc:
@@ -314,6 +316,12 @@ class AuctionUpdate(FormFrictionMixin, LoginRequiredMixin, AuctionViewMixin, Upd
             return self.form_invalid(form)
         # Promoting a previously-unpromoted auction makes it the club's current auction.
         updated_auction = self.get_object()
+        # The admin's call, and only with approval off; see AuctionEditForm.let_waiting_sellers_sell.
+        if let_waiting_in and not updated_auction.only_approved_sellers:
+            if waiting_seen == updated_auction.cannot_sell_count:
+                updated_auction.let_waiting_sellers_sell(user=self.request.user)
+            else:
+                messages.warning(self.request, "Who can't sell changed while you were editing, so nobody was let in.")
         if promoting_makes_it_the_clubs_current_auction(updated_auction, was_promoted):
             messages.info(self.request, f"This is now the current auction for {updated_auction.club.name}.")
         if (

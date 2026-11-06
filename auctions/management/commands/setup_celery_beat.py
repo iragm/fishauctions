@@ -67,14 +67,13 @@ class Command(BaseCommand):
                 schedule_obj = interval
                 schedule_type = "interval"
             else:
-                # Crontab schedule
-                crontab, created = CrontabSchedule.objects.get_or_create(
-                    minute=schedule.minute,
-                    hour=schedule.hour,
-                    day_of_week=schedule.day_of_week,
-                    day_of_month=schedule.day_of_month,
-                    month_of_year=schedule.month_of_year,
-                )
+                # Crontab schedule, found or made the way beat's own sync does (ModelEntry.to_model_schedule):
+                # its original fields and time zone. Its .minute etc. are the expanded sets, stored as
+                # "{30}", which no crontab parses; this command and beat then relinked the task to
+                # each other's row on every start, and beat skipped the weekly backup while it held this one.
+                crontab = CrontabSchedule.from_schedule(schedule)
+                if crontab.pk is None:
+                    crontab.save()
                 schedule_obj = crontab
                 schedule_type = "crontab"
 
@@ -113,6 +112,9 @@ class Command(BaseCommand):
                 else:
                     self.stdout.write(f"  - Skipped (no changes): {task_name}")
                     skipped_count += 1
+
+        # The unparseable rows the old crontab lookup left ("{30}"), once nothing points at them.
+        CrontabSchedule.objects.filter(minute__startswith="{", periodictask__isnull=True).delete()
 
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("Summary:"))

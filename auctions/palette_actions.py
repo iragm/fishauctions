@@ -8946,7 +8946,9 @@ def _auction_setting_fields(form):
     return {
         name: field
         for name, field in form.fields.items()
-        if name not in _AUCTION_SETTINGS_NOT_SPOKEN and not isinstance(field, forms.DateTimeField)
+        if name not in _AUCTION_SETTINGS_NOT_SPOKEN
+        and name not in getattr(form, "ACTIONS", ())
+        and not isinstance(field, forms.DateTimeField)
     }
 
 
@@ -10561,6 +10563,22 @@ def _can_add_species(user) -> bool:
     return bool(userdata and userdata.runs_an_auction)
 
 
+def _genus_relative(scientific_name):
+    """The species on the list most like a new one in the same genus: one with a family, in the trade, first."""
+    from .models import Species
+    from .species_matching import split_scientific_name
+
+    genus, _epithet = split_scientific_name(scientific_name)
+    if not genus:
+        return None
+    return (
+        Species.objects.filter(genus__iexact=genus, approved=True, is_hybrid=False, parent__isnull=True)
+        .annotate(no_family=Q(family=""))
+        .order_by("no_family", "trade_rank", "pk")
+        .first()
+    )
+
+
 def add_species(request, params: dict[str, Any]) -> dict[str, Any]:
     """Add a species that isn't on the list; try the other two tools first.
 
@@ -10609,6 +10627,23 @@ def add_species(request, params: dict[str, Any]) -> dict[str, Any]:
             )
         parent = matches[0]
 
+    from .models import Category
+
+    # A new species in a genus the list already has takes that genus's family, habitat and category.
+    relative = parent or _genus_relative(scientific_name)
+    category = None
+    category_name = _str(params, "category")
+    if category_name:
+        category = Category.objects.filter(name__iexact=category_name).first()
+        if category is None:
+            return _error(f"There is no category called {untrusted_short(category_name)}.")
+    elif relative and relative.category_id:
+        category = relative.category
+    saltwater = _preference_boolean(params.get("saltwater"))
+    if saltwater is None and relative and (relative.freshwater or relative.brackish or relative.saltwater):
+        habitat = {"freshwater": relative.freshwater, "brackish": relative.brackish, "saltwater": relative.saltwater}
+    else:
+        habitat = {"freshwater": not saltwater, "saltwater": bool(saltwater)}
     data = {
         "scientific_name_input": scientific_name,
         "common_name": common_name[:255],
@@ -10617,12 +10652,15 @@ def add_species(request, params: dict[str, Any]) -> dict[str, Any]:
         "parent": parent.pk if parent else "",
         "other_names": _str(params, "other_names"),
         "attach_to_lots": False,
-        "freshwater": True,
+        "category": category.pk if category else "",
+        **{flag: "on" for flag, on in habitat.items() if on},
         "breeder_points": True,
     }
     form = SpeciesAdminForm(data=data, added_by=user)
     if not form.is_valid():
         return _form_problem(form)
+    if relative:
+        form.instance.family, form.instance.order = relative.family, relative.order
     species = form.save()
 
     summary = f"Added {species.full_scientific_name} to the species list."
@@ -12182,6 +12220,11 @@ register(
                 "scientific name blank and put the trade's name in variety."
             ),
             "other_names": "string, optional. Further names people type, separated by commas.",
+            "category": (
+                "string, optional. The category its lots are filed under, by name. Left out, a species in "
+                "a genus the list already has takes that genus's category, family and habitat."
+            ),
+            "saltwater": "boolean, optional. True for a marine species; left out, the genus decides, else freshwater.",
             "lot": "string, optional. A lot to set the new species on straight away.",
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
