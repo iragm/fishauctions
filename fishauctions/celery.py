@@ -101,6 +101,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.backup_database",
         "schedule": crontab(day_of_week=0, hour=3, minute=30),
     },
+    # CARES species from aquaristspecies.net (auctions/cares.py), Saturdays at 4:20 AM.
+    "sync_cares_species": {
+        "task": "auctions.tasks.sync_cares_species",
+        "schedule": crontab(day_of_week=6, hour=4, minute=20),
+    },
     # Send notifications about unread chats - every 24 hours
     "email_unseen_chats": {
         "task": "auctions.tasks.email_unseen_chats",

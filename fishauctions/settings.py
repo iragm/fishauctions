@@ -786,6 +786,10 @@ DMCA_AGENT_PHONE = os.environ.get("DMCA_AGENT_PHONE", "")
 DMCA_AGENT_EMAIL = os.environ.get("DMCA_AGENT_EMAIL", "")
 DMCA_AGENT_ADDRESS = os.environ.get("DMCA_AGENT_ADDRESS", "")
 
+# The weekly CARES species sync (auctions/cares.py). Blank turns it off.
+CARES_PARTNER_KEY = os.environ.get("CARES_PARTNER_KEY", "")
+CARES_API_URL = os.environ.get("CARES_API_URL", "https://aquaristspecies.net/api/partner/cares-species/")
+
 # Command palette assist (auctions/llm.py). Enabled only with an API key.
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano")

@@ -1215,6 +1215,8 @@ class ClubBapLotHTMxTable(tables.Table):
                 ' <span class="badge bg-info text-dark">{}</span>',
                 record.auction.custom_checkbox_name,
             )
+        if self.club and self.club.points_for_cares_species > 0 and record.cares:
+            badges = badges + format_html(' <span class="badge bg-info text-dark">CARES</span>')
         return format_html('<a href="{}">{}</a><div class="mt-1">{}</div>', url, value, badges)
 
     def render_seller_name(self, value, record):
@@ -1255,6 +1257,8 @@ class ClubBapLotHTMxTable(tables.Table):
             default_points = record.species_category.bap_points if record.species_category_id else 5
         if self.club and self.club.points_for_custom_checkbox > 0 and record.custom_checkbox:
             default_points += self.club.points_for_custom_checkbox
+        if self.club and self.club.points_for_cares_species > 0 and record.cares:
+            default_points += self.club.points_for_cares_species
         return mark_safe(  # noqa: S308 - render_to_string output; the template autoescapes
             render_to_string(
                 "auctions/bap_lot_buttons.html",

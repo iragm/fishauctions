@@ -3557,6 +3557,7 @@ _CLUB_BAP_SETTINGS = (
     "days_between_same_name_lots",
     "days_between_same_species_lots",
     "points_for_custom_checkbox",
+    "points_for_cares_species",
     "only_donation_lots",
     "only_sold_lots",
     "auto_add_points",

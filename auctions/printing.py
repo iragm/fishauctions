@@ -206,9 +206,15 @@ def plan_label(label, *, print_fields, geometry):
             label.species_line, label.species_is_scientific = label.scientific_name_line, True
         elif label.common_name_line:
             label.species_line = label.common_name_line
+    # A CARES species says so after its name, on every label that prints species.
+    label.species_suffix = ""
+    if "scientific_name" in print_fields and label.cares:
+        if not label.species_line:
+            label.species_line, label.species_is_scientific = label.scientific_name, True
+        label.species_suffix = " (CARES)"
 
     middle_band = (
-        ("species", label.species_line, small),
+        ("species", label.species_line + label.species_suffix, small),
         ("custom_field", label.custom_field_1 if "custom_field_1" in print_fields else "", small),
         ("category", str(label.category) if "category" in print_fields and label.category else "", font),
     )
