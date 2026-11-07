@@ -738,7 +738,7 @@ this only quotes its opening sentence.
 - **`test_wallet_passes.py`** (1113 lines)
   Membership cards: Google Wallet, Apple Wallet, PassKit and the numbers on them.
   `DiscordJoinModalNameTests`, `DiscordJoinButtonTests`, `ClubMemberNameModelTests`, `ClubMemberIngestNameTests`, `GoogleWalletClassCreateTests`, `MembershipNumberUniquenessTests`, `AppleWalletPassTests`, `PassKitWebServiceTests`, `MembershipNumberModeTests`, `ClubIconWalletTests`
-- **`test_wallet_status.py`** (1404 lines)
+- **`test_wallet_status.py`** (1405 lines)
   Wallet status text, error-page logging, and the label-printing surfaces in the app.
 - **`tests.py`** (329 lines)
   Shared test fixture and helpers every other test module builds on: StandardTestCase, WritableMediaRoot, patch_views.
