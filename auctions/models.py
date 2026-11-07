@@ -1055,6 +1055,11 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
 
+    # Booked by the Square webhook (SquareWebhookView) from orders the site didn't create.
+    record_offsite_square_payments = models.BooleanField(
+        default=False,
+        verbose_name="Add Square payments taken outside this site to the treasurer report",
+    )
     # Donation vendor tracking; see auctions/donations.py.
     enable_donation_tracking = models.BooleanField(
         default=False,
@@ -11751,6 +11756,8 @@ class ClubMoney(models.Model):
     CATEGORY_CLUB_MEMBER_DISCOUNT = "club_member_discount"
     CATEGORY_REGISTRATION_FEE = "registration_fee"
     CATEGORY_ROUNDING = "rounding"
+    # Booked by the Square webhook from the club's own Square sales, when the club opts in.
+    CATEGORY_SQUARE_OFFSITE = "square_offsite"
     # Entered by hand by a treasurer.
     CATEGORY_DONATION = "donation"
     CATEGORY_SPEAKER_COSTS = "speaker_costs"
@@ -11767,6 +11774,7 @@ class ClubMoney(models.Model):
         CATEGORY_FIRST_BID_PAYOUT,
         CATEGORY_CLUB_MEMBER_DISCOUNT,
         CATEGORY_ROUNDING,
+        CATEGORY_SQUARE_OFFSITE,
     )
 
     CATEGORY_CHOICES = (
@@ -11779,6 +11787,7 @@ class ClubMoney(models.Model):
         (CATEGORY_CLUB_MEMBER_DISCOUNT, "Club member discount"),
         (CATEGORY_REGISTRATION_FEE, "Registration fee"),
         (CATEGORY_ROUNDING, "Invoice rounding"),
+        (CATEGORY_SQUARE_OFFSITE, "Square payment outside this site"),
         (CATEGORY_DONATION, "Donation"),
         (CATEGORY_SPEAKER_COSTS, "Speaker costs"),
         (CATEGORY_MEETING_LOCATION_COST, "Meeting location cost"),
@@ -11796,6 +11805,8 @@ class ClubMoney(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.CharField(max_length=DESCRIPTION_MAX_LENGTH, blank=True, default="")
     category = models.CharField(max_length=40, choices=CATEGORY_CHOICES)
+    # The Square payment or refund id, for rows the webhook books; it re-fires, so this keeps one row each.
+    external_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     createdon = models.DateTimeField(auto_now_add=True)
 
     class Meta:

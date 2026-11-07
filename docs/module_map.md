@@ -159,7 +159,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6659 lines)
+- **`forms.py`** (6665 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -206,7 +206,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15377 lines)
+- **`models.py`** (15388 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -667,9 +667,9 @@ this only quotes its opening sentence.
 - **`test_species_search.py`** (188 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.
   `LotSearchBySpeciesTests`, `SpeciesQuickCreateTests`
-- **`test_square.py`** (943 lines)
+- **`test_square.py`** (1070 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
-  `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`
+  `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`, `SquareOffsitePaymentTests`
 - **`test_static_files.py`** (155 lines)
   `/static/`: content-hashed names, and the nginx rule that caches them for a year.
   `TemplatesNameRealFilesTests`, `HashedNamesReachTheYearLongCacheTests`, `MissingManifestEntriesDoNotRaiseTests`, `DebugSkipsHashingTests`
@@ -1081,7 +1081,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_pages.py`** (623 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
-- **`club_reports.py`** (829 lines)
+- **`club_reports.py`** (830 lines)
   What a club's officers read: history, stats, the treasurer's report, money in and out.
   `ClubHistoryView`, `ClubStatsView`, `ClubTreasurerReportView`, `ClubTreasurerReportExportView`, `ClubMoneyCreateView`, `ClubMoneyBalanceView`, `ClubMemberCSVImportView`, `ClubMemberCSVExportView`
 - **`discord.py`** (972 lines)
@@ -1137,7 +1137,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`voice.py`** (188 lines)
   Voice on set lot winners: reading what was heard, opening the page's OpenAI session, and the log.
   `VoiceCommandLogView`, `VoiceInterpretView`, `VoiceCloudSessionView`
-- **`webhooks.py`** (974 lines)
+- **`webhooks.py`** (1104 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`
 

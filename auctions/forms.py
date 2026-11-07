@@ -4825,6 +4825,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "show_member_barcode",
+            "record_offsite_square_payments",
             "paypal_webhook_id",
         ]
         help_texts = {
@@ -4845,6 +4846,11 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.form_method = "post"
 
         layout_fields = ["membership_system", "membership_annual_fee", "show_member_barcode"]
+        if self.instance and self.instance.pk and self.instance.effective_square_seller:
+            layout_fields.append("record_offsite_square_payments")
+        else:
+            # Nothing to record without a Square account; popping keeps any saved value.
+            self.fields.pop("record_offsite_square_payments", None)
         if show_paypal_subscriptions:
             self.fields["paypal_webhook_id"].label = "PayPal webhook ID"
             self.fields["paypal_webhook_id"].required = False
