@@ -1366,6 +1366,7 @@ EXCLUDED: dict[str, str] = {
     "clubmember_discord": _API,
     "clubmember_create": _API,
     "club_member_renew": _API,
+    "club_square_dues": _API,
     "club_member_membership_number": _API,
     "club_member_resend_card": _API,
     "club_member_delete": _API,

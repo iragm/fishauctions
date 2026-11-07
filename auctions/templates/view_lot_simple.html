@@ -36,6 +36,7 @@
                 {% endif %}
             {% endif %}<br>
             {% if lot.auction.use_i_bred_this_fish_field and lot.i_bred_this_fish%}<b>Bred by this user</b><br>{% endif %}
+            {% if lot.cares %}<b>CARES:</b> {{ lot.cares_display }}<br>{% endif %}
             {% if lot.custom_checkbox_label %}<b>{{ lot.custom_checkbox_label }}</b><br>{% endif %}
             {% if lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
                 <b>{{ lot.auction.custom_field_1_name }}:</b> {{ lot.custom_field_1 }}<br>

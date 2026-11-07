@@ -75,6 +75,7 @@ REPOINTED = frozenset(
         "auctions.ClubHistory.user",
         "auctions.ClubMember.added_by",
         "auctions.ClubMoney.created_by",
+        "auctions.SquareOffsitePayment.resolved_by",
         "auctions.CommandPaletteSearch.user",
         "auctions.ContentReport.reported_by",
         "auctions.ContentReport.resolved_by",

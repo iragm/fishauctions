@@ -1067,7 +1067,8 @@ class ClubMemberRenewAPITests(TestCase):
         self.club.send_membership_renewal_confirmation = True
         self.club.save()
         ClubMember.objects.create(club=self.club, name="Confirm Member", email="confirm@example.com")
-        with patch("auctions.tasks.mail.send") as send:
+        # Sent once the renewal commits.
+        with patch("auctions.tasks.mail.send") as send, self.captureOnCommitCallbacks(execute=True):
             self._post({"email": "confirm@example.com"})
         self.assertTrue(send.called)
         self.assertIn("renewed", send.call_args.kwargs["subject"])

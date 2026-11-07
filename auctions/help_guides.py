@@ -839,6 +839,7 @@ CLUB_SETTINGS_NOT_IN_HELP: dict[str, str] = {
             "auto_add_points",
             "points_per_lot",
             "points_for_custom_checkbox",
+            "points_for_cares_species",
             "days_between_same_name_lots",
             "days_between_same_species_lots",
             "only_active_members_can_participate",

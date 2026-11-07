@@ -211,6 +211,8 @@ class ClubBapLotSerializer(serializers.ModelSerializer):
     category = serializers.SerializerMethodField()
     program = serializers.CharField(source="bap_placeholder", read_only=True)
     custom_checkbox_name = serializers.SerializerMethodField()
+    #: The species' CARES priority in words, or "".
+    cares = serializers.CharField(source="cares_display", read_only=True)
     bap_eligible = serializers.SerializerMethodField()
     bap_ineligible_reason = serializers.SerializerMethodField()
     bap_ineligible_reason_display = serializers.SerializerMethodField()
@@ -277,6 +279,7 @@ class ClubBapLotSerializer(serializers.ModelSerializer):
             "donation",
             "custom_checkbox",
             "custom_checkbox_name",
+            "cares",
             "bap_eligible",
             "bap_ineligible_reason",
             "bap_ineligible_reason_display",
@@ -301,6 +304,8 @@ class SpeciesMatchSerializer(serializers.ModelSerializer):
     common_names = serializers.SerializerMethodField()
     # The model calls it "species"; out as the conventional name.
     species_epithet = serializers.CharField(source="species", read_only=True)
+    #: The CARES priority in words, or "".
+    cares = serializers.CharField(source="cares_display", read_only=True)
 
     def get_parent(self, obj):
         if not obj.parent_id:
@@ -337,6 +342,7 @@ class SpeciesMatchSerializer(serializers.ModelSerializer):
             "order",
             "category",
             "trade_rank",
+            "cares",
             "source",
             # Unapproved species come back to their club only, so the club must be able to tell.
             "approved",
@@ -622,7 +628,13 @@ class ClubApiLotSerializer(SparseFieldsMixin, PrivateBlockMixin, serializers.Mod
         name = obj.scientific_name
         if not name:
             return None
-        return {"id": obj.species_id, "scientific_name": name, "common_name": obj.species.common_name or ""}
+        return {
+            "id": obj.species_id,
+            "scientific_name": name,
+            "common_name": obj.species.common_name or "",
+            # The CARES priority in words ("Endangered"), or "" for a species not on the list.
+            "cares": obj.cares_display,
+        }
 
     def get_common_name(self, obj):
         """The hobby name to show when the lot name is the scientific one."""

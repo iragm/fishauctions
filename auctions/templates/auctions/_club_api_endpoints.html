@@ -68,6 +68,7 @@
       "donation": false,
       "custom_checkbox": false,
       "custom_checkbox_name": "",
+      "cares": "",
       "bap_eligible": true,
       "bap_ineligible_reason": "",
       "bap_ineligible_reason_display": "",
@@ -156,6 +157,7 @@
       "order": "Cichliformes",
       "category": {"id": 7, "name": "Cichlids"},
       "trade_rank": 0,
+      "cares": "",
       "source": "fishbase",
       "approved": true
     }
@@ -168,6 +170,7 @@
         <li><code>is_hybrid</code> &mdash; a cross with no accepted scientific name, e.g. a tibee shrimp. The only case where <code>scientific_name</code>, <code>genus</code> and <code>species_epithet</code> are all empty; <code>variety</code> holds the name the trade uses and <code>full_scientific_name</code> reads "Hybrid 'Tibee'". Post one with <code>{"is_hybrid": true, "variety": "Tibee"}</code> and no scientific name.</li>
         <li><code>category</code> &mdash; the category a lot of this species gets here, or <code>null</code>.</li>
         <li><code>trade_rank</code> &mdash; 0 = kept in the hobby, 1 = its genus is, 2 = neither. Results are ordered by it.</li>
+        <li><code>cares</code> &mdash; the species' CARES conservation priority ("Endangered"), or empty when it is not on the CARES list. Lots carry it too.</li>
         <li><code>approved</code> &mdash; <code>false</code> means it is yours: visible to this club only, until a site admin approves it.</li>
         <li><code>source</code> &mdash; <code>fishbase</code>, <code>aquarium</code> (curated trade list), <code>admin</code> or <code>manual</code>.</li>
         <li><code>source</code> at the top level &mdash; how it was matched: <code>exact</code>, <code>cache</code>, <code>search</code>, <code>llm</code> or <code>none</code>.</li>
@@ -254,7 +257,7 @@
       "quantity": 6,
       "description": "&lt;p&gt;Home bred, about 1 inch&lt;/p&gt;",
       "category": {"id": 7, "name": "Catfish"},
-      "species": {"id": 4821, "scientific_name": "Corydoras panda", "common_name": "Panda cory"},
+      "species": {"id": 4821, "scientific_name": "Corydoras panda", "common_name": "Panda cory", "cares": ""},
       "common_name": "Panda cory",
       "custom_checkbox": false,
       "custom_field_1": "",

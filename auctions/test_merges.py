@@ -67,6 +67,7 @@ class MergeCoverageTests(TestCase):
         "auctions.ClubMember.membership_carried_by",
         "auctions.Invoice.club_member",
         "auctions.InvoicePayment.club_member",
+        "auctions.SquareOffsitePayment.member",
     }
     #: A phone holds the closed member's own pass, which deactivating voids; the duplicate flag is cleared.
     MEMBER_LEFT = {"auctions.AppleDeviceRegistration.member", "auctions.ClubMember.possible_duplicate"}

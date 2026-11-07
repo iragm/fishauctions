@@ -871,8 +871,12 @@ class Club(CloudflareImageMixin, models.Model):
         default=0,
         help_text=(
             "Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable. "
-            "For example, call the checkbox “CARES species” and give it 5."
+            "For example, call the checkbox “Native species” and give it 5. CARES species have their own bonus."
         ),
+    )
+    points_for_cares_species = models.IntegerField(
+        default=0,
+        help_text="Bonus BAP points for a lot whose species is on the CARES list. Leave at 0 to disable.",
     )
     only_donation_lots = models.BooleanField(
         default=False,
@@ -1055,6 +1059,11 @@ class Club(CloudflareImageMixin, models.Model):
         ),
     )
 
+    # Booked by the Square webhook (SquareWebhookView) from orders the site didn't create.
+    record_offsite_square_payments = models.BooleanField(
+        default=False,
+        verbose_name="Add Square payments taken outside this site to the treasurer report",
+    )
     # Donation vendor tracking; see auctions/donations.py.
     enable_donation_tracking = models.BooleanField(
         default=False,
@@ -2583,6 +2592,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
         BapAward.objects.filter(club_member=duplicate).update(club_member=self)
         InvoicePayment.objects.filter(club_member=duplicate).update(club_member=self)
+        SquareOffsitePayment.objects.filter(member=duplicate).update(member=self)
         # An unpaid dues invoice renews whoever it names.
         Invoice.objects.filter(club_member=duplicate).update(club_member=self)
         for column in ("auction_email_member", "contact_email_member", "donation_email_member"):
@@ -3551,6 +3561,18 @@ def normalize_species_name(text):
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text)).strip()[:120]
 
 
+#: CARES priority codes and their names, as aquaristspecies.net sends them. auctions/cares.py folds the
+#: site's older spellings into these.
+CARES_CLASSIFICATIONS = (
+    ("CLC", "Least Concern"),
+    ("CNT", "Near Threatened"),
+    ("CVU", "Vulnerable"),
+    ("CEN", "Endangered"),
+    ("CCR", "Critically Endangered"),
+    ("CEW", "Extinct in the Wild"),
+)
+
+
 class Species(models.Model):
     """One species a lot can be tagged with, loaded from FishBase and the curated list.
 
@@ -3574,6 +3596,8 @@ class Species(models.Model):
         # Added on the site. Not "manual" (old Product rows), which import_fishbase folds away.
         ("admin", "Added on the site"),
         ("manual", "Added by hand"),
+        # The CARES priority list, from aquaristspecies.net (auctions/cares.py).
+        ("cares", "CARES list"),
     )
 
     #: FishBase ``Aquarium`` values meaning "an aquarium fish".
@@ -3682,6 +3706,19 @@ class Species(models.Model):
         ),
     )
 
+    cares_id = models.PositiveIntegerField(null=True, blank=True, unique=True)
+    cares_id.help_text = (
+        "This species' id on aquaristspecies.net, written by the weekly CARES sync.  Blank for a "
+        "species that has never been on the CARES list."
+    )
+    cares_classification = models.CharField(
+        max_length=4, blank=True, default="", choices=CARES_CLASSIFICATIONS, db_index=True
+    )
+    cares_classification.help_text = (
+        "The species' CARES conservation priority.  Blank means not a CARES species.  Kept by the "
+        "weekly sync; a hand edit lasts until CARES next changes the record."
+    )
+
     #: Sources that number their own species; duplicates are impossible there, so the scan is skipped.
     IMPORTED_SOURCES = ("fishbase", "sealifebase")
 
@@ -3763,6 +3800,13 @@ class Species(models.Model):
             possible_duplicate=None
         )
         self.possible_duplicate = None
+        # The CARES mark follows too; cares_id is unique, so the losing row lets go of it first. When both
+        # rows have one, the losing record is reported as claimed by the next sync, never re-added.
+        if duplicate.cares_id and not self.cares_id:
+            cares_id, code = duplicate.cares_id, duplicate.cares_classification
+            Species.objects.filter(pk=duplicate.pk).update(cares_id=None)
+            Species.objects.filter(pk=self.pk).update(cares_id=cares_id, cares_classification=code)
+            self.cares_id, self.cares_classification = cares_id, code
         duplicate.delete()
         return moved
 
@@ -3799,7 +3843,11 @@ class Species(models.Model):
         """
         if self.in_trade_override is not None:
             return self.in_trade_override
-        return self.source == "aquarium" or self.aquarium_use in self.AQUARIUM_TRADE_VALUES
+        return (
+            self.source in ("aquarium", "cares")
+            or bool(self.cares_classification)
+            or self.aquarium_use in self.AQUARIUM_TRADE_VALUES
+        )
 
     @classmethod
     def recompute_trade_ranks(cls, genus=None, batch_size=2000):
@@ -3809,7 +3857,8 @@ class Species(models.Model):
         traded = cls.objects.filter(in_trade_override=True) | cls.objects.filter(
             in_trade_override__isnull=True, aquarium_use__in=cls.AQUARIUM_TRADE_VALUES
         )
-        traded = traded | cls.objects.filter(in_trade_override__isnull=True, source="aquarium")
+        traded = traded | cls.objects.filter(in_trade_override__isnull=True, source__in=("aquarium", "cares"))
+        traded = traded | cls.objects.filter(in_trade_override__isnull=True).exclude(cares_classification="")
         if genus:
             traded = traded.filter(genus=genus)
         # order_by() clears Meta.ordering, which would make DISTINCT per species. discard(""): hybrids
@@ -3858,6 +3907,28 @@ class Species(models.Model):
         if self.variety and self.scientific_name:
             return f"{self.scientific_name} '{self.variety}'"
         return self.scientific_name or self.variety
+
+    @property
+    def cares(self):
+        """This species' CARES classification code, or its parent's for a cultivar; "" when it isn't on the list."""
+        if self.cares_classification:
+            return self.cares_classification
+        if self.parent_id and self.parent.cares_classification:
+            return self.parent.cares_classification
+        return ""
+
+    @property
+    def cares_display(self):
+        """The CARES priority in words ("Endangered"), or ""."""
+        return dict(CARES_CLASSIFICATIONS).get(self.cares, "")
+
+    @property
+    def cares_url(self):
+        """This species' page on aquaristspecies.net, or "" when the sync never saw it."""
+        if not self.cares:
+            return ""
+        species_id = self.cares_id if self.cares_classification else self.parent.cares_id
+        return f"https://www.aquaristspecies.net/species/{species_id}/" if species_id else ""
 
     @property
     def label(self):
@@ -4294,7 +4365,9 @@ class Auction(CachedPropertiesMixin, models.Model):
     use_scientific_name = models.BooleanField(default=True, blank=True, verbose_name="Use scientific name field")
     use_scientific_name.help_text = "Suggest a species based on the lot name.  Users pick from a short list, or No species for hardware and other non-living lots."
     use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
-    use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
+    use_custom_checkbox_field.help_text = (
+        "Optional information such as native species or difficult to keep.  CARES species are marked automatically."
+    )
     custom_dropdown_name = models.CharField(
         max_length=50, default="", blank=True, null=True, verbose_name="Custom dropdown name"
     )
@@ -9548,12 +9621,14 @@ class Lot(CachedPropertiesMixin, models.Model):
         return self.species_category.bap_points if self.species_category else 5
 
     def default_bap_points(self, club):
-        """What Approve offers: :meth:`bap_points_for_club` plus ``points_for_custom_checkbox`` if ticked. The
+        """What Approve offers: :meth:`bap_points_for_club` plus the custom checkbox and CARES bonuses. The
         one definition; ``ClubBapLotHTMxTable.render_actions`` is a deliberate prefetched copy.
         """
         points = self.bap_points_for_club(club)
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
             points += club.points_for_custom_checkbox
+        if club.points_for_cares_species > 0 and self.cares:
+            points += club.points_for_cares_species
         return points
 
     def auto_award_bap_points(self):
@@ -10412,6 +10487,42 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.auction and self.auction.use_quantity_field or self.quantity > 1:
             return f"QTY: {self.quantity}"
         return ""
+
+    @property
+    def cares(self):
+        """The CARES classification code of this lot's species, or "" -- also when the auction has the species
+        field off, as :attr:`scientific_name` is.
+        """
+        return self.species.cares if self.scientific_name else ""
+
+    @property
+    def cares_display(self):
+        """The CARES priority in words, or ""."""
+        return self.species.cares_display if self.cares else ""
+
+    #: What searching for this word matches: lots whose species is on the CARES list.
+    CARES_SEARCH_WORD = "cares"
+
+    @staticmethod
+    def cares_q():
+        """Lots :attr:`cares` is true for, as a filter: the species or a cultivar's parent is on the list, in
+        an auction that uses the species field (or no auction)."""
+        on_list = Q(species__cares_classification__gt="") | Q(species__parent__cares_classification__gt="")
+        return on_list & (Q(auction__isnull=True) | Q(auction__use_scientific_name=True))
+
+    @staticmethod
+    def cares_text_q(word):
+        """What a search for "cares" finds: :meth:`cares_q`, a lot whose name says so, and a ticked custom
+        checkbox its auction calls CARES -- what people marked by hand before the site knew."""
+        return (
+            Lot.cares_q()
+            | Q(lot_name__icontains=word)
+            | Q(
+                custom_checkbox=True,
+                auction__use_custom_checkbox_field=True,
+                auction__custom_checkbox_name__iexact=word,
+            )
+        )
 
     @property
     def custom_checkbox_label(self):
@@ -11419,6 +11530,13 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return ""
 
     @cached_property
+    def square_payment_hint(self):
+        """A line for admins when a Square payment taken outside the site matches this unpaid balance."""
+        from auctions.square_offsite import invoice_payment_hint
+
+        return invoice_payment_hint(self)
+
+    @cached_property
     def pre_register_used(self):
         return self.sold_lots_queryset.filter(pre_register_discount__gt=0).exists()
 
@@ -11751,6 +11869,8 @@ class ClubMoney(models.Model):
     CATEGORY_CLUB_MEMBER_DISCOUNT = "club_member_discount"
     CATEGORY_REGISTRATION_FEE = "registration_fee"
     CATEGORY_ROUNDING = "rounding"
+    # Booked by the Square webhook from the club's own Square sales, when the club opts in.
+    CATEGORY_SQUARE_OFFSITE = "square_offsite"
     # Entered by hand by a treasurer.
     CATEGORY_DONATION = "donation"
     CATEGORY_SPEAKER_COSTS = "speaker_costs"
@@ -11767,6 +11887,7 @@ class ClubMoney(models.Model):
         CATEGORY_FIRST_BID_PAYOUT,
         CATEGORY_CLUB_MEMBER_DISCOUNT,
         CATEGORY_ROUNDING,
+        CATEGORY_SQUARE_OFFSITE,
     )
 
     CATEGORY_CHOICES = (
@@ -11779,6 +11900,7 @@ class ClubMoney(models.Model):
         (CATEGORY_CLUB_MEMBER_DISCOUNT, "Club member discount"),
         (CATEGORY_REGISTRATION_FEE, "Registration fee"),
         (CATEGORY_ROUNDING, "Invoice rounding"),
+        (CATEGORY_SQUARE_OFFSITE, "Square payment outside this site"),
         (CATEGORY_DONATION, "Donation"),
         (CATEGORY_SPEAKER_COSTS, "Speaker costs"),
         (CATEGORY_MEETING_LOCATION_COST, "Meeting location cost"),
@@ -11796,6 +11918,8 @@ class ClubMoney(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.CharField(max_length=DESCRIPTION_MAX_LENGTH, blank=True, default="")
     category = models.CharField(max_length=40, choices=CATEGORY_CHOICES)
+    # The Square payment or refund id, for rows the webhook books; it re-fires, so this keeps one row each.
+    external_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     createdon = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -11804,6 +11928,49 @@ class ClubMoney(models.Model):
 
     def __str__(self):
         return f"{self.club}: {self.date} {self.amount} {self.get_category_display()}"
+
+
+class SquareOffsitePayment(models.Model):
+    """A payment taken in a connected Square account without this site: a club's own Payment Link or
+    register. Kept briefly (``square_offsite.RETENTION_DAYS``) to suggest a dues renewal or flag an invoice
+    that may be paid already; see :mod:`auctions.square_offsite`.
+    """
+
+    RESOLUTION_ADDED = "added"
+    RESOLUTION_RENEWED = "renewed"
+    RESOLUTION_DISMISSED = "dismissed"
+    RESOLUTION_CHOICES = (
+        (RESOLUTION_ADDED, "Added as a member"),
+        (RESOLUTION_RENEWED, "Renewed a member"),
+        (RESOLUTION_DISMISSED, "Not dues"),
+    )
+
+    payment_id = models.CharField(max_length=255, unique=True)
+    merchant_id = models.CharField(max_length=64, db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=10, default="USD")
+    paid_at = models.DateTimeField(db_index=True)
+    buyer_name = models.CharField(max_length=200, blank=True, default="")
+    buyer_email = models.CharField(max_length=254, blank=True, default="")
+    source = models.CharField(max_length=100, blank=True, default="")
+    refunded = models.BooleanField(default=False)
+    resolution = models.CharField(max_length=20, blank=True, default="", choices=RESOLUTION_CHOICES)
+    resolved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    resolved_on = models.DateTimeField(null=True, blank=True)
+    member = models.ForeignKey(
+        "ClubMember", null=True, blank=True, on_delete=models.SET_NULL, related_name="square_offsite_payments"
+    )
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-paid_at"]
+
+    def __str__(self):
+        return f"Square {self.payment_id}: {self.amount} {self.currency}"
+
+    @property
+    def buyer(self):
+        return self.buyer_name or self.buyer_email
 
 
 class Bid(InvalidatesRelatedCache, models.Model):

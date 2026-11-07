@@ -1987,7 +1987,7 @@ def my_bidder_number(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def lot_fields_in_use(auction) -> dict[str, Any]:
     """The optional per-lot fields this auction has on, under the club's labels, so the model knows e.g.
-    "CARES species" is ``custom_field_1``. Empty for most auctions.
+    "Native species" is ``custom_field_1``. Empty for most auctions.
     """
     fields: dict[str, Any] = {}
     if auction.use_i_bred_this_fish_field:
@@ -3557,6 +3557,7 @@ _CLUB_BAP_SETTINGS = (
     "days_between_same_name_lots",
     "days_between_same_species_lots",
     "points_for_custom_checkbox",
+    "points_for_cares_species",
     "only_donation_lots",
     "only_sold_lots",
     "auto_add_points",
@@ -16669,6 +16670,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "ClubSquareDuesView": (
+        "Offers one Square payment taken outside the site at a time, beside the member list, so a person "
+        "can judge whether the buyer is the member it names before renewing; an assistant adds or renews "
+        "members with the member tools."
+    ),
     "BlogPostView": _REDIRECT,
     "ReverifyEmailView": (
         "Sends a verification link to the person's own inbox, and clicking that link is the whole point, "

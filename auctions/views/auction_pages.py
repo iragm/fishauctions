@@ -361,6 +361,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 invoice_string = invoice.invoice_summary_short
                 context["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
                 context["unsold_lot_warning"] = invoice.unsold_lot_warning
+                context["square_payment_hint"] = invoice.square_payment_hint
             except AttributeError:
                 invoice = None
                 invoice_string = ""

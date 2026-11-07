@@ -65,6 +65,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.backfill_page_view_auctions",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Buyers' names and emails from off-site Square payments are kept only a few weeks.
+    "purge_square_offsite_payments": {
+        "task": "auctions.tasks.purge_square_offsite_payments",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Club lifecycle rollup and the outreach queue; nothing it measures moves faster than daily.
     "refresh_club_health": {
         "task": "auctions.tasks.refresh_club_health",
@@ -95,6 +100,11 @@ app.conf.beat_schedule = {
     "backup_database": {
         "task": "auctions.tasks.backup_database",
         "schedule": crontab(day_of_week=0, hour=3, minute=30),
+    },
+    # CARES species from aquaristspecies.net (auctions/cares.py), Saturdays at 4:20 AM.
+    "sync_cares_species": {
+        "task": "auctions.tasks.sync_cares_species",
+        "schedule": crontab(day_of_week=6, hour=4, minute=20),
     },
     # Send notifications about unread chats - every 24 hours
     "email_unseen_chats": {

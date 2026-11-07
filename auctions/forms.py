@@ -4825,6 +4825,7 @@ class ClubMembershipSettingsForm(forms.ModelForm):
             "membership_system",
             "membership_annual_fee",
             "show_member_barcode",
+            "record_offsite_square_payments",
             "paypal_webhook_id",
         ]
         help_texts = {
@@ -4845,6 +4846,12 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.form_method = "post"
 
         layout_fields = ["membership_system", "membership_annual_fee", "show_member_barcode"]
+        if not (self.instance and self.instance.pk) or self.instance.effective_square_seller:
+            # Unbound (the palette reads the fields from one) or a club with a Square account.
+            layout_fields.append("record_offsite_square_payments")
+        else:
+            # Nothing to record without a Square account; popping keeps any saved value.
+            self.fields.pop("record_offsite_square_payments", None)
         if show_paypal_subscriptions:
             self.fields["paypal_webhook_id"].label = "PayPal webhook ID"
             self.fields["paypal_webhook_id"].required = False
@@ -5155,6 +5162,7 @@ class ClubBapSettingsForm(forms.ModelForm):
             "auto_add_points",
             "points_per_lot",
             "points_for_custom_checkbox",
+            "points_for_cares_species",
             "min_quantity",
             "days_between_same_name_lots",
             "days_between_same_species_lots",
@@ -5176,6 +5184,7 @@ class ClubBapSettingsForm(forms.ModelForm):
                 "auto_add_points",
                 "points_per_lot",
                 "points_for_custom_checkbox",
+                "points_for_cares_species",
                 "min_quantity",
                 "days_between_same_name_lots",
                 "days_between_same_species_lots",
@@ -5187,7 +5196,12 @@ class ClubBapSettingsForm(forms.ModelForm):
                 "separate_cap",
             ),
         )
+        # Left off a saved form (older clients, tests) means no bonus, not an error.
+        self.fields["points_for_cares_species"].required = False
         self.helper.add_input(Submit("submit", "Save BAP settings", css_class="btn-primary"))
+
+    def clean_points_for_cares_species(self):
+        return self.cleaned_data.get("points_for_cares_species") or 0
 
 
 class ClubBapCategoryOverrideForm(forms.ModelForm):

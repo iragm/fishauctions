@@ -31,6 +31,7 @@ from rest_framework.authentication import SessionAuthentication, TokenAuthentica
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from auctions import square_offsite
 from auctions.crawlers import is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
@@ -48,16 +49,12 @@ from auctions.models import (
     Club,
     ClubHistory,
     ClubMember,
-    ClubMoney,
 )
 from auctions.services import (
     attachment_filename,
     bidder_number_holder_in,
     club_managed_auctions_for,
     club_managed_shadows_for,
-)
-from auctions.tasks import (
-    maybe_send_membership_renewal_confirmation,
 )
 
 from .ajax import APIPostView
@@ -72,6 +69,7 @@ from .base import (
     close_modal_response,
     club_from_url,
     club_ids_available_for_contact_autofill,
+    renew_club_member,
 )
 
 logger = logging.getLogger(__name__)
@@ -260,6 +258,7 @@ class ClubMemberAdminView(APIView):
                 ctx["modal_title"] = f"{title} {invoice.invoice_summary_short}"
                 ctx["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
                 ctx["unsold_lot_warning"] = invoice.unsold_lot_warning
+                ctx["square_payment_hint"] = invoice.square_payment_hint
                 ctx["invoice"] = invoice
                 ctx["is_admin"] = True
             except AttributeError:
@@ -824,57 +823,6 @@ class ClubMemberCreateView(APIView):
         return render(request, "auctions/generic_admin_form.html", context)
 
 
-def renew_club_member(member, *, acting_user=None, actor="", money_description=""):
-    """Extend a membership by one period, record it, and return the member.
-
-    Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
-    ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key. Callers
-    refuse a carried membership first: it renews only through its carrier.
-    """
-    if member.membership_carried_by_id:
-        msg = f"{member}'s membership is carried with {member.membership_carried_by}'s"
-        raise ValueError(msg)
-    today = timezone.localdate()
-    had_paid = member.has_ever_paid
-    member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
-    member.membership_last_paid = today
-    member.save(
-        update_fields=[
-            "membership_last_paid",
-            "membership_expiration_date",
-            "membership_expiration_reminder_30_days_due",
-            "membership_expiration_reminder_due",
-        ]
-    )
-    member.welcome_after_first_payment(had_paid)
-    member.update_last_club_activity()
-    new_exp_str = (
-        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
-    )
-    via = f" via {actor}" if actor else ""
-    ClubHistory.objects.create(
-        club=member.club,
-        user=acting_user,
-        action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
-        applies_to="MEMBERSHIP",
-        member=member,
-    )
-    if member.club.charges_dues:
-        ClubMoney.objects.create(
-            club=member.club,
-            created_by=acting_user,
-            date=today,
-            amount=member.club.membership_annual_fee,
-            description=money_description or f"Membership renewal for {member}{via}",
-            category=ClubMoney.CATEGORY_MEMBERSHIP,
-        )
-    try:
-        maybe_send_membership_renewal_confirmation(member)
-    except Exception:
-        logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
-    return member
-
-
 class ClubMemberRenewView(APIView):
     """Renew a club member's membership, extending the current expiration by one year."""
 
@@ -1121,3 +1069,39 @@ class ClubBarcodePNGView(View):
 
 BAP_EMBED_PROGRAM_FIELDS = {"bap": "bap_points", "hap": "hap_points", "cap": "culture_points"}
 BAP_EMBED_PROGRAM_LABELS = {"bap": "BAP", "hap": "HAP", "cap": "CAP"}
+
+
+class ClubSquareDuesView(LoginRequiredMixin, View):
+    """The members page's card for the newest dues-sized payment taken in the club's Square account outside
+    this site: add the buyer, renew the member their email matches, or dismiss it. Each answer shows the next.
+    """
+
+    def _club(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_add_edit"):
+            raise PermissionDenied()
+        return club
+
+    def _render(self, request, club, error=""):
+        payment, member = square_offsite.next_dues_payment(club)
+        return render(
+            request,
+            "auctions/partials/club_square_dues.html",
+            {"club": club, "payment": payment, "member": member, "error": error},
+        )
+
+    def get(self, request, slug):
+        return self._render(request, self._club(request, slug))
+
+    def post(self, request, slug):
+        club = self._club(request, slug)
+        try:
+            member = square_offsite.resolve_dues_payment(
+                club, request.POST.get("payment"), request.POST.get("action"), request.user
+            )
+        except ValueError as error:
+            return self._render(request, club, error=str(error))
+        response = self._render(request, club)
+        if member is not None:
+            response["HX-Trigger"] = "clubMemberListChanged"
+        return response

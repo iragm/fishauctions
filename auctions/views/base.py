@@ -42,6 +42,7 @@ from auctions.models import (
     Club,
     ClubHistory,
     ClubMember,
+    ClubMoney,
     Invoice,
     InvoicePayment,
     PickupLocation,
@@ -1085,3 +1086,62 @@ class LocationMixin:
         context = super().get_context_data(**kwargs)
         context["location_message"] = self._location_message
         return context
+
+
+def renew_club_member(member, *, acting_user=None, actor="", money_description="", book_money=True, external_id=""):
+    """Extend a membership by one period, record it, and return the member.
+
+    Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
+    ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key. Callers
+    refuse a carried membership first: it renews only through its carrier. ``book_money=False`` when the
+    dues are already in the ledger (an off-site Square payment the treasurer report has); ``external_id``
+    stamps the dues row with the Square payment it came from, so the webhook and refunds find it.
+    """
+    if member.membership_carried_by_id:
+        msg = f"{member}'s membership is carried with {member.membership_carried_by}'s"
+        raise ValueError(msg)
+    today = timezone.localdate()
+    had_paid = member.has_ever_paid
+    member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
+    member.membership_last_paid = today
+    member.save(
+        update_fields=[
+            "membership_last_paid",
+            "membership_expiration_date",
+            "membership_expiration_reminder_30_days_due",
+            "membership_expiration_reminder_due",
+        ]
+    )
+    member.welcome_after_first_payment(had_paid)
+    member.update_last_club_activity()
+    new_exp_str = (
+        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
+    )
+    via = f" via {actor}" if actor else ""
+    ClubHistory.objects.create(
+        club=member.club,
+        user=acting_user,
+        action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
+        applies_to="MEMBERSHIP",
+        member=member,
+    )
+    if book_money and member.club.charges_dues:
+        ClubMoney.objects.create(
+            club=member.club,
+            created_by=acting_user,
+            date=today,
+            amount=member.club.membership_annual_fee,
+            description=money_description or f"Membership renewal for {member}{via}",
+            category=ClubMoney.CATEGORY_MEMBERSHIP,
+            external_id=external_id,
+        )
+
+    def _confirm():
+        try:
+            maybe_send_membership_renewal_confirmation(member)
+        except Exception:
+            logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
+
+    # A caller's transaction may still roll back; then nobody should hear they were renewed.
+    transaction.on_commit(_confirm)
+    return member

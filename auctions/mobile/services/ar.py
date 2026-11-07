@@ -124,6 +124,8 @@ def _label_fields(lot):
         "custom_dropdown_label": (auction.custom_dropdown_name, lot.custom_dropdown_label),
         "custom_random_label": (auction.custom_random_name, lot.custom_random_label),
     }
+    # The label prints "(CARES)" with the species, so the overlay says it where the species field is printed.
+    candidates["scientific_name"] = ("CARES", lot.cares_display)
     fields = []
     for token in order:
         if token in candidates:

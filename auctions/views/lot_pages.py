@@ -531,7 +531,7 @@ class ViewLot(DetailView):
             if viewer_has_bap and lot.sold:
                 club = lot.auction.club
                 context["bap_club"] = club
-                context["bap_default_points"] = lot.bap_points_for_club(club)
+                context["bap_default_points"] = lot.default_bap_points(club)
         is_lot_creator = lot.is_owned_by(self.request.user)
         # Not lot.user, which is null for lots added through an unlinked TOS.
         context["is_lot_creator"] = is_lot_creator

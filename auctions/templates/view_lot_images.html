@@ -687,6 +687,11 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                         <td class="text-nowrap"><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
                     </tr>
                     {% endif %}
+                    {% if lot.cares %}
+                    <tr>
+                        <td class="text-nowrap"><b>CARES:</b></td><td>{% if lot.species.cares_url %}<a href="{{ lot.species.cares_url }}" target="_blank" rel="noopener">{{ lot.cares_display }}</a>{% else %}{{ lot.cares_display }}{% endif %}</td>
+                    </tr>
+                    {% endif %}
                     {% if lot.auction and lot.custom_checkbox_label %}
                     <tr>
                         <td class="text-nowrap"><b>{{ lot.custom_checkbox_label }}</b></td><td></td>
