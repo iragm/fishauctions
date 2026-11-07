@@ -1987,7 +1987,7 @@ def my_bidder_number(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def lot_fields_in_use(auction) -> dict[str, Any]:
     """The optional per-lot fields this auction has on, under the club's labels, so the model knows e.g.
-    "CARES species" is ``custom_field_1``. Empty for most auctions.
+    "Native species" is ``custom_field_1``. Empty for most auctions.
     """
     fields: dict[str, Any] = {}
     if auction.use_i_bred_this_fish_field:

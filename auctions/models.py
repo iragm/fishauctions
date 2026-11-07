@@ -871,7 +871,7 @@ class Club(CloudflareImageMixin, models.Model):
         default=0,
         help_text=(
             "Bonus BAP points awarded when the custom checkbox is checked on a lot. Leave at 0 to disable. "
-            "For example, call the checkbox “CARES species” and give it 5."
+            "For example, call the checkbox “Native species” and give it 5. CARES species have their own bonus."
         ),
     )
     points_for_cares_species = models.IntegerField(
@@ -4365,7 +4365,9 @@ class Auction(CachedPropertiesMixin, models.Model):
     use_scientific_name = models.BooleanField(default=True, blank=True, verbose_name="Use scientific name field")
     use_scientific_name.help_text = "Suggest a species based on the lot name.  Users pick from a short list, or No species for hardware and other non-living lots."
     use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
-    use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
+    use_custom_checkbox_field.help_text = (
+        "Optional information such as native species or difficult to keep.  CARES species are marked automatically."
+    )
     custom_dropdown_name = models.CharField(
         max_length=50, default="", blank=True, null=True, verbose_name="Custom dropdown name"
     )
@@ -10497,6 +10499,30 @@ class Lot(CachedPropertiesMixin, models.Model):
     def cares_display(self):
         """The CARES priority in words, or ""."""
         return self.species.cares_display if self.cares else ""
+
+    #: What searching for this word matches: lots whose species is on the CARES list.
+    CARES_SEARCH_WORD = "cares"
+
+    @staticmethod
+    def cares_q():
+        """Lots :attr:`cares` is true for, as a filter: the species or a cultivar's parent is on the list, in
+        an auction that uses the species field (or no auction)."""
+        on_list = Q(species__cares_classification__gt="") | Q(species__parent__cares_classification__gt="")
+        return on_list & (Q(auction__isnull=True) | Q(auction__use_scientific_name=True))
+
+    @staticmethod
+    def cares_text_q(word):
+        """What a search for "cares" finds: :meth:`cares_q`, a lot whose name says so, and a ticked custom
+        checkbox its auction calls CARES -- what people marked by hand before the site knew."""
+        return (
+            Lot.cares_q()
+            | Q(lot_name__icontains=word)
+            | Q(
+                custom_checkbox=True,
+                auction__use_custom_checkbox_field=True,
+                auction__custom_checkbox_name__iexact=word,
+            )
+        )
 
     @property
     def custom_checkbox_label(self):

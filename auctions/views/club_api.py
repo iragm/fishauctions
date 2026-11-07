@@ -516,6 +516,7 @@ class ClubBapLotListAPIView(ClubAPIViewMixin, APIView):
                 "winner",
                 "auction__club",
                 "species_category",
+                "species__parent",  # Lot.cares
                 "bap_award",
             )
             .order_by("-date_end")

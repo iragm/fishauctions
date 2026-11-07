@@ -62,7 +62,7 @@
       </td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.seller_as_str }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
-      <td><a href="{{ lot.lot_link }}?src=lot_list">{{ lot.lot_name }}</a>
+      <td><a href="{{ lot.lot_link }}?src=lot_list">{{ lot.lot_name }}</a>{% if lot.cares %} <span class="badge bg-info text-dark" title="{{ lot.cares_display }}">CARES</span>{% endif %}
         {% comment %} App-only: walk the user to this lot with lot scanning. The annotation (LotFilter.qs) is only
         present in the app, for a located lot in an in-person auction that's happening now. {% endcomment %}
         {% if lot.ar_locate_available %}

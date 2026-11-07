@@ -6,9 +6,10 @@ marks each record's species with ``Species.cares_id`` and ``cares_classification
 species the list is missing as ``source="cares"`` -- after looking for it by id, by its name, then by
 each synonym in ``alt_name``, so a species FishBase files under an older genus is marked, not cloned.
 
-The weekly task asks only for records changed since the last good run started, except when it has no
-such time or the last full pass is a month old: only a full pass can see a species *leave* the list,
-so only a full pass clears a classification.
+The first run fetches the whole list; after that each run asks only for records changed since the
+last finished run started, kept as ``finished`` on the ``cares_sync`` :class:`ChunkedJobState` row
+(no row means never). The API has no way to say a species left
+the list, so a mark is never taken off by the sync.
 """
 
 from __future__ import annotations
@@ -25,15 +26,10 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
-from .models import CARES_CLASSIFICATIONS, Species, SpeciesCommonName, normalize_species_name
+from .models import CARES_CLASSIFICATIONS, ChunkedJobState, Species, SpeciesCommonName, normalize_species_name
 
 logger = logging.getLogger(__name__)
 
-#: When the last complete run started, and when the last full one did. The cache, not a table: losing
-#: them costs one full pass of a list that fits on one page.
-LAST_RUN_KEY = "cares_sync_last_start"
-LAST_FULL_KEY = "cares_sync_last_full"
-FULL_EVERY = datetime.timedelta(days=28)
 PAGE_SIZE = 1000
 TIMEOUT_SECONDS = 30
 #: The API allows 120 requests an hour; a throttled page waits at most this long before giving up.
@@ -50,9 +46,6 @@ SOURCE_PREFERENCE = ("fishbase", "aquarium", "admin", "cares", "sealifebase", "m
 _BINOMIAL = re.compile(r"^[A-Z][a-z]+ [a-z][a-z-]+( [a-z][a-z-]+)?$")
 #: A throttled page is asked again at most this many times.
 MAX_RETRIES = 3
-#: A full pass that sees fewer than this share of the species already marked clears nothing: an API
-#: answering with an empty or broken list must not wipe the marks.
-MIN_SEEN_TO_CLEAR = 0.5
 
 
 class CaresError(Exception):
@@ -228,7 +221,7 @@ def _create(record, code):
 
 def _keep_names(species, names):
     """Make *names* this species' ``source="cares"`` common names, skipping any another species answers to.
-    Touches only what differs, since an unchanged record comes back every full pass.
+    Touches only what differs.
     """
     from .species_matching import species_carrying_common_name
 
@@ -302,41 +295,38 @@ def apply(record, counts, genera, others_names=frozenset()):
 
 
 LOCK_KEY = "cares_sync_lock"
+STATE_NAME = "cares_sync"
 LOCK_SECONDS = 60 * 60
 
 
-def sync(full=None, session=None, now=None, sleep=time.sleep):
-    """One run at a time. *full* ``None`` decides by the last runs. Returns the counts; raises
-    :class:`CaresError`. A run with a failed record keeps the old start time, so the next one asks again.
+def sync(session=None, now=None, sleep=time.sleep):
+    """One run at a time. Returns the counts; raises :class:`CaresError`. A run with a record it couldn't
+    place keeps the old start time, so the next one asks for those records again.
     """
     if not enabled():
         return {"disabled": 1}
     if not cache.add(LOCK_KEY, "1", timeout=LOCK_SECONDS):
         return {"already_running": 1}
     try:
-        return _sync(full, session, now or timezone.now(), sleep)
+        return _sync(session, now or timezone.now(), sleep)
     finally:
         cache.delete(LOCK_KEY)
 
 
-def _sync(full, session, now, sleep):
+def _sync(session, now, sleep):
     from collections import Counter
 
     from celery.exceptions import SoftTimeLimitExceeded
 
-    last_run = cache.get(LAST_RUN_KEY)
-    last_full = cache.get(LAST_FULL_KEY)
-    if full is None:
-        full = not last_run or not last_full or now - last_full >= FULL_EVERY
+    state, _created = ChunkedJobState.objects.get_or_create(name=STATE_NAME)
     counts = Counter()
-    # Whole list first (it is a page or two), so every record's own name is known before synonyms.
-    records = list(fetch(None if full else last_run, session=session, sleep=sleep))
+    # The list is a page or two, so all of it first: every record's own name is known before synonyms.
+    records = list(fetch(state.finished, session=session, sleep=sleep))
     valid = [record for record in records if _valid(record)]
     counts["skipped"] += len(records) - len(valid)
     names = Counter(_key(record["name"]) for record in valid)
-    seen, genera = set(), set()
+    genera = set()
     for record in valid:
-        seen.add(record["id"])
         own = _key(record["name"])
         others = {name for name, count in names.items() if name != own or count > 1}
         try:
@@ -346,22 +336,14 @@ def _sync(full, session, now, sleep):
         except Exception:  # one bad record must not stop the list
             logger.exception("CARES record %s failed", record["id"])
             counts["failed"] += 1
-    if full:
-        # Only a full pass knows what has left the list -- and only if it really got the list.
-        marked = Species.objects.exclude(cares_classification="").filter(cares_id__isnull=False)
-        gone = marked.exclude(cares_id__in=seen)
-        if counts["failed"] or len(seen) < MIN_SEEN_TO_CLEAR * marked.count():
-            counts["not_cleared"] = gone.count()
-        else:
-            genera.update(gone.exclude(genus="").values_list("genus", flat=True))
-            counts["cleared"] = gone.update(cares_classification="")
     genera.discard("")
     for genus in genera:
         Species.recompute_trade_ranks(genus=genus)
-    timeout = 60 * 60 * 24 * 365
-    if not counts["failed"]:
-        cache.set(LAST_RUN_KEY, now, timeout=timeout)
-        if full:
-            cache.set(LAST_FULL_KEY, now, timeout=timeout)
-    counts["full"] = int(full)
+    counts["full"] = int(state.finished is None)
+    # A record that couldn't be placed is asked for again next run, so a fix (a new code, a merge) is
+    # picked up -- and so it is in the batch whose names a synonym may not take.
+    if not (counts["failed"] or counts["unknown_code"] or counts["claimed"]):
+        # When this run started, not ended: a record changed mid-run comes back next time.
+        state.finished = now
+        state.save(update_fields=["finished", "updated"])
     return dict(counts)

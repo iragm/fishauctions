@@ -3,11 +3,16 @@
 The API is never called: :class:`FakeSession` serves the pages.
 """
 
+import csv
 import datetime
+import io
+from unittest import mock
 
 from django.core.cache import cache
+from django.core.management import call_command
 from django.template.loader import render_to_string
 from django.test import RequestFactory, TestCase, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from auctions import cares
@@ -17,6 +22,7 @@ from auctions.models import (
     Auction,
     AuctionTOS,
     Category,
+    ChunkedJobState,
     Club,
     ClubMember,
     Lot,
@@ -70,7 +76,8 @@ def page(results, next_url=None):
 @override_settings(CARES_PARTNER_KEY="test-key", CARES_API_URL=API)
 class CaresSyncTests(TestCase):
     def setUp(self):
-        cache.delete_many([cares.LAST_RUN_KEY, cares.LAST_FULL_KEY, cares.LOCK_KEY])
+        cache.delete(cares.LOCK_KEY)
+        ChunkedJobState.objects.filter(name=cares.STATE_NAME).delete()
         self.category = Category.objects.create(name="Livebearers")
         self.goodeid = Species.objects.create(
             genus="Xenotoca",
@@ -116,7 +123,7 @@ class CaresSyncTests(TestCase):
         self.goodeid.cares_id = 99
         self.goodeid.cares_classification = "CVU"
         self.goodeid.save()
-        counts, _session = self.sync(page([record(13, "Xenotoca eiseni", "CEN")]), full=False)
+        counts, _session = self.sync(page([record(13, "Xenotoca eiseni", "CEN")]))
         self.goodeid.refresh_from_db()
         self.assertEqual(self.goodeid.cares_id, 99)
         # Not cloned either: a second row of a listed name is worse than an unmarked record.
@@ -132,14 +139,14 @@ class CaresSyncTests(TestCase):
             with self.subTest(first=records[0]["id"]):
                 Species.objects.exclude(pk=self.goodeid.pk).delete()
                 Species.objects.filter(pk=self.goodeid.pk).update(cares_id=None, cares_classification="")
-                self.sync(page(records), full=True)
+                self.sync(page(records))
                 self.goodeid.refresh_from_db()
                 self.assertEqual(self.goodeid.cares_id, 21)
                 self.assertEqual(Species.objects.get(cares_id=20).genus, "Allotoca")
 
     def test_a_second_run_finds_its_own_row_by_id(self):
         self.sync(page([record(11, "Xenotoca doadrioi", "CCR")]))
-        counts, _session = self.sync(page([record(11, "Xenotoca doadrioi", "CEN")]), full=True)
+        counts, _session = self.sync(page([record(11, "Xenotoca doadrioi", "CEN")]))
         self.assertEqual(Species.objects.filter(genus="Xenotoca", species="doadrioi").count(), 1)
         self.assertEqual(Species.objects.get(cares_id=11).cares_classification, "CEN")
         self.assertEqual(counts["marked"], 1)
@@ -170,17 +177,10 @@ class CaresSyncTests(TestCase):
         self.sync(page([record(15, "Hypancistrus seideli", "CEN", alt="L046")]))
         self.assertFalse(SpeciesCommonName.objects.filter(species__cares_id=15).exists())
 
-    def test_a_full_pass_that_sees_too_little_clears_nothing(self):
-        self.sync(page([record(10, "Xenotoca eiseni"), record(11, "Xenotoca doadrioi")]))
-        counts, _session = self.sync(page([]), full=True)
-        self.goodeid.refresh_from_db()
-        self.assertEqual(self.goodeid.cares_classification, "CEN")
-        self.assertEqual(counts["not_cleared"], 2)
-
     def test_a_page_without_a_results_list_stops_the_run(self):
         self.sync(page([record(10, "Xenotoca eiseni")]))
         with self.assertRaises(cares.CaresError):
-            self.sync(FakeResponse(200, {"detail": "maintenance"}), full=True)
+            self.sync(FakeResponse(200, {"detail": "maintenance"}))
         self.goodeid.refresh_from_db()
         self.assertEqual(self.goodeid.cares_classification, "CEN")
 
@@ -223,7 +223,7 @@ class CaresSyncTests(TestCase):
     def test_a_refusal_stops_the_run_without_recording_it(self):
         with self.assertRaises(cares.CaresError):
             self.sync(FakeResponse(401))
-        self.assertIsNone(cache.get(cares.LAST_RUN_KEY))
+        self.assertFalse(ChunkedJobState.objects.filter(name=cares.STATE_NAME, finished__isnull=False).exists())
         self.assertIsNone(cache.get(cares.LOCK_KEY))
 
     def test_first_run_is_full_and_later_ones_ask_since_the_last_start(self):
@@ -233,28 +233,21 @@ class CaresSyncTests(TestCase):
         _counts, session = self.sync(page([]), now=started + datetime.timedelta(days=7))
         self.assertEqual(session.calls[0]["params"]["since"], started.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
-    def test_a_month_on_the_run_is_full_again(self):
-        started = timezone.now() - datetime.timedelta(days=30)
+    def test_a_failed_record_keeps_the_last_start(self):
+        started = timezone.now() - datetime.timedelta(days=7)
         self.sync(page([]), now=started)
-        _counts, session = self.sync(page([]), now=started + cares.FULL_EVERY)
-        self.assertNotIn("since", session.calls[0]["params"])
+        with mock.patch.object(cares, "apply", side_effect=RuntimeError):
+            counts, _session = self.sync(page([record(10, "Xenotoca eiseni")]))
+        self.assertEqual(counts["failed"], 1)
+        _counts, session = self.sync(page([]))
+        self.assertEqual(session.calls[0]["params"]["since"], started.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
-    def test_only_a_full_pass_clears_a_species_that_left_the_list(self):
-        self.sync(page([record(10, "Xenotoca eiseni"), record(11, "Xenotoca doadrioi")]))
-        self.sync(page([record(11, "Xenotoca doadrioi")]), full=False)
-        self.goodeid.refresh_from_db()
-        self.assertEqual(self.goodeid.cares_classification, "CEN")
-        counts, _session = self.sync(page([record(11, "Xenotoca doadrioi")]), full=True)
-        self.goodeid.refresh_from_db()
-        self.assertEqual(self.goodeid.cares_classification, "")
-        self.assertEqual(counts["cleared"], 1)
-
-    def test_a_full_pass_leaves_a_hand_set_classification_alone(self):
-        self.goodeid.cares_classification = "CNT"
-        self.goodeid.save()
-        self.sync(page([]), full=True)
-        self.goodeid.refresh_from_db()
-        self.assertEqual(self.goodeid.cares_classification, "CNT")
+    def test_an_unknown_code_is_asked_for_again(self):
+        started = timezone.now() - datetime.timedelta(days=7)
+        self.sync(page([]), now=started)
+        self.sync(page([record(10, "Xenotoca eiseni", "ZZZ")]))
+        _counts, session = self.sync(page([]))
+        self.assertEqual(session.calls[0]["params"]["since"], started.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     def test_one_run_at_a_time(self):
         cache.add(cares.LOCK_KEY, "1")
@@ -303,6 +296,79 @@ class CaresLotTests(StandardTestCase):
         self.assertEqual(lot.cares, "")
         response = self.client.get(lot.get_absolute_url())
         self.assertNotContains(response, "<b>CARES:</b>", html=False)
+
+    def test_searching_cares_finds_only_cares_lots(self):
+        from auctions.filters import LotAdminFilter
+
+        other = Lot.objects.create(
+            lot_name="plain lot", auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos
+        )
+        found = set(LotAdminFilter.generic(None, Lot.objects.all(), "CARES"))
+        self.assertIn(self.in_person_lot, found)
+        self.assertNotIn(other, found)
+        self.assertEqual(set(Lot.objects.filter(Lot.cares_q())), {self.in_person_lot})
+
+    def test_searching_cares_still_finds_lots_marked_by_hand(self):
+        from auctions.filters import LotAdminFilter
+
+        self.in_person_auction.use_custom_checkbox_field = True
+        self.in_person_auction.custom_checkbox_name = "CARES"
+        self.in_person_auction.save()
+        ticked = Lot.objects.create(
+            lot_name="ticked lot",
+            custom_checkbox=True,
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+        )
+        named = Lot.objects.create(
+            lot_name="CARES goodeids", auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos
+        )
+        found = set(LotAdminFilter.generic(None, Lot.objects.all(), "cares"))
+        self.assertTrue({self.in_person_lot, ticked, named} <= found)
+
+    def test_lot_list_search_and_badge(self):
+        Lot.objects.create(lot_name="plain lot", auction=self.in_person_auction, auctiontos_seller=self.in_person_tos)
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("allLots"), {"q": "cares", "auction": self.in_person_auction.slug})
+        self.assertContains(response, self.in_person_lot.lot_name)
+        self.assertNotContains(response, "plain lot")
+        self.assertContains(response, ">CARES</span>")
+
+    def test_csv_export_has_a_cares_column(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("lot_list", kwargs={"slug": self.in_person_auction.slug}))
+        rows = list(csv.reader(io.StringIO(response.content.decode())))
+        column = rows[0].index("CARES priority")
+        values = [row[column] for row in rows[1:]]
+        self.assertIn("Critically Endangered", values)
+
+    def test_club_api_lot_carries_cares(self):
+        from auctions.serializers import ClubApiLotSerializer, SpeciesMatchSerializer
+
+        lot = Lot.objects.get(pk=self.in_person_lot.pk)
+        self.assertEqual(ClubApiLotSerializer(lot).data["species"]["cares"], "Critically Endangered")
+        self.assertEqual(SpeciesMatchSerializer(self.cares_species).data["cares"], "Critically Endangered")
+
+    def test_app_overlay_lists_cares_where_the_label_prints_species(self):
+        from auctions.mobile.services.ar import _label_fields
+
+        self.in_person_auction.label_print_fields = "lot_name,scientific_name"
+        self.in_person_auction.save()
+        lot = Lot.objects.get(pk=self.in_person_lot.pk)
+        self.assertEqual(_label_fields(lot), [{"label": "CARES", "value": "Critically Endangered"}])
+        self.in_person_auction.label_print_fields = "lot_name"
+        self.in_person_auction.save()
+        self.assertEqual(_label_fields(Lot.objects.get(pk=lot.pk)), [])
+
+    def test_command_lists_creators_using_the_checkbox_for_cares(self):
+        self.in_person_auction.use_custom_checkbox_field = True
+        self.in_person_auction.custom_checkbox_name = "CARES species"
+        self.in_person_auction.save()
+        out = io.StringIO()
+        call_command("cares_checkbox_auctions", stdout=out)
+        rows = list(csv.DictReader(io.StringIO(out.getvalue())))
+        self.assertEqual([row["latest_auction"] for row in rows], [self.in_person_auction.title])
+        self.assertEqual(rows[0]["email"], self.in_person_auction.created_by.email)
 
     def _label(self, lot):
         self.in_person_auction.label_print_fields = "lot_name,scientific_name"
