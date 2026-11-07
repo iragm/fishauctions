@@ -93,6 +93,9 @@ this only quotes its opening sentence.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
 - **`brevo.py`** (573 lines)
   One-way Django -> Brevo sync for clubs, built like auctions/mailchimp.py.
+- **`cares.py`** (367 lines)
+  The CARES conservation-priority list, kept in step with aquaristspecies.net.
+  `CaresError`, `enabled`, `classification`, `fetch`, `Claimed`, `find_species`, `apply`, `sync`
 - **`client_ip.py`** (111 lines)
   Where a request came from, for the things that count per address.
   `client_ip`, `rate_limit_address`, `address_bucket`
@@ -159,7 +162,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6666 lines)
+- **`forms.py`** (6673 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -175,7 +178,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (1009 lines)
+- **`help_guides.py`** (1010 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (1079 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -206,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15439 lines)
+- **`models.py`** (15518 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -223,7 +226,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17071 lines)
+- **`palette_actions.py`** (17072 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -238,7 +241,7 @@ this only quotes its opening sentence.
 - **`printer_programs.py`** (675 lines)
   Validation and seed data for :class:`ThermalPrinterProfile` command programs.
   `ProgramValidationError`, `validate_program`, `validate_match_patterns`, `validate_profile_programs`, `serialize_profile`
-- **`printing.py`** (319 lines)
+- **`printing.py`** (327 lines)
   Shared label-printing helpers.
   `text_width_pt`, `split_label_tags`, `wrapped_lines`, `plan_label`, `inches_per_unit`, `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
 - **`queryset_annotations.py`** (223 lines)
@@ -283,9 +286,9 @@ this only quotes its opening sentence.
 - **`square_offsite.py`** (338 lines)
   Square payments taken in a connected account without this site: a club's own Payment Link or register.
   `square_time`, `order_source`, `record_payment`, `purge`, `record_refund`, `next_dues_payment`, `resolve_dues_payment`, `invoice_payment_hint`
-- **`tables.py`** (1785 lines)
+- **`tables.py`** (1789 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1897 lines)
+- **`tasks.py`** (1911 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -382,6 +385,9 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (191 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`, `CameraScannerReadingTests`, `LotQueuePreviewTests`
+- **`test_cares.py`** (405 lines)
+  The CARES list: the weekly sync from aquaristspecies.net, and where a CARES species shows.
+  `record`, `FakeResponse`, `FakeSession`, `page`, `CaresSyncTests`, `CaresSpeciesTests`, `CaresLotTests`, `CaresBapTests`
 - **`test_celery_tasks.py`** (1142 lines)
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
@@ -885,6 +891,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`split_speaker_talks.py`** (174 lines)
   Recover the individual talk titles from an imported speaker's run-on "Programs:" list.
   `normalize`, `split_is_faithful`, `Command`
+- **`sync_cares_species.py`** (23 lines)
+  Run the weekly CARES species sync now: ``manage.py sync_cares_species [--full]``.
+  `Command`
 - **`sync_google_wallet_classes.py`** (104 lines)
   `Command`
 - **`tap_to_pay_launch_announcement.py`** (158 lines)
@@ -1161,7 +1170,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (291 lines)
+- **`celery.py`** (296 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
@@ -1170,7 +1179,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1303 lines)
+- **`settings.py`** (1307 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

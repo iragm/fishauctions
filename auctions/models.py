@@ -874,6 +874,10 @@ class Club(CloudflareImageMixin, models.Model):
             "For example, call the checkbox “CARES species” and give it 5."
         ),
     )
+    points_for_cares_species = models.IntegerField(
+        default=0,
+        help_text="Bonus BAP points for a lot whose species is on the CARES list. Leave at 0 to disable.",
+    )
     only_donation_lots = models.BooleanField(
         default=False,
         help_text="Require all BAP lots to be a donation. For clubs whose program is “breed it and donate it to the auction”.",
@@ -3557,6 +3561,18 @@ def normalize_species_name(text):
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text)).strip()[:120]
 
 
+#: CARES priority codes and their names, as aquaristspecies.net sends them. auctions/cares.py folds the
+#: site's older spellings into these.
+CARES_CLASSIFICATIONS = (
+    ("CLC", "Least Concern"),
+    ("CNT", "Near Threatened"),
+    ("CVU", "Vulnerable"),
+    ("CEN", "Endangered"),
+    ("CCR", "Critically Endangered"),
+    ("CEW", "Extinct in the Wild"),
+)
+
+
 class Species(models.Model):
     """One species a lot can be tagged with, loaded from FishBase and the curated list.
 
@@ -3580,6 +3596,8 @@ class Species(models.Model):
         # Added on the site. Not "manual" (old Product rows), which import_fishbase folds away.
         ("admin", "Added on the site"),
         ("manual", "Added by hand"),
+        # The CARES priority list, from aquaristspecies.net (auctions/cares.py).
+        ("cares", "CARES list"),
     )
 
     #: FishBase ``Aquarium`` values meaning "an aquarium fish".
@@ -3688,6 +3706,19 @@ class Species(models.Model):
         ),
     )
 
+    cares_id = models.PositiveIntegerField(null=True, blank=True, unique=True)
+    cares_id.help_text = (
+        "This species' id on aquaristspecies.net, written by the weekly CARES sync.  Blank for a "
+        "species that has never been on the CARES list."
+    )
+    cares_classification = models.CharField(
+        max_length=4, blank=True, default="", choices=CARES_CLASSIFICATIONS, db_index=True
+    )
+    cares_classification.help_text = (
+        "The species' CARES conservation priority.  Blank means not a CARES species.  Kept by the "
+        "weekly sync; a hand edit lasts until CARES next changes the record."
+    )
+
     #: Sources that number their own species; duplicates are impossible there, so the scan is skipped.
     IMPORTED_SOURCES = ("fishbase", "sealifebase")
 
@@ -3769,6 +3800,13 @@ class Species(models.Model):
             possible_duplicate=None
         )
         self.possible_duplicate = None
+        # The CARES mark follows too; cares_id is unique, so the losing row lets go of it first. When both
+        # rows have one, the losing record is reported as claimed by the next sync, never re-added.
+        if duplicate.cares_id and not self.cares_id:
+            cares_id, code = duplicate.cares_id, duplicate.cares_classification
+            Species.objects.filter(pk=duplicate.pk).update(cares_id=None)
+            Species.objects.filter(pk=self.pk).update(cares_id=cares_id, cares_classification=code)
+            self.cares_id, self.cares_classification = cares_id, code
         duplicate.delete()
         return moved
 
@@ -3805,7 +3843,11 @@ class Species(models.Model):
         """
         if self.in_trade_override is not None:
             return self.in_trade_override
-        return self.source == "aquarium" or self.aquarium_use in self.AQUARIUM_TRADE_VALUES
+        return (
+            self.source in ("aquarium", "cares")
+            or bool(self.cares_classification)
+            or self.aquarium_use in self.AQUARIUM_TRADE_VALUES
+        )
 
     @classmethod
     def recompute_trade_ranks(cls, genus=None, batch_size=2000):
@@ -3815,7 +3857,8 @@ class Species(models.Model):
         traded = cls.objects.filter(in_trade_override=True) | cls.objects.filter(
             in_trade_override__isnull=True, aquarium_use__in=cls.AQUARIUM_TRADE_VALUES
         )
-        traded = traded | cls.objects.filter(in_trade_override__isnull=True, source="aquarium")
+        traded = traded | cls.objects.filter(in_trade_override__isnull=True, source__in=("aquarium", "cares"))
+        traded = traded | cls.objects.filter(in_trade_override__isnull=True).exclude(cares_classification="")
         if genus:
             traded = traded.filter(genus=genus)
         # order_by() clears Meta.ordering, which would make DISTINCT per species. discard(""): hybrids
@@ -3864,6 +3907,28 @@ class Species(models.Model):
         if self.variety and self.scientific_name:
             return f"{self.scientific_name} '{self.variety}'"
         return self.scientific_name or self.variety
+
+    @property
+    def cares(self):
+        """This species' CARES classification code, or its parent's for a cultivar; "" when it isn't on the list."""
+        if self.cares_classification:
+            return self.cares_classification
+        if self.parent_id and self.parent.cares_classification:
+            return self.parent.cares_classification
+        return ""
+
+    @property
+    def cares_display(self):
+        """The CARES priority in words ("Endangered"), or ""."""
+        return dict(CARES_CLASSIFICATIONS).get(self.cares, "")
+
+    @property
+    def cares_url(self):
+        """This species' page on aquaristspecies.net, or "" when the sync never saw it."""
+        if not self.cares:
+            return ""
+        species_id = self.cares_id if self.cares_classification else self.parent.cares_id
+        return f"https://www.aquaristspecies.net/species/{species_id}/" if species_id else ""
 
     @property
     def label(self):
@@ -9554,12 +9619,14 @@ class Lot(CachedPropertiesMixin, models.Model):
         return self.species_category.bap_points if self.species_category else 5
 
     def default_bap_points(self, club):
-        """What Approve offers: :meth:`bap_points_for_club` plus ``points_for_custom_checkbox`` if ticked. The
+        """What Approve offers: :meth:`bap_points_for_club` plus the custom checkbox and CARES bonuses. The
         one definition; ``ClubBapLotHTMxTable.render_actions`` is a deliberate prefetched copy.
         """
         points = self.bap_points_for_club(club)
         if club.points_for_custom_checkbox > 0 and self.custom_checkbox:
             points += club.points_for_custom_checkbox
+        if club.points_for_cares_species > 0 and self.cares:
+            points += club.points_for_cares_species
         return points
 
     def auto_award_bap_points(self):
@@ -10418,6 +10485,18 @@ class Lot(CachedPropertiesMixin, models.Model):
         if self.auction and self.auction.use_quantity_field or self.quantity > 1:
             return f"QTY: {self.quantity}"
         return ""
+
+    @property
+    def cares(self):
+        """The CARES classification code of this lot's species, or "" -- also when the auction has the species
+        field off, as :attr:`scientific_name` is.
+        """
+        return self.species.cares if self.scientific_name else ""
+
+    @property
+    def cares_display(self):
+        """The CARES priority in words, or ""."""
+        return self.species.cares_display if self.cares else ""
 
     @property
     def custom_checkbox_label(self):

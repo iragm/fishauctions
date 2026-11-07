@@ -1390,7 +1390,7 @@ def bap_review_lots(club):
         lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
     return (
         lots.filter(Exists(matching_member))
-        .select_related("auctiontos_seller__user", "auction__club", "species_category", "species")
+        .select_related("auctiontos_seller__user", "auction__club", "species_category", "species__parent")
         .prefetch_related("bap_award")
         .order_by("-date_end")
     )

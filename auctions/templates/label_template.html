@@ -103,7 +103,7 @@
                 {% endif %}
                 {% comment %}The name the seller did *not* type: a label reading "Chindongo saulosi" twice wastes the one line of space that could have said "Saulosi cichlid" instead.  See Lot.scientific_name_line and plan_label.{% endcomment %}
                 {% if 'species' in label.details %}
-                    <div class="small">{% if label.species_is_scientific %}<i>{{ label.species_line }}</i>{% else %}{{ label.species_line }}{% endif %}</div>
+                    <div class="small">{% if label.species_is_scientific %}<i>{{ label.species_line }}</i>{% else %}{{ label.species_line }}{% endif %}{{ label.species_suffix }}</div>
                 {% endif %}
                 {% if 'custom_field' in label.details %}
                     <div class="small">{{ label.custom_field_1 }}</div>

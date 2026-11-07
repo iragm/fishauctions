@@ -1895,3 +1895,17 @@ def tidy_library(self):
     from auctions.documents.index import tidy
 
     tidy()
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=1500, time_limit=1560)
+def sync_cares_species(self):
+    """Mark CARES species on the species list and add the ones it lacks (``cares.sync``). Weekly; a no-op
+    without ``CARES_PARTNER_KEY``."""
+    from auctions import cares
+
+    try:
+        counts = cares.sync()
+    except (cares.CaresError, requests.RequestException) as error:
+        logger.error("CARES sync stopped: %s", error)
+        return
+    logger.info("CARES sync: %s", counts)
