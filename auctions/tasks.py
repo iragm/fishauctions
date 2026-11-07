@@ -491,6 +491,14 @@ def endauctions(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def purge_square_offsite_payments(self):
+    """Forget off-site Square payments past retention: they hold buyers' names and emails."""
+    from auctions.square_offsite import purge
+
+    purge()
+
+
+@shared_task(bind=True, ignore_result=True)
 def sendnotifications(self):
     """Send notifications about watched items."""
     call_command("sendnotifications")

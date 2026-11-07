@@ -727,10 +727,15 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 logger.exception("Error retrieving Square order %s: %s", order_id, e)
                         if order is not None:
                             reference_id = getattr(order, "reference_id", None)
-                        # Tap to Pay charges carry the invoice on the payment rather than the order.
-                        reference_id = reference_id or payment.get("reference_id")
-                        # Only a read order proves there is no reference: an unread one may be ours.
-                        if (order is not None or not order_id) and not str(reference_id or "").isdigit():
+                        # Only a read order proves there is no reference: an unread one may be ours. Tap to
+                        # Pay names its invoice on the payment, not the order; that keeps it from looking
+                        # off-site, but only an order's reference credits an invoice, as before.
+                        payment_reference = payment.get("reference_id")
+                        if (
+                            (order is not None or not order_id)
+                            and not str(reference_id or "").isdigit()
+                            and not str(payment_reference or "").isdigit()
+                        ):
                             # Every charge this site makes names its invoice by number, so this one was
                             # taken in Square directly. Normal, and the order stays out of the log.
                             logger.info(
@@ -739,7 +744,11 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 order_id,
                                 square_offsite.order_source(order) or "unknown source",
                             )
-                            square_offsite.record_payment(merchant_id, payment, order)
+                            try:
+                                square_offsite.record_payment(merchant_id, payment, order)
+                            except Exception:
+                                # Not the site's payment: never a 500 that Square retries for ever.
+                                logger.exception("Could not keep off-site Square payment %s", payment_id)
                             reference_id = None
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
@@ -914,6 +923,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                 square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
                 if square_seller:
                     square_seller.delete()
+                if not SquareSeller.objects.filter(square_merchant_id=merchant_id).exists():
+                    # The buyers' names and emails kept for that account go with it.
+                    square_offsite.purge(merchant_id)
         return HttpResponse(status=200)
 
 

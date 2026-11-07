@@ -49,16 +49,12 @@ from auctions.models import (
     Club,
     ClubHistory,
     ClubMember,
-    ClubMoney,
 )
 from auctions.services import (
     attachment_filename,
     bidder_number_holder_in,
     club_managed_auctions_for,
     club_managed_shadows_for,
-)
-from auctions.tasks import (
-    maybe_send_membership_renewal_confirmation,
 )
 
 from .ajax import APIPostView
@@ -73,6 +69,7 @@ from .base import (
     close_modal_response,
     club_from_url,
     club_ids_available_for_contact_autofill,
+    renew_club_member,
 )
 
 logger = logging.getLogger(__name__)
@@ -824,58 +821,6 @@ class ClubMemberCreateView(APIView):
             "extra_script": mark_safe(extra_script),  # noqa: S308
         }
         return render(request, "auctions/generic_admin_form.html", context)
-
-
-def renew_club_member(member, *, acting_user=None, actor="", money_description="", book_money=True):
-    """Extend a membership by one period, record it, and return the member.
-
-    Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
-    ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key. Callers
-    refuse a carried membership first: it renews only through its carrier. ``book_money=False`` when the
-    dues are already in the ledger (an off-site Square payment the treasurer report has).
-    """
-    if member.membership_carried_by_id:
-        msg = f"{member}'s membership is carried with {member.membership_carried_by}'s"
-        raise ValueError(msg)
-    today = timezone.localdate()
-    had_paid = member.has_ever_paid
-    member.membership_expiration_date = _compute_member_renewal_expiration(member.club, member, today)
-    member.membership_last_paid = today
-    member.save(
-        update_fields=[
-            "membership_last_paid",
-            "membership_expiration_date",
-            "membership_expiration_reminder_30_days_due",
-            "membership_expiration_reminder_due",
-        ]
-    )
-    member.welcome_after_first_payment(had_paid)
-    member.update_last_club_activity()
-    new_exp_str = (
-        member.membership_expiration_date.strftime("%-m/%-d/%Y") if member.membership_expiration_date else "unknown"
-    )
-    via = f" via {actor}" if actor else ""
-    ClubHistory.objects.create(
-        club=member.club,
-        user=acting_user,
-        action=f"Renewed membership for {member}{via}; new expiration {new_exp_str}",
-        applies_to="MEMBERSHIP",
-        member=member,
-    )
-    if book_money and member.club.charges_dues:
-        ClubMoney.objects.create(
-            club=member.club,
-            created_by=acting_user,
-            date=today,
-            amount=member.club.membership_annual_fee,
-            description=money_description or f"Membership renewal for {member}{via}",
-            category=ClubMoney.CATEGORY_MEMBERSHIP,
-        )
-    try:
-        maybe_send_membership_renewal_confirmation(member)
-    except Exception:
-        logger.exception("Failed to send membership renewal confirmation for club member %s", member.pk)
-    return member
 
 
 class ClubMemberRenewView(APIView):

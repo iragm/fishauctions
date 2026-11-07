@@ -65,6 +65,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.backfill_page_view_auctions",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # Buyers' names and emails from off-site Square payments are kept only a few weeks.
+    "purge_square_offsite_payments": {
+        "task": "auctions.tasks.purge_square_offsite_payments",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Club lifecycle rollup and the outreach queue; nothing it measures moves faster than daily.
     "refresh_club_health": {
         "task": "auctions.tasks.refresh_club_health",

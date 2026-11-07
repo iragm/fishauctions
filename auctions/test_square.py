@@ -1160,6 +1160,46 @@ class SquareOffsiteSuggestionTests(TestCase):
         row = ClubMoney.objects.get(club=self.club)
         self.assertEqual(row.category, ClubMoney.CATEGORY_MEMBERSHIP)
 
+    def test_name_only_payment_renews_its_member_once(self):
+        from auctions.models import ClubMember
+
+        member = ClubMember.objects.create(club=self.club, name="Register Buyer", email="r@example.com")
+        payment = self._payment("P_REGISTER", name="register buyer")
+        self.assertIn("Renew Register Buyer", self.client.get(self.url).content.decode())
+        self.client.post(self.url, {"payment": payment.pk, "action": "renew"})
+        row = ClubMoney.objects.get(category=ClubMoney.CATEGORY_MEMBERSHIP)
+        self.assertEqual(row.external_id, "P_REGISTER")
+        # Renewed some other way since the payment: not offered again.
+        second = self._payment("P_REGISTER_2", name="Register Buyer", ago_days=3)
+        member.refresh_from_db()
+        self.assertNotIn("Register Buyer", self.client.get(self.url).content.decode())
+        page = self.client.post(self.url, {"payment": second.pk, "action": "renew"}).content.decode()
+        self.assertIn("already been renewed", page)
+        self.assertEqual(ClubMoney.objects.filter(category=ClubMoney.CATEGORY_MEMBERSHIP).count(), 1)
+
+    def test_kept_only_for_clubs_and_forgotten_on_disconnect(self):
+        from auctions.square_offsite import record_payment
+
+        payment = {
+            "id": "P_PERSONAL",
+            "created_at": timezone.now().isoformat(),
+            "amount_money": {"amount": 500, "currency": "USD"},
+            "buyer_email_address": "shopper@example.com",
+        }
+        record_payment("M_PERSONAL", payment, None)
+        self.assertFalse(SquareOffsitePayment.objects.filter(payment_id="P_PERSONAL").exists())
+        old = dict(payment, id="P_ANCIENT", created_at=(timezone.now() - datetime.timedelta(days=60)).isoformat())
+        record_payment("M_DUES", old, None)
+        self.assertFalse(SquareOffsitePayment.objects.filter(payment_id="P_ANCIENT").exists())
+        self._payment("P_KEPT", name="Someone")
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True):
+            self.client.post(
+                reverse("square_webhook"),
+                data={"merchant_id": "M_DUES", "type": "oauth.authorization.revoked", "data": {}},
+                content_type="application/json",
+            )
+        self.assertFalse(SquareOffsitePayment.objects.exists())
+
     def test_dismiss_and_permissions(self):
         payment = self._payment("P_DISMISS", name="Someone")
         self.client.post(self.url, {"payment": payment.pk, "action": "dismiss"})

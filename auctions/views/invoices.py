@@ -331,8 +331,10 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 self.request,
                 "This user still has unsold lots, make sure to sell all non-donation lots before marking this ready or paid.",
             )
-        if self.auction and self.is_auction_admin and self.get_object().square_payment_hint:
-            messages.info(self.request, self.get_object().square_payment_hint)
+        if self.auction and self.is_auction_admin:
+            hint = self.get_object().square_payment_hint
+            if hint:
+                messages.info(self.request, hint)
         self.object = self.get_object()
         invoice_adjustment_formset = self.InvoiceAdjustmentFormSet(
             form_kwargs={"invoice": self.get_object()}, queryset=self.queryset

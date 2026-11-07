@@ -120,10 +120,17 @@ def record_payment(merchant_id, payment, order):
         return
     currency = money.get("currency") or "USD"
     paid_at = square_time(payment.get("created_at")) or timezone.now()
+    now = timezone.now()
+    # Only a club's account: a personal one's register sales are nobody's business here. And never
+    # past retention, which a re-sent old payment would otherwise write back.
+    if (
+        paid_at < now - timedelta(days=RETENTION_DAYS)
+        or not Club.objects.filter(square_seller__square_merchant_id=merchant_id).exists()
+    ):
+        return
     name, email = _buyer(payment, order)
     source = order_source(order)
-    now = timezone.now()
-    SquareOffsitePayment.objects.filter(paid_at__lt=now - timedelta(days=RETENTION_DAYS)).delete()
+    purge()
     SquareOffsitePayment.objects.update_or_create(
         payment_id=payment_id,
         defaults={
@@ -160,6 +167,14 @@ def record_payment(merchant_id, payment, order):
     _book(club, payment_id, amount, timezone.localdate(paid_at), description)
 
 
+def purge(merchant_id=None):
+    """Delete kept payments past retention, or all of a merchant's (its account was disconnected)."""
+    if merchant_id:
+        return SquareOffsitePayment.objects.filter(merchant_id=merchant_id).delete()
+    cutoff = timezone.now() - timedelta(days=RETENTION_DAYS)
+    return SquareOffsitePayment.objects.filter(paid_at__lt=cutoff).delete()
+
+
 def record_refund(merchant_id, refund):
     """A completed refund of an off-site payment: hide the payment from suggestions and, if the payment is
     in a treasurer report, take the refund off it there. True when the payment was one of ours to track.
@@ -187,16 +202,18 @@ def _recent(merchant_id, since=None):
     return SquareOffsitePayment.objects.filter(merchant_id=merchant_id, paid_at__gte=since, refunded=False)
 
 
-def _member_for(club, email):
-    """The member a payment's email belongs to (the carrier, for a carried membership), or None."""
-    if not email:
-        return None
-    member = (
-        ClubMember.objects.filter(club=club, is_deleted=False, email__iexact=email)
-        .select_related("membership_carried_by")
-        .order_by("-membership_expiration_date", "pk")
-        .first()
-    )
+def _member_for(club, payment):
+    """The member a payment belongs to (the carrier, for a carried membership), or None: by email, or with
+    no email (a register sale), by a name only one member has.
+    """
+    members = ClubMember.objects.filter(club=club, is_deleted=False).select_related("membership_carried_by")
+    if payment.buyer_email:
+        member = members.filter(email__iexact=payment.buyer_email).order_by("-membership_expiration_date", "pk").first()
+    elif payment.buyer_name:
+        named = list(members.filter(name__iexact=payment.buyer_name)[:2])
+        member = named[0] if len(named) == 1 else None
+    else:
+        member = None
     if member and member.membership_carried_by_id:
         return member.membership_carried_by
     return member
@@ -209,23 +226,32 @@ def next_dues_payment(club):
     seller = club.effective_square_seller
     if not club.charges_dues or not seller or not seller.square_merchant_id:
         return None, None
-    payment = (
+    candidates = (
         _recent(seller.square_merchant_id)
         .filter(resolution="", amount=club.membership_annual_fee, currency=seller.currency)
         .exclude(buyer_name="", buyer_email="")
         .order_by("-paid_at", "-pk")
-        .first()
     )
-    if payment is None:
-        return None, None
-    return payment, _member_for(club, payment.buyer_email)
+    for payment in candidates[:25]:
+        member = _member_for(club, payment)
+        if not _renewed_since(member, payment):
+            return payment, member
+    return None, None
+
+
+def _renewed_since(member, payment):
+    """The member was renewed on or after the payment's day, some other way: this money is spent."""
+    return bool(
+        member and member.membership_last_paid and member.membership_last_paid >= timezone.localdate(payment.paid_at)
+    )
 
 
 def resolve_dues_payment(club, payment_pk, action, user):
     """Act on a payment from :func:`next_dues_payment`: ``add`` a new member, ``renew`` the matching one, or
     ``dismiss`` it. Returns the member renewed or added, or None. Raises ValueError when it no longer applies.
     """
-    from auctions.views.club_members import renew_club_member
+    # Lazily: the views import this module.
+    from auctions.views.base import renew_club_member
 
     seller = club.effective_square_seller
     if not seller or not seller.square_merchant_id or action not in ("add", "renew", "dismiss"):
@@ -243,13 +269,16 @@ def resolve_dues_payment(club, payment_pk, action, user):
             if payment.amount != club.membership_annual_fee or not club.charges_dues:
                 msg = "That payment isn't one year's dues"
                 raise ValueError(msg)
-            member = _member_for(club, payment.buyer_email)
+            member = _member_for(club, payment)
             if action == "renew" and member is None:
-                msg = "No member has that email"
+                msg = "No member matches that payment"
+                raise ValueError(msg)
+            if _renewed_since(member, payment):
+                msg = f"{member} has already been renewed since that payment"
                 raise ValueError(msg)
             if action == "add":
                 if member is not None:
-                    msg = "That email already belongs to a member"
+                    msg = "That payment matches a member already"
                     raise ValueError(msg)
                 member = ClubMember.objects.create(
                     club=club,
@@ -270,6 +299,7 @@ def resolve_dues_payment(club, payment_pk, action, user):
                 acting_user=user,
                 money_description=f"Membership dues for {member}, paid in Square",
                 book_money=booked is None,
+                external_id=payment.payment_id,
             )
             if booked:
                 booked.category = ClubMoney.CATEGORY_MEMBERSHIP

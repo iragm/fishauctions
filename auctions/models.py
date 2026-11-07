@@ -2588,6 +2588,7 @@ class ClubMember(CachedPropertiesMixin, ContactRecord):
 
         BapAward.objects.filter(club_member=duplicate).update(club_member=self)
         InvoicePayment.objects.filter(club_member=duplicate).update(club_member=self)
+        SquareOffsitePayment.objects.filter(member=duplicate).update(member=self)
         # An unpaid dues invoice renews whoever it names.
         Invoice.objects.filter(club_member=duplicate).update(club_member=self)
         for column in ("auction_email_member", "contact_email_member", "donation_email_member"):
