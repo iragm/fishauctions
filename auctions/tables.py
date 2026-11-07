@@ -1216,7 +1216,7 @@ class ClubBapLotHTMxTable(tables.Table):
                 record.auction.custom_checkbox_name,
             )
         if self.club and self.club.points_for_cares_species > 0 and record.cares:
-            badges = badges + format_html(' <span class="badge bg-info text-dark">CARES</span>')
+            badges = badges + static_html(' <span class="badge bg-info text-dark">CARES</span>')
         return format_html('<a href="{}">{}</a><div class="mt-1">{}</div>', url, value, badges)
 
     def render_seller_name(self, value, record):
