@@ -58,8 +58,8 @@ class FakeSession:
         self.responses = list(responses)
         self.calls = []
 
-    def get(self, url, headers=None, params=None, timeout=None):
-        self.calls.append({"url": url, "headers": headers, "params": params})
+    def get(self, url, headers=None, params=None, timeout=None, allow_redirects=True):
+        self.calls.append({"url": url, "headers": headers, "params": params, "redirects": allow_redirects})
         return self.responses.pop(0)
 
 
@@ -116,12 +116,26 @@ class CaresSyncTests(TestCase):
         self.goodeid.cares_id = 99
         self.goodeid.cares_classification = "CVU"
         self.goodeid.save()
-        self.sync(page([record(13, "Xenotoca eiseni", "CEN")]), full=False)
+        counts, _session = self.sync(page([record(13, "Xenotoca eiseni", "CEN")]), full=False)
         self.goodeid.refresh_from_db()
         self.assertEqual(self.goodeid.cares_id, 99)
-        # A second row of the same name, flagged for a person to merge.
-        added = Species.objects.get(cares_id=13)
-        self.assertEqual(added.possible_duplicate, self.goodeid)
+        # Not cloned either: a second row of a listed name is worse than an unmarked record.
+        self.assertEqual(Species.objects.count(), 1)
+        self.assertEqual(counts["claimed"], 1)
+
+    def test_a_synonym_never_takes_another_records_own_name(self):
+        """Either order: the record named Xenotoca eiseni gets that row, the other is added."""
+        for records in (
+            [record(20, "Allotoca eiseni", alt="Xenotoca eiseni"), record(21, "Xenotoca eiseni")],
+            [record(21, "Xenotoca eiseni"), record(20, "Allotoca eiseni", alt="Xenotoca eiseni")],
+        ):
+            with self.subTest(first=records[0]["id"]):
+                Species.objects.exclude(pk=self.goodeid.pk).delete()
+                Species.objects.filter(pk=self.goodeid.pk).update(cares_id=None, cares_classification="")
+                self.sync(page(records), full=True)
+                self.goodeid.refresh_from_db()
+                self.assertEqual(self.goodeid.cares_id, 21)
+                self.assertEqual(Species.objects.get(cares_id=20).genus, "Allotoca")
 
     def test_a_second_run_finds_its_own_row_by_id(self):
         self.sync(page([record(11, "Xenotoca doadrioi", "CCR")]))
@@ -155,6 +169,40 @@ class CaresSyncTests(TestCase):
         SpeciesCommonName.objects.create(species=other, name="L046", source="fishbase")
         self.sync(page([record(15, "Hypancistrus seideli", "CEN", alt="L046")]))
         self.assertFalse(SpeciesCommonName.objects.filter(species__cares_id=15).exists())
+
+    def test_a_full_pass_that_sees_too_little_clears_nothing(self):
+        self.sync(page([record(10, "Xenotoca eiseni"), record(11, "Xenotoca doadrioi")]))
+        counts, _session = self.sync(page([]), full=True)
+        self.goodeid.refresh_from_db()
+        self.assertEqual(self.goodeid.cares_classification, "CEN")
+        self.assertEqual(counts["not_cleared"], 2)
+
+    def test_a_page_without_a_results_list_stops_the_run(self):
+        self.sync(page([record(10, "Xenotoca eiseni")]))
+        with self.assertRaises(cares.CaresError):
+            self.sync(FakeResponse(200, {"detail": "maintenance"}), full=True)
+        self.goodeid.refresh_from_db()
+        self.assertEqual(self.goodeid.cares_classification, "CEN")
+
+    def test_malformed_records_are_skipped(self):
+        bad = [None, "x", {"id": True, "name": "Xenotoca doadrioi"}, {"id": "5", "name": "Xenotoca doadrioi"}]
+        counts, _session = self.sync(page([*bad, record(10, "Xenotoca eiseni")]))
+        self.assertEqual(counts["skipped"], 4)
+        self.assertEqual(Species.objects.count(), 1)
+
+    def test_the_key_never_goes_to_another_host_or_through_a_redirect(self):
+        session = FakeSession(page([record(10, "Xenotoca eiseni")], next_url="https://elsewhere.example.com/?page=2"))
+        with self.assertRaises(cares.CaresError):
+            cares.sync(session=session, sleep=lambda seconds: None)
+        self.assertEqual(len(session.calls), 1)
+        self.assertFalse(session.calls[0]["redirects"])
+
+    def test_retry_after_as_a_date_or_nonsense_waits_a_minute_and_gives_up(self):
+        waits = []
+        throttled = [FakeResponse(429, headers={"Retry-After": "Wed, 11 Nov 2026 04:30:00 GMT"})] * 4
+        with self.assertRaises(cares.CaresError):
+            cares.sync(session=FakeSession(*throttled), sleep=waits.append)
+        self.assertEqual(waits, [60, 60, 60])
 
     def test_pages_are_followed_over_https(self):
         _counts, session = self.sync(
@@ -270,11 +318,12 @@ class CaresLotTests(StandardTestCase):
         self.assertEqual(label.species_suffix, " (CARES)")
         self.assertIn("<i>Xenotoca doadrioi</i> (CARES)", html)
 
-    def test_label_of_a_lot_named_for_the_species_still_says_cares(self):
+    def test_label_of_a_lot_named_for_the_species_says_cares_once(self):
         self.in_person_lot.lot_name = "Xenotoca doadrioi"
         self.in_person_lot.save()
         _label, html = self._label(self.in_person_lot)
-        self.assertIn("<i>Xenotoca doadrioi</i> (CARES)", html)
+        self.assertNotIn("<i>Xenotoca doadrioi</i>", html)
+        self.assertIn('<div class="small">CARES</div>', html)
 
     def test_label_without_the_species_field_says_nothing(self):
         self.in_person_auction.label_print_fields = "lot_name"

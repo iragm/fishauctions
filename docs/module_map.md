@@ -93,9 +93,9 @@ this only quotes its opening sentence.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
 - **`brevo.py`** (573 lines)
   One-way Django -> Brevo sync for clubs, built like auctions/mailchimp.py.
-- **`cares.py`** (277 lines)
+- **`cares.py`** (367 lines)
   The CARES conservation-priority list, kept in step with aquaristspecies.net.
-  `CaresError`, `enabled`, `classification`, `fetch`, `find_species`, `apply`, `sync`
+  `CaresError`, `enabled`, `classification`, `fetch`, `Claimed`, `find_species`, `apply`, `sync`
 - **`client_ip.py`** (111 lines)
   Where a request came from, for the things that count per address.
   `client_ip`, `rate_limit_address`, `address_bucket`
@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15517 lines)
+- **`models.py`** (15518 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -241,7 +241,7 @@ this only quotes its opening sentence.
 - **`printer_programs.py`** (675 lines)
   Validation and seed data for :class:`ThermalPrinterProfile` command programs.
   `ProgramValidationError`, `validate_program`, `validate_match_patterns`, `validate_profile_programs`, `serialize_profile`
-- **`printing.py`** (325 lines)
+- **`printing.py`** (327 lines)
   Shared label-printing helpers.
   `text_width_pt`, `split_label_tags`, `wrapped_lines`, `plan_label`, `inches_per_unit`, `deterministic_warnings`, `label_prefs_warnings`, `warning_matrix`
 - **`queryset_annotations.py`** (223 lines)
@@ -385,7 +385,7 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (191 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`, `CameraScannerReadingTests`, `LotQueuePreviewTests`
-- **`test_cares.py`** (356 lines)
+- **`test_cares.py`** (405 lines)
   The CARES list: the weekly sync from aquaristspecies.net, and where a CARES species shows.
   `record`, `FakeResponse`, `FakeSession`, `page`, `CaresSyncTests`, `CaresSpeciesTests`, `CaresLotTests`, `CaresBapTests`
 - **`test_celery_tasks.py`** (1142 lines)

@@ -209,9 +209,11 @@ def plan_label(label, *, print_fields, geometry):
     # A CARES species says so after its name, on every label that prints species.
     label.species_suffix = ""
     if "scientific_name" in print_fields and label.cares:
-        if not label.species_line:
-            label.species_line, label.species_is_scientific = label.scientific_name, True
-        label.species_suffix = " (CARES)"
+        if label.species_line:
+            label.species_suffix = " (CARES)"
+        else:
+            # The lot name already is the scientific name; don't print it twice.
+            label.species_line = "CARES"
 
     middle_band = (
         ("species", label.species_line + label.species_suffix, small),

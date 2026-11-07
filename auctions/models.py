@@ -3800,7 +3800,8 @@ class Species(models.Model):
             possible_duplicate=None
         )
         self.possible_duplicate = None
-        # The CARES mark follows too; cares_id is unique, so the losing row lets go of it first.
+        # The CARES mark follows too; cares_id is unique, so the losing row lets go of it first. When both
+        # rows have one, the losing record is reported as claimed by the next sync, never re-added.
         if duplicate.cares_id and not self.cares_id:
             cares_id, code = duplicate.cares_id, duplicate.cares_classification
             Species.objects.filter(pk=duplicate.pk).update(cares_id=None)
