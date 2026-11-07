@@ -10,6 +10,9 @@
         {% if invoice.unsold_lot_warning %}
           <div class="alert alert-warning fw-bold py-2 text-dark" role="alert">{{ invoice.unsold_lot_warning }}</div>
         {% endif %}
+        {% if invoice.square_payment_hint %}
+          <div class="alert alert-info py-2 text-dark" role="status">{{ invoice.square_payment_hint }}</div>
+        {% endif %}
         {{ tos.name }} <span id="quick-checkout-invoice-summary">{{ invoice.invoice_summary_short }}</span> {% include 'invoice_buttons.html' %}<br>
         {% include "auctions/partials/invoice_membership_renewal.html" with is_admin=True %}
         {% if tos.is_club_member and tos.auction.uses_alternate_split %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}

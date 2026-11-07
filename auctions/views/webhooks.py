@@ -27,6 +27,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView, View
 
+from auctions import square_offsite
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -716,16 +717,39 @@ class SquareWebhookView(SquareAPIMixin, View):
                 elif seller.square_merchant_id:
                     client = seller.get_square_client()
                     if client:
-                        try:
-                            order_response = client.orders.get(order_id=order_id)
-                            # Square SDK returns response objects with attributes
-                            if hasattr(order_response, "order") and order_response.order:
-                                reference_id = getattr(order_response.order, "reference_id", None)
-                            if not reference_id:
-                                logger.error("reference id not found for Square order %s", order_id)
-                                logger.error(order_response)
-                        except Exception as e:
-                            logger.exception("Error retrieving Square order %s: %s", order_id, e)
+                        order = None
+                        if order_id:
+                            try:
+                                order_response = client.orders.get(order_id=order_id)
+                                # Square SDK returns response objects with attributes
+                                order = getattr(order_response, "order", None)
+                            except Exception as e:
+                                logger.exception("Error retrieving Square order %s: %s", order_id, e)
+                        if order is not None:
+                            reference_id = getattr(order, "reference_id", None)
+                        # Only a read order proves there is no reference: an unread one may be ours. Tap to
+                        # Pay names its invoice on the payment, not the order; that keeps it from looking
+                        # off-site, but only an order's reference credits an invoice, as before.
+                        payment_reference = payment.get("reference_id")
+                        if (
+                            (order is not None or not order_id)
+                            and not str(reference_id or "").isdigit()
+                            and not str(payment_reference or "").isdigit()
+                        ):
+                            # Every charge this site makes names its invoice by number, so this one was
+                            # taken in Square directly. Normal, and the order stays out of the log.
+                            logger.info(
+                                "Square payment %s on order %s was taken outside this site (%s)",
+                                payment_id,
+                                order_id,
+                                square_offsite.order_source(order) or "unknown source",
+                            )
+                            try:
+                                square_offsite.record_payment(merchant_id, payment, order)
+                            except Exception:
+                                # Not the site's payment: never a 500 that Square retries for ever.
+                                logger.exception("Could not keep off-site Square payment %s", payment_id)
+                            reference_id = None
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
 
@@ -747,7 +771,13 @@ class SquareWebhookView(SquareAPIMixin, View):
                             else None
                         )
                         currency = (payment.get("amount_money") or {}).get("currency", "USD")
-                        if not payee or not seller or payee.pk != seller.pk or currency != invoice.currency:
+                        # By merchant: several officers' connections can share one Square account.
+                        if (
+                            not payee
+                            or not seller
+                            or payee.square_merchant_id != merchant_id
+                            or currency != invoice.currency
+                        ):
                             logger.warning(
                                 "Square webhook: payment %s names invoice %s, which merchant %s does not collect for",
                                 payment_id,
@@ -883,6 +913,8 @@ class SquareWebhookView(SquareAPIMixin, View):
                         action = f"Refund via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
+                elif refund_id and square_offsite.record_refund(event.get("merchant_id", ""), refund):
+                    logger.info("Square refund of off-site payment %s booked", payment_id)
 
         elif event_type == "oauth.authorization.revoked":
             # Merchant revoked OAuth authorization - delete SquareSeller instance
@@ -891,6 +923,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                 square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
                 if square_seller:
                     square_seller.delete()
+                if not SquareSeller.objects.filter(square_merchant_id=merchant_id).exists():
+                    # The buyers' names and emails kept for that account go with it.
+                    square_offsite.purge(merchant_id)
         return HttpResponse(status=200)
 
 

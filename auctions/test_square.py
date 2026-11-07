@@ -5,20 +5,24 @@ import datetime
 import hashlib
 import hmac
 import json
+import logging
 from decimal import Decimal
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from django.core.exceptions import ImproperlyConfigured
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from auctions.models import (
     AuctionTOS,
+    ClubMoney,
     Invoice,
     InvoicePayment,
     Lot,
     PickupLocation,
+    SquareOffsitePayment,
     SquareSeller,
     UserData,
 )
@@ -941,3 +945,304 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
                 )
 
             self.assertIn("SQUARE_WEBHOOK_SIGNATURE_KEY must be set", str(context.exception))
+
+
+@override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True)
+class SquareOffsitePaymentTests(TestCase):
+    """Payments a club takes in Square without this site (Payment Links, its own register) reach the webhook
+    too: a quiet log line with no order details, a short-lived record for the members page and invoices, and
+    a treasurer-report row only when the club opts in.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+
+        from auctions.models import Club
+
+        self.club = Club.objects.create(name="Offsite club", membership_system="rolling", membership_annual_fee=25)
+        self.owner = User.objects.create_user(username="offsite_owner", password="pw", email="o@example.com")
+        self.seller = SquareSeller.objects.create(
+            user=self.owner, club=self.club, square_merchant_id="MERCHANT_OFFSITE", currency="USD"
+        )
+        self.order = SimpleNamespace(
+            reference_id=None,
+            source=SimpleNamespace(name="Payment Links"),
+            line_items=[SimpleNamespace(name="Club shirt", quantity="2"), SimpleNamespace(name="Raffle", quantity="1")],
+            customer_id="CUSTOMER_SECRET",
+        )
+        self.client_mock = Mock()
+        self.client_mock.orders.get.return_value = SimpleNamespace(order=self.order)
+        self.now = timezone.now()
+
+    def _payment(self, payment_id="PAY_OFF", cents=2500, currency="USD", ago=None, **extra):
+        created = self.now - (ago or datetime.timedelta(hours=1))
+        payment = {
+            "id": payment_id,
+            "status": "COMPLETED",
+            "order_id": "ORDER_OFF",
+            "created_at": created.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "amount_money": {"amount": cents, "currency": currency},
+            "total_money": {"amount": cents, "currency": currency},
+            "buyer_email_address": "buyer@example.com",
+            "billing_address": {"first_name": "Pat", "last_name": "Buyer"},
+        }
+        payment.update(extra)
+        return payment
+
+    def _post(self, event_type, obj, merchant_id="MERCHANT_OFFSITE"):
+        with patch.object(SquareSeller, "get_square_client", return_value=self.client_mock):
+            response = self.client.post(
+                reverse("square_webhook"),
+                data={"merchant_id": merchant_id, "type": event_type, "data": {"object": obj}},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+
+    def _offsite_rows(self):
+        return ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_SQUARE_OFFSITE)
+
+    def _opt_in(self):
+        self.club.record_offsite_square_payments = True
+        self.club.save()
+
+    def test_logged_quietly_without_order_details(self):
+        with self.assertLogs("auctions.views.webhooks", level="INFO") as logs:
+            self._post("payment.updated", {"payment": self._payment()})
+        # The unsigned-in-DEBUG warning is this test's setup, not the payment.
+        loud = [r for r in logs.records if r.levelno >= logging.WARNING and "SIGNATURE_KEY" not in r.getMessage()]
+        self.assertFalse(loud)
+        text = "\n".join(logs.output)
+        self.assertIn("Payment Links", text)
+        for detail in ("Club shirt", "CUSTOMER_SECRET", "Raffle", "Pat", "buyer@example.com"):
+            self.assertNotIn(detail, text)
+        kept = SquareOffsitePayment.objects.get()
+        self.assertEqual((kept.buyer_name, kept.buyer_email, kept.amount), ("Pat Buyer", "buyer@example.com", 25))
+        # The treasurer report is off by default.
+        self.assertFalse(ClubMoney.objects.exists())
+        self.assertFalse(InvoicePayment.objects.exists())
+
+    def test_opted_in_club_books_it_once(self):
+        self._opt_in()
+        self._post("payment.updated", {"payment": self._payment()})
+        self._post("payment.updated", {"payment": self._payment()})
+        row = self._offsite_rows().get()
+        self.assertEqual(row.amount, Decimal("25.00"))
+        self.assertEqual(row.external_id, "PAY_OFF")
+        self.assertEqual(row.description, "Square (Payment Links): Club shirt x2, Raffle")
+        # A changed amount corrects the row rather than adding one.
+        self._post("payment.updated", {"payment": self._payment(cents=3000)})
+        self.assertEqual(self._offsite_rows().get().amount, Decimal("30.00"))
+
+    def test_old_payments_are_not_new_to_the_report(self):
+        """Square re-sends old payments (a refund fires payment.updated again); opting in later doesn't book them."""
+        self._opt_in()
+        self._post("payment.updated", {"payment": self._payment(ago=datetime.timedelta(days=10))})
+        self.assertFalse(ClubMoney.objects.exists())
+
+    def test_refund_comes_off_the_books_once(self):
+        self._opt_in()
+        self._post("payment.updated", {"payment": self._payment()})
+        refund = {
+            "id": "REFUND_OFF",
+            "payment_id": "PAY_OFF",
+            "status": "COMPLETED",
+            "amount_money": {"amount": 1000, "currency": "USD"},
+        }
+        self._post("refund.updated", {"refund": refund})
+        self._post("refund.updated", {"refund": refund})
+        self.assertEqual(sum(row.amount for row in self._offsite_rows()), Decimal("15.00"))
+        self.assertTrue(SquareOffsitePayment.objects.get(payment_id="PAY_OFF").refunded)
+        # Another merchant naming the same payment books nothing.
+        self._post("refund.updated", {"refund": dict(refund, id="REFUND_OTHER")}, merchant_id="SOMEONE_ELSE")
+        self.assertFalse(ClubMoney.objects.filter(external_id="REFUND_OTHER").exists())
+
+    def test_site_charges_are_never_offsite(self):
+        """A Tap to Pay charge names its invoice on the payment, and an unread order proves nothing."""
+        self._opt_in()
+        self._post("payment.updated", {"payment": self._payment(payment_id="PAY_TTP", reference_id="999999")})
+        self.client_mock.orders.get.return_value = SimpleNamespace(order=None, errors=["nope"])
+        self._post("payment.updated", {"payment": self._payment(payment_id="PAY_NO_ORDER")})
+        self.client_mock.orders.get.side_effect = RuntimeError("Square is down")
+        self._post("payment.updated", {"payment": self._payment(payment_id="PAY_UNREAD")})
+        self.assertFalse(SquareOffsitePayment.objects.exists())
+        self.assertFalse(ClubMoney.objects.exists())
+
+    def test_other_currency_and_personal_accounts_book_nothing(self):
+        self._opt_in()
+        self._post("payment.updated", {"payment": self._payment(payment_id="PAY_CAD", currency="CAD")})
+        self.seller.club = None
+        self.seller.save()
+        self._post("payment.updated", {"payment": self._payment(payment_id="PAY_PERSONAL")})
+        self.assertFalse(ClubMoney.objects.exists())
+
+    def test_setting_only_offered_with_a_square_account(self):
+        from auctions.forms import ClubMembershipSettingsForm
+
+        self.assertIn("record_offsite_square_payments", ClubMembershipSettingsForm(instance=self.club).fields)
+        self.seller.delete()
+        club = type(self.club).objects.get(pk=self.club.pk)
+        self.assertNotIn("record_offsite_square_payments", ClubMembershipSettingsForm(instance=club).fields)
+
+
+class SquareOffsiteSuggestionTests(TestCase):
+    """The members page offers dues-sized off-site payments; an unpaid invoice notes a matching one."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+
+        from auctions.models import Club, ClubMember
+
+        self.club = Club.objects.create(name="Dues club", membership_system="rolling", membership_annual_fee=25)
+        self.admin = User.objects.create_user(username="dues_admin", password="pw", email="a@example.com")
+        ClubMember.objects.create(club=self.club, user=self.admin, name="Admin", permission_add_edit=True)
+        SquareSeller.objects.create(user=self.admin, club=self.club, square_merchant_id="M_DUES", currency="USD")
+        self.client.login(username="dues_admin", password="pw")
+        self.url = reverse("club_square_dues", kwargs={"slug": self.club.slug})
+
+    def _payment(self, payment_id, email="", name="", amount=25, ago_days=1, **extra):
+        return SquareOffsitePayment.objects.create(
+            payment_id=payment_id,
+            merchant_id="M_DUES",
+            amount=amount,
+            paid_at=timezone.now() - datetime.timedelta(days=ago_days),
+            buyer_email=email,
+            buyer_name=name,
+            **extra,
+        )
+
+    def test_newest_first_then_the_next_after_each_answer(self):
+        from auctions.models import ClubMember
+
+        member = ClubMember.objects.create(club=self.club, name="Old member", email="Old@Example.com")
+        self._payment("P_OLD", email="old@example.com", ago_days=5)
+        newest = self._payment("P_NEW", name="New Person", email="new@example.com", ago_days=1)
+        self._payment("P_WRONG_AMOUNT", name="Raffle buyer", amount=10, ago_days=0)
+        self._payment("P_STALE", name="Too old", ago_days=40)
+
+        page = self.client.get(self.url).content.decode()
+        self.assertIn("New Person", page)
+        self.assertIn("Add as member", page)
+
+        response = self.client.post(self.url, {"payment": newest.pk, "action": "add"})
+        self.assertEqual(response["HX-Trigger"], "clubMemberListChanged")
+        added = ClubMember.objects.get(email="new@example.com")
+        self.assertTrue(added.membership_expiration_date)
+        page = response.content.decode()
+        self.assertIn("Renew Old member", page)
+
+        page = self.client.post(self.url, {"payment": newest.pk, "action": "add"}).content.decode()
+        self.assertIn("already been handled", page)
+
+        old = SquareOffsitePayment.objects.get(payment_id="P_OLD")
+        page = self.client.post(self.url, {"payment": old.pk, "action": "renew"}).content.decode()
+        member.refresh_from_db()
+        self.assertEqual(member.membership_last_paid, timezone.localdate())
+        self.assertNotIn("Too old", page)
+        self.assertNotIn("Raffle buyer", page)
+        # Dues booked once each.
+        self.assertEqual(ClubMoney.objects.filter(category=ClubMoney.CATEGORY_MEMBERSHIP).count(), 2)
+        # Never refundable from the site: refunds work only on recorded invoice payments.
+        self.assertFalse(InvoicePayment.objects.exists())
+
+    def test_renewal_reuses_the_treasurer_report_row(self):
+        from auctions.models import ClubMember
+
+        ClubMember.objects.create(club=self.club, name="Member", email="m@example.com")
+        payment = self._payment("P_BOOKED", email="m@example.com")
+        ClubMoney.objects.create(
+            club=self.club,
+            external_id="P_BOOKED",
+            amount=25,
+            date=timezone.localdate(),
+            category=ClubMoney.CATEGORY_SQUARE_OFFSITE,
+        )
+        self.client.post(self.url, {"payment": payment.pk, "action": "renew"})
+        row = ClubMoney.objects.get(club=self.club)
+        self.assertEqual(row.category, ClubMoney.CATEGORY_MEMBERSHIP)
+
+    def test_name_only_payment_renews_its_member_once(self):
+        from auctions.models import ClubMember
+
+        member = ClubMember.objects.create(club=self.club, name="Register Buyer", email="r@example.com")
+        payment = self._payment("P_REGISTER", name="register buyer")
+        self.assertIn("Renew Register Buyer", self.client.get(self.url).content.decode())
+        self.client.post(self.url, {"payment": payment.pk, "action": "renew"})
+        row = ClubMoney.objects.get(category=ClubMoney.CATEGORY_MEMBERSHIP)
+        self.assertEqual(row.external_id, "P_REGISTER")
+        # Renewed some other way since the payment: not offered again.
+        second = self._payment("P_REGISTER_2", name="Register Buyer", ago_days=3)
+        member.refresh_from_db()
+        self.assertNotIn("Register Buyer", self.client.get(self.url).content.decode())
+        page = self.client.post(self.url, {"payment": second.pk, "action": "renew"}).content.decode()
+        self.assertIn("already been renewed", page)
+        self.assertEqual(ClubMoney.objects.filter(category=ClubMoney.CATEGORY_MEMBERSHIP).count(), 1)
+
+    def test_kept_only_for_clubs_and_forgotten_on_disconnect(self):
+        from auctions.square_offsite import record_payment
+
+        payment = {
+            "id": "P_PERSONAL",
+            "created_at": timezone.now().isoformat(),
+            "amount_money": {"amount": 500, "currency": "USD"},
+            "buyer_email_address": "shopper@example.com",
+        }
+        record_payment("M_PERSONAL", payment, None)
+        self.assertFalse(SquareOffsitePayment.objects.filter(payment_id="P_PERSONAL").exists())
+        old = dict(payment, id="P_ANCIENT", created_at=(timezone.now() - datetime.timedelta(days=60)).isoformat())
+        record_payment("M_DUES", old, None)
+        self.assertFalse(SquareOffsitePayment.objects.filter(payment_id="P_ANCIENT").exists())
+        self._payment("P_KEPT", name="Someone")
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True):
+            self.client.post(
+                reverse("square_webhook"),
+                data={"merchant_id": "M_DUES", "type": "oauth.authorization.revoked", "data": {}},
+                content_type="application/json",
+            )
+        self.assertFalse(SquareOffsitePayment.objects.exists())
+
+    def test_dismiss_and_permissions(self):
+        payment = self._payment("P_DISMISS", name="Someone")
+        self.client.post(self.url, {"payment": payment.pk, "action": "dismiss"})
+        payment.refresh_from_db()
+        self.assertEqual(payment.resolution, SquareOffsitePayment.RESOLUTION_DISMISSED)
+        self.assertNotIn("Someone", self.client.get(self.url).content.decode())
+
+        from django.contrib.auth.models import User
+
+        User.objects.create_user(username="dues_outsider", password="pw")
+        self.client.login(username="dues_outsider", password="pw")
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.assertEqual(self.client.post(self.url, {"payment": payment.pk, "action": "add"}).status_code, 403)
+
+    def test_another_clubs_payment_cannot_be_used(self):
+        other = SquareOffsitePayment.objects.create(
+            payment_id="P_OTHER", merchant_id="M_ELSEWHERE", amount=25, paid_at=timezone.now(), buyer_name="X"
+        )
+        page = self.client.post(self.url, {"payment": other.pk, "action": "add"}).content.decode()
+        self.assertIn("already been handled", page)
+        from auctions.models import ClubMember
+
+        self.assertEqual(ClubMember.objects.filter(club=self.club).count(), 1)
+
+    def test_invoice_hint_matches_amount_and_time(self):
+        from auctions.models import Auction, AuctionTOS, Invoice, PickupLocation
+        from auctions.square_offsite import invoice_payment_hint
+
+        auction = Auction.objects.create(
+            created_by=self.admin, club=self.club, title="Hint auction", date_start=timezone.now()
+        )
+        location = PickupLocation.objects.create(name="here", auction=auction, pickup_time=timezone.now())
+        tos = AuctionTOS.objects.create(user=self.admin, auction=auction, pickup_location=location, name="Bidder")
+        invoice = Invoice.objects.create(auctiontos_user=tos, auction=auction)
+        owed = Decimal("0.00") - Decimal(invoice.rounded_net_after_payments)
+        self.assertEqual(invoice_payment_hint(invoice), "")  # nothing owed yet, or nothing matching
+        with patch.object(Invoice, "rounded_net_after_payments", Decimal("-40.00")):
+            self._payment("P_BEFORE", name="Early", amount=40, ago_days=2)
+            Invoice.objects.filter(pk=invoice.pk).update(date=timezone.now() - datetime.timedelta(days=1))
+            invoice.refresh_from_db()
+            self.assertEqual(invoice_payment_hint(invoice), "")
+            self._payment("P_AFTER", name="Pat Buyer", amount=40, ago_days=0)
+            self.assertIn("Square payment from Pat Buyer", invoice_payment_hint(invoice))
+            self._payment("P_REFUNDED", name="Refunded", amount=40, ago_days=0, refunded=True)
+            self.assertNotIn("Refunded", invoice_payment_hint(invoice))
+        self.assertGreaterEqual(owed, 0)

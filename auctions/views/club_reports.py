@@ -336,6 +336,7 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             "tax_collected": self._money_sum(entries, category=ClubMoney.CATEGORY_TAX),
             "membership_dues": self._money_sum(entries, category=ClubMoney.CATEGORY_MEMBERSHIP),
             "donations": self._money_sum(entries, category=ClubMoney.CATEGORY_DONATION),
+            "square_offsite": self._money_sum(entries, category=ClubMoney.CATEGORY_SQUARE_OFFSITE),
             "outstanding_invoices": outstanding["count"],
             "outstanding_invoices_amount": outstanding["amount"],
         }

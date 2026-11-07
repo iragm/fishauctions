@@ -1,0 +1,15 @@
+<div id="club-square-dues">
+{% if payment %}
+  <div class="alert alert-info d-flex flex-wrap gap-2 align-items-center py-2" role="status">
+    <span class="me-auto">{{ payment.currency }} {{ payment.amount }} in Square from {{ payment.buyer }}, {{ payment.paid_at|date:"M j, g:i A" }}{% if error %} <span class="text-danger">{{ error }}</span>{% endif %}</span>
+    {% if member %}
+      <button class="btn btn-sm btn-success" hx-post="{% url 'club_square_dues' club.slug %}" hx-vals='{"payment": "{{ payment.pk }}", "action": "renew"}' hx-target="#club-square-dues" hx-swap="outerHTML"><i class="bi bi-arrow-repeat"></i> Renew {{ member }}</button>
+    {% else %}
+      <button class="btn btn-sm btn-success" hx-post="{% url 'club_square_dues' club.slug %}" hx-vals='{"payment": "{{ payment.pk }}", "action": "add"}' hx-target="#club-square-dues" hx-swap="outerHTML"><i class="bi bi-person-fill-add"></i> Add as member</button>
+    {% endif %}
+    <button class="btn btn-sm btn-secondary" hx-post="{% url 'club_square_dues' club.slug %}" hx-vals='{"payment": "{{ payment.pk }}", "action": "dismiss"}' hx-target="#club-square-dues" hx-swap="outerHTML">Not dues</button>
+  </div>
+{% elif error %}
+  <div class="alert alert-warning py-2" role="status">{{ error }}</div>
+{% endif %}
+</div>

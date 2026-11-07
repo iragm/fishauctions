@@ -32,7 +32,7 @@ this only quotes its opening sentence.
 - **`account_export.py`** (311 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_merge.py`** (422 lines)
+- **`account_merge.py`** (423 lines)
   Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
   `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
 - **`account_nav.py`** (201 lines)
@@ -159,7 +159,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6659 lines)
+- **`forms.py`** (6666 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -206,7 +206,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15377 lines)
+- **`models.py`** (15439 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -223,11 +223,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17066 lines)
+- **`palette_actions.py`** (17071 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2038 lines)
+- **`palette_routes.py`** (2039 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -280,9 +280,12 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1290 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
+- **`square_offsite.py`** (338 lines)
+  Square payments taken in a connected account without this site: a club's own Payment Link or register.
+  `square_time`, `order_source`, `record_payment`, `purge`, `record_refund`, `next_dues_payment`, `resolve_dues_payment`, `invoice_payment_hint`
 - **`tables.py`** (1785 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1889 lines)
+- **`tasks.py`** (1897 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -552,7 +555,7 @@ this only quotes its opening sentence.
 - **`test_membership_flow.py`** (1702 lines)
   Tests for club membership money: invoices, discounts, renewals and confirmation emails.
   `InvoiceStatusButtonTests`, `ClubMembershipRenewalFlowTests`, `PayPalSubscriptionWebhookTests`, `ClubMemberDiscountTests`, `ClubMoneyRenewalConsistencyTests`, `ClubMembershipEmailTaskTests`, `ClubBarcodeViewTests`, `QuickCheckoutHTMXTests`, `CarriedMembershipTests`, `WelcomeLetterTests`
-- **`test_merges.py`** (415 lines)
+- **`test_merges.py`** (416 lines)
   What a merge carries over: everything that points at the participant, club member or account it closes.
   `relations_to`, `MergeCoverageTests`, `ParticipantMergeTests`, `MemberMergeTests`
 - **`test_mobile_features.py`** (2724 lines)
@@ -667,9 +670,9 @@ this only quotes its opening sentence.
 - **`test_species_search.py`** (188 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.
   `LotSearchBySpeciesTests`, `SpeciesQuickCreateTests`
-- **`test_square.py`** (943 lines)
+- **`test_square.py`** (1248 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
-  `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`
+  `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`, `SquareOffsitePaymentTests`, `SquareOffsiteSuggestionTests`
 - **`test_static_files.py`** (155 lines)
   `/static/`: content-hashed names, and the nginx rule that caches them for a year.
   `TemplatesNameRealFilesTests`, `HashedNamesReachTheYearLongCacheTests`, `MissingManifestEntriesDoNotRaiseTests`, `DebugSkipsHashingTests`
@@ -735,7 +738,7 @@ this only quotes its opening sentence.
 - **`test_wallet_passes.py`** (1113 lines)
   Membership cards: Google Wallet, Apple Wallet, PassKit and the numbers on them.
   `DiscordJoinModalNameTests`, `DiscordJoinButtonTests`, `ClubMemberNameModelTests`, `ClubMemberIngestNameTests`, `GoogleWalletClassCreateTests`, `MembershipNumberUniquenessTests`, `AppleWalletPassTests`, `PassKitWebServiceTests`, `MembershipNumberModeTests`, `ClubIconWalletTests`
-- **`test_wallet_status.py`** (1404 lines)
+- **`test_wallet_status.py`** (1405 lines)
   Wallet status text, error-page logging, and the label-printing surfaces in the app.
 - **`tests.py`** (329 lines)
   Shared test fixture and helpers every other test module builds on: StandardTestCase, WritableMediaRoot, patch_views.
@@ -745,7 +748,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (142 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1378 lines)
+- **`urls.py`** (1379 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -1044,14 +1047,14 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1146 lines)
+- **`auction_pages.py`** (1147 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1087 lines)
+- **`base.py`** (1147 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (961 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -1076,12 +1079,12 @@ Every view on the site, split by the part of it the view belongs to.
   `ClubFinderView`, `ClubAddView`
 - **`club_integrations.py`** (1248 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
-- **`club_members.py`** (1123 lines)
+- **`club_members.py`** (1107 lines)
   The club's list of people: joining, renewing, permissions, cards.
 - **`club_pages.py`** (623 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
-- **`club_reports.py`** (829 lines)
+- **`club_reports.py`** (830 lines)
   What a club's officers read: history, stats, the treasurer's report, money in and out.
   `ClubHistoryView`, `ClubStatsView`, `ClubTreasurerReportView`, `ClubTreasurerReportExportView`, `ClubMoneyCreateView`, `ClubMoneyBalanceView`, `ClubMemberCSVImportView`, `ClubMemberCSVExportView`
 - **`discord.py`** (972 lines)
@@ -1096,7 +1099,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`help.py`** (100 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (394 lines)
+- **`invoices.py`** (398 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`logistics.py`** (78 lines)
@@ -1137,7 +1140,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`voice.py`** (188 lines)
   Voice on set lot winners: reading what was heard, opening the page's OpenAI session, and the log.
   `VoiceCommandLogView`, `VoiceInterpretView`, `VoiceCloudSessionView`
-- **`webhooks.py`** (974 lines)
+- **`webhooks.py`** (1009 lines)
   Webhooks from PayPal, Square and the email provider: unauthenticated POSTs verified by signature.
   `PayPalWebhookView`, `PayPalSubscriptionWebhookView`, `SquareWebhookView`, `QuickCheckout`, `QuickCheckoutHTMX`
 
@@ -1158,7 +1161,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (286 lines)
+- **`celery.py`** (291 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
