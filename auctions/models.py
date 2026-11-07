@@ -10498,6 +10498,16 @@ class Lot(CachedPropertiesMixin, models.Model):
         """The CARES priority in words, or ""."""
         return self.species.cares_display if self.cares else ""
 
+    #: What searching for this word matches: lots whose species is on the CARES list.
+    CARES_SEARCH_WORD = "cares"
+
+    @staticmethod
+    def cares_q():
+        """Lots :attr:`cares` is true for, as a filter: the species or a cultivar's parent is on the list, in
+        an auction that uses the species field (or no auction)."""
+        on_list = Q(species__cares_classification__gt="") | Q(species__parent__cares_classification__gt="")
+        return on_list & (Q(auction__isnull=True) | Q(auction__use_scientific_name=True))
+
     @property
     def custom_checkbox_label(self):
         if self.auction.custom_checkbox_name and self.auction.use_custom_checkbox_field and self.custom_checkbox:

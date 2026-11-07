@@ -427,6 +427,8 @@ class LotAdminFilter(django_filters.FilterSet):
                 and value.lower() == auction.custom_checkbox_name.lower()
             ):
                 return queryset.filter(custom_checkbox=True)
+            if value.lower() == Lot.CARES_SEARCH_WORD:
+                return queryset.filter(Lot.cares_q())
 
             def get_colon_filter(key, val):
                 if key == "lot":
@@ -806,6 +808,7 @@ class LotFilter(django_filters.FilterSet):
             "auction",
             "auction__created_by__userdata",  # Lot.currency_symbol
             "species_category",
+            "species__parent",  # Lot.cares
             "user__userdata",
             "winner__userdata",  # Lot.winner_as_str
             "auctiontos_seller__auction",  # AuctionTOS.display_name -> auction.is_online
@@ -1085,6 +1088,9 @@ class LotFilter(django_filters.FilterSet):
             qList = Q()  # empty
             for fragment in split:
                 fragment = fragment.strip()
+                if fragment.lower() == Lot.CARES_SEARCH_WORD:
+                    qList |= Lot.cares_q()
+                    continue
                 qList |= (
                     Q(summernote_description__icontains=fragment)
                     | Q(lot_name__icontains=fragment)

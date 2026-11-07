@@ -724,6 +724,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         # Only when the auction collected one, so a club with the field off gets no empty column.
         if self.auction.use_scientific_name:
             first_row_fields.insert(2, "Scientific name")
+            first_row_fields.insert(3, "CARES")
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
@@ -737,7 +738,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         # Every row names the seller and winner and where each collects, reaching the AuctionTOS,
         # its pickup location and its auction.
         lots = self.auction.lots_qs.select_related(
-            "species",
+            "species__parent",
             "auction",
             "species_category",
             "auctiontos_seller__pickup_location",
@@ -770,6 +771,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             ]
             if self.auction.use_scientific_name:
                 row.insert(2, lot.scientific_name)
+                row.insert(3, lot.cares_display)
             if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
                 row.append(lot.custom_checkbox_label)
             if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:

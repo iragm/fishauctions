@@ -291,6 +291,7 @@ class ClubBapLotAPITests(TestCase):
                 "bap_ineligible_reason",
                 "bap_ineligible_reason_display",
                 "bap_points_awarded",
+                "cares",
                 "category",
                 "custom_checkbox",
                 "custom_checkbox_name",
@@ -757,7 +758,7 @@ class ClubAuctionReadAPITests(WritableMediaRoot, TestCase):
         self.assertEqual(lot["category"], {"id": self.category.pk, "name": "Catfish"})
         self.assertEqual(
             lot["species"],
-            {"id": self.species.pk, "scientific_name": "Corydoras panda", "common_name": "Panda cory"},
+            {"id": self.species.pk, "scientific_name": "Corydoras panda", "common_name": "Panda cory", "cares": ""},
         )
 
     def test_no_species_when_the_auction_turned_scientific_names_off(self):

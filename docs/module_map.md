@@ -93,7 +93,7 @@ this only quotes its opening sentence.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
 - **`brevo.py`** (573 lines)
   One-way Django -> Brevo sync for clubs, built like auctions/mailchimp.py.
-- **`cares.py`** (367 lines)
+- **`cares.py`** (347 lines)
   The CARES conservation-priority list, kept in step with aquaristspecies.net.
   `CaresError`, `enabled`, `classification`, `fetch`, `Claimed`, `find_species`, `apply`, `sync`
 - **`client_ip.py`** (111 lines)
@@ -154,7 +154,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (2032 lines)
+- **`filters.py`** (2038 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15518 lines)
+- **`models.py`** (15528 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -254,7 +254,7 @@ this only quotes its opening sentence.
   Repeating club events.
   `clean_lines`, `to_text`, `from_text`, `current_or_next`, `with_exdate`, `describe`
 - **`routing.py`** (9 lines)
-- **`serializers.py`** (859 lines)
+- **`serializers.py`** (871 lines)
   DRF serializers for the club API.
 - **`services.py`** (1646 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
@@ -385,7 +385,7 @@ this only quotes its opening sentence.
 - **`test_camera_scanner.py`** (191 lines)
   Guards the iPhone code path through the camera barcode scanner.
   `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`, `CameraScannerReadingTests`, `LotQueuePreviewTests`
-- **`test_cares.py`** (405 lines)
+- **`test_cares.py`** (446 lines)
   The CARES list: the weekly sync from aquaristspecies.net, and where a CARES species shows.
   `record`, `FakeResponse`, `FakeSession`, `page`, `CaresSyncTests`, `CaresSpeciesTests`, `CaresLotTests`, `CaresBapTests`
 - **`test_celery_tasks.py`** (1142 lines)
@@ -817,6 +817,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`backup_database.py`** (34 lines)
   Back up the core tables to R2 now, or print which tables would be dumped. See auctions/backups.py.
   `Command`
+- **`cares_checkbox_auctions.py`** (49 lines)
+  Who uses the custom checkbox for CARES: ``manage.py cares_checkbox_auctions``.
+  `Command`
 - **`change_assistant.py`** (29 lines)
   `Command`
 - **`change_paypal.py`** (28 lines)
@@ -891,8 +894,8 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`split_speaker_talks.py`** (174 lines)
   Recover the individual talk titles from an imported speaker's run-on "Programs:" list.
   `normalize`, `split_is_faithful`, `Command`
-- **`sync_cares_species.py`** (23 lines)
-  Run the weekly CARES species sync now: ``manage.py sync_cares_species [--full]``.
+- **`sync_cares_species.py`** (20 lines)
+  Run the weekly CARES species sync now: ``manage.py sync_cares_species``.
   `Command`
 - **`sync_google_wallet_classes.py`** (104 lines)
   `Command`
@@ -978,7 +981,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 ## `auctions/mobile/services/`
 
-- **`ar.py`** (418 lines)
+- **`ar.py`** (420 lines)
   AR lot scanning: overlay and card metadata, observation ingestion, and position payloads.
   `ar_dirty_key`, `mark_auction_dirty`, `drain_dirty_auction_pks`, `locatable_auction_pks`, `build_lot_metadata`, `ingest_observations`, `record_ar_events`, `positions_payload`, `clear_positions`
 - **`auth.py`** (59 lines)
@@ -1103,7 +1106,7 @@ Every view on the site, split by the part of it the view belongs to.
   The library: the list of your own and your clubs' documents (``/library/``), adding them
 - **`embeds.py`** (643 lines)
   The snippets a club puts on its own website, and the pages behind them.
-- **`exports.py`** (975 lines)
+- **`exports.py`** (977 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`help.py`** (100 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
