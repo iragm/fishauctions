@@ -1137,6 +1137,7 @@ urlpatterns = [
     ),
     path("api/clubmember/<int:pk>/discord/", views.ClubMemberDiscordAdminView.as_view(), name="clubmember_discord"),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
+    path("clubs/<slug:slug>/admin/square-dues/", views.ClubSquareDuesView.as_view(), name="club_square_dues"),
     path(
         "api/clubmember/<int:pk>/membership-number/",
         views.ClubMembershipNumberView.as_view(),

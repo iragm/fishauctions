@@ -11424,6 +11424,13 @@ class Invoice(CachedPropertiesMixin, models.Model):
         return ""
 
     @cached_property
+    def square_payment_hint(self):
+        """A line for admins when a Square payment taken outside the site matches this unpaid balance."""
+        from auctions.square_offsite import invoice_payment_hint
+
+        return invoice_payment_hint(self)
+
+    @cached_property
     def pre_register_used(self):
         return self.sold_lots_queryset.filter(pre_register_discount__gt=0).exists()
 
@@ -11815,6 +11822,49 @@ class ClubMoney(models.Model):
 
     def __str__(self):
         return f"{self.club}: {self.date} {self.amount} {self.get_category_display()}"
+
+
+class SquareOffsitePayment(models.Model):
+    """A payment taken in a connected Square account without this site: a club's own Payment Link or
+    register. Kept briefly (``square_offsite.RETENTION_DAYS``) to suggest a dues renewal or flag an invoice
+    that may be paid already; see :mod:`auctions.square_offsite`.
+    """
+
+    RESOLUTION_ADDED = "added"
+    RESOLUTION_RENEWED = "renewed"
+    RESOLUTION_DISMISSED = "dismissed"
+    RESOLUTION_CHOICES = (
+        (RESOLUTION_ADDED, "Added as a member"),
+        (RESOLUTION_RENEWED, "Renewed a member"),
+        (RESOLUTION_DISMISSED, "Not dues"),
+    )
+
+    payment_id = models.CharField(max_length=255, unique=True)
+    merchant_id = models.CharField(max_length=64, db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=10, default="USD")
+    paid_at = models.DateTimeField(db_index=True)
+    buyer_name = models.CharField(max_length=200, blank=True, default="")
+    buyer_email = models.CharField(max_length=254, blank=True, default="")
+    source = models.CharField(max_length=100, blank=True, default="")
+    refunded = models.BooleanField(default=False)
+    resolution = models.CharField(max_length=20, blank=True, default="", choices=RESOLUTION_CHOICES)
+    resolved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    resolved_on = models.DateTimeField(null=True, blank=True)
+    member = models.ForeignKey(
+        "ClubMember", null=True, blank=True, on_delete=models.SET_NULL, related_name="square_offsite_payments"
+    )
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-paid_at"]
+
+    def __str__(self):
+        return f"Square {self.payment_id}: {self.amount} {self.currency}"
+
+    @property
+    def buyer(self):
+        return self.buyer_name or self.buyer_email
 
 
 class Bid(InvalidatesRelatedCache, models.Model):

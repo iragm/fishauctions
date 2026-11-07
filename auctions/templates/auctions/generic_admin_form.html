@@ -10,6 +10,7 @@
 		  <h5 class="modal-title" id="modal-invoice-title">{% block modal_title %}{{ modal_title }}{% endblock %}</h5> {{ top_buttons }}
 		</div>
 		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning text-dark'>{{ unsold_lot_warning }}</span></div>{% endif %}
+		{% if square_payment_hint %}<div class="modal-header"><span class='text-info text-dark'>{{ square_payment_hint }}</span></div>{% endif %}
 		<div class="modal-body">
             <span class="">{{ tooltip }}</span>
             {% if invoice %}{% include "auctions/partials/invoice_membership_renewal.html" %}{% endif %}

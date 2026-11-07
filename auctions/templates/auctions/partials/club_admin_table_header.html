@@ -24,6 +24,10 @@
   {% include "auctions/partials/htmx_table_filters.html" %}
 </div>
 
+{% if can_add_edit and club.charges_dues and club.effective_square_seller %}
+<div hx-get="{% url 'club_square_dues' club.slug %}" hx-trigger="load" hx-swap="outerHTML"></div>
+{% endif %}
+
 {% if can_export %}
 <div class="collapse mb-3" id="csvImportMembers">
   <div class="card card-body">

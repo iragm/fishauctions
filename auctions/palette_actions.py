@@ -16669,6 +16669,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "ClubSquareDuesView": (
+        "Offers one Square payment taken outside the site at a time, beside the member list, so a person "
+        "can judge whether the buyer is the member it names before renewing; an assistant adds or renews "
+        "members with the member tools."
+    ),
     "BlogPostView": _REDIRECT,
     "ReverifyEmailView": (
         "Sends a verification link to the person's own inbox, and clicking that link is the whole point, "

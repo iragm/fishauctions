@@ -4,7 +4,6 @@ A renewal can arrive here, which is why the renewal helpers live in :mod:`auctio
 
 import json
 import logging
-from datetime import timezone as datetime_timezone
 from decimal import Decimal, InvalidOperation
 
 import channels.layers
@@ -24,11 +23,11 @@ from django.http import (
     JsonResponse,
 )
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView, View
 
+from auctions import square_offsite
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -626,118 +625,6 @@ class PayPalSubscriptionWebhookView(PayPalAPIMixin, View):
         return JsonResponse({"status": "ok"})
 
 
-def _square_order_source(order):
-    """Where Square says an order came from ("Payment Links", "Square Point of Sale"), or ""."""
-    name = getattr(getattr(order, "source", None), "name", None)
-    return name if isinstance(name, str) else ""
-
-
-def _square_event_date(value):
-    """The local date of a Square RFC 3339 timestamp, or today."""
-    parsed = parse_datetime(value) if isinstance(value, str) else None
-    if parsed is None:
-        return timezone.localdate()
-    if timezone.is_naive(parsed):
-        parsed = timezone.make_aware(parsed, datetime_timezone.utc)
-    return timezone.localdate(parsed)
-
-
-def _book_offsite_square_money(club, external_id, amount, category, date, description):
-    """Write or correct the one ledger row for a Square payment or refund. Square re-fires, often
-    concurrently, so the club row is locked and the row is found by its Square id.
-    """
-    with transaction.atomic():
-        Club.objects.select_for_update().filter(pk=club.pk).first()
-        row = ClubMoney.objects.filter(club=club, external_id=external_id).first()
-        if row is None:
-            ClubMoney.objects.create(
-                club=club,
-                external_id=external_id,
-                amount=amount,
-                category=category,
-                date=date,
-                description=description[: ClubMoney.DESCRIPTION_MAX_LENGTH],
-            )
-        elif row.amount != amount:
-            row.amount = amount
-            row.save(update_fields=["amount"])
-
-
-def _record_offsite_square_payment(seller, payment, order):
-    """Book a payment the club took in Square without this site (a Payment Link, its own POS) into its
-    treasurer report, when the club has turned that on. Only the order's source and item names are kept.
-    """
-    club = getattr(seller, "club", None)
-    payment_id = payment.get("id")
-    if not club or not club.record_offsite_square_payments or not payment_id:
-        return
-    money = payment.get("total_money") or payment.get("amount_money") or {}
-    try:
-        amount = Decimal(money.get("amount", 0)) / 100
-    except (InvalidOperation, TypeError, ValueError):
-        return
-    if amount <= 0:
-        return
-    if money.get("currency") and money.get("currency") != seller.currency:
-        # The ledger has no currency of its own; another currency would add up as if it were this one.
-        logger.info("Square payment %s is in another currency; not added to the treasurer report", payment_id)
-        return
-    items = []
-    line_items = getattr(order, "line_items", None)
-    for line_item in line_items if isinstance(line_items, list) else []:
-        name = getattr(line_item, "name", None)
-        if isinstance(name, str) and name.strip():
-            quantity = getattr(line_item, "quantity", None)
-            quantity = quantity if isinstance(quantity, str) else "1"
-            items.append(name.strip() if quantity == "1" else f"{name.strip()} x{quantity}")
-    source = _square_order_source(order)
-    description = f"Square ({source})" if source else "Square"
-    if items:
-        description += ": " + ", ".join(items)
-    _book_offsite_square_money(
-        club,
-        payment_id,
-        amount,
-        ClubMoney.CATEGORY_SQUARE_OFFSITE,
-        _square_event_date(payment.get("created_at")),
-        description,
-    )
-
-
-def _record_offsite_square_refund(merchant_id, refund):
-    """A refund of a payment booked by :func:`_record_offsite_square_payment` comes off the same books."""
-    refund_id = refund.get("id")
-    payment_id = refund.get("payment_id")
-    if not refund_id or not payment_id or not merchant_id:
-        return False
-    booked = (
-        ClubMoney.objects.filter(
-            external_id=payment_id,
-            category=ClubMoney.CATEGORY_SQUARE_OFFSITE,
-            club__square_seller__square_merchant_id=merchant_id,
-        )
-        .select_related("club")
-        .first()
-    )
-    if not booked:
-        return False
-    try:
-        amount = Decimal((refund.get("amount_money") or {}).get("amount", 0)) / 100
-    except (InvalidOperation, TypeError, ValueError):
-        return False
-    if amount <= 0:
-        return False
-    _book_offsite_square_money(
-        booked.club,
-        refund_id,
-        -amount,
-        ClubMoney.CATEGORY_REFUNDS,
-        _square_event_date(refund.get("created_at")),
-        "Square refund of a payment taken outside this site",
-    )
-    return True
-
-
 class SquareWebhookView(SquareAPIMixin, View):
     """Square payment webhooks, verified with HMAC-SHA256."""
 
@@ -831,29 +718,29 @@ class SquareWebhookView(SquareAPIMixin, View):
                     client = seller.get_square_client()
                     if client:
                         order = None
-                        order_read = not order_id
                         if order_id:
                             try:
                                 order_response = client.orders.get(order_id=order_id)
                                 # Square SDK returns response objects with attributes
                                 order = getattr(order_response, "order", None)
-                                order_read = True
                             except Exception as e:
                                 logger.exception("Error retrieving Square order %s: %s", order_id, e)
                         if order is not None:
                             reference_id = getattr(order, "reference_id", None)
                         # Tap to Pay charges carry the invoice on the payment rather than the order.
                         reference_id = reference_id or payment.get("reference_id")
-                        if not reference_id and order_read:
-                            # Every charge this site makes names its invoice, so this one was taken in
-                            # Square directly. Normal, and the order (customer details) stays out of the log.
+                        # Only a read order proves there is no reference: an unread one may be ours.
+                        if (order is not None or not order_id) and not str(reference_id or "").isdigit():
+                            # Every charge this site makes names its invoice by number, so this one was
+                            # taken in Square directly. Normal, and the order stays out of the log.
                             logger.info(
                                 "Square payment %s on order %s was taken outside this site (%s)",
                                 payment_id,
                                 order_id,
-                                _square_order_source(order) or "unknown source",
+                                square_offsite.order_source(order) or "unknown source",
                             )
-                            _record_offsite_square_payment(seller, payment, order)
+                            square_offsite.record_payment(merchant_id, payment, order)
+                            reference_id = None
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
 
@@ -875,7 +762,13 @@ class SquareWebhookView(SquareAPIMixin, View):
                             else None
                         )
                         currency = (payment.get("amount_money") or {}).get("currency", "USD")
-                        if not payee or not seller or payee.pk != seller.pk or currency != invoice.currency:
+                        # By merchant: several officers' connections can share one Square account.
+                        if (
+                            not payee
+                            or not seller
+                            or payee.square_merchant_id != merchant_id
+                            or currency != invoice.currency
+                        ):
                             logger.warning(
                                 "Square webhook: payment %s names invoice %s, which merchant %s does not collect for",
                                 payment_id,
@@ -1011,7 +904,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                         action = f"Refund via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
-                elif refund_id and _record_offsite_square_refund(event.get("merchant_id", ""), refund):
+                elif refund_id and square_offsite.record_refund(event.get("merchant_id", ""), refund):
                     logger.info("Square refund of off-site payment %s booked", payment_id)
 
         elif event_type == "oauth.authorization.revoked":

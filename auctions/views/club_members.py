@@ -31,6 +31,7 @@ from rest_framework.authentication import SessionAuthentication, TokenAuthentica
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from auctions import square_offsite
 from auctions.crawlers import is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
@@ -260,6 +261,7 @@ class ClubMemberAdminView(APIView):
                 ctx["modal_title"] = f"{title} {invoice.invoice_summary_short}"
                 ctx["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
                 ctx["unsold_lot_warning"] = invoice.unsold_lot_warning
+                ctx["square_payment_hint"] = invoice.square_payment_hint
                 ctx["invoice"] = invoice
                 ctx["is_admin"] = True
             except AttributeError:
@@ -824,12 +826,13 @@ class ClubMemberCreateView(APIView):
         return render(request, "auctions/generic_admin_form.html", context)
 
 
-def renew_club_member(member, *, acting_user=None, actor="", money_description=""):
+def renew_club_member(member, *, acting_user=None, actor="", money_description="", book_money=True):
     """Extend a membership by one period, record it, and return the member.
 
     Shared by the Renew button and the API-key renew endpoint: same expiration maths, club history,
     ledger entry and confirmation email. ``actor`` names a non-user actor, such as an API key. Callers
-    refuse a carried membership first: it renews only through its carrier.
+    refuse a carried membership first: it renews only through its carrier. ``book_money=False`` when the
+    dues are already in the ledger (an off-site Square payment the treasurer report has).
     """
     if member.membership_carried_by_id:
         msg = f"{member}'s membership is carried with {member.membership_carried_by}'s"
@@ -859,7 +862,7 @@ def renew_club_member(member, *, acting_user=None, actor="", money_description="
         applies_to="MEMBERSHIP",
         member=member,
     )
-    if member.club.charges_dues:
+    if book_money and member.club.charges_dues:
         ClubMoney.objects.create(
             club=member.club,
             created_by=acting_user,
@@ -1121,3 +1124,39 @@ class ClubBarcodePNGView(View):
 
 BAP_EMBED_PROGRAM_FIELDS = {"bap": "bap_points", "hap": "hap_points", "cap": "culture_points"}
 BAP_EMBED_PROGRAM_LABELS = {"bap": "BAP", "hap": "HAP", "cap": "CAP"}
+
+
+class ClubSquareDuesView(LoginRequiredMixin, View):
+    """The members page's card for the newest dues-sized payment taken in the club's Square account outside
+    this site: add the buyer, renew the member their email matches, or dismiss it. Each answer shows the next.
+    """
+
+    def _club(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_add_edit"):
+            raise PermissionDenied()
+        return club
+
+    def _render(self, request, club, error=""):
+        payment, member = square_offsite.next_dues_payment(club)
+        return render(
+            request,
+            "auctions/partials/club_square_dues.html",
+            {"club": club, "payment": payment, "member": member, "error": error},
+        )
+
+    def get(self, request, slug):
+        return self._render(request, self._club(request, slug))
+
+    def post(self, request, slug):
+        club = self._club(request, slug)
+        try:
+            member = square_offsite.resolve_dues_payment(
+                club, request.POST.get("payment"), request.POST.get("action"), request.user
+            )
+        except ValueError as error:
+            return self._render(request, club, error=str(error))
+        response = self._render(request, club)
+        if member is not None:
+            response["HX-Trigger"] = "clubMemberListChanged"
+        return response

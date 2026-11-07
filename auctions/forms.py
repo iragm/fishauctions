@@ -4846,7 +4846,8 @@ class ClubMembershipSettingsForm(forms.ModelForm):
         self.helper.form_method = "post"
 
         layout_fields = ["membership_system", "membership_annual_fee", "show_member_barcode"]
-        if self.instance and self.instance.pk and self.instance.effective_square_seller:
+        if not (self.instance and self.instance.pk) or self.instance.effective_square_seller:
+            # Unbound (the palette reads the fields from one) or a club with a Square account.
             layout_fields.append("record_offsite_square_payments")
         else:
             # Nothing to record without a Square account; popping keeps any saved value.
