@@ -300,8 +300,8 @@ LOCK_SECONDS = 60 * 60
 
 
 def sync(session=None, now=None, sleep=time.sleep):
-    """One run at a time. Returns the counts; raises :class:`CaresError`. A run with a failed record keeps
-    the old start time, so the next one asks for those records again.
+    """One run at a time. Returns the counts; raises :class:`CaresError`. A run with a record it couldn't
+    place keeps the old start time, so the next one asks for those records again.
     """
     if not enabled():
         return {"disabled": 1}
@@ -340,7 +340,9 @@ def _sync(session, now, sleep):
     for genus in genera:
         Species.recompute_trade_ranks(genus=genus)
     counts["full"] = int(state.finished is None)
-    if not counts["failed"]:
+    # A record that couldn't be placed is asked for again next run, so a fix (a new code, a merge) is
+    # picked up -- and so it is in the batch whose names a synonym may not take.
+    if not (counts["failed"] or counts["unknown_code"] or counts["claimed"]):
         # When this run started, not ended: a record changed mid-run comes back next time.
         state.finished = now
         state.save(update_fields=["finished", "updated"])

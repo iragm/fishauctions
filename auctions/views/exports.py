@@ -724,7 +724,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
         # Only when the auction collected one, so a club with the field off gets no empty column.
         if self.auction.use_scientific_name:
             first_row_fields.insert(2, "Scientific name")
-            first_row_fields.insert(3, "CARES")
+            # Not "CARES": that is what many auctions call their custom checkbox, a column of its own.
+            first_row_fields.insert(3, "CARES priority")
         if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:

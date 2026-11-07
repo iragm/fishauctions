@@ -7,7 +7,6 @@ auction first, for telling them the site now marks CARES species by itself.
 import csv
 
 from django.core.management.base import BaseCommand
-from django.db.models import Count, Q
 
 from auctions.models import Auction
 
@@ -20,11 +19,11 @@ class Command(BaseCommand):
             Auction.objects.filter(
                 is_deleted=False,
                 use_custom_checkbox_field=True,
-                custom_checkbox_name__icontains="cares",
+                # The word, not the letters: "Caresheet included" is not this.
+                custom_checkbox_name__iregex=r"(^|[^a-z])cares([^a-z]|$)",
                 created_by__isnull=False,
             )
             .select_related("created_by")
-            .annotate(ticked=Count("lot", filter=Q(lot__custom_checkbox=True, lot__is_deleted=False)))
             .order_by("-date_start")
         )
         creators = {}
@@ -42,7 +41,8 @@ class Command(BaseCommand):
                 },
             )
             row["auctions"] += 1
-            row["lots_ticked"] += auction.ticked
+            # lots_qs: the lots the auction's own pages count.
+            row["lots_ticked"] += auction.lots_qs.filter(custom_checkbox=True).count()
         fields = ["email", "name", "auctions", "lots_ticked", "latest_auction", "latest_date", "checkbox_name"]
         writer = csv.DictWriter(self.stdout, fieldnames=fields)
         writer.writeheader()

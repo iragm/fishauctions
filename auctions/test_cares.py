@@ -242,6 +242,13 @@ class CaresSyncTests(TestCase):
         _counts, session = self.sync(page([]))
         self.assertEqual(session.calls[0]["params"]["since"], started.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
+    def test_an_unknown_code_is_asked_for_again(self):
+        started = timezone.now() - datetime.timedelta(days=7)
+        self.sync(page([]), now=started)
+        self.sync(page([record(10, "Xenotoca eiseni", "ZZZ")]))
+        _counts, session = self.sync(page([]))
+        self.assertEqual(session.calls[0]["params"]["since"], started.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
     def test_one_run_at_a_time(self):
         cache.add(cares.LOCK_KEY, "1")
         self.assertEqual(cares.sync(session=FakeSession()), {"already_running": 1})
@@ -301,6 +308,24 @@ class CaresLotTests(StandardTestCase):
         self.assertNotIn(other, found)
         self.assertEqual(set(Lot.objects.filter(Lot.cares_q())), {self.in_person_lot})
 
+    def test_searching_cares_still_finds_lots_marked_by_hand(self):
+        from auctions.filters import LotAdminFilter
+
+        self.in_person_auction.use_custom_checkbox_field = True
+        self.in_person_auction.custom_checkbox_name = "CARES"
+        self.in_person_auction.save()
+        ticked = Lot.objects.create(
+            lot_name="ticked lot",
+            custom_checkbox=True,
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+        )
+        named = Lot.objects.create(
+            lot_name="CARES goodeids", auction=self.in_person_auction, auctiontos_seller=self.admin_in_person_tos
+        )
+        found = set(LotAdminFilter.generic(None, Lot.objects.all(), "cares"))
+        self.assertTrue({self.in_person_lot, ticked, named} <= found)
+
     def test_lot_list_search_and_badge(self):
         Lot.objects.create(lot_name="plain lot", auction=self.in_person_auction, auctiontos_seller=self.in_person_tos)
         self.client.force_login(self.user)
@@ -313,7 +338,7 @@ class CaresLotTests(StandardTestCase):
         self.client.force_login(self.user)
         response = self.client.get(reverse("lot_list", kwargs={"slug": self.in_person_auction.slug}))
         rows = list(csv.reader(io.StringIO(response.content.decode())))
-        column = rows[0].index("CARES")
+        column = rows[0].index("CARES priority")
         values = [row[column] for row in rows[1:]]
         self.assertIn("Critically Endangered", values)
 

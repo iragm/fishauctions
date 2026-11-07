@@ -416,6 +416,9 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_random=value)
             )
         else:
+            if value.lower() == Lot.CARES_SEARCH_WORD:
+                # The same lots whether or not this auction's checkbox is called CARES, and wherever it's called from.
+                return queryset.filter(Lot.cares_text_q(value))
             try:
                 auction = self.queryset.first().auction
             except (ValueError, AttributeError):
@@ -427,8 +430,6 @@ class LotAdminFilter(django_filters.FilterSet):
                 and value.lower() == auction.custom_checkbox_name.lower()
             ):
                 return queryset.filter(custom_checkbox=True)
-            if value.lower() == Lot.CARES_SEARCH_WORD:
-                return queryset.filter(Lot.cares_q())
 
             def get_colon_filter(key, val):
                 if key == "lot":
@@ -1089,8 +1090,7 @@ class LotFilter(django_filters.FilterSet):
             for fragment in split:
                 fragment = fragment.strip()
                 if fragment.lower() == Lot.CARES_SEARCH_WORD:
-                    qList |= Lot.cares_q()
-                    continue
+                    qList |= Lot.cares_text_q(fragment)
                 qList |= (
                     Q(summernote_description__icontains=fragment)
                     | Q(lot_name__icontains=fragment)
