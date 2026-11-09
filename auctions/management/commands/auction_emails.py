@@ -79,8 +79,13 @@ class Command(BaseCommand):
 
     def _send_admin_emails(self, auction, now, current_site):
         """The welcome, invoices-ready and thank-you messages to one auction's creator, whichever are due."""
-        if not auction.created_by_id or auction.created_by.userdata.has_unsubscribed:
-            # Nobody to write to: the creator unsubscribed, or their account is gone (SET_NULL).
+        if (
+            not auction.created_by_id
+            or not (auction.created_by.email or "").strip()
+            or auction.created_by.userdata.has_unsubscribed
+        ):
+            # Nobody to write to: the creator unsubscribed, has no email address (these messages are
+            # never pushed), or their account is gone (SET_NULL). Otherwise the send fails every run.
             _mark_sent(auction, "welcome_email_sent", "invoice_email_sent", "followup_email_sent")
             return
         userData = auction.created_by.userdata

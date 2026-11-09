@@ -427,6 +427,69 @@ class SquarePaymentTests(StandardTestCase):
         for junk in ["call me", "555-1234", "", None, "x1234", "0", "12345678901234567890"]:
             self.assertEqual(sanitize_square_phone(junk), "", msg=f"expected '' for {junk!r}")
 
+    def test_payment_link_retries_without_a_phone_square_rejects(self):
+        """A plausible-looking phone Square still refuses is dropped, not a failed checkout."""
+        from unittest.mock import MagicMock, PropertyMock
+
+        from django.test import RequestFactory
+        from square.core.api_error import ApiError
+
+        from auctions.models import Invoice, SquareSeller
+
+        self.tosB.phone_number = "555-123-4567"
+        self.tosB.save()
+        rejected = ApiError(
+            status_code=400,
+            body={"errors": [{"code": "INVALID_PHONE_NUMBER", "field": "pre_populated_data.buyer_phone_number"}]},
+        )
+        client = MagicMock()
+        sent = []
+
+        def create(**kwargs):
+            sent.append(dict(kwargs["pre_populated_data"]))
+            if "buyer_phone_number" in kwargs["pre_populated_data"]:
+                raise rejected
+            return MagicMock(payment_link=MagicMock(url="https://sq/x"))
+
+        client.checkout.payment_links.create.side_effect = create
+        request = RequestFactory().post("/")
+        request.user = self.user
+        with (
+            patch.object(SquareSeller, "get_square_client", return_value=client),
+            patch.object(SquareSeller, "get_location_id", return_value="LOC"),
+            patch.object(Invoice, "rounded_net_after_payments", new_callable=PropertyMock, return_value=-20),
+        ):
+            url, error = self.square_seller.create_payment_link(self.test_invoice, request)
+        self.assertEqual((url, error), ("https://sq/x", None))
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sent[0]["buyer_phone_number"], "5551234567")
+        self.assertNotIn("buyer_phone_number", sent[1])
+
+    def test_payment_link_other_square_errors_are_not_retried(self):
+        from unittest.mock import MagicMock, PropertyMock
+
+        from django.test import RequestFactory
+        from square.core.api_error import ApiError
+
+        from auctions.models import Invoice, SquareSeller
+
+        client = MagicMock()
+        client.checkout.payment_links.create.side_effect = ApiError(
+            status_code=400, body={"errors": [{"code": "BAD_THING", "detail": "nope", "field": "order.location_id"}]}
+        )
+        request = RequestFactory().post("/")
+        request.user = self.user
+        with (
+            patch.object(SquareSeller, "get_square_client", return_value=client),
+            patch.object(SquareSeller, "get_location_id", return_value="LOC"),
+            patch.object(Invoice, "rounded_net_after_payments", new_callable=PropertyMock, return_value=-20),
+            self.assertLogs("auctions.models", level="ERROR"),
+        ):
+            url, error = self.square_seller.create_payment_link(self.test_invoice, request)
+        self.assertIsNone(url)
+        self.assertEqual(error, "Square error: nope")
+        self.assertEqual(client.checkout.payment_links.create.call_count, 1)
+
     def test_open_invoice_filter_no_duplicates(self):
         """Multiple payments on an invoice don't duplicate AuctionTOS rows."""
         from auctions.filters import AuctionTOSFilter

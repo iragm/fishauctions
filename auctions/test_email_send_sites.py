@@ -183,6 +183,19 @@ class SendSiteTests(StandardTestCase):
                 self.assertEqual(email.html_message.count("/unsubscribe/tok/"), 1)
                 self.assertEqual(email.message.count("/unsubscribe/tok/"), 1)
 
+    def test_creator_without_an_email_is_skipped_not_retried(self):
+        """auction_emails once failed every run for a creator with a blank address."""
+        creator = self.online_auction.created_by
+        creator.email = ""
+        creator.save()
+        type(self.online_auction).objects.filter(pk=self.online_auction.pk).update(
+            welcome_email_sent=False, welcome_email_due=timezone.now() - datetime.timedelta(hours=1)
+        )
+        with self.assertNoLogs("auctions.management.commands.auction_emails", level="ERROR"):
+            call_command("auction_emails", stdout=io.StringIO())
+        self.online_auction.refresh_from_db()
+        self.assertTrue(self.online_auction.welcome_email_sent)
+
     def test_help_is_a_bullet_in_the_welcome(self):
         mail.send(
             "admin@example.com",
