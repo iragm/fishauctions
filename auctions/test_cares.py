@@ -269,7 +269,7 @@ class CaresSpeciesTests(TestCase):
         )
         strain = Species.objects.create(genus="Xenotoca", species="doadrioi", variety="Gold", parent=parent)
         self.assertEqual((strain.cares, strain.cares_display), ("CCR", "Critically Endangered"))
-        self.assertEqual(strain.cares_url, "https://www.aquaristspecies.net/species/7/")
+        self.assertEqual(strain.cares_url, "https://aquaristspecies.net/species/7/")
         plain = Species.objects.create(genus="Xenotoca", species="eiseni")
         self.assertEqual((plain.cares, plain.cares_url), ("", ""))
 
@@ -288,6 +288,7 @@ class CaresLotTests(StandardTestCase):
         response = self.client.get(self.in_person_lot.get_absolute_url())
         self.assertContains(response, "<b>CARES:</b>", html=False)
         self.assertContains(response, "Critically Endangered")
+        self.assertContains(response, 'href="https://aquaristspecies.net/species/7/"')
 
     def test_not_shown_when_the_auction_has_species_off(self):
         self.in_person_auction.use_scientific_name = False

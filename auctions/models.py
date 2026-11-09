@@ -3924,11 +3924,13 @@ class Species(models.Model):
 
     @property
     def cares_url(self):
-        """This species' page on aquaristspecies.net, or "" when the sync never saw it."""
+        """This species' page on aquaristspecies.net, or "" when the sync never saw it. Without the www the
+        API's own ``url`` carries, which doesn't load.
+        """
         if not self.cares:
             return ""
         species_id = self.cares_id if self.cares_classification else self.parent.cares_id
-        return f"https://www.aquaristspecies.net/species/{species_id}/" if species_id else ""
+        return f"https://aquaristspecies.net/species/{species_id}/" if species_id else ""
 
     @property
     def label(self):
