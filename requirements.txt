@@ -10,15 +10,15 @@ aiohttp==3.14.5
     # via pywebpush
 aiosignal==1.4.0
     # via aiohttp
-amqp==5.4.1
+amqp==5.4.2
     # via kombu
 annotated-types==0.8.0
     # via pydantic
-anyio==4.15.1
+anyio==4.16.0
     # via
     #   httpx
     #   watchfiles
-asgiref==3.12.1
+asgiref==3.13.0
     # via
     #   -r requirements.in
     #   channels
@@ -35,32 +35,33 @@ beautifulsoup4==4.15.0
     #   -r requirements.in
     #   markdownify
     #   markitdown
-billiard==4.3.1
+billiard==4.3.2
     # via celery
 bleach==6.4.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.114
+boto3==1.43.126
     # via django-ses
-botocore==1.43.114
+botocore==1.43.126
     # via
     #   boto3
     #   s3transfer
-brotli==1.2.0
+brotli==1.2.1
     # via fonttools
 cachecontrol==0.14.4
     # via firebase-admin
-celery==5.6.3
+celery==5.7.0
     # via
     #   -r requirements.in
     #   django-celery-beat
-certifi==2026.10.18
+certifi==2026.10.23
     # via
     #   -r requirements.in
     #   httpcore
     #   httpx
     #   mailchimp-marketing
+    #   markitdown
     #   requests
 cffi==2.1.1
     # via
@@ -82,7 +83,7 @@ charset-normalizer==3.5.2
     #   pdfminer-six
     #   reportlab
     #   requests
-click==8.5.0
+click==8.5.1
     # via
     #   celery
     #   click-didyoumean
@@ -121,7 +122,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   markitdown
-django==5.2.18
+django==5.2.19
     # via
     #   -r requirements.in
     #   channels
@@ -150,7 +151,7 @@ django==5.2.18
     #   djangorestframework
     #   djangorestframework-simplejwt
     #   easy-thumbnails
-django-allauth==65.20.0
+django-allauth==65.21.1
     # via -r requirements.in
 django-autocomplete-light==5.0.0
     # via -r requirements.in
@@ -190,7 +191,7 @@ django-qr-code==5.0.0
     # via -r requirements.in
 django-recaptcha==4.1.0
     # via -r requirements.in
-django-ses[events]==4.8.2
+django-ses[events]==4.9.0
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
@@ -216,19 +217,19 @@ firebase-admin==7.7.0
     # via -r requirements.in
 flatbuffers==25.12.19
     # via onnxruntime
-fonttools[woff]==4.67.0
+fonttools[woff]==4.68.0
     # via weasyprint
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-api-core[grpc]==2.42.0
+google-api-core[grpc]==2.44.0
     # via
     #   firebase-admin
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-storage
-google-auth==2.62.0
+google-auth==2.62.1
     # via
     #   -r requirements.in
     #   google-api-core
@@ -249,16 +250,16 @@ google-crc32c==1.9.0
     #   google-resumable-media
 google-resumable-media==2.11.0
     # via google-cloud-storage
-googleapis-common-protos==1.75.5
+googleapis-common-protos==1.76.0
     # via
     #   google-api-core
     #   grpcio-status
-grpcio==1.84.0
+grpcio==1.85.1
     # via
     #   google-api-core
     #   google-cloud-firestore
     #   grpcio-status
-grpcio-status==1.84.0
+grpcio-status==1.85.1
     # via google-api-core
 gunicorn==26.2.0
     # via -r requirements.in
@@ -298,7 +299,7 @@ jmespath==1.1.0
     #   botocore
 jwcrypto==1.6.1
     # via django-oauth-toolkit
-kombu==5.6.2
+kombu==5.7.0
     # via celery
 linkify-it-py==2.2.0
     # via django-markdownfield
@@ -306,13 +307,13 @@ lxml==6.1.3
     # via
     #   markitdown
     #   python-pptx
-magika==0.6.3
+magika==1.0.3
     # via markitdown
 mailchimp-marketing==3.0.80
     # via -r requirements.in
-mammoth==1.11.0
+mammoth==1.13.0
     # via markitdown
-markdown==3.11.1
+markdown==3.11.3
     # via -r requirements.in
 markdown-it-py==4.2.0
     # via
@@ -320,17 +321,17 @@ markdown-it-py==4.2.0
     #   mdit-py-plugins
 markdownify==1.2.3
     # via markitdown
-markitdown[docx,outlook,pdf,pptx,xls,xlsx]==0.1.8
+markitdown[docx,outlook,pdf,pptx,xls,xlsx]==0.1.9
     # via -r requirements.in
 mdit-py-plugins==0.6.1
     # via django-markdownfield
 mdurl==0.1.2
     # via markdown-it-py
-msgpack==1.2.3
+msgpack==1.2.4
     # via
     #   cachecontrol
     #   channels-redis
-multidict==7.1.0
+multidict==7.2.1
     # via
     #   aiohttp
     #   yarl
@@ -343,29 +344,27 @@ nh3==0.3.7
 numpy==2.4.6
     # via
     #   -r requirements.in
-    #   magika
     #   onnxruntime
     #   pandas
     #   scipy
-oauthlib==4.0.0
+oauthlib==4.0.1
     # via
     #   -r requirements.in
     #   django-oauth-toolkit
     #   requests-oauthlib
 olefile==0.47
     # via markitdown
-onnxruntime==1.31.0
+onnxruntime==1.31.1
     # via magika
 openpyxl==3.1.5
     # via markitdown
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
     # via google-api-core
 packaging==26.3
     # via
     #   -r requirements.in
-    #   kombu
     #   onnxruntime
-pandas==3.0.6
+pandas==3.1.1
     # via markitdown
 pdfminer-six==20260107
     # via
@@ -404,9 +403,9 @@ protobuf==7.36.2
     #   proto-plus
 py-vapid==1.9.6
     # via pywebpush
-pyarrow==26.0.0
+pyarrow==26.0.1
     # via -r requirements.in
-pyasn1==0.6.4
+pyasn1==0.6.5
     # via
     #   -r requirements.in
     #   pyasn1-modules
@@ -414,21 +413,21 @@ pyasn1-modules==0.4.2
     # via
     #   -r requirements.in
     #   google-auth
-pycparser==3.11
+pycparser==3.12
     # via
     #   -r requirements.in
     #   cffi
-pydantic==2.14.1
+pydantic==2.14.3
     # via
     #   django-bootstrap-datepicker-plus
     #   django-qr-code
     #   pydantic-settings
     #   squareup
-pydantic-core==2.50.1
+pydantic-core==2.50.4
     # via
     #   pydantic
     #   squareup
-pydantic-settings==2.16.0
+pydantic-settings==2.16.2
     # via django-bootstrap-datepicker-plus
 pydyf==0.13.0
     # via weasyprint
@@ -445,7 +444,7 @@ pyopenssl==26.4.0
     # via -r requirements.in
 pyparsing==3.3.3
     # via -r requirements.in
-pypdfium2==5.14.0
+pypdfium2==5.15.1
     # via
     #   -r requirements.in
     #   pdfplumber
@@ -464,12 +463,11 @@ python-dateutil==2.9.0.post0
     #   pandas
 python-dotenv==1.2.4
     # via
-    #   magika
     #   pydantic-settings
     #   uvicorn
 python-pptx==1.0.2
     # via markitdown
-pytz==2026.5
+pytz==2026.6
     # via -r requirements.in
 pywebpush==2.5.0
     # via django-webpush
@@ -481,7 +479,7 @@ redis==8.1.0
     # via
     #   -r requirements.in
     #   channels-redis
-reportlab==5.0.1
+reportlab==5.1.0
     # via -r requirements.in
 requests==2.34.2
     # via
@@ -497,7 +495,7 @@ requests==2.34.2
     #   requests-oauthlib
 requests-oauthlib==2.0.0
     # via -r requirements.in
-s3transfer==0.19.2
+s3transfer==0.19.3
     # via boto3
 scipy==1.17.1
     # via -r requirements.in
@@ -513,9 +511,9 @@ six==1.17.0
     #   mailchimp-marketing
     #   markdownify
     #   python-dateutil
-soupsieve==3.0.3
+soupsieve==4.0.1
     # via beautifulsoup4
-sqlparse==0.6.0
+sqlparse==0.6.1
     # via
     #   -r requirements.in
     #   django
@@ -548,15 +546,15 @@ typing-extensions==4.16.0
     #   python-pptx
     #   squareup
     #   typing-inspection
-typing-inspection==0.4.4
+typing-inspection==0.4.5
     # via
     #   pydantic
     #   pydantic-settings
-tzdata==2026.5
+tzdata==2026.6
     # via
     #   django-celery-beat
-    #   kombu
-tzlocal==5.4.4
+    #   python-dateutil
+tzlocal==5.4.5
     # via celery
 ua-parser==1.0.2
     # via
@@ -584,7 +582,7 @@ vine==5.1.0
     #   kombu
 watchfiles==1.3.0
     # via uvicorn
-wcwidth==0.9.2
+wcwidth==0.9.4
     # via prompt-toolkit
 weasyprint==70.0
     # via django-weasyprint
@@ -595,11 +593,11 @@ webencodings==0.6.1
     #   cssselect2
     #   tinycss2
     #   tinyhtml5
-websockets==17.2
+websockets==17.4
     # via uvicorn
 xlrd==2.0.2
     # via markitdown
-xlsxwriter==3.2.9
+xlsxwriter==3.3.1
     # via python-pptx
 yarl==1.25.1
     # via aiohttp
