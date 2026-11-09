@@ -13352,6 +13352,19 @@ def sanitize_square_phone(raw):
     return f"+{digits}" if has_plus else digits
 
 
+def _rejected_prefill_field(error, pre_populated_data):
+    """The ``pre_populated_data`` key a Square 400 blames, if it is one we sent, else None."""
+    body = getattr(error, "body", None)
+    if not isinstance(body, dict):
+        return None
+    for err in body.get("errors") or []:
+        field = (err.get("field") or "") if isinstance(err, dict) else ""
+        prefix, _, key = field.partition(".")
+        if prefix == "pre_populated_data" and key.split(".")[0] in pre_populated_data:
+            return key.split(".")[0]
+    return None
+
+
 def _requester_is_invoice_member(request, invoice):
     """Whether this request comes from the member a club invoice is for: their account, or the
     ``member_uuid`` their UUID page posts."""
@@ -13669,25 +13682,36 @@ class SquareSeller(models.Model):
                 redirect_url = request.build_absolute_uri(
                     reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
                 )
-            link_resp = client.checkout.payment_links.create(
-                idempotency_key=str(uuid_module.uuid4()),
-                checkout_options={
-                    "redirect_url": redirect_url,
-                    "ask_for_shipping_address": ask_for_shipping_address,
-                },
-                pre_populated_data=pre_populated_data or {},
-                order={
-                    "location_id": location_id,
-                    "reference_id": str(invoice.pk),
-                    "line_items": [
-                        {
-                            "name": payment_note,
-                            "quantity": "1",
-                            "base_price_money": {"amount": amount_cents, "currency": self.currency},
-                        }
-                    ],
-                },
-            )
+            # The pre-fill is only a hint: when Square rejects one of its fields (a phone it
+            # won't take despite the sanitizer, say), drop that field and ask again.
+            while True:
+                try:
+                    link_resp = client.checkout.payment_links.create(
+                        idempotency_key=str(uuid_module.uuid4()),
+                        checkout_options={
+                            "redirect_url": redirect_url,
+                            "ask_for_shipping_address": ask_for_shipping_address,
+                        },
+                        pre_populated_data=pre_populated_data or {},
+                        order={
+                            "location_id": location_id,
+                            "reference_id": str(invoice.pk),
+                            "line_items": [
+                                {
+                                    "name": payment_note,
+                                    "quantity": "1",
+                                    "base_price_money": {"amount": amount_cents, "currency": self.currency},
+                                }
+                            ],
+                        },
+                    )
+                    break
+                except Exception as e:
+                    rejected = _rejected_prefill_field(e, pre_populated_data)
+                    if not rejected:
+                        raise
+                    logger.info("Square rejected %s for invoice %s; retrying without it", rejected, invoice.pk)
+                    pre_populated_data.pop(rejected)
 
             payment_link_obj = getattr(link_resp, "payment_link", None)
             payment_url = getattr(payment_link_obj, "url", None)

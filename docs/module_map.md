@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15544 lines)
+- **`models.py`** (15568 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -468,7 +468,7 @@ this only quotes its opening sentence.
 - **`test_email_layout.py`** (212 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
-- **`test_email_send_sites.py`** (348 lines)
+- **`test_email_send_sites.py`** (372 lines)
   Every templated email, sent through post_office with real model objects, the way the site sends it.
   `SendSiteTests`, `SuiteMailBackendTests`
 - **`test_endauctions.py`** (902 lines)
@@ -676,7 +676,7 @@ this only quotes its opening sentence.
 - **`test_species_search.py`** (188 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.
   `LotSearchBySpeciesTests`, `SpeciesQuickCreateTests`
-- **`test_square.py`** (1248 lines)
+- **`test_square.py`** (1311 lines)
   Square: taking a payment, refunding one, the OAuth grant, and webhook signatures.
   `SquarePaymentTests`, `SquareRefundFormTests`, `SquarePaymentSuccessViewTests`, `SquareOAuthRevocationTests`, `SquareWebhookSignatureValidationTests`, `SquareOffsitePaymentTests`, `SquareOffsiteSuggestionTests`
 - **`test_static_files.py`** (155 lines)
@@ -802,7 +802,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`android_testers_invite.py`** (138 lines)
   Invite Android users to the Google Play closed test, once.
   `eligible_users`, `invited_addresses`, `Command`
-- **`auction_emails.py`** (359 lines)
+- **`auction_emails.py`** (383 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
 - **`auction_promos.py`** (335 lines)
