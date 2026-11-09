@@ -468,7 +468,7 @@ this only quotes its opening sentence.
 - **`test_email_layout.py`** (212 lines)
   The HTML email layout: every seeded template and allauth's mail render on it, greet the same way,
   `render`, `LayoutTests`, `ClubHeaderTests`, `AllauthEmailTests`, `AllauthFlowTests`
-- **`test_email_send_sites.py`** (361 lines)
+- **`test_email_send_sites.py`** (372 lines)
   Every templated email, sent through post_office with real model objects, the way the site sends it.
   `SendSiteTests`, `SuiteMailBackendTests`
 - **`test_endauctions.py`** (902 lines)
@@ -802,7 +802,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`android_testers_invite.py`** (138 lines)
   Invite Android users to the Google Play closed test, once.
   `eligible_users`, `invited_addresses`, `Command`
-- **`auction_emails.py`** (364 lines)
+- **`auction_emails.py`** (383 lines)
   The nightly email about auctions worth knowing about, and the Discord post beside it.
   `Command`
 - **`auction_promos.py`** (335 lines)

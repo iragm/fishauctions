@@ -14,7 +14,9 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.sites.models import Site
+from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand
+from django.core.validators import validate_email
 from django.db.models import Q
 from django.utils import timezone
 from post_office import mail
@@ -40,6 +42,15 @@ def _create_discord_scheduled_event(guild_id, name, start_time, end_time, locati
         end_time=end_time,
         location=location_url,
     )
+
+
+def _deliverable(address):
+    """Whether post_office will take *address*; a blank or malformed one fails the whole send."""
+    try:
+        validate_email((address or "").strip())
+    except ValidationError:
+        return False
+    return True
 
 
 def _mark_sent(auction, *flags):
@@ -79,14 +90,22 @@ class Command(BaseCommand):
 
     def _send_admin_emails(self, auction, now, current_site):
         """The welcome, invoices-ready and thank-you messages to one auction's creator, whichever are due."""
-        if (
-            not auction.created_by_id
-            or not (auction.created_by.email or "").strip()
-            or auction.created_by.userdata.has_unsubscribed
-        ):
-            # Nobody to write to: the creator unsubscribed, has no email address (these messages are
-            # never pushed), or their account is gone (SET_NULL). Otherwise the send fails every run.
+        if not auction.created_by_id or auction.created_by.userdata.has_unsubscribed:
+            # Nobody to write to: the creator unsubscribed, or their account is gone (SET_NULL).
             _mark_sent(auction, "welcome_email_sent", "invoice_email_sent", "followup_email_sent")
+            return
+        if not _deliverable(auction.created_by.email):
+            # No usable address, and these are never pushed: skip what is due now rather than fail
+            # every run, and leave the later ones for an address added in the meantime.
+            due = [
+                f"{name}_email_sent"
+                for name in ("welcome", "invoice", "followup")
+                if not getattr(auction, f"{name}_email_sent")
+                and getattr(auction, f"{name}_email_due")
+                and now >= getattr(auction, f"{name}_email_due")
+            ]
+            if due:
+                _mark_sent(auction, *due)
             return
         userData = auction.created_by.userdata
 
@@ -124,7 +143,7 @@ class Command(BaseCommand):
                 ),
                 auction_pk=auction.pk,
             )
-            logger.info("Sent welcome notification to %s for auction %s", auction.created_by.email, auction.slug)
+            logger.info("Sent welcome notification to user %s for auction %s", auction.created_by_id, auction.slug)
             _mark_sent(auction, "welcome_email_sent")
 
         # Invoice email: sent 1 hour after auction end (online auctions only)
@@ -146,7 +165,7 @@ class Command(BaseCommand):
                 ),
                 auction_pk=auction.pk,
             )
-            logger.info("Sent invoice notification to %s for auction %s", auction.created_by.email, auction.slug)
+            logger.info("Sent invoice notification to user %s for auction %s", auction.created_by_id, auction.slug)
             _mark_sent(auction, "invoice_email_sent")
 
         # Follow-up/thanks email: sent 24 hours after auction end (online) or start (in-person)
@@ -168,7 +187,7 @@ class Command(BaseCommand):
                 ),
                 auction_pk=auction.pk,
             )
-            logger.info("Sent follow-up notification to %s for auction %s", auction.created_by.email, auction.slug)
+            logger.info("Sent follow-up notification to user %s for auction %s", auction.created_by_id, auction.slug)
             _mark_sent(auction, "followup_email_sent")
 
     def _send_discord_notifications(self, now, domain):
