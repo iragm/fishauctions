@@ -257,7 +257,9 @@ def _anonymize_assistant_records(user):
 
     AssistantSkillRequest.objects.filter(user=user).delete()
     LLMUsage.objects.filter(user=user).update(user=None, query="")
-    MCPCall.objects.filter(user=user).update(user=None, arguments="", detail="", client="", connection="")
+    MCPCall.objects.filter(user=user).update(
+        user=None, arguments="", detail="", client="", connection="", result_metadata={}
+    )
     VoiceCommandLog.objects.filter(user=user).update(user=None)
     SpeakerComment.objects.filter(user=user).update(user=None)
 

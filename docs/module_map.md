@@ -26,7 +26,7 @@ this only quotes its opening sentence.
 - **`account_adapter.py`** (33 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
-- **`account_deletion.py`** (446 lines)
+- **`account_deletion.py`** (448 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
 - **`account_export.py`** (311 lines)
@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15560 lines)
+- **`models.py`** (15563 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -226,7 +226,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17072 lines)
+- **`palette_actions.py`** (17090 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -477,7 +477,7 @@ this only quotes its opening sentence.
 - **`test_error_pages.py`** (35 lines)
   `SubresourceNotFoundTests`
 - **`test_feature_requests_page.py`** (68 lines)
-  /requests/: the web form for bug reports and feature requests, writing the same queue as request_a_skill.
+  /requests/: the web form for bug reports and feature requests, writing the same queue as request_feature.
   `FeatureRequestsPageTests`
 - **`test_form_filter_fixes.py`** (413 lines)
   Regression tests for a batch of form and filter fixes: edit locks and limits on lot forms, the posted
@@ -546,10 +546,13 @@ this only quotes its opening sentence.
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
+- **`test_mcp_reliability.py`** (184 lines)
+  Connector regressions: honest navigation, safe oversized writes, search diagnostics and client evals.
+  `ResultContractTests`, `DiagnosticsTests`, `EvaluationTests`
 - **`test_mcp_resources.py`** (350 lines)
   The addressable reads and the recipes: ``resources/templates/list``, ``prompts/*``, completions.
   `ResourceCatalogueTests`, `ResourceEndpointTests`, `PromptTests`, `PromptEndpointTests`
-- **`test_mcp_usage.py`** (232 lines)
+- **`test_mcp_usage.py`** (233 lines)
   What agents ask ``/mcp/`` for (:mod:`auctions.mcp.usage`), ``mcp_usage`` on ``/mcp/admin/``, and the
   `RecordingTests`, `ChatGPTTextTests`, `UsageReportTests`
 - **`test_mcp_widgets.py`** (197 lines)
@@ -833,7 +836,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`chatgpt_reviewer.py`** (158 lines)
   Make the account OpenAI's reviewer signs in with, and the auction its test cases name.
   `Command`
-- **`chatgpt_submission.py`** (402 lines)
+- **`chatgpt_submission.py`** (403 lines)
   Write ``chatgpt-app-submission.json``, the file OpenAI's plugin form imports.
   `behaviour`, `justifications`, `build`, `Command`
 - **`check_apple_wallet.py`** (91 lines)
@@ -873,6 +876,9 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`load_demo_data.py`** (86 lines)
   Management command to load demo data for development environments.
+  `Command`
+- **`mcp_eval.py`** (31 lines)
+  Export MCP selection scenarios or score recorded, independently observed client runs.
   `Command`
 - **`migrate_to_cloudflare_images.py`** (122 lines)
   Move locally stored images to Cloudflare Images.
@@ -918,7 +924,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2697 lines)
+- **`admin.py`** (2700 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
@@ -930,6 +936,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`consent.py`** (61 lines)
   The OAuth consent screen, with one rule the toolkit can't know: a connection to ``/mcp/admin/``.
   `ConsentView`
+- **`evaluation.py`** (82 lines)
+  Export a labeled MCP prompt set and score recorded client runs without executing any tools.
+  `cases`, `score`
 - **`icons.py`** (100 lines)
   Icons for the tools, the prompts, the resources and the server itself.
   `domain`, `absolute`, `icons`, `for_action`, `for_prompt`, `for_uri`, `server`
@@ -939,24 +948,24 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`prompts.py`** (502 lines)
   Prompts: multi-step recipes offered to the *person* to pick off a menu, not to the model.
   `Argument`, `Prompt`, `descriptors`, `prompt_list`, `render`, `complete`, `completes`
-- **`protocol.py`** (275 lines)
+- **`protocol.py`** (274 lines)
   JSON-RPC 2.0 and the MCP methods, with no HTTP in it.
   `Caller`, `error`, `is_notification`, `negotiate`, `handle`
 - **`resources.py`** (379 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
   `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (466 lines)
+- **`tools.py`** (509 lines)
   The action registry, as MCP tools.
 - **`transport.py`** (169 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
-- **`usage.py`** (246 lines)
+- **`usage.py`** (349 lines)
   Recording what agents ask ``/mcp/`` for, and reading it back for ``mcp_usage`` on ``/mcp/admin/``.
-  `outcome_of`, `record`, `report`, `admin_report`
+  `catalog_version`, `result_metadata`, `outcome_of`, `record`, `report`, `admin_report`
 - **`verification.py`** (28 lines)
   Proving to a plugin directory that this host is ours.
   `openai_apps_challenge`
-- **`widgets.py`** (167 lines)
+- **`widgets.py`** (173 lines)
   Interactive views this server publishes as MCP-app widgets.
   `resource_descriptors`, `read_resource`, `tool_meta`
 

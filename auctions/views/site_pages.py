@@ -163,7 +163,7 @@ class SupportView(FormView):
 class FeatureRequestsView(LoginRequiredMixin, FormView):
     """``/requests/``: report a bug or ask for a feature, and see where your earlier ones stand.
 
-    The web face of ``request_a_skill`` and ``my_requests``: the same queue the site owner marks
+    The web face of ``request_feature`` and ``my_requests``: the same queue the site owner marks
     planned, so a request from here is built exactly like one an assistant filed. GitHub's new-issue
     page sends people here. The owner's note is never shown.
     """
@@ -205,7 +205,7 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
             messages.error(self.request, "That's a lot for one day; send the rest tomorrow.")
             return self.form_invalid(form)
         self.request.assistant_surface = "requests page"
-        result = palette_actions.request_a_skill(
+        result = palette_actions.request_feature(
             self.request, {"skill": form.short_name, "reason": form.cleaned_data["request"]}
         )
         row = AssistantSkillRequest.objects.filter(pk=result.get("request_id")).first()

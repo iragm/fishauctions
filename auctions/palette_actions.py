@@ -109,6 +109,8 @@ class Action:
     #: Short sentence for the countdown card.
     confirm_template: str = ""
     examples: list[str] = field(default_factory=list)
+    #: Full connector wording when the palette navigates itself or offers a different set of tools.
+    mcp_description: str = ""
     #: Undocumented parameter spellings accepted, so near-misses work without widening the prompt.
     aliases: set[str] = field(default_factory=set)
     #: Who this is worth describing to. See :func:`actions_for`.
@@ -159,6 +161,7 @@ def register(action: Action) -> Action:
 #: old tool list (ChatGPT's app keeps the one it was reviewed with until it is resubmitted) keeps
 #: working. Never listed. Each was renamed because a model confused it with its neighbour.
 RENAMED: dict[str, str] = {
+    "request_a_skill": "request_feature",
     # set_my_auction is the user's own; this one is the club page's.
     "set_current_auction": "set_club_current_auction",
     # renew_membership is the user's own; this one is an admin renewing somebody else.
@@ -10847,10 +10850,10 @@ def remove_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-# --- request_a_skill ---------------------------------------------------------
+# --- request_feature ---------------------------------------------------------
 
 
-def request_a_skill(request, params: dict[str, Any]) -> dict[str, Any]:
+def request_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     """Record a tool that should exist and doesn't.
 
     Duplicates across people are counted (``others_asking``); the same person and skill updates their
@@ -10917,7 +10920,7 @@ def my_requests(request, params: dict[str, Any]) -> dict[str, Any]:
     rows = AssistantSkillRequest.objects.filter(user=request.user)
     total = rows.count()
     if not total:
-        return _ok("You haven't asked for anything yet. request_a_skill is how to ask.", requests=[])
+        return _ok("You haven't asked for anything yet. request_feature is how to ask.", requests=[])
     limit, offset = _slice(params)
     found = [
         {
@@ -12093,17 +12096,13 @@ def _rotate_image_file(image, angle: int):
 
 register(
     Action(
-        name="request_a_skill",
+        name="request_feature",
         description=(
-            "Write down something this site should be able to do and can't — a tool here, a "
-            "feature on the website, or an endpoint on the club API an integration needed and "
-            "didn't find. Call it when the user asked for something and nothing here can do it — "
-            "after you have said so, not instead of saying so. It changes nothing and does not do "
-            "the thing they wanted; it puts the request in front of the person who builds the "
-            "site, and my_requests shows them later where it stands. Say what it would be called, "
-            "what it would need to be told, and what the user was actually trying to do. Do not "
-            "call it for something a tool here already does, and do not call it twice for the "
-            "same thing in one conversation."
+            "Submit an auction.fish feature request to the site owner. Use when the user asks "
+            "to request a missing website feature, assistant tool or club API endpoint. Saves "
+            "the request; it does not perform the missing operation. Describe what the user "
+            "wanted and the limitation encountered. my_requests shows its status. For a "
+            "supported action, use that action's tool instead."
         ),
         params={
             "skill": "string, required. Short name for the tool or feature, e.g. 'refund an invoice'.",
@@ -12115,10 +12114,10 @@ register(
         },
         danger=DANGER_CONFIRM,
         idempotent=True,
-        resolver=request_a_skill,
+        resolver=request_feature,
         aliases={"command", "name", "why", "description"},
-        confirm_template="Ask for a new assistant skill",
-        examples=["there's no way to do that here", "ask them to add a way to refund an invoice"],
+        confirm_template="Submit a feature request",
+        examples=["submit a feature request", "ask them to add a way to refund an invoice"],
     )
 )
 
@@ -12126,7 +12125,7 @@ register(
     Action(
         name="my_requests",
         description=(
-            "The features the signed-in user has asked for with request_a_skill, and where each "
+            "The features the signed-in user has asked for with request_feature, and where each "
             "stands: received, planned, built or not planned."
         ),
         params=dict(PAGING_PARAMS),
@@ -12143,7 +12142,8 @@ register(
         description=(
             "Put the scientific name on a lot, matched against this site's own species list. The "
             "seller or an auction admin only. This is what 'fix the scientific name on lot 10', "
-            "'lot 12 is Neocaridina davidi' and 'what species is this lot?' mean. Leave 'species' "
+            "or 'lot 12 is Neocaridina davidi' means. To read the existing species, use "
+            "describe_lot. Leave 'species' "
             "out to re-read it off the lot's own name, which is the fix for a lot added by a route "
             "that filled nothing in. A name matching several species comes back as a question with "
             "the candidates rather than a guess: a wrong species reaches a printed label and "
@@ -12328,7 +12328,9 @@ register(
     Action(
         name="add_lot",
         description=(
-            "Add one lot — an item for sale — to an auction. Defaults to the user's most recent "
+            "Create one lot immediately — an item for sale — in an auction. For several lots use "
+            "add_lots; to open a form for the user to complete, use add_a_lot_via_webform. "
+            "Defaults to the user's most recent "
             "auction and to the user themselves as the seller. Only auction admins may pass "
             "'bidder' to add a lot for someone else. A lot is a thing: fish, plants, shrimp, food, "
             "equipment. If what they want to add is a PERSON (a first name and a surname, 'add "
@@ -12401,6 +12403,13 @@ register(
             "they want to add is a PERSON ('add mike smith'), they mean add_person. Never look a "
             "lot up before calling this: a lot they are adding does not exist yet, and the page "
             "finds their own previous lot of the same name by itself."
+        ),
+        mcp_description=(
+            "Prepare the add-lot web form when the user asks to open a form, review a draft, "
+            "or finish entering a lot on the website. Returns a prefilled URL; nothing is saved "
+            "until the user saves the form. To create lots directly through the connector, "
+            "use add_lot for one lot or add_lots for several. Pass the supplied lot details "
+            "so the form can fill them in. A PERSON belongs in add_person."
         ),
         params={
             "name": "string, optional. What the item is, e.g. 'blue shrimp'. Never a person's name.",
@@ -14158,11 +14167,19 @@ register(
             "a club. This is the right answer for anything phrased as 'take me to', 'open', 'show "
             "me' or 'where is', and it is also the correct last resort when no other action fits."
         ),
+        mcp_description=(
+            "Resolve an auction.fish page into a URL when the user asks to open, visit or "
+            "navigate to it. The host can open the returned link; this tool does not control "
+            "the browser. 'page' accepts a destination key or a page described in plain words. "
+            "find_page can search destination keys when needed. Use 'target' for a particular "
+            "auction, club, lot or person. For a question about the data on a page, use the "
+            "corresponding read tool."
+        ),
         params={
             "page": "string, required. A destination key from find_page, or the page named in plain words.",
             "target": (
                 "string, optional. Which auction / club / lot / person the page is about. "
-                "Omit only when the user is on the page it applies to."
+                "Omit for pages that do not need a subject; use my_context if the subject is unclear."
             ),
             "tab": "string, optional, only for club_detail_tab: bap, hap, culture or my-points.",
         },
@@ -14937,7 +14954,8 @@ register(
     Action(
         name="read_source",
         description=(
-            "Read this website's own source code, which is published as a public repository. It "
+            "Search and read auction.fish source code to investigate implementation, bugs or MCP "
+            "connector behavior. The code is published as a public repository. This tool "
             "can search the code line by line, list a directory, read a numbered page of one file, "
             "or find a file by name. For "
             "when somebody asks how a feature is actually implemented, why the site behaved the "
@@ -16505,8 +16523,8 @@ for _name in MCP_ONLY_SKILLS:
 #: Views a registered action covers: view class -> action name.
 SKILLS: dict[str, str] = {
     # The upload form, with an agent's transcription as the file.
-    # Bug reports and feature requests: the form is the same row request_a_skill writes.
-    "FeatureRequestsView": "request_a_skill",
+    # Bug reports and feature requests: the form is the same row request_feature writes.
+    "FeatureRequestsView": "request_feature",
     "LibraryAddView": "add_document",
     "DocumentEditView": "update_document",
     "DocumentDeleteView": "delete_document",
@@ -16803,7 +16821,7 @@ NOT_A_SKILL: dict[str, str] = {
         "wrote in their own words, and its whole purpose is to work with no account, since it is "
         "the App Store Support URL opened by a reviewer with no session. An assistant reaching it "
         "is already signed in, and a signed-in person is shown the address itself on the FAQ -- so "
-        "the capability the form provides is one the caller does not need. request_a_skill is where "
+        "the capability the form provides is one the caller does not need. request_feature is where "
         "an agent records something this site could not do. go_to_page opens the page."
     ),
     "AgentProposalsView": (

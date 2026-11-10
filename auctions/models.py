@@ -14434,7 +14434,8 @@ class MCPCall(models.Model):
 
     The site never sees the conversation an agent is having, only its calls, so this is the evidence for
     whether people get answers: a tool name that doesn't exist, a parameter it refuses, an error, a
-    question back, or an empty find is a turn that went wrong. ``mcp_usage`` on ``/mcp/admin/`` reads it.
+    question back, or an empty find. Empty results and clarification are not necessarily failures.
+    ``mcp_usage`` on ``/mcp/admin/`` reads these signals, not a task-success rate.
     ``/mcp/admin/`` calls are recorded with ``admin`` set: an audit of every privileged read, and what
     each costs in characters. ``mcp_usage`` leaves them out of its report on other people's agents.
     """
@@ -14462,6 +14463,8 @@ class MCPCall(models.Model):
     outcome = models.CharField(max_length=20, blank=True, db_index=True)
     detail = models.CharField(max_length=300, blank=True, help_text="The error, or the question asked back.")
     result_chars = models.PositiveIntegerField(default=0)
+    catalog_version = models.CharField(max_length=16, blank=True)
+    result_metadata = models.JSONField(default=dict, blank=True)
     elapsed_ms = models.PositiveIntegerField(default=0)
     admin = models.BooleanField(default=False, help_text="Made on /mcp/admin/, by a superuser's agent.")
 
@@ -15387,7 +15390,7 @@ class SpeakerComment(models.Model):
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """A feature somebody asked for through an assistant: a tool it lacked, or something the site can't do.
 
-    Written by ``request_a_skill``, read through the admin MCP's ``list_feature_requests``; the asker follows it
+    Written by ``request_feature``, read through the admin MCP's ``list_feature_requests``; the asker follows it
     with ``my_requests``. ``planned`` is the site owner's go-ahead to build it, in the repository
     ``target`` names. Duplicates are evidence and are counted. Content is model-written: displayed
     escaped, never executed or matched.

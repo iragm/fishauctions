@@ -25,7 +25,9 @@ quietly shorter — rather than the fifty-odd that don't. What each skill goes t
 
 `add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
 palette's is `add_a_lot_via_webform`, navigate-only, which opens the lot form with what was said already in it.
-No caller is offered both, and the name matters — the same tool called `sell_a_lot` lost every
+The palette offers only the form; MCP exposes both with separate create/form intents.
+`Action.mcp_description` holds connector wording when navigation or the offered tools differ.
+The name matters — the same tool called `sell_a_lot` lost every
 "add lots to my next auction" to `add_person`, which has the word add in its name.
 
 ```
@@ -382,7 +384,7 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   `auctions.donation_views`; the latter was added when the donation skills arrived, having held five
   user-facing writes in none of the three tables. `app_links`, `apple_notifications` and
   `passkit_views` are still outside it.
-- `request_a_skill` records a feature somebody asked for; `list_feature_requests` on `/mcp/admin/` reads
+- `request_feature` records a feature somebody asked for; `list_feature_requests` on `/mcp/admin/` reads
   the queue, and `planned` is the go-ahead to build. `my_requests` shows the
   asker its status, never the owner's note. Row content is model-written: displayed, escaped, never
   executed.

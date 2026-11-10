@@ -2,17 +2,19 @@
 
 One :class:`~auctions.models.MCPCall` row per message that gets an answer, written after the answer
 is built and never allowed to break it. The site sees an agent's calls, never its conversation, so
-"did they get a good answer" is read off the calls: a tool name that doesn't exist, a refused call, a
-question asked back, a find that found nothing, or the same tool called again and again.
+call outcomes are diagnostics, not task-success labels. Unknown tools and refusals are failures;
+clarification, empty searches and repeated calls need interpretation in the client conversation.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 from collections import Counter, defaultdict
 from datetime import timedelta
+from functools import lru_cache
 from typing import Any
 
 from django.utils import timezone
@@ -25,8 +27,75 @@ _NOT_RECORDED = frozenset({"ping", "notifications/initialized"})
 #: The most tool calls one report reads.
 MAX_CALLS = 5000
 
-#: Calls by one connection this close together are one conversation.
+#: An activity grouping heuristic, not a host conversation identifier.
 CONVERSATION_GAP = timedelta(minutes=15)
+
+FAILURE_OUTCOMES = frozenset({"error", "unknown_tool", "bad_request"})
+
+
+@lru_cache(maxsize=1)
+def catalog_version() -> str:
+    """Fingerprint this process's published definitions, not the client's possibly cached copy."""
+    from . import protocol, tools
+
+    catalog = {"instructions": protocol.INSTRUCTIONS, "tools": tools.tool_descriptors(None)}
+    return hashlib.sha256(json.dumps(catalog, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def result_metadata(answer: dict[str, Any]) -> dict[str, Any]:
+    """Bounded result facts for search diagnostics; no free text, contact details, URLs or images.
+
+    Arguments already record the redacted search and filters. Retain result order and identifiers
+    alongside them so a zero-result search and an irrelevant result set can be investigated.
+    """
+    payload = (answer.get("result") or {}).get("structuredContent") or {}
+    facts = {}
+    for key in (
+        "found",
+        "count",
+        "total",
+        "more",
+        "showing",
+        "offset",
+        "next_offset",
+        "next_line",
+        "navigation_performed",
+        "operation_completed",
+    ):
+        value = payload.get(key)
+        if isinstance(value, (bool, int)):
+            facts[key] = value
+    for key in ("status", "error_code"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.replace("_", "").isalnum() and len(value) <= 40:
+            facts[key] = value
+    identifiers = ("id", "lot_number", "request_id", "document", "page", "bidder_number")
+    groups = {}
+    for key in ("lots", "people", "pages", "results", "documents", "requests", "help", "paths", "in_the_code"):
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        # Only integer IDs and catalog page keys. Other strings may be user-authored names.
+        selected = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            item = {name: row[name] for name in identifiers if type(row.get(name)) is int}
+            for name in ("lot_number", "bidder_number"):
+                value = row.get(name)
+                if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 9:
+                    item[name] = value
+            page = row.get("page")
+            if isinstance(page, str):
+                from auctions import palette_routes
+
+                if palette_routes.get_route(page):
+                    item["page"] = page
+            selected.append(item)
+        groups[key] = {"returned": len(rows), "first_results": selected}
+    if groups:
+        facts["results"] = groups
+    return facts
 
 
 def _connection(credential) -> str:
@@ -50,8 +119,10 @@ def outcome_of(method: str, answer: dict[str, Any]) -> tuple[str, str, int]:
             return MCPCall.UNKNOWN_TOOL, message, 0
         return MCPCall.BAD_REQUEST, message, 0
     result = answer.get("result") or {}
-    # The text blocks, not a second serialisation of everything: a scan's pictures are megabytes.
+    # Both model-visible channels count, including ChatGPT's summary-only text. Exclude image bytes.
     size = len(_text_of(result))
+    if isinstance(result.get("structuredContent"), dict):
+        size += len(json.dumps(result["structuredContent"], ensure_ascii=False, separators=(",", ":")))
     if method != "tools/call":
         return MCPCall.OK, "", size
     structured = result.get("structuredContent") or {}
@@ -93,6 +164,8 @@ def record(
             outcome=outcome,
             detail=redact(detail)[:300],
             result_chars=size,
+            catalog_version=catalog_version(),
+            result_metadata=result_metadata(answer),
             elapsed_ms=int((time.monotonic() - started) * 1000),
             admin=admin,
         )
@@ -120,7 +193,18 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
     calls = list(
         recent.filter(method="tools/call")
         .order_by("-createdon")
-        .values("user_id", "client", "connection", "tool", "arguments", "outcome", "detail", "createdon")[:MAX_CALLS]
+        .values(
+            "user_id",
+            "client",
+            "connection",
+            "tool",
+            "arguments",
+            "outcome",
+            "detail",
+            "createdon",
+            "catalog_version",
+            "result_metadata",
+        )[:MAX_CALLS]
     )[::-1]
     people: dict[Any, str] = {}
 
@@ -137,7 +221,7 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
             "client": client,
             "calls": sum(counts.values()),
             "people": len(client_people[client]),
-            "went_wrong": _rate(sum(counts.values()) - counts["ok"], sum(counts.values())),
+            "went_wrong": _rate(sum(counts[outcome] for outcome in FAILURE_OUTCOMES), sum(counts.values())),
             "outcomes": dict(counts),
         }
         for client, counts in sorted(by_client.items(), key=lambda item: -sum(item[1].values()))
@@ -150,7 +234,7 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
         for tool, counts in sorted(by_tool.items(), key=lambda item: -sum(item[1].values()))
     ]
     problems = Counter(
-        (row["tool"], row["outcome"], row["detail"][:160]) for row in calls if row["outcome"] != MCPCall.OK
+        (row["tool"], row["outcome"], row["detail"][:160]) for row in calls if row["outcome"] in FAILURE_OUTCOMES
     )
     # Conversations: one connection's calls with no gap longer than CONVERSATION_GAP, newest last.
     stories: list[dict[str, Any]] = []
@@ -182,7 +266,7 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
     }
     from auctions.models import AssistantSkillRequest
 
-    # What the agents themselves said they couldn't do (request_a_skill), named but never who asked.
+    # What the agents themselves said they couldn't do (request_feature), named but never who asked.
     wanted = list(
         AssistantSkillRequest.objects.filter(createdon__gte=since)
         .order_by("-createdon")
@@ -190,7 +274,7 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
     )
     summary = (
         f"{len(calls)} tool calls from {len({row['user_id'] for row in calls})} people in {days} days; "
-        f"{sum(1 for row in calls if row['outcome'] != MCPCall.OK)} went wrong. "
+        f"{sum(1 for row in calls if row['outcome'] in FAILURE_OUTCOMES)} failed. "
         f"/ai/: {ai_requests} questions, {len(ai_page['marked_not_helpful'])} marked not helpful."
     )
     return {
@@ -204,6 +288,25 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
         ],
         "sessions_opened": recent.filter(method="initialize").count(),
         "calls_read": len(calls),
+        "catalog_versions": dict(Counter(row["catalog_version"] or "unversioned" for row in calls)),
+        "measurement_limits": (
+            "Calls only: no host discovery searches, uncalled tools or final answers. "
+            "Empty results and clarification are separate outcomes, not failures. "
+            "Recent conversations are inferred activity groups separated by 15 minutes. "
+            "Catalog versions describe server definitions, not the host's cached tool list."
+        ),
+        "recent_searches": [
+            {
+                "tool": row["tool"],
+                "arguments": row["arguments"],
+                "outcome": row["outcome"],
+                "result": row["result_metadata"],
+                "catalog_version": row["catalog_version"],
+            }
+            for row in calls
+            if row["tool"].startswith(("find_", "search_", "list_"))
+            or row["tool"] in {"read_source", "go_to_page", "open_lot_search"}
+        ][-20:],
         "recent_conversations": stories[-conversations:],
         "ai_page": ai_page,
         "skills_asked_for": wanted,
@@ -226,7 +329,7 @@ def admin_report(days: int = 7) -> dict[str, Any]:
             chars=Sum("result_chars"),
             biggest=Max("result_chars"),
             average_ms=Avg("elapsed_ms"),
-            went_wrong=Count("pk", filter=~Q(outcome=MCPCall.OK)),
+            went_wrong=Count("pk", filter=Q(outcome__in=FAILURE_OUTCOMES)),
         )
         .order_by("-chars")
     )
