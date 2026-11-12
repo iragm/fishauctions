@@ -1330,6 +1330,7 @@ EXCLUDED: dict[str, str] = {
     "auction_lot_queue_fullscreen": _API,
     "auction_lot_map_data": _API,
     "auction_logistics_mark": "The tap on a name on the logistics page, which crosses it off that pickup.",
+    "auction_logistics_scan": "The logistics page's scanner, reading an invoice or lot code held up to the camera.",
     "auction_post_end_banner": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,

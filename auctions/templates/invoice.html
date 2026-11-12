@@ -1,5 +1,6 @@
 {% extends base_template_name %}
 {% load crispy_forms_tags %}
+{% load qr_code %}
 {% load currency_filters %}
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
@@ -107,6 +108,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% block content %}
 {% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
 
+{% if pickup_qr_code %}<div id="invoice-pickup-qr" class="float-md-end mx-auto mx-md-0 ms-md-3 mb-2" style="max-width: 160px;">{% qr_from_text pickup_qr_code size="S" border="2" %}</div>{% endif %}
 <h3>{{ invoice.auctiontos_user.name }}</h3>
 <small><span id="invoice-summary-short">{{ invoice.invoice_summary_short }}</span> {% if invoice.status == "PAID" %}<span class="badge rounded-pill bg-success">Paid in full</span>{% endif %}</small>
 {% if invoice.auction.multi_location %}

@@ -450,6 +450,11 @@ urlpatterns = [
         name="auction_logistics",
     ),
     path(
+        "auctions/<slug:slug>/logistics/scan/",
+        login_required(views.AuctionLogisticsScan.as_view()),
+        name="auction_logistics_scan",
+    ),
+    path(
         "auctions/<slug:slug>/logistics/<int:pk>/<int:which>/",
         login_required(views.AuctionLogisticsMark.as_view()),
         name="auction_logistics_mark",
