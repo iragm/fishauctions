@@ -69,11 +69,16 @@ def result_metadata(answer: dict[str, Any]) -> dict[str, Any]:
         value = payload.get(key)
         if isinstance(value, str) and value.replace("_", "").isalnum() and len(value) <= 40:
             facts[key] = value
-    identifiers = ("id", "lot_number", "request_id", "document", "page", "bidder_number")
+    # People are counted, never identified: a search for a name kept beside the rows it found would
+    # outlive the person found deleting their account.
+    identifiers = ("id", "lot_number", "request_id", "document", "page")
     groups = {}
     for key in ("lots", "people", "pages", "results", "documents", "requests", "help", "paths", "in_the_code"):
         rows = payload.get(key)
         if not isinstance(rows, list):
+            continue
+        if key == "people":
+            groups[key] = {"returned": len(rows)}
             continue
         # Only integer IDs and catalog page keys. Other strings may be user-authored names.
         selected = []
@@ -81,7 +86,7 @@ def result_metadata(answer: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(row, dict):
                 continue
             item = {name: row[name] for name in identifiers if type(row.get(name)) is int}
-            for name in ("lot_number", "bidder_number"):
+            for name in ("lot_number",):
                 value = row.get(name)
                 if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 9:
                     item[name] = value
@@ -120,9 +125,13 @@ def outcome_of(method: str, answer: dict[str, Any]) -> tuple[str, str, int]:
         return MCPCall.BAD_REQUEST, message, 0
     result = answer.get("result") or {}
     # Both model-visible channels count, including ChatGPT's summary-only text. Exclude image bytes.
-    size = len(_text_of(result))
+    text = _text_of(result)
+    size = len(text)
     if isinstance(result.get("structuredContent"), dict):
-        size += len(json.dumps(result["structuredContent"], ensure_ascii=False, separators=(",", ":")))
+        structured_text = json.dumps(result["structuredContent"], ensure_ascii=False, separators=(",", ":"))
+        # Everyone else's text block already is that JSON; counting it twice doubled result_chars.
+        if structured_text != text:
+            size += len(structured_text)
     if method != "tools/call":
         return MCPCall.OK, "", size
     structured = result.get("structuredContent") or {}

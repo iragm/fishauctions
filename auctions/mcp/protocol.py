@@ -44,9 +44,9 @@ INTERNAL_ERROR = -32603
 INSTRUCTIONS = (
     "auction.fish: auctions, club membership, invoices and breeder points. "
     "Implementation or connector debugging: read_source. Website help: search_help. "
-    "Navigation: go_to_page returns the link to open. Feature requests: request_feature. "
+    "Navigation: go_to_page returns the link to open. Feature requests: request_feature, if you have it. "
     "Use my_context when the auction or club is unclear. If no available tool fits, explain "
-    "the limitation; do not invent tool names. Submit a feature request when the user asks. "
+    "the limitation; do not invent tool names. "
     "Tools enforce the signed-in user's permissions. Link only to returned URLs. "
     "Read-only tools are marked with readOnlyHint. "
     "Most tools take an optional `auction` or `club`; fill it in from my_context rather than "

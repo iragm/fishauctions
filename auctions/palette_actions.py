@@ -12407,8 +12407,8 @@ register(
         mcp_description=(
             "Prepare the add-lot web form when the user asks to open a form, review a draft, "
             "or finish entering a lot on the website. Returns a prefilled URL; nothing is saved "
-            "until the user saves the form. To create lots directly through the connector, "
-            "use add_lot for one lot or add_lots for several. Pass the supplied lot details "
+            "until the user saves the form. To create lots directly, use add_lot for one lot or "
+            "add_lots for several when you have them. Pass the supplied lot details "
             "so the form can fill them in. A PERSON belongs in add_person."
         ),
         params={
@@ -14179,7 +14179,8 @@ register(
             "page": "string, required. A destination key from find_page, or the page named in plain words.",
             "target": (
                 "string, optional. Which auction / club / lot / person the page is about. "
-                "Omit for pages that do not need a subject; use my_context if the subject is unclear."
+                "Omit only when the user is on the page it applies to, or the page needs no subject; "
+                "over a connector there is no current page, so use my_context if it is unclear."
             ),
             "tab": "string, optional, only for club_detail_tab: bap, hap, culture or my-points.",
         },

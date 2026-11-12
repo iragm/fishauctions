@@ -34,7 +34,8 @@ class ResultContractTests(SimpleTestCase):
         self.assertEqual(data["status"], "destination_resolved")
         self.assertFalse(data["navigation_performed"])
         self.assertEqual(data["url"], "http://testserver/clubs/")
-        self.assertNotIn("Taking you", data["summary"])
+        self.assertTrue(data["summary"].startswith("Not opened yet"))
+        self.assertIn("Taking you", data["summary"])  # which page it found is kept
         self.assertFalse(result["isError"])
         self.assertIn("go_to_page", widgets.TOOL_WIDGETS)
 
@@ -65,7 +66,8 @@ class ResultContractTests(SimpleTestCase):
             first = tools.call_tool(self.request, "add_lot", {"name": "overflow test"})
             second = tools.call_tool(self.request, "add_lot", {"name": "overflow test"})
         self.assertEqual(run.call_count, 1)
-        self.assertTrue(first["isError"])
+        # It went through, so the host must not be told it failed.
+        self.assertFalse(first["isError"])
         self.assertTrue(first["structuredContent"]["operation_completed"])
         self.assertFalse(first["structuredContent"]["retryable"])
         self.assertEqual(first["structuredContent"], second["structuredContent"])
@@ -96,7 +98,8 @@ class ResultContractTests(SimpleTestCase):
         entries = schema["properties"]["lots"]
         item = entries["items"]["anyOf"][1]
         self.assertEqual(set(item["properties"]), {*palette_actions._PER_LOT_KEYS, "count"})
-        self.assertFalse(item["additionalProperties"])
+        # The resolver ignores keys it doesn't know, so the schema doesn't refuse them either.
+        self.assertNotIn("additionalProperties", item)
         self.assertNotIn("bidder", item["properties"])
         self.assertEqual(item["properties"]["count"]["maximum"], palette_actions.MAX_LOTS_PER_BATCH)
         self.assertEqual(entries["maxItems"], palette_actions.MAX_LOTS_PER_BATCH)
@@ -105,6 +108,17 @@ class ResultContractTests(SimpleTestCase):
 class DiagnosticsTests(SimpleTestCase):
     def tearDown(self):
         usage.catalog_version.cache_clear()
+
+    def test_text_that_is_the_structured_json_is_counted_once(self):
+        payload = {"summary": "Done", "lots": [{"lot_number": 5}]}
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        result = {"content": [{"type": "text", "text": text}], "structuredContent": payload}
+        self.assertEqual(usage.outcome_of("tools/call", {"result": result})[2], len(text))
+
+    def test_people_found_are_counted_not_identified(self):
+        payload = {"people": [{"id": 4, "bidder_number": "45", "name": "Someone"}]}
+        found = usage.result_metadata({"result": {"structuredContent": payload}})
+        self.assertEqual(found["results"]["people"], {"returned": 1})
 
     def test_summary_only_text_still_counts_structured_content(self):
         payload = {"summary": "Done", "lots": [{"lot_number": 5}]}

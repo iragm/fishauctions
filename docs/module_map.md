@@ -226,7 +226,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17090 lines)
+- **`palette_actions.py`** (17091 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -546,7 +546,7 @@ this only quotes its opening sentence.
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
-- **`test_mcp_reliability.py`** (184 lines)
+- **`test_mcp_reliability.py`** (206 lines)
   Connector regressions: honest navigation, safe oversized writes, search diagnostics and client evals.
   `ResultContractTests`, `DiagnosticsTests`, `EvaluationTests`
 - **`test_mcp_resources.py`** (350 lines)
@@ -954,12 +954,12 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`resources.py`** (379 lines)
   Addressable reads: the read-only tools' answers, reachable by URI.
   `Template`, `offered_to`, `template_descriptors`, `fixed_descriptors`, `match`, `read`, `links_for`
-- **`tools.py`** (509 lines)
+- **`tools.py`** (520 lines)
   The action registry, as MCP tools.
 - **`transport.py`** (169 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
-- **`usage.py`** (349 lines)
+- **`usage.py`** (358 lines)
   Recording what agents ask ``/mcp/`` for, and reading it back for ``mcp_usage`` on ``/mcp/admin/``.
   `catalog_version`, `result_metadata`, `outcome_of`, `record`, `report`, `admin_report`
 - **`verification.py`** (28 lines)

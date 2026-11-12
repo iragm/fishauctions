@@ -138,7 +138,6 @@ def input_schema(action: palette_actions.Action) -> dict[str, Any]:
                         "type": "object",
                         "properties": {**item_properties, "count": count},
                         "required": ["name"],
-                        "additionalProperties": False,
                     },
                 ]
             },
@@ -498,10 +497,12 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
     payload = _absolute(_payload(result), request.build_absolute_uri)
     if action.danger == palette_actions.DANGER_NAVIGATE and payload.get("url"):
         # The palette performs navigation; MCP only resolves the destination for its host.
+        # Its own summary still says which page was found ("the bulk page, nothing filled in").
+        found = payload.get("summary") if isinstance(payload.get("summary"), str) else ""
         payload.update(
             status="destination_resolved",
             navigation_performed=False,
-            summary="Page ready. Open the returned link to continue.",
+            summary=f"Not opened yet; give the user the link. {found}".strip(),
         )
     body = _text(payload, operation_completed=not read_only(action))
     # Parsed back from the text so both say the same thing and the structure is JSON-safe (Decimals).
@@ -513,4 +514,7 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
             body += f"\n[Open page]({structured['url']})"
         elif structured.get("error_code") == "result_too_large":
             body = f"{structured['error']} {structured['what_to_do']}"
-    return _result(body, is_error=structured.get("status") == "error", structured=structured, links=links)
+    # A write that went through is not a failure because its receipt was too long to send: a host
+    # shown an error says so to the user, who then does it again.
+    failed = structured.get("status") == "error" and not structured.get("operation_completed")
+    return _result(body, is_error=failed, structured=structured, links=links)
