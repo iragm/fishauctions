@@ -4085,6 +4085,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             "email_me_when_people_comment_on_my_lots",
             "email_me_about_new_chat_replies",
             "send_reminder_emails_about_joining_auctions",
+            "email_me_about_new_features",
             "email_me_about_new_auctions",
             "email_me_about_new_auctions_distance",
             "email_me_about_new_in_person_auctions",
@@ -4180,6 +4181,13 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                 ),
                 Div(
                     "send_reminder_emails_about_joining_auctions",
+                    css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
+            Div(
+                Div(
+                    "email_me_about_new_features",
                     css_class="col-md-4",
                 ),
                 css_class="row",

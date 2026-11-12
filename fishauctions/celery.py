@@ -132,6 +132,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.next_auction_emails",
         "schedule": 3600.0,  # Run every hour
     },
+    # Feature emails: once a day, so the daily cap is one batch (auctions/feature_emails.py)
+    "feature_emails": {
+        "task": "auctions.tasks.feature_emails",
+        "schedule": crontab(hour=15, minute=10),
+    },
     # Set user locations - every 2 hours
     "set_user_location": {
         "task": "auctions.tasks.set_user_location",

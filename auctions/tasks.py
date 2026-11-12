@@ -1186,6 +1186,14 @@ def next_auction_emails(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def feature_emails(self):
+    """Today's share of the feature emails (auctions/feature_emails.py). Daily, mid-morning Eastern."""
+    from auctions import feature_emails as emails
+
+    _safely("feature emails", emails.send_feature_emails)
+
+
+@shared_task(bind=True, ignore_result=True)
 def email_unseen_chats(self):
     """Send notifications about unread chat messages."""
     call_command("email_unseen_chats")

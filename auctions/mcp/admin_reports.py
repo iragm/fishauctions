@@ -1,4 +1,4 @@
-"""Fifteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
+"""Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 
 Each answers a question the owner would otherwise decide by feel, and says so in its description:
 
@@ -19,6 +19,8 @@ Each answers a question the owner would otherwise decide by feel, and says so in
 ``outreach_outcomes``    clubs contacted 60+ days ago that then ran a real auction, by club health stage
 ``tools_vs_retention``   whether clubs using more club tools are still running auctions
 ``club_funnel``          clubs out there, probably active, tried the site, ran a real auction, ran one lately
+``outreach_queue``       the next clubs to email, which email, and how to reach each (no address)
+``feature_email_results``  feature emails sent, clicked, opted out and bounced, per kind
 =======================  ==========================================================================
 
 **Nobody is named.** A person is a user number at most, never a name, username or email; anything a
@@ -1222,6 +1224,139 @@ def club_funnel(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+#: Clubs ``outreach_queue`` writes to, by ``ClubHealth`` stage: not running auctions here now. A club
+#: with no health row yet counts as ``empty``.
+COLD_STAGES = ("aware", "trial", "dormant", "empty")
+#: How long a contacted club stays off the queue: people change jobs in a club.
+RECONTACT_DAYS = 730
+CONTACT_ORDER = {"email": 0, "webform": 1, "facebook": 2, "": 3}
+
+
+def _miles(a, b) -> float:
+    import math
+
+    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 3958.8 * 2 * math.asin(math.sqrt(h))
+
+
+def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The clubs to write to this week, one email each, and which email.
+
+    Not running auctions here (``COLD_STAGES``), not folded or not interested, reachable somehow, and not
+    contacted in :data:`RECONTACT_DAYS`. Clubs with members here come first, then those that tried and
+    stopped, then the rest; email before web form before Facebook. Version ``b`` (don't ask them to
+    switch) goes to a club marked ``other_software`` or stalled on ``uses_other``. No address leaves: the
+    row says which door to knock on and links the club's admin page, where the owner reads it.
+    """
+    from auctions.club_health import ClubHealth
+    from auctions.models import Auction, Club
+
+    now = timezone.now()
+    days = max(30, min(_int(params, "days_since_contact", RECONTACT_DAYS) or RECONTACT_DAYS, 3650))
+    limit = max(1, min(_int(params, "limit", 10) or 10, 50))
+    stages = dict(ClubHealth.objects.values_list("club_id", "stage"))
+    clubs = (
+        Club.objects.filter(active=True)
+        .exclude(stall_reason__in=("folded", "not_interested"))
+        .filter(Q(date_contacted__isnull=True) | Q(date_contacted__lt=now - timedelta(days=days)))
+    )
+    candidates = []
+    for club in clubs:
+        stage = stages.get(club.pk, "empty")
+        reachable = club.contact_method or club.contact_email or club.homepage or club.facebook_page
+        if stage in COLD_STAGES and reachable:
+            candidates.append((club, stage))
+    candidates.sort(
+        key=lambda row: (
+            COLD_STAGES.index(row[1]),
+            CONTACT_ORDER.get(row[0].contact_method or ("email" if row[0].contact_email else ""), 3),
+            row[0].date_contacted or now.replace(year=1970),
+        )
+    )
+    running = [
+        club
+        for club in Club.objects.filter(health__stage__in=("active", "new"), latitude__isnull=False)
+        if club.longitude is not None
+    ]
+    domain = _own_host()
+    rows = []
+    for club, stage in candidates[:limit]:
+        nearest = None
+        if club.latitude is not None and club.longitude is not None and running:
+            other = min(running, key=lambda o: _miles((club.latitude, club.longitude), (o.latitude, o.longitude)))
+            nearest = {
+                "club": fence(other.name),
+                "miles": round(_miles((club.latitude, club.longitude), (other.latitude, other.longitude))),
+            }
+        last = Auction.objects.filter(club=club, is_deleted=False).order_by("-date_posted").first()
+        version = "b" if club.other_software or club.stall_reason == "uses_other" else "a"
+        rows.append(
+            {
+                "club": club.pk,
+                "name": fence(club.name),
+                "stage": stage,
+                "email_version": version,
+                "possible_mygroupauctions": club.other_software == "mygroupauctions",
+                "other_software": club.other_software,
+                "contact_method": club.contact_method or ("email" if club.contact_email else ""),
+                "has_contact_email": bool((club.contact_email or "").strip()),
+                "homepage": fence(club.homepage or ""),
+                "facebook_page": fence(club.facebook_page or ""),
+                "last_contacted": club.date_contacted.date().isoformat() if club.date_contacted else None,
+                "nearest_club_running_auctions_here": nearest,
+                "last_auction_creator_user": last.created_by_id if last else None,
+                "admin_url": f"https://{domain}/admin/auctions/club/{club.pk}/change/",
+            }
+        )
+    summary = (
+        f"{len(candidates)} clubs are due a first or renewed outreach email; here are the next {len(rows)}. "
+        "Version a introduces the site; b doesn't ask a club with its own system to switch. "
+        "After sending, propose record_outreach for each club so it leaves the queue."
+    )
+    return _ok(summary, due=len(candidates), clubs=rows)
+
+
+def feature_email_results(request, params: dict[str, Any]) -> dict[str, Any]:
+    """How each feature email is doing: sent, clicked, opted out, bounced; and whether they're paused."""
+    from auctions import feature_emails
+    from auctions.models import FeatureEmail, FeatureEmailPause
+
+    days = _days(params, default=30, most=365)
+    since = _since(days)
+    rows = list(FeatureEmail.objects.filter(sent_on__gte=since).select_related("user__userdata"))
+    clicks = set(_capped(_views(since, source__startswith="email_", user__isnull=False), ("user_id", "source"))[0])
+    by_kind: dict[str, dict[str, int]] = defaultdict(lambda: {"sent": 0, "clicked": 0, "opted_out": 0, "bounced": 0})
+    for row in rows:
+        counts = by_kind[row.kind]
+        data = row.user.userdata
+        counts["sent"] += 1
+        counts["clicked"] += (row.user_id, f"email_{row.kind}") in clicks
+        counts["opted_out"] += bool(data.has_unsubscribed or not data.email_me_about_new_features)
+        counts["bounced"] += bool(data.email_bounced_on and data.email_bounced_on >= row.sent_on)
+    pause = FeatureEmailPause.objects.order_by("-created_on").first()
+    start = feature_emails.start_date()
+    table = [{"kind": kind, **counts} for kind, counts in sorted(by_kind.items(), key=lambda item: -item[1]["sent"])]
+    sent = sum(row["sent"] for row in table)
+    summary = (
+        f"{sent} feature emails in the last {days} days. "
+        + (f"Paused since {pause.created_on.date()}: {pause.reason}. " if pause else "")
+        + (
+            f"Sending starts {start}; today's cap is {feature_emails.daily_cap(timezone.localdate())}."
+            if start
+            else "Turned off."
+        )
+    )
+    return _ok(
+        summary,
+        days=days,
+        starts=start.isoformat() if start else None,
+        paused=pause.reason if pause else None,
+        cap_today=feature_emails.daily_cap(timezone.localdate()),
+        by_kind=table,
+    )
+
+
 # --- the catalogue ----------------------------------------------------------------------------------
 
 _DAYS = "integer, optional, default {default}, at most {most}. How far back to look."
@@ -1424,5 +1559,30 @@ READS: list[Action] = [
         },
         danger=DANGER_SAFE,
         resolver=club_funnel,
+    ),
+    Action(
+        name="outreach_queue",
+        description=(
+            "The clubs to email this week, one email each: not running auctions here, reachable, not folded, "
+            "and not contacted in two years. Each row says which email (a introduces the site, b is for a "
+            "club with its own system or possibly on MyGroupAuctions), how to reach it, the nearest club "
+            "running auctions here, and its admin page. No address is shown."
+        ),
+        params={
+            "limit": "integer, optional, default 10, at most 50. How many clubs.",
+            "days_since_contact": "integer, optional, default 730. Clubs contacted more recently are left out.",
+        },
+        danger=DANGER_SAFE,
+        resolver=outreach_queue,
+    ),
+    Action(
+        name="feature_email_results",
+        description=(
+            "How the feature emails are doing, per kind: sent, clicked, opted out, bounced; whether sending "
+            "is paused and why, when it starts, and today's cap."
+        ),
+        params={"days": _days_param(30, 365)},
+        danger=DANGER_SAFE,
+        resolver=feature_email_results,
     ),
 ]
