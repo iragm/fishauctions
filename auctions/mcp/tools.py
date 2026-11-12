@@ -164,9 +164,13 @@ def title_for(action: palette_actions.Action) -> str:
     return action.name.replace("_", " ").capitalize()
 
 
-def describe(action: palette_actions.Action) -> str:
-    """The tool description: what the registry says, plus the examples it carries."""
-    if action.mcp_description:
+def describe(action: palette_actions.Action, *, palette: bool = False) -> str:
+    """The tool description: what the registry says, plus the examples it carries.
+
+    ``palette`` keeps the website's own wording: the palette navigates by itself and offers the lot
+    form instead of ``add_lot``, so ``Action.mcp_description`` would tell its model the opposite.
+    """
+    if action.mcp_description and not palette:
         return action.mcp_description.strip()
     description = action.description.strip()
     if action.examples:
@@ -175,7 +179,7 @@ def describe(action: palette_actions.Action) -> str:
     return description
 
 
-def descriptor(action: palette_actions.Action) -> dict[str, Any]:
+def descriptor(action: palette_actions.Action, *, palette: bool = False) -> dict[str, Any]:
     """One MCP tool descriptor.
 
     ``tools/list`` is paid for in context every session, so keys that restate the spec's default are
@@ -196,7 +200,7 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
     built = {
         "name": action.name,
         "title": title_for(action),
-        "description": describe(action),
+        "description": describe(action, palette=palette),
         "inputSchema": input_schema(action),
         "annotations": annotations,
         # A URL, not inline SVG; see auctions.mcp.icons.
@@ -265,16 +269,19 @@ def wanted(action: palette_actions.Action, areas: set[str]) -> bool:
     return area_of(action) in (areas | {AREA_GENERAL})
 
 
-def tool_descriptors(user=None, *, writes: bool = True, areas: set[str] | None = None) -> list[dict[str, Any]]:
+def tool_descriptors(
+    user=None, *, writes: bool = True, areas: set[str] | None = None, palette: bool = False
+) -> list[dict[str, Any]]:
     """The catalogue for one caller.
 
     ``user=None`` means every action (for the audit test). ``actions_for`` filters for relevance, not
     security. ``writes=False`` drops write tools from the list as well as the call. ``areas`` is the
-    ``?tools=`` filter, since the protocol has no way to ask for a subset.
+    ``?tools=`` filter, since the protocol has no way to ask for a subset. ``palette`` is the command
+    palette asking, which gets the website wording (see :func:`describe`).
     """
     areas = areas or set()
     return [
-        descriptor(action)
+        descriptor(action, palette=palette)
         for action in palette_actions.actions_for(user)
         if (writes or read_only(action)) and wanted(action, areas)
     ]

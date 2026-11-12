@@ -83,6 +83,14 @@ class ResultContractTests(SimpleTestCase):
         self.assertNotIn("Anything about adding", tools.describe(form))
         self.assertIn("nothing is saved", tools.describe(form))
 
+    def test_the_palette_keeps_the_website_wording(self):
+        # The palette navigates by itself and offers only the lot form; the connector wording says otherwise.
+        for name in ("add_a_lot_via_webform", "go_to_page"):
+            action = palette_actions.get_action(name)
+            self.assertTrue(action.mcp_description)
+            self.assertNotEqual(tools.describe(action, palette=True), tools.describe(action))
+            self.assertTrue(tools.describe(action, palette=True).startswith(action.description.strip()))
+
     def test_batch_schema_defines_per_lot_fields_and_copy_limits(self):
         schema = tools.input_schema(palette_actions.get_action("add_lots"))
         entries = schema["properties"]["lots"]

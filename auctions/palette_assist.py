@@ -166,7 +166,7 @@ def tools_for(user, query: str = "") -> list[dict[str, Any]]:
 
     shared = [
         tool
-        for tool in mcp_tools.tool_descriptors(user)
+        for tool in mcp_tools.tool_descriptors(user, palette=True)
         if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
     ]
     reads = [tool for tool in shared if not _is_a_write(tool)]

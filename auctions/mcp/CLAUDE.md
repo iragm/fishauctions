@@ -101,7 +101,7 @@ there to approve.
 
 ## The palette as a client
 
-`palette_assist.tools_for` is `mcp.tools.tool_descriptors(user)` plus three tools of its own —
+`palette_assist.tools_for` is `mcp.tools.tool_descriptors(user, palette=True)` (the registry's own wording, never `mcp_description`) plus three tools of its own —
 `ask_the_user` and `cannot_do_this` — there is no tool that takes a sentence. `llm.complete` sends them as OpenAI function
 definitions (`llm.as_openai_tool`). `read_reply` maps "which tool" to
 lookup/action/question/answer/refusal. `complete_json` stays for the four callers that want data,
