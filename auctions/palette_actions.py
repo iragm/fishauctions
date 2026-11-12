@@ -16808,7 +16808,7 @@ NOT_A_SKILL: dict[str, str] = {
         "worse than typing it into the box on the speaker's page, which the palette can reach."
     ),
     "SpeakerCommentDeleteView": (
-        "Deletes something a named person wrote about how a talk went. The judgement is whether "
+        "Deletes something a member wrote, under their username, about a speaker. The judgement is whether "
         "that note should stop existing, which is made by reading it next to the others on the "
         "speaker's page."
     ),

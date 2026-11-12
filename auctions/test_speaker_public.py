@@ -594,3 +594,43 @@ class SignedInReadersTests(TestCase):
     def test_whoever_typed_in_contact_details_still_sees_them(self):
         Speaker.objects.filter(pk=self.speaker.pk).update(created_by=self.reader, email="terry@example.com")
         self.assertContains(self.page_for(self.reader), "terry@example.com")
+
+    def test_a_speaker_cant_comment_on_their_own_page(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(user=self.reader)
+        client = Client()
+        client.force_login(self.reader)
+        response = client.post(reverse("speaker_comment", kwargs={"slug": self.speaker.slug}), {"body": "I'm great"})
+        self.assertContains(response, "Comments are for other people")
+        self.assertFalse(SpeakerComment.objects.filter(user=self.reader).exists())
+
+    def test_comments_are_limited_per_hour(self):
+        for number in range(SpeakerComment.HOURLY_LIMIT):
+            SpeakerComment.objects.create(speaker=self.speaker, user=self.reader, body=f"note {number}")
+        client = Client()
+        client.force_login(self.reader)
+        response = client.post(reverse("speaker_comment", kwargs={"slug": self.speaker.slug}), {"body": "one more"})
+        self.assertContains(response, "try again later")
+        self.assertFalse(SpeakerComment.objects.filter(body="one more").exists())
+
+    def test_deleting_an_account_removes_its_own_comments_and_unsigns_club_notes(self):
+        from auctions.account_deletion import _anonymize_assistant_records
+
+        club_note = SpeakerComment.objects.create(
+            speaker=self.speaker, user=self.officer, club=self.nec_club, body="Club note"
+        )
+        _anonymize_assistant_records(self.officer)
+        self.assertFalse(SpeakerComment.objects.filter(pk=self.comment.pk).exists())
+        club_note.refresh_from_db()
+        self.assertIsNone(club_note.user)
+
+    def test_deleting_from_a_page_you_cant_open_returns_nothing(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_HIDDEN)
+        client = Client()
+        client.force_login(self.officer)
+        response = client.post(
+            reverse("speaker_comment_delete", kwargs={"slug": self.speaker.slug, "pk": self.comment.pk})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        self.comment.refresh_from_db()
+        self.assertTrue(self.comment.is_deleted)

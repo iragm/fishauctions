@@ -852,7 +852,7 @@ class SpeakerCommentTests(TestCase):
         response = self.client.post(self.url, {"body": "Good stuff"})
         comment = SpeakerComment.objects.get()
         self.assertEqual(comment.club, self.club)
-        self.assertNotIn(self.club.name, comment.author_display)
+        self.assertNotIn(self.club.name, comment.author_username)
         self.assertNotContains(response, self.club.name)
 
     def test_an_empty_comment_is_rejected(self):

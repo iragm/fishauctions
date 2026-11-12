@@ -269,6 +269,8 @@ def _anonymize_assistant_records(user):
         user=None, arguments="", detail="", client="", connection="", result_metadata={}
     )
     VoiceCommandLog.objects.filter(user=user).update(user=None)
+    # Their own words about a speaker go; a note they left for their NEC club stays, unsigned.
+    SpeakerComment.objects.filter(user=user, club__isnull=True).delete()
     SpeakerComment.objects.filter(user=user).update(user=None)
 
 

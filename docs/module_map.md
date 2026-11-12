@@ -26,7 +26,7 @@ this only quotes its opening sentence.
 - **`account_adapter.py`** (33 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
-- **`account_deletion.py`** (456 lines)
+- **`account_deletion.py`** (458 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
 - **`account_export.py`** (311 lines)
@@ -208,7 +208,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15692 lines)
+- **`models.py`** (15702 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -672,7 +672,7 @@ this only quotes its opening sentence.
 - **`test_signup_links.py`** (177 lines)
   Sign-in links, the one-tap claim on an invoice, and the shortcuts on the selling, buying, lots and new-lot pages.
   `SocialButtonNextTests`, `InvoiceClaimTests`, `SellingAddLotTests`, `EndedAuctionLinksCurrentTests`, `NewLotJoinsSilentlyTests`
-- **`test_site_account_fixes.py`** (592 lines)
+- **`test_site_account_fixes.py`** (595 lines)
   Regression tests for a sweep of site and account fixes.
 - **`test_site_checks.py`** (256 lines)
   The checks for the site quietly not doing its job (:mod:`auctions.site_checks`), and the log context
@@ -686,7 +686,7 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speaker_public.py`** (566 lines)
+- **`test_speaker_public.py`** (636 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
   `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`
 - **`test_speakers.py`** (1415 lines)
@@ -1172,7 +1172,7 @@ Every view on the site, split by the part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (770 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-- **`speakers.py`** (755 lines)
+- **`speakers.py`** (778 lines)
   The speaker directory: who will come and talk to a club, and what about.
 - **`species.py`** (523 lines)
   Adding species and common names, the superuser's cleanup queue, and each species' public page.
