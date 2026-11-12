@@ -539,6 +539,7 @@ class ClubFunnelTests(Helpers):
         self.auction(Club.objects.create(name="Tester club"), "test auction")
         self.auction(Club.objects.create(name="Old club"), "Spring swap", days_ago=500)
         self.auction(Club.objects.create(name="Current club"), "Fall swap")
+        self.auction(Club.objects.create(name="Future club"), "Next year swap", days_ago=-200)
         self.auction(folded, "Farewell swap")
         self.auction(None, "Clubless swap")
         self.auction(None, "test run")
@@ -547,29 +548,33 @@ class ClubFunnelTests(Helpers):
             "stopped_before_probably_active": "«Folded club»",
             "stopped_before_tried_the_site": "«Never club»",
             "stopped_before_ran_a_real_auction": "«Tester club»",
-            "stopped_before_used_it_this_year": "«Old club»",
+            "stopped_before_used_it_in_window": "«Old club»",
         }
         for key, name in expected.items():
             with self.subTest(key):
-                self.assertIn(name, result[key])
+                self.assertIn(name, result[key]["names"])
                 others = [other for other in expected.values() if other != name]
-                self.assertFalse(set(others) & set(result[key]))
+                self.assertFalse(set(others) & set(result[key]["names"]))
         for key in expected:
-            self.assertNotIn("«Current club»", result[key])
+            self.assertNotIn("«Current club»", result[key]["names"])
         steps = {step["step"]: step["clubs"] for step in result["steps"]}
         old = {step["step"]: step["clubs"] for step in before["steps"]}
-        self.assertEqual(steps["clubs"] - old["clubs"], 5)
-        self.assertEqual(steps["probably_active"] - old["probably_active"], 4)
-        self.assertEqual(steps["tried_the_site"] - old["tried_the_site"], 3)
-        self.assertEqual(steps["ran_a_real_auction"] - old["ran_a_real_auction"], 2)
-        self.assertEqual(steps["used_it_this_year"] - old["used_it_this_year"], 1)
+        self.assertIn("«Future club»", result["stopped_before_used_it_in_window"]["names"])
+        self.assertEqual(steps["clubs"] - old["clubs"], 6)
+        self.assertEqual(steps["probably_active"] - old["probably_active"], 5)
+        self.assertEqual(steps["tried_the_site"] - old["tried_the_site"], 4)
+        self.assertEqual(steps["ran_a_real_auction"] - old["ran_a_real_auction"], 3)
+        self.assertEqual(steps["used_it_in_window"] - old["used_it_in_window"], 1)
         self.assertEqual(result["real_auctions_with_no_club"] - before["real_auctions_with_no_club"], 1)
-        self.assertEqual(result["inactive_clubs_still_running"] - before["inactive_clubs_still_running"], 1)
+        self.assertIn("«Folded club»", result["inactive_but_running"])
         reasons = {row["stall_reason"]: row["clubs"] for row in result["never_tried_by_stall_reason"]}
         self.assertGreaterEqual(reasons.get("uses_other", 0), 1)
 
     def test_limit_caps_the_names(self):
         for n in range(3):
             Club.objects.create(name=f"Quiet club {n}")
-        result = self.run_report("club_funnel", {"limit": 1})
-        self.assertEqual(len(result["stopped_before_tried_the_site"]), 1)
+        first = self.run_report("club_funnel", {"limit": 1})["stopped_before_tried_the_site"]
+        self.assertEqual(len(first["names"]), 1)
+        self.assertGreaterEqual(first["clubs"], 3)
+        second = self.run_report("club_funnel", {"limit": 1, "offset": first["next_offset"]})
+        self.assertNotEqual(first["names"], second["stopped_before_tried_the_site"]["names"])
