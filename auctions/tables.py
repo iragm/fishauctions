@@ -13,6 +13,7 @@ from django.contrib.humanize.templatetags.humanize import naturalday
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import F
 from django.urls import reverse
+from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join, strip_tags
 from django.utils.safestring import mark_safe
 
@@ -1776,8 +1777,17 @@ class LogisticsHTMxTable(tables.Table):
         self.tab = tab
         super().__init__(*args, exclude=exclude, **kwargs)
 
+    @cached_property
+    def waiting_on(self):
+        return logistics.waiting_on(self.tab.location.auction, self.tab)
+
     def render_name(self, value, record):
-        return logistics_name_cell(record, self.tab.which)
+        cell = logistics_name_cell(record, self.tab.which)
+        sellers = self.waiting_on.get(record.pk) if record.pickup_now else None
+        if not sellers:
+            return cell
+        waiting = sellers[0] if len(sellers) == 1 else f"{len(sellers)} sellers"
+        return format_html("{} <span class='text-muted small'>(waiting on {})</span>", cell, waiting)
 
     def render_invoice(self, value, record):
         return record.invoice_link_html
