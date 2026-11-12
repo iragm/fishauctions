@@ -1,9 +1,23 @@
 {% extends "auctions/htmx_table_view.html" %}
+{% load static %}
 
 {% block title %}Logistics for {{ auction }}{% endblock %}
 
 {% block htmx_table_ribbon %}
   {% include "auction_ribbon.html" %}
+  {% comment %} The scanner: an invoice's QR crosses its seller off and checks their lots in, a lot label checks in that one lot (logistics.scan). A USB scanner types into the box. {% endcomment %}
+  <div class="mt-3">
+    <form id="logistics-scan-form" class="d-flex flex-wrap gap-2 align-items-center">
+      <button id="logistics-scan-toggle" type="button" class="btn btn-primary"><i class="bi bi-camera-video"></i> Scan</button>
+      <input id="logistics-scan-code" type="text" class="form-control w-auto" placeholder="Invoice or lot code" autocomplete="off" aria-label="Invoice or lot code">
+    </form>
+    <div id="logistics-scanner-wrapper" class="mt-2 d-none">
+      <div class="rounded border overflow-hidden w-100" style="aspect-ratio: 3 / 1;">
+        <video id="logistics-scanner-video" playsinline muted style="width: 100%; height: 100%; object-fit: cover;"></video>
+      </div>
+    </div>
+    <div id="logistics-scan-result" class="alert mt-2 mb-0 d-none" role="status"></div>
+  </div>
   {% if tabs|length > 1 %}
   <ul class="nav nav-tabs mt-3">
     {% for item in tabs %}
@@ -11,4 +25,99 @@
     {% endfor %}
   </ul>
   {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script src="{% static 'js/camera_scanner.js' %}"></script>
+<script>
+  (() => {
+    const scanUrl = "{% url 'auction_logistics_scan' slug=auction.slug %}";
+    const csrfToken = "{{ csrf_token }}";
+    const toggle = document.getElementById("logistics-scan-toggle");
+    const wrapper = document.getElementById("logistics-scanner-wrapper");
+    const input = document.getElementById("logistics-scan-code");
+    const result = document.getElementById("logistics-scan-result");
+    const startLabel = toggle.innerHTML;
+
+    function show(message, ok) {
+      result.className = `alert mt-2 mb-0 alert-${ok ? "success" : "danger"}`;
+      // The server builds this with format_html, so names in it are escaped.
+      result.innerHTML = message;
+    }
+
+    function refreshTable() {
+      // The crossed-off names and the "waiting on" notes come from the server.
+      if (window.htmx && document.getElementById("table-container")) {
+        htmx.ajax("GET", window.location.href, { target: "#table-container", swap: "outerHTML" });
+      }
+    }
+
+    async function post(fields) {
+      const body = new FormData();
+      Object.entries(fields).forEach(([key, value]) => body.append(key, value));
+      let payload = null;
+      try {
+        const response = await fetch(scanUrl, { method: "POST", headers: { "X-CSRFToken": csrfToken }, body: body });
+        payload = await response.json();
+      } catch (error) {
+        payload = null;
+      }
+      if (!payload) {
+        show("Scan failed -- check your connection and try again.", false);
+        return false;
+      }
+      show(payload.message, payload.ok);
+      if (payload.ok) {
+        refreshTable();
+      }
+      return payload.ok;
+    }
+
+    result.addEventListener("click", (event) => {
+      const link = event.target.closest("[data-check-in-seller]");
+      if (link) {
+        event.preventDefault();
+        post({ seller: link.dataset.checkInSeller });
+      }
+    });
+
+    document.getElementById("logistics-scan-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const code = input.value.trim();
+      input.value = "";
+      if (code) {
+        post({ code: code });
+      }
+    });
+
+    const scanner = window.createCameraScanner({
+      video: document.getElementById("logistics-scanner-video"),
+      onCode: (value) => post({ code: value }),
+      onStatus: (message, level) => {
+        if (level === "danger") {
+          show(message, false);
+        }
+      },
+      formats: ["qr_code"],
+    });
+
+    toggle.addEventListener("click", async () => {
+      if (scanner.isScanning()) {
+        await scanner.stop();
+        wrapper.classList.add("d-none");
+        toggle.innerHTML = startLabel;
+        return;
+      }
+      wrapper.classList.remove("d-none");
+      toggle.innerHTML = '<i class="bi bi-camera-video-off"></i> Stop';
+      try {
+        await scanner.start();
+      } catch (error) {
+        wrapper.classList.add("d-none");
+        toggle.innerHTML = startLabel;
+      }
+    });
+  })();
+</script>
 {% endblock %}

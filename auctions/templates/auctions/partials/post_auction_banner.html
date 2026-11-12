@@ -26,6 +26,10 @@
   <div>{{ post_end.sellers_paid.done }} of {{ post_end.sellers_paid.total }} seller's invoices have been paid. <a href="{% url 'auction_tos_list' slug=auction.slug %}?query=club+owes+outstanding" class="text-white">See who the club owes and hasn't paid</a></div>
   {% include "auctions/partials/post_auction_bar.html" with step=post_end.sellers_paid %}
   {% endif %}
+  {% if post_end.accounted %}
+  <div>{{ post_end.accounted.done }} out of {{ post_end.accounted.total }} lots accounted for.  <a href="{% url 'auction_logistics' slug=auction.slug %}" class="text-white">Scan users in to account for their lots</a></div>
+  {% include "auctions/partials/post_auction_bar.html" with step=post_end.accounted %}
+  {% endif %}
   {% endif %}
 </div>
 {% endif %}

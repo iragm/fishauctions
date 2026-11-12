@@ -1,10 +1,11 @@
-"""Online auctions after bidding: the logistics page, its tap to cross a name off, and the admin's progress banner.
+"""Online auctions after bidding: the logistics page, its tap to cross a name off, its scanner, and the admin's
+progress banner.
 
 The rules for who comes to which pickup are in :mod:`auctions.logistics`.
 """
 
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.generic import TemplateView, View
 
@@ -15,7 +16,7 @@ from auctions.tables import LogisticsHTMxTable, logistics_name_cell
 
 from .base import AuctionViewMixin, HTMxTableView
 
-__all__ = ["AuctionLogistics", "AuctionLogisticsMark", "AuctionPostEndBanner"]
+__all__ = ["AuctionLogistics", "AuctionLogisticsMark", "AuctionLogisticsScan", "AuctionPostEndBanner"]
 
 
 class AuctionLogistics(LoginRequiredMixin, AuctionViewMixin, HTMxTableView):
@@ -64,6 +65,21 @@ class AuctionLogisticsMark(LoginRequiredMixin, AuctionViewMixin, View):
         tos = get_object_or_404(AuctionTOS, pk=pk, auction=self.auction)
         logistics.mark_off(tos, which, request.user, marked=request.POST.get("marked") == "1")
         return HttpResponse(logistics_name_cell(tos, which))
+
+
+class AuctionLogisticsScan(LoginRequiredMixin, AuctionViewMixin, View):
+    """A code read by the logistics page's scanner (``logistics.scan``), or the tip's "mark all" link."""
+
+    def post(self, request):
+        if not self.auction.is_online:
+            raise Http404
+        if request.POST.get("seller"):
+            try:
+                seller = int(request.POST["seller"])
+            except ValueError:
+                raise Http404 from None
+            return JsonResponse(logistics.check_in_seller(self.auction, seller, request.user))
+        return JsonResponse(logistics.scan(self.auction, request.POST.get("code", ""), request.user))
 
 
 class AuctionPostEndBanner(LoginRequiredMixin, AuctionViewMixin, TemplateView):

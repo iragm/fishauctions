@@ -16711,6 +16711,10 @@ NOT_A_SKILL: dict[str, str] = {
         "Crosses a name off a pickup list while that person stands at the table with their lots, and back "
         "on with a second tap. It records nothing anyone acts on later; the list itself is the record."
     ),
+    "AuctionLogisticsScan": (
+        "Reads an invoice or lot label held up to a camera at the pickup table, checking those lots in. "
+        "It needs the physical barcode in front of the volunteer; a caller without one has nothing to scan."
+    ),
     "AuctionPageAction": (
         "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "
         "shows one person and nothing else. The other two are site staff trusting an auction's "
