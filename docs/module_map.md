@@ -198,7 +198,7 @@ this only quotes its opening sentence.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
   `current`, `ContextFilter`, `set_user`, `RequestContextMiddleware`, `UserContextMiddleware`, `connect_celery`
-- **`logistics.py`** (365 lines)
+- **`logistics.py`** (375 lines)
   After an online auction: who comes to which pickup, and how far along the club is.
 - **`mailchimp.py`** (656 lines)
   One-way Django -> Mailchimp sync for clubs.
@@ -387,9 +387,9 @@ this only quotes its opening sentence.
 - **`test_cache_hygiene.py`** (132 lines)
   Guards against tests that clear a cache shared with every other parallel worker.
   `find_test_modules`, `check_source`, `CachesAreNotSharedBetweenWorkersTests`, `CacheHygieneCheckerTests`
-- **`test_camera_scanner.py`** (191 lines)
+- **`test_camera_scanner.py`** (211 lines)
   Guards the iPhone code path through the camera barcode scanner.
-  `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`, `CameraScannerReadingTests`, `LotQueuePreviewTests`
+  `CameraScannerSourceTests`, `ScannerTemplateTests`, `QuickCheckoutCameraStartsOffTests`, `CameraScannerReadingTests`, `LotQueuePreviewTests`, `ZxingSourceIsNamedByTheTagTests`
 - **`test_cares.py`** (471 lines)
   The CARES list: the weekly sync from aquaristspecies.net, and where a CARES species shows.
   `record`, `FakeResponse`, `FakeSession`, `page`, `CaresSyncTests`, `CaresSpeciesTests`, `CaresLotTests`, `CaresBapTests`
@@ -644,7 +644,7 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (1180 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`, `PayPalLotRefundTests`
-- **`test_pickup_logistics.py`** (513 lines)
+- **`test_pickup_logistics.py`** (523 lines)
   Online auction pickups: holding lots for the second pickup, the day-before email, the logistics page,
   `PickupTestCase`, `HoldForSecondPickupTests`, `PickupPlanTests`, `PickupTomorrowEmailTests`, `LogisticsPageTests`, `PostAuctionBannerTests`, `CheckInTests`, `UsersFilterTests`, `LocationFilterTests`, `CreatedAheadChartTests`
 - **`test_printable_lot_list.py`** (148 lines)
@@ -1142,7 +1142,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`help.py`** (108 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (411 lines)
+- **`invoices.py`** (412 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`logistics.py`** (95 lines)

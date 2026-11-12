@@ -25,7 +25,7 @@ from django.views.generic.edit import (
     FormMixin,
 )
 
-from auctions import auction_survey
+from auctions import auction_survey, logistics
 from auctions.filters import (
     InvoiceFilter,
 )
@@ -272,7 +272,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 },
             )
         context["is_auction_admin"] = self.auction and self.is_auction_admin
-        # Scanned at the pickup table on the logistics page (logistics.scan).
+        # Scanned at the pickup table on the logistics page (logistics.scan), so only around the pickups.
         tos = invoice.auctiontos_user
         if (
             invoice.auction
@@ -280,6 +280,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             and tos
             and tos.pickup_location
             and not tos.pickup_location.pickup_by_mail
+            and logistics.shows_pickup_code(invoice.auction)
         ):
             context["pickup_qr_code"] = (
                 f"https://{Site.objects.get_current().domain}{reverse('invoice_by_pk', kwargs={'pk': invoice.pk})}"

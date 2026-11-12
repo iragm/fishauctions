@@ -189,3 +189,23 @@ class LotQueuePreviewTests(SimpleTestCase):
         self.assertIn("aspect-ratio: 4 / 3", rule)
         lot_queue = (REPO_ROOT / "auctions" / "templates" / "auctions" / "lot_queue.html").read_text()
         self.assertIn('class="lot-queue-camera', lot_queue)
+
+
+class ZxingSourceIsNamedByTheTagTests(SimpleTestCase):
+    """{% static %} hashes names when DEBUG is off, so camera_scanner.js can't find the reader from its own
+    file name; the one include that loads it says where the reader is.
+    """
+
+    def test_only_the_include_loads_the_scanner(self):
+        templates = REPO_ROOT / "auctions" / "templates"
+        include = templates / "auctions" / "camera_scanner.html"
+        self.assertIn("data-zxing-src=", include.read_text())
+        loaders = {p for p in templates.rglob("*.html") if re.search(r"camera_scanner\.js", p.read_text())}
+        self.assertEqual(loaders, {include})
+
+    def test_the_include_renders_both_paths(self):
+        from django.template.loader import render_to_string
+
+        html = render_to_string("auctions/camera_scanner.html")
+        self.assertRegex(html, r'src="[^"]*camera_scanner[^"]*\.js"')
+        self.assertRegex(html, r'data-zxing-src="[^"]*zxing[^"]*\.js"')
