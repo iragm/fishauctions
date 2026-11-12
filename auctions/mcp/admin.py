@@ -1676,6 +1676,159 @@ def merge_accounts(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Moved everything from {name} to {kept.username} and closed {name}.")
 
 
+# --- the speaker directory's duplicates ---------------------------------------------------------------
+
+
+def _speaker(params: dict[str, Any], key: str):
+    """The live speaker a step names by slug, or ``None``."""
+    from auctions.models import Speaker
+
+    slug = _str(params, key)
+    return Speaker.objects.filter(slug=slug, is_deleted=False).first() if slug else None
+
+
+def _speaker_row(speaker) -> dict[str, Any]:
+    bio = " ".join((speaker.bio or "").split())
+    return {
+        "slug": speaker.slug,
+        "name": palette_actions.untrusted_short(speaker.display_name),
+        "location": palette_actions.untrusted_short(speaker.location),
+        "bio_starts": palette_actions.untrusted(bio[:200]) if bio else "",
+        "visibility": speaker.visibility,
+        "from_the_nec": speaker.imported_from_nec,
+        "has_an_account": bool(speaker.user_id),
+        "added_on": speaker.createdon.date().isoformat() if speaker.createdon else "",
+        "page_url": speaker.get_absolute_url(),
+    }
+
+
+def _speaker_pair(params: dict[str, Any]):
+    """``merge_speakers``' two speakers as ``(closed, kept, "")``, or ``(None, None, why not)``."""
+    from auctions.speaker_duplicates import merge_problem
+
+    closed, kept = _speaker(params, "close"), _speaker(params, "keep")
+    problem = merge_problem(closed, kept)
+    return (None, None, problem) if problem else (closed, kept, "")
+
+
+def merge_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Fold one speaker into another: the duplicate's address redirects to the kept page."""
+    from auctions import speaker_duplicates
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    closed, kept, problem = _speaker_pair(params)
+    if problem:
+        return _error(problem)
+    speaker_duplicates.merge_speakers(closed, kept)
+    return _ok(f"Merged {closed.slug} into {kept.slug}.")
+
+
+def _speaker_and_claimant(params: dict[str, Any]):
+    """A claim step's speaker and account as ``(speaker, user, claim, "")``, or ``(None, None, None, why not)``."""
+    from auctions.models import SpeakerClaim
+
+    speaker, user = _speaker(params, "speaker"), _account(params, "account")
+    if speaker is None:
+        return None, None, None, "There is no live speaker by that slug."
+    if user is None:
+        return None, None, None, "There is no active account by that number or username."
+    claim = SpeakerClaim.objects.filter(speaker=speaker, user=user).first()
+    if claim is None:
+        return None, None, None, "That account hasn't asked for that speaker's page."
+    return speaker, user, claim, ""
+
+
+def _claim_problem(params: dict[str, Any]) -> str:
+    speaker, user, _claim, problem = _speaker_and_claimant(params)
+    if problem:
+        return problem
+    if speaker.user_id and speaker.user_id != user.pk:
+        return "That speaker already belongs to another account."
+    if user.is_staff or user.is_superuser:
+        return "Staff accounts aren't linked through a proposal."
+    return ""
+
+
+def link_speaker_to_account(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Approve a "This is me": the speaker becomes the account's profile, its own profile merged in."""
+    from auctions import speaker_duplicates
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _claim_problem(params)
+    if problem:
+        return _error(problem)
+    speaker, user, _claim, _problem = _speaker_and_claimant(params)
+    speaker_duplicates.link_speaker_to_account(speaker, user)
+    return _ok(f"{speaker.slug} is now {user.username}'s speaker profile.")
+
+
+def decline_speaker_claim(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Turn down a "This is me" that isn't them. The page stays as it is."""
+    from auctions.models import SpeakerClaim
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    _speaker_obj, _user, claim, problem = _speaker_and_claimant(params)
+    if problem:
+        return _error(problem)
+    SpeakerClaim.objects.filter(pk=claim.pk).update(status=SpeakerClaim.STATUS_DECLINED)
+    return _ok("Declined.")
+
+
+def find_duplicate_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Open "This is me" requests, then pairs of speakers that are probably one person, each with the
+    proposal step that would settle it.
+    """
+    from auctions import speaker_duplicates
+    from auctions.models import Speaker, SpeakerClaim
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    claims = []
+    for claim in SpeakerClaim.objects.filter(status=SpeakerClaim.STATUS_OPEN, speaker__is_deleted=False).select_related(
+        "speaker", "user"
+    )[:50]:
+        own = Speaker.objects.filter(user=claim.user, is_deleted=False).exclude(pk=claim.speaker_id).first()
+        claims.append(
+            {
+                "speaker": _speaker_row(claim.speaker),
+                "account": claim.user_id,
+                "account_name": palette_actions.untrusted_short(claim.user.get_full_name() or claim.user.username),
+                "their_own_profile": _speaker_row(own) if own else None,
+                "asked_on": claim.createdon.date().isoformat(),
+                "approve_with": {
+                    "tool": "link_speaker_to_account",
+                    "arguments": {"speaker": claim.speaker.slug, "account": claim.user_id},
+                },
+                "decline_with": {
+                    "tool": "decline_speaker_claim",
+                    "arguments": {"speaker": claim.speaker.slug, "account": claim.user_id},
+                },
+            }
+        )
+    pairs = []
+    for first, second, reasons in speaker_duplicates.duplicate_groups():
+        kept, closed = speaker_duplicates.suggested_keep(first, second)
+        problem = speaker_duplicates.merge_problem(closed, kept)
+        row = {"keep": _speaker_row(kept), "close": _speaker_row(closed), "why": reasons}
+        if problem:
+            row["cannot_merge"] = problem
+        else:
+            row["merge_with"] = {"tool": "merge_speakers", "arguments": {"keep": kept.slug, "close": closed.slug}}
+        pairs.append(row)
+    limit, offset = palette_actions._slice(params)
+    result = {"claims": claims, "pairs": pairs[offset : offset + limit], "total_pairs": len(pairs)}
+    if offset + limit < len(pairs):
+        result["next_offset"] = offset + limit
+    summary = (
+        f'{len(claims)} open "This is me" request{"s" if len(claims) != 1 else ""} and '
+        f"{len(pairs)} likely duplicate pair{'s' if len(pairs) != 1 else ''}. Read both pages before proposing a merge."
+    )
+    return _ok(summary, **result)
+
+
 def _auction_and_club(params: dict[str, Any]):
     """``link_auction_to_club``'s auction and club as ``(auction, club, "")``, or ``(None, None, why not)``."""
     from auctions.models import Auction
@@ -2235,6 +2388,48 @@ APPROVAL_ONLY: dict[str, Action] = {
             resolver=merge_accounts,
         ),
         Action(
+            name="merge_speakers",
+            description=(
+                "Fold a duplicate speaker into another: blanks filled, topics, tags and comments moved, and "
+                "the duplicate's page redirecting to the kept one. The person's own (account-linked) text "
+                "wins. find_duplicate_speakers suggests the pairs."
+            ),
+            params={
+                "keep": "string, required. The slug of the speaker page to keep.",
+                "close": "string, required. The slug of the duplicate to fold in and retire.",
+            },
+            danger=DANGER_CONFIRM,
+            destructive=True,
+            confirm_template="Merge two speakers",
+            resolver=merge_speakers,
+        ),
+        Action(
+            name="link_speaker_to_account",
+            description=(
+                'Approve a "This is me" request: the speaker page becomes that account\'s profile, and any '
+                "profile the account already had is merged into it. find_duplicate_speakers lists the requests."
+            ),
+            params={
+                "speaker": "string, required. The slug of the speaker page that was claimed.",
+                "account": "string, required. The claiming account's number or username.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="Give a speaker page to its owner",
+            resolver=link_speaker_to_account,
+        ),
+        Action(
+            name="decline_speaker_claim",
+            description='Turn down a "This is me" request that isn\'t them. The page is left as it is.',
+            params={
+                "speaker": "string, required. The slug of the speaker page that was claimed.",
+                "account": "string, required. The claiming account's number or username.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Decline a speaker page request",
+            resolver=decline_speaker_claim,
+        ),
+        Action(
             name="add_palette_shortcut",
             description=(
                 "Answer one phrase from the command palette straight from the page catalogue, with no "
@@ -2264,6 +2459,9 @@ PROPOSAL_CHECKS = {
     "update_club": lambda arguments: _club_changes(arguments)[3],
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
+    "merge_speakers": lambda arguments: _speaker_pair(arguments)[2],
+    "link_speaker_to_account": _claim_problem,
+    "decline_speaker_claim": lambda arguments: _speaker_and_claimant(arguments)[3],
     "add_palette_shortcut": _shortcut_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
@@ -2589,6 +2787,20 @@ ADMIN_TOOLS: dict[str, Action] = {
             },
             danger=DANGER_SAFE,
             resolver=read_logs,
+        ),
+        Action(
+            name="find_duplicate_speakers",
+            description=(
+                'The speaker directory\'s open "This is me" requests, and pairs of speakers that are probably '
+                "one person (same or similar name, email or website), each with the proposal step that "
+                "settles it: merge_speakers, link_speaker_to_account or decline_speaker_claim."
+            ),
+            params={
+                "limit": "integer, optional, default 15. Pairs to return.",
+                "offset": "integer, optional, default 0.",
+            },
+            danger=DANGER_SAFE,
+            resolver=find_duplicate_speakers,
         ),
         Action(
             name="site_health",

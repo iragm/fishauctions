@@ -66,7 +66,7 @@ there to approve.
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes, a library transcription) and
   `admin.APPROVAL_ONLY` (feature request status; adding a club, its details, admins and interests, an account's features (PayPal, Square, library), a club's outreach
-  stage, trusting a user, filing an auction under a club, merging two accounts, a palette shortcut;
+  stage, trusting a user, filing an auction under a club, merging two accounts, merging two speakers or settling a "This is me" request (`find_duplicate_speakers` lists both), a palette shortcut;
   the species list's upkeep from `admin_species`) can be proposed, checked again at approval.
   `planned` starts a build, so only the owner sets it (the project chat's decision cards, Django
   admin, or approving a proposal whose step plans a `new` request with no note or target, shown with

@@ -16792,7 +16792,12 @@ NOT_A_SKILL: dict[str, str] = {
     ),
     # Speaker directory
     "SpeakerCreateView": _FORM_PAGE,
+    "SpeakerSelfCreateView": _FORM_PAGE,
     "SpeakerUpdateView": _FORM_PAGE,
+    "SpeakerClaimView": (
+        "Says a speaker's page is the person asking, which is only worth something said while looking at "
+        "that page's bio and photo; it is a request a site admin checks, and changes nothing by itself."
+    ),
     "SpeakerDeleteView": _DESTRUCTIVE,
     "SpeakerTagView": (
         "Tagging is a toggle on a speaker's page, and the tag list is on screen while you pick. "

@@ -1526,18 +1526,18 @@ class SpeakerAdmin(admin.ModelAdmin):
         "location",
         "topics_need_review",
         "topic_review_note",
-        "nec_only",
+        "visibility",
         "imported_from_nec",
         "created_by",
         "is_deleted",
         "createdon",
     )
     list_select_related = ("created_by",)
-    list_filter = ("topics_need_review", "nec_only", "imported_from_nec", "is_deleted", "topics")
+    list_filter = ("topics_need_review", "visibility", "imported_from_nec", "is_deleted", "topics")
     search_fields = ("name", "bio", "programs", "location", "email")
     raw_id_fields = ("created_by", "club")
     filter_horizontal = ("topics",)
-    readonly_fields = ("slug", "source_url", "wordpress_post_id", "createdon", "lastmodified")
+    readonly_fields = ("slug", "source_url", "wordpress_post_id", "merged_into", "createdon", "lastmodified")
     inlines = [SpeakerTagInline, SpeakerCommentInline]
     actions = [export_to_csv, "mark_topics_reviewed"]
 

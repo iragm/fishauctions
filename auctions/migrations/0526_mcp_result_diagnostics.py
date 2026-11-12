@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0524_lot_checked_in"),
+        ("auctions", "0525_speaker_visibility_and_claims"),
     ]
 
     operations = [

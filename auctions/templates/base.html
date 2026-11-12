@@ -405,8 +405,8 @@
                     </div>
                   </li>
                   {% else %}
-                  <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
-                  <a href="{% url 'account_signup' %}?next={% firstof request.path '/' %}" class='nav-link'>Create account</a>
+                  <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link' rel='nofollow'>Sign in</a>
+                  <a href="{% url 'account_signup' %}?next={% firstof request.path '/' %}" class='nav-link' rel='nofollow'>Create account</a>
                 {% endif %}
                 </ul>
               </div>

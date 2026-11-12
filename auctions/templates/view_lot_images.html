@@ -440,7 +440,8 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 <h3 class="mb-1">{{ lot.lot_name }}</h3>
                 {% comment %}The scientific name the seller picked.  Italics because that is how a binomial is set, and a cultivar is shown as Genus species 'Strain' -- see Species.full_scientific_name.  The "?" is where FishBase's attribution lives: it is asked for wherever their data is used, and this is the one page where a reader is actually reading the name, so it is here rather than under every lot form on the site.{% endcomment %}
                 {% comment %}Which of the two names goes underneath depends on which one the seller typed up there -- see Lot.scientific_name_line and Lot.common_name_line.  A lot called "Labidochromis caeruleus" gets "Yellow lab" here, not the same two words in italics.{% endcomment %}
-                {% if lot.scientific_name_line %}<div class="text-muted"><i>{{ lot.scientific_name_line }}</i> <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>
+                {% comment %}Species pages are unlinked while they are new: only a superuser gets the link.{% endcomment %}
+                {% if lot.scientific_name_line %}<div class="text-muted">{% if request.user.is_superuser and lot.species_id %}<a class="text-muted" href="{{ lot.species.get_absolute_url }}"><i>{{ lot.scientific_name_line }}</i></a>{% else %}<i>{{ lot.scientific_name_line }}</i>{% endif %} <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>
                 {% elif lot.common_name_line %}<div class="text-muted">{{ lot.common_name_line }} <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>{% endif %}
                 {% if lot.scientific_name_line or lot.common_name_line %}<div class="collapse" id="fishbase-citation">{% fishbase_citation %}</div>{% endif %}
                 <div class="text-muted small mb-2">{{ lot.species_category }}, lot number {{ lot.lot_number_display }}</div>
@@ -933,7 +934,7 @@ side. They are closed after the recommended-lots strip at the bottom of the page
             <div class="modal-footer">
                 {% comment %}One button, not two. The body is already one sentence with a sign-in link in it, and the sign-in page offers creating an account -- so a second primary button here said the same thing a third time.{% endcomment %}
                 {% if not user.is_authenticated %}
-                    <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
+                    <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" rel="nofollow" role="button" class="btn btn-primary">Sign in</a>
                 {% comment %}The auction test is not redundant: a standalone lot has no auction, and
                 user_tos is falsy for it too, so this used to reverse auction_main with an empty slug
                 and raise NoReverseMatch -- a 500 on any standalone lot a signed-in user opened.{% endcomment %}

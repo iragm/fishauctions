@@ -147,6 +147,12 @@ ROUTE_LIST: list[Route] = [
         keywords=["new speaker", "add a presenter", "add a program"],
     ),
     _r(
+        "speaker_add_self",
+        "Add yourself to the speaker directory",
+        "Browsing",
+        keywords=["i give talks", "list me as a speaker", "my speaker profile", "become a speaker"],
+    ),
+    _r(
         "help",
         "Help guides",
         "Browsing",
@@ -1274,6 +1280,7 @@ EXCLUDED: dict[str, str] = {
     # Speaker directory
     "speaker_panel": _API,
     "speaker_tag": _API,
+    "speaker_claim": "POST-only request made from a speaker's page; the page itself is the destination.",
     "speaker_comment": _API,
     "speaker_comment_delete": _API,
     "speaker_delete": _ACTION_ONLY,
@@ -1336,6 +1343,9 @@ EXCLUDED: dict[str, str] = {
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,
     "species_quick_create": _API,
+    # Unlinked while new: a superuser reaches one from a lot's species name.
+    "species_detail": "One species' public page, for search engines and people browsing; find_species and price_history answer the same questions.",
+    "species_detail_slug": "One species' public page, with its name in the address; the same page as species_detail.",
     # Species gaps page buttons and the club API endpoint; the palette sends people to species_gaps.
     "species_cache_forget": _API,
     "species_approve": _API,
@@ -1948,11 +1958,9 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     elif route.scope == SCOPE_SPEAKER:
         from .models import Speaker
 
-        # Scoped to the NEC rule, so this can't confirm a hidden speaker. Matches "Last, First" and
-        # "First Last".
-        speakers = Speaker.objects.filter(is_deleted=False)
-        if not _user_sees_nec_speakers(user):
-            speakers = speakers.filter(nec_only=False)
+        # Only the speakers the directory lists for this user, so this can't confirm a link-only or
+        # NEC-only profile exists. Matches "Last, First" and "First Last".
+        speakers = Speaker.listed_for(user, _user_sees_nec_speakers(user))
         speaker = None
         if hint:
             words = [word for word in hint.split() if word]

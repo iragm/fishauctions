@@ -1,8 +1,25 @@
 {% extends "base.html" %}
-{% block title %}{{ speaker.display_name }} - Speakers{% endblock %}
+{% block title %}{{ speaker.display_name }} - aquarium club speaker{% endblock %}
+{% block meta_description %}{{ meta_description }}{% endblock %}
 
-{% comment %}A speaker's own page. This is what a shared link resolves to, and what the
-sliding panel pushes into the URL bar, so the two show the same content.{% endcomment %}
+{% comment %}A speaker's own page. This is what a shared link resolves to, what the sliding panel
+pushes into the URL bar, and what search engines index (public profiles only: the view sets
+canonical_url and structured_data for those, and marks every other one a private page).{% endcomment %}
+
+{% block extra_head %}
+{% if canonical_url %}
+<link rel="canonical" href="{{ canonical_url }}">
+<meta property="og:type" content="profile">
+<meta property="og:title" content="{{ speaker.display_name }}">
+<meta property="og:description" content="{{ meta_description }}">
+<meta property="og:url" content="{{ canonical_url }}">
+{% if og_image %}<meta property="og:image" content="{{ og_image }}">{% endif %}
+<meta name="twitter:card" content="{% if og_image %}summary_large_image{% else %}summary{% endif %}">
+<script type="application/ld+json">{{ structured_data }}</script>
+{% else %}
+<meta name="robots" content="noindex, nofollow">
+{% endif %}
+{% endblock %}
 
 {% block content %}
 <a href="{% url 'speaker_list' %}" class="btn btn-sm btn-secondary mb-3"><i class="bi bi-arrow-left"></i> All speakers</a>
