@@ -1,4 +1,4 @@
-"""Fourteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
+"""Fifteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 
 Each answers a question the owner would otherwise decide by feel, and says so in its description:
 
@@ -18,6 +18,7 @@ Each answers a question the owner would otherwise decide by feel, and says so in
 ``club_first_touch``     where each new club's creator first arrived from, by their first signed-in view
 ``outreach_outcomes``    clubs contacted 60+ days ago that then ran a real auction, by club health stage
 ``tools_vs_retention``   whether clubs using more club tools are still running auctions
+``club_funnel``          clubs out there, probably active, tried the site, ran a real auction, ran one lately
 =======================  ==========================================================================
 
 **Nobody is named.** A person is a user number at most, never a name, username or email; anything a
@@ -1123,6 +1124,104 @@ def tools_vs_retention(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(summary, clubs=len(health), by_tools_used=table, by_tool=tools)
 
 
+#: The funnel's steps, each a subset of the one before: (key, what it means).
+FUNNEL_STEPS = (
+    ("clubs", "every club in the directory"),
+    ("probably_active", "not marked inactive or folded"),
+    ("tried_the_site", "made any auction here, a test one included"),
+    ("ran_a_real_auction", "made an auction not named like a test"),
+    ("used_it_in_window", "a real auction that started inside the window"),
+)
+
+
+def club_funnel(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Clubs out there, probably active, tried the site, ran a real auction, and ran one inside the window.
+
+    Read from ``Auction`` rather than the nightly ``ClubHealth``, so an auction filed under a club today
+    counts today: there are a few hundred club auctions, not ``PageView``'s millions. "Probably active"
+    trusts the hand-set ``Club.active`` and ``stall_reason``; a club marked inactive that still runs
+    auctions is named in ``inactive_but_running`` so the flag can be fixed.
+    """
+    from auctions.club_health import is_test_auction
+    from auctions.models import Auction, Club
+
+    days = _days(params, default=365, most=1095)
+    now = timezone.now()
+    since = _since(days)
+    limit = max(1, min(_int(params, "limit", 30) or 30, 200))
+    offset = max(0, _int(params, "offset", 0) or 0)
+    tried: set[int] = set()
+    real: set[int] = set()
+    recent: set[int] = set()
+    for auction in (
+        Auction.objects.filter(is_deleted=False, club__isnull=False)
+        .only("club_id", "slug", "title", "date_start")
+        .iterator(chunk_size=2000)
+    ):
+        tried.add(auction.club_id)
+        if not is_test_auction(auction):
+            real.add(auction.club_id)
+            if auction.date_start and since <= auction.date_start <= now:
+                recent.add(auction.club_id)
+    clubs = list(Club.objects.order_by("name").values_list("pk", "name", "active", "stall_reason"))
+    names = {pk: name for pk, name, _active, _stall in clubs}
+    probably_active = {pk for pk, _name, active, stall in clubs if active and stall != "folded"}
+    members = {
+        "clubs": set(names),
+        "probably_active": probably_active,
+        "tried_the_site": tried,
+        "ran_a_real_auction": real,
+        "used_it_in_window": recent,
+    }
+    remaining = [pk for pk, *_rest in clubs]
+    steps = []
+    stopped = {}
+    for key, meaning in FUNNEL_STEPS:
+        passed = [pk for pk in remaining if pk in members[key]]
+        if steps:
+            gone = [pk for pk in remaining if pk not in members[key]]
+            stopped[f"stopped_before_{key}"] = {
+                "clubs": len(gone),
+                "names": [fence(names[pk]) for pk in gone[offset : offset + limit]],
+                "next_offset": offset + limit if offset + limit < len(gone) else None,
+            }
+        steps.append(
+            {
+                "step": key,
+                "means": meaning,
+                "clubs": len(passed),
+                "percent_of_previous": _share(len(passed), len(remaining)),
+            }
+        )
+        remaining = passed
+    stalls = {pk: stall for pk, _name, _active, stall in clubs}
+    never_tried = Counter(stalls[pk] or "(not known)" for pk in probably_active - tried)
+    outside = sorted(recent - probably_active, key=lambda pk: names[pk])
+    unfiled = Auction.objects.filter(
+        is_deleted=False, club__isnull=True, date_start__gte=since, date_start__lte=now
+    ).only("slug", "title")
+    unfiled_real = sum(1 for auction in unfiled.iterator() if not is_test_auction(auction))
+    counts = ", ".join(f"{step['clubs']} {step['step'].replace('_', ' ')}" for step in steps)
+    summary = (
+        f"{counts} (the window is the last {days} days). "
+        f"{unfiled_real} real auction(s) in the window have no club, so a club using the site can be missing "
+        "here until they're filed (admin_unlinked_auctions)."
+    )
+    if outside:
+        summary += f" {len(outside)} club(s) marked inactive or folded still ran a real auction in the window."
+    return _ok(
+        summary,
+        days=days,
+        steps=steps,
+        never_tried_by_stall_reason=[
+            {"stall_reason": reason, "clubs": count} for reason, count in never_tried.most_common()
+        ],
+        real_auctions_with_no_club=unfiled_real,
+        inactive_but_running=[fence(names[pk]) for pk in outside[:limit]],
+        **stopped,
+    )
+
+
 # --- the catalogue ----------------------------------------------------------------------------------
 
 _DAYS = "integer, optional, default {default}, at most {most}. How far back to look."
@@ -1310,5 +1409,20 @@ READS: list[Action] = [
         params={},
         danger=DANGER_SAFE,
         resolver=tools_vs_retention,
+    ),
+    Action(
+        name="club_funnel",
+        description=(
+            "How many clubs are out there, probably active, have tried the site, ran a real (non-test) "
+            "auction, and ran one within the window: each step a subset of the one before, with the "
+            "percent kept, the clubs that stopped before each step, and why the never-tried ones stalled."
+        ),
+        params={
+            "days": _days_param(365, 1095),
+            "limit": "integer, optional, default 30, at most 200. How many club names to list per step.",
+            "offset": "integer, optional, default 0. Skip this many names in each step's list -- how you page.",
+        },
+        danger=DANGER_SAFE,
+        resolver=club_funnel,
     ),
 ]

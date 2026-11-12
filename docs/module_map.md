@@ -557,9 +557,9 @@ this only quotes its opening sentence.
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (1931 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_admin_reports.py`** (525 lines)
+- **`test_mcp_admin_reports.py`** (580 lines)
   The growth reports on ``/mcp/admin/`` (:mod:`auctions.mcp.admin_reports`), the 404 page's title they
-  `Helpers`, `ShapeTests`, `FunnelTests`, `ClubTests`, `DeadEndTests`, `PageVerbTests`, `ShortcutCandidateTests`, `FeedbackTests`, `AcquisitionTests`
+  `Helpers`, `ShapeTests`, `FunnelTests`, `ClubTests`, `DeadEndTests`, `PageVerbTests`, `ShortcutCandidateTests`, `FeedbackTests`, `AcquisitionTests`, `ClubFunnelTests`
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
@@ -961,8 +961,8 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 - **`admin.py`** (3054 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_reports.py`** (1314 lines)
-  Fourteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
+- **`admin_reports.py`** (1428 lines)
+  Fifteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
 - **`auth.py`** (385 lines)
