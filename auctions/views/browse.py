@@ -532,7 +532,8 @@ class MyLots(HTMxTableView):
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
         context["filter_bap"] = self.request.GET.get("query", "").strip().lower() == "bap"
-        context["add_lot_auction"] = _last_joined_auction_taking_lots(self.request.user)
+        if not self.request.htmx:
+            context["add_lot_auction"] = _last_joined_auction_taking_lots(self.request.user)
         return context
 
     def get(self, *args, **kwargs):

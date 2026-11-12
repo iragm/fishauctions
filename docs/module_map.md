@@ -655,7 +655,7 @@ this only quotes its opening sentence.
 - **`test_security.py`** (616 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
-- **`test_signup_links.py`** (153 lines)
+- **`test_signup_links.py`** (177 lines)
   Sign-in links, the one-tap claim on an invoice, and the shortcuts on the selling, buying, lots and new-lot pages.
   `SocialButtonNextTests`, `InvoiceClaimTests`, `SellingAddLotTests`, `EndedAuctionLinksCurrentTests`, `NewLotJoinsSilentlyTests`
 - **`test_site_account_fixes.py`** (592 lines)
@@ -1071,7 +1071,7 @@ Every view on the site, split by the part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1147 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (977 lines)
+- **`browse.py`** (978 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (510 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
@@ -1120,7 +1120,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`logistics.py`** (78 lines)
   Online auctions after bidding: the logistics page, its tap to cross a name off, and the admin's progress banner.
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionPostEndBanner`
-- **`lot_pages.py`** (1354 lines)
+- **`lot_pages.py`** (1364 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.

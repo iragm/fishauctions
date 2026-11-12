@@ -85,11 +85,22 @@ class _OpenAuctionMixin:
 class SellingAddLotTests(_OpenAuctionMixin, StandardTestCase):
     def test_add_lot_aims_at_the_auction_joined_last(self):
         auction = self.open_auction()
+        Auction.objects.filter(pk=auction.pk).update(allow_bulk_adding_lots=False)
         AuctionTOS.objects.create(
             user=self.user, auction=auction, pickup_location=auction.location_qs.first(), bidder_number="901"
         )
         self.client.login(username="my_lot", password="testpassword")
         self.assertContains(self.client.get(reverse("selling")), f'href="{auction.add_lot_link}"')
+
+    def test_bulk_add_auction_goes_to_bulk_add(self):
+        auction = self.open_auction()
+        Auction.objects.filter(pk=auction.pk).update(allow_bulk_adding_lots=True)
+        AuctionTOS.objects.create(
+            user=self.user, auction=auction, pickup_location=auction.location_qs.first(), bidder_number="902"
+        )
+        self.client.login(username="my_lot", password="testpassword")
+        url = reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": auction.slug})
+        self.assertContains(self.client.get(reverse("selling")), f'href="{url}"')
 
     def test_plain_add_lot_without_an_open_auction(self):
         self.client.login(username="no_joins", password="testpassword")
@@ -124,29 +135,42 @@ class NewLotJoinsSilentlyTests(_OpenAuctionMixin, StandardTestCase):
 
     def test_add_lot_from_the_site_joins_and_skips_the_question(self):
         auction = self.open_auction()
-        response = self.client.get(auction.add_lot_link, HTTP_SEC_FETCH_SITE="same-origin")
+        response = self.client.get(auction.add_lot_link, HTTP_REFERER=self.page(auction))
         self.assertEqual(response.status_code, 200)
         self.assertTrue(self.joined(auction))
         self.assertTrue(response.context["auction_chosen"])
         self.assertFalse(response.context["show_no_auction_modal"])
 
-    def test_same_site_referer_counts(self):
+    def page(self, auction):
+        return f"http://testserver{auction.get_absolute_url()}"
+
+    def test_from_the_auctions_lots_too(self):
         auction = self.open_auction()
-        self.client.get(auction.add_lot_link, HTTP_REFERER=f"http://testserver{auction.get_absolute_url()}")
+        self.client.get(auction.add_lot_link, HTTP_REFERER=f"http://testserver{auction.view_lot_link}")
         self.assertTrue(self.joined(auction))
 
     def test_a_link_from_elsewhere_never_joins(self):
         auction = self.open_auction()
-        for headers in ({}, {"HTTP_SEC_FETCH_SITE": "cross-site", "HTTP_REFERER": "https://evil.example/"}):
+        other = self.open_auction("Somewhere else")
+        for headers in (
+            {},
+            {"HTTP_SEC_FETCH_SITE": "same-origin"},
+            {"HTTP_REFERER": "https://evil.example/"},
+            # A link in another auction's rules or a lot description is on this site, but isn't Add Lot.
+            {"HTTP_REFERER": self.page(other)},
+            {"HTTP_REFERER": f"http://testserver{self.lot.lot_link}"},
+        ):
             response = self.client.get(auction.add_lot_link, **headers)
             self.assertRedirects(response, auction.get_absolute_url(), fetch_redirect_response=False)
         self.assertFalse(self.joined(auction))
 
-    def test_a_choice_of_pickup_location_still_goes_to_join(self):
-        auction = self.open_auction(locations=2)
-        response = self.client.get(auction.add_lot_link, HTTP_SEC_FETCH_SITE="same-origin")
-        self.assertRedirects(response, auction.get_absolute_url(), fetch_redirect_response=False)
-        self.assertFalse(self.joined(auction))
+    def test_anything_to_choose_or_approve_still_goes_to_join(self):
+        vetted = self.open_auction("Vetted")
+        Auction.objects.filter(pk=vetted.pk).update(only_approved_sellers=True)
+        for auction in (self.open_auction(locations=2), self.open_auction(locations=0), vetted):
+            response = self.client.get(auction.add_lot_link, HTTP_REFERER=self.page(auction))
+            self.assertRedirects(response, auction.get_absolute_url(), fetch_redirect_response=False)
+            self.assertFalse(self.joined(auction))
 
     def test_plain_new_lot_still_asks(self):
         response = self.client.get(reverse("new_lot"))
