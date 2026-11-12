@@ -101,7 +101,7 @@
   <h1 class="mb-3">One home for your club's <span class="promo-rotator" data-words="auctions|members|events|mailing list|Discord|breeder awards">auctions</span></h1>
   <p class="promo-lead text-muted mx-auto mb-4" style="max-width: 36rem;">In person or online, and everything your club does between auctions. Completely free.</p>
   <div class="d-flex flex-wrap gap-2 justify-content-center">
-    <a class="btn btn-success text-dark btn-lg" href="{% if enable_club_finder %}{% url 'clubs' %}{% else %}{% url 'support' %}{% endif %}">Bring your club</a>
+    <a class="btn btn-success text-dark btn-lg" href="{% if enable_club_finder %}{% url 'club_add' %}{% else %}{% url 'support' %}{% endif %}">Bring your club</a>
     <a class="btn btn-primary btn-lg" href="{% url 'auctions' %}">Find an auction</a>
   </div>
   {% if site.lots %}<p class="text-muted small mt-3 mb-0">{{ site.lots|floatformat:"0g" }} lots auctioned here in the last three years.</p>{% endif %}

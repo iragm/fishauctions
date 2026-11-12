@@ -1,9 +1,9 @@
 {% comment %}A copy that isn't indexed (ALLOW_SEARCH_INDEXING) still allows crawling: its pages say noindex, and a crawler has to fetch a page to read that and drop it.{% endcomment %}User-agent: *
 Allow: /
-{% if allow_search_indexing %}{% comment %}Pages whose URL is the key to one person's membership, invoice or email settings. They also send X-Robots-Tag: noindex (PrivatePageMiddleware).{% endcomment %}Disallow: /clubs/*/member/
-Disallow: /clubs/*/member-number/
-Disallow: /invoices/
+{% if allow_search_indexing %}{% comment %}Opening an invoice or unsubscribe link changes something, so crawlers stay off them. Member pages are crawlable on purpose: they send X-Robots-Tag: noindex (PrivatePageMiddleware), a Disallow would stop a crawler reading it, and a URL it already had would stay in the index. Sign-in and sign-up: every signed-out page links them with its own ?next=, one more URL per page.{% endcomment %}Disallow: /invoices/
 Disallow: /unsubscribe/
 Disallow: /donations/unsubscribe/
+Disallow: /login/
+Disallow: /signup/
 Sitemap: {{ request.scheme }}://{{ request.get_host }}/sitemap.xml
 {% endif %}

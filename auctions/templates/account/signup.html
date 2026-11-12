@@ -18,13 +18,13 @@
     {% if not request.is_mobile_app %}
       <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">
       {% if GOOGLE_LOGIN_ENABLED %}
-      <a id='sign-up-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign up with Google</a>
+      <a id='sign-up-google' class='btn btn-primary' href="/google/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}">Sign up with Google</a>
       {% endif %}
       {% if APPLE_LOGIN_ENABLED %}
-      <a id='sign-up-apple' class='btn btn-primary' href="/apple/login/?process=login&next={{ redirect_field_value }}">Sign up with Apple</a>
+      <a id='sign-up-apple' class='btn btn-primary' href="/apple/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}">Sign up with Apple</a>
       {% endif %}
       {% if FACEBOOK_LOGIN_ENABLED %}
-      <a id='sign-up-facebook' class='btn btn-primary' href="/facebook/login/?process=login&next={{ redirect_field_value }}">Sign up with Facebook</a>
+      <a id='sign-up-facebook' class='btn btn-primary' href="/facebook/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}">Sign up with Facebook</a>
       {% endif %}
       </div>
       {% if GOOGLE_LOGIN_ENABLED or APPLE_LOGIN_ENABLED or FACEBOOK_LOGIN_ENABLED %}
