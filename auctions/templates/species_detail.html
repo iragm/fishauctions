@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% load species_tags %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block meta_description %}{{ meta_description }}{% endblock %}
+{% block extra_head %}
+<link rel="canonical" href="{{ canonical_url }}">
+{% if not indexable %}<meta name="robots" content="noindex">{% endif %}
+<meta property="og:type" content="article">
+<meta property="og:title" content="{{ page_title }}">
+<meta property="og:description" content="{{ meta_description }}">
+<meta property="og:url" content="{{ canonical_url }}">
+{% if stats.photo %}<meta property="og:image" content="{{ stats.photo }}">{% endif %}
+{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      {% if species.common_name %}
+      <h1 class="h3 mb-1">{{ species.common_name }}</h1>
+      {% if species.full_scientific_name and species.full_scientific_name != species.common_name %}<div class="text-muted mb-2"><i>{{ species.full_scientific_name }}</i></div>{% endif %}
+      {% else %}
+      <h1 class="h3 mb-2"><i>{{ species.full_scientific_name }}</i></h1>
+      {% endif %}
+    </div>
+    {% if request.user.is_superuser %}<a class="btn btn-sm btn-info" href="{% url 'admin:auctions_species_change' species.pk %}"><i class="bi bi-pencil"></i> Edit</a>{% endif %}
+  </div>
+  <div class="mb-3">
+    {% if species.cares %}<span class="badge bg-success text-dark me-1">CARES: {{ species.cares_display }}</span>{% endif %}
+    {% if species.category %}<span class="badge bg-secondary me-1">{{ species.category }}</span>{% endif %}
+    {% for word in habitat %}<span class="badge bg-secondary me-1">{{ word|capfirst }}</span>{% endfor %}
+    {% if species.family %}<span class="badge bg-secondary me-1">{{ species.family }}</span>{% endif %}
+    {% if not species.approved %}<span class="badge bg-danger">Not approved</span>{% endif %}
+  </div>
+
+  <div class="row g-4">
+    <div class="col-md-5">
+      {% if stats.photo %}<img src="{{ stats.photo }}" class="img-fluid rounded mb-2" alt="{{ page_title }}" loading="lazy">{% endif %}
+      {% if other_names %}<p class="small text-muted mb-1">Also called {{ other_names|join:", " }}</p>{% endif %}
+      {% if species.parent %}<p class="small mb-1">A variety of <a href="{{ species.parent.get_absolute_url }}"><i>{{ species.parent.full_scientific_name }}</i></a></p>{% endif %}
+      {% if fishbase_url %}<p class="small mb-1"><a href="{{ fishbase_url }}" target="_blank" rel="noopener">FishBase</a></p>{% endif %}
+    </div>
+    <div class="col-md-7">
+      {% if stats.price %}
+      <div class="card mb-3">
+        <div class="card-body">
+          <h2 class="h5">Price guide</h2>
+          <div class="display-6">{{ stats.price.symbol }}{{ stats.price.median }}</div>
+          <div class="text-muted small">Usually {{ stats.price.symbol }}{{ stats.price.low }} to {{ stats.price.symbol }}{{ stats.price.high }} a lot{% if stats.price.per_each %}, {{ stats.price.symbol }}{{ stats.price.per_each }} each{% endif %}, from {{ stats.price.sales }} sale{{ stats.price.sales|pluralize }} in the last {{ price_years }} years</div>
+        </div>
+      </div>
+      {% endif %}
+      {% if stats.lots %}
+      <dl class="row mb-3">
+        <dt class="col-6">First seen</dt><dd class="col-6">{{ stats.first_seen|date:"F Y" }}</dd>
+        <dt class="col-6">Lots</dt><dd class="col-6">{{ stats.lots }}{% if stats.sold %}, {{ stats.sold }} sold{% endif %}{% if stats.sell_through is not None %} ({{ stats.sell_through }}%){% endif %}</dd>
+        <dt class="col-6">Sellers</dt><dd class="col-6">{{ stats.sellers }}</dd>
+        <dt class="col-6">Buyers</dt><dd class="col-6">{{ stats.buyers }}</dd>
+        {% if stats.clubs %}<dt class="col-6">Clubs</dt><dd class="col-6">{{ stats.clubs }}</dd>{% endif %}
+        {% if stats.bred_percent %}<dt class="col-6">Bred by the seller</dt><dd class="col-6">{{ stats.bred_percent }}%</dd>{% endif %}
+        <dt class="col-6">Last 12 months</dt><dd class="col-6">{{ stats.recent_lots }} lot{{ stats.recent_lots|pluralize }}{% if stats.trend %} <span class="badge {% if stats.trend == 'declining' %}bg-secondary{% else %}bg-success text-dark{% endif %}">{{ stats.trend|capfirst }}</span>{% endif %}</dd>
+        {% if stats.rank %}<dt class="col-6">Popularity</dt><dd class="col-6">#{{ stats.rank }} of {{ stats.ranked_species }}</dd>{% endif %}
+      </dl>
+      {% if stats.years|length > 1 %}
+      <table class="table table-sm small">
+        <thead><tr><th>Year</th><th>Lots</th><th>Sold</th></tr></thead>
+        <tbody>{% for row in stats.years %}<tr><td>{{ row.year }}</td><td>{{ row.lots }}</td><td>{{ row.sold }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+      {% else %}
+      <p class="text-muted">No lots yet.</p>
+      {% endif %}
+      {% if varieties %}
+      <h2 class="h6">Varieties</h2>
+      <ul class="list-unstyled small">{% for variety, lots in varieties %}<li><a href="{{ variety.get_absolute_url }}">{{ variety.variety|default:variety.full_scientific_name }}</a> <span class="text-muted">{{ lots }}</span></li>{% endfor %}</ul>
+      {% endif %}
+    </div>
+  </div>
+  <div class="small text-muted mt-3">{% fishbase_citation %}</div>
+</div>
+{% endblock %}

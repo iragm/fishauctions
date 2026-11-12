@@ -16670,6 +16670,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "SpeciesDetailView": (
+        "A page for reading one species' totals, made for search engines and people browsing; an "
+        "assistant already has the same answers from find_species and price_history, scoped to the "
+        "person's own auctions."
+    ),
     "ClubSquareDuesView": (
         "Offers one Square payment taken outside the site at a time, beside the member list, so a person "
         "can judge whether the buyer is the member it names before renewing; an assistant adds or renews "

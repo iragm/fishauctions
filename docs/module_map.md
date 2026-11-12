@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15560 lines)
+- **`models.py`** (15569 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -226,7 +226,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17072 lines)
+- **`palette_actions.py`** (17077 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -283,6 +283,9 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1290 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
+- **`species_stats.py`** (301 lines)
+  What the site's own sales say about one species, for its public page (``/species/<pk>/``).
+  `public_lots`, `lots_for`, `price_guide`, `trend`, `popularity_rank`, `representative_photo`, `species_stats`, `varieties_with_lots`
 - **`square_offsite.py`** (338 lines)
   Square payments taken in a connected account without this site: a club's own Payment Link or register.
   `square_time`, `order_source`, `record_payment`, `purge`, `record_refund`, `next_dues_payment`, `resolve_dues_payment`, `invoice_payment_hint`
@@ -673,6 +676,9 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
+- **`test_species_page.py`** (105 lines)
+  The public species page and the numbers behind it (``auctions/species_stats.py``).
+  `SpeciesPageTests`
 - **`test_species_search.py`** (188 lines)
   Lot searches that know species by every name, and the lot form's one-click add of a missing species.
   `LotSearchBySpeciesTests`, `SpeciesQuickCreateTests`
@@ -754,7 +760,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (142 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1379 lines)
+- **`urls.py`** (1381 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -1144,8 +1150,8 @@ Every view on the site, split by the part of it the view belongs to.
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (441 lines)
-  Adding species and common names, and the superuser's cleanup queue.
+- **`species.py`** (521 lines)
+  Adding species and common names, the superuser's cleanup queue, and each species' public page.
 - **`usability.py`** (197 lines)
   The usability reports, and linking auctions to clubs.
   `AdminUsability`, `recent_club_links`, `UnlinkedAuctions`, `LinkAuctionsToClub`, `AdminFreeTextUsage`, `AdminSessionReplay`
