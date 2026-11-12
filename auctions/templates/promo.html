@@ -106,6 +106,7 @@
   </div>
   {% if site.lots %}<p class="text-muted small mt-3 mb-0">{{ site.lots|floatformat:"0g" }} lots auctioned here in the last three years.</p>{% endif %}
 </section>
+<div hx-get="{% url 'promo_nearby' %}" hx-trigger="load" hx-swap="outerHTML"></div>
 
 {% if photos %}
 <div class="promo-strip my-4" aria-label="Lots sold here recently">
