@@ -96,9 +96,9 @@ this only quotes its opening sentence.
 - **`cares.py`** (349 lines)
   The CARES conservation-priority list, kept in step with aquaristspecies.net.
   `CaresError`, `enabled`, `classification`, `fetch`, `Claimed`, `find_species`, `apply`, `sync`
-- **`client_ip.py`** (111 lines)
+- **`client_ip.py`** (138 lines)
   Where a request came from, for the things that count per address.
-  `client_ip`, `rate_limit_address`, `address_bucket`
+  `client_ip`, `rate_limit_address`, `address_bucket`, `visitor_coordinates`
 - **`cloudflare_cache.py`** (70 lines)
   Purging a file out of Cloudflare's edge cache.
   `enabled`, `purge_urls`
@@ -118,9 +118,9 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1659 lines)
+- **`command_palette.py`** (1593 lines)
   Shared logic for the command palette, behind the JSON views.
-  `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `page_verb_items`, `default_items`, `search`, `with_ask_ai`, `log_search`
+  `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
@@ -229,7 +229,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2049 lines)
+- **`palette_routes.py`** (2041 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -542,9 +542,6 @@ this only quotes its opening sentence.
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (1931 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_admin_reports.py`** (344 lines)
-  The growth reports on ``/mcp/admin/`` (:mod:`auctions.mcp.admin_reports`), the 404 page's title they
-  `Helpers`, `ShapeTests`, `FunnelTests`, `ClubTests`, `DeadEndTests`, `PageVerbTests`, `ShortcutCandidateTests`
 - **`test_mcp_permissions.py`** (724 lines)
   Every tool on ``/mcp/``, run against somebody else's club and auction.
   `secrets`, `CrossTenantTestCase`, `NobodyElsesDataTests`, `NobodyElsesRowsTests`, `NothingCrashesInsteadOfRefusingTests`, `PrintLabelsByPrimaryKeyTests`, `AuctionSetupBelongsToTheAuctionTests`, `ClubSetupBelongsToTheClubTests`
@@ -644,6 +641,9 @@ this only quotes its opening sentence.
 - **`test_promo.py`** (135 lines)
   The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
   `PromoPageTests`, `PromoPhotoTests`
+- **`test_promo_nearby.py`** (120 lines)
+  Auctions near a signed-out visitor, placed by Cloudflare's location headers: when the headers are believed,
+  `FakeRequest`, `VisitorCoordinatesTests`, `PromoNearbyTests`
 - **`test_query_counts.py`** (684 lines)
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
@@ -756,7 +756,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (142 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1384 lines)
+- **`urls.py`** (1385 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -920,10 +920,8 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2838 lines)
+- **`admin.py`** (2801 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_reports.py`** (963 lines)
-  Ten reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
 - **`auth.py`** (385 lines)
@@ -1070,7 +1068,7 @@ Every view on the site, split by the part of it the view belongs to.
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1147 lines)
+- **`base.py`** (1176 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (961 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -1132,7 +1130,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (572 lines)
+- **`palette.py`** (571 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
 - **`payments.py`** (1187 lines)
   Connecting PayPal and Square accounts and taking payments through them.
@@ -1143,7 +1141,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (687 lines)
+- **`site_pages.py`** (748 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
