@@ -2,11 +2,12 @@
 
 The list and each public speaker's page are open to everyone, search engines included; a profile's
 ``visibility`` narrows that (``Speaker.listed_for`` / ``Speaker.can_be_viewed_by``). Anyone signed in reads
-tags and comments; leaving them stays behind ``NECSpeakerAccessMixin`` (any club permission in a club
-flagged ``is_nec_club``). Adding somebody else takes admin permission in any club
+tags and comments and may comment; tagging needs a club permission in a club flagged ``is_nec_club``
+(``NECSpeakerAccessMixin``). Adding somebody else takes admin permission in any club
 (``ClubAdminSpeakerMixin``). Anyone signed in can add themselves.
 """
 
+import datetime
 import json
 import logging
 import re
@@ -19,10 +20,12 @@ from django.core.exceptions import PermissionDenied
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
+    HttpResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import truncatechars
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
@@ -150,7 +153,7 @@ class SpeakerAccessMixin:
 
 
 class NECSpeakerAccessMixin(LoginRequiredMixin, SpeakerAccessMixin):
-    """Gate a page to people involved with an NEC member club: leaving tags and comments.
+    """Gate a page to people involved with an NEC member club: tagging speakers.
 
     Renders an explanation rather than a bare 403, since most people reaching it are in clubs that
     simply aren't NEC members.
@@ -420,11 +423,8 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
         )
         # Tags and comments: read by anyone signed in, left by NEC clubs, and only on pages those clubs can
         # list (SpeakerTagView looks the speaker up the same way), not on link-only or hidden ones.
-        context["show_club_notes"] = user.is_authenticated and (
-            speaker.visibility == Speaker.VISIBILITY_PUBLIC
-            or (speaker.visibility == Speaker.VISIBILITY_NEC and self.is_nec_member)
-        )
-        context["notes_read_only"] = not self.is_nec_member
+        context["show_club_notes"] = user.is_authenticated and shows_comments(speaker, self.is_nec_member)
+        context["tags_read_only"] = not self.is_nec_member
         if context["show_club_notes"]:
             context["tag_counts"] = speaker.tag_counts()
             context["my_tags"] = speaker.tags_by_user(user)
@@ -701,23 +701,44 @@ class SpeakerTagView(NECSpeakerAccessMixin, View):
                 "tag_counts": speaker.tag_counts(),
                 "my_tags": speaker.tags_by_user(request.user),
                 "tag_groups": SpeakerTag.grouped_definitions(),
-                "notes_read_only": False,
+                "tags_read_only": False,
             },
         )
 
 
-class SpeakerCommentView(NECSpeakerAccessMixin, View):
-    """Add a comment to a speaker, and re-render the comment list."""
+def shows_comments(speaker, is_nec_member):
+    """Whether a page shows comments (and takes them): public ones, and NEC-only ones for NEC clubs."""
+    return speaker.visibility == Speaker.VISIBILITY_PUBLIC or (
+        speaker.visibility == Speaker.VISIBILITY_NEC and is_nec_member
+    )
+
+
+class SpeakerCommentView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Add a comment to a speaker, and re-render the comment list. Anyone signed in, on the pages that show
+    comments, except the speaker on their own page; at most ``SpeakerComment.HOURLY_LIMIT`` an hour.
+    """
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        if not shows_comments(speaker, self.is_nec_member):
+            raise Http404
         form = SpeakerCommentForm(request.POST)
+        if speaker.user_id == request.user.pk:
+            form.add_error(None, "Comments are for other people's notes about you.")
+        elif (
+            SpeakerComment.objects.filter(
+                user=request.user, createdon__gte=timezone.now() - datetime.timedelta(hours=1)
+            ).count()
+            >= SpeakerComment.HOURLY_LIMIT
+        ):
+            form.add_error(None, "That's a lot of comments for one hour; try again later.")
         if form.is_valid():
             comment = form.save(commit=False)
             comment.speaker = speaker
             comment.user = request.user
-            # Recorded for the admin only, and only when there's one club to attach.
-            comment.club = self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
+            # Recorded for the admin only, and only when there's one real club to attach.
+            if len(self.nec_clubs) == 1 and not request.user.is_superuser:
+                comment.club = self.nec_clubs[0]
             comment.save()
             form = SpeakerCommentForm()
         return render(
@@ -727,14 +748,13 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": form,
-                "notes_read_only": False,
             },
         )
 
 
 class SpeakerCommentDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
-    """Remove your own comment (or, for a superuser, anyone's), even after leaving the NEC club you wrote
-    it from: it carries your name.
+    """Remove your own comment (or, for a superuser, anyone's), even on a page you can no longer open:
+    it carries your username. The list it re-renders is only for a page that shows you comments.
     """
 
     def post(self, request, slug, pk):
@@ -743,6 +763,10 @@ class SpeakerCommentDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
         if not comment.can_be_deleted_by(request.user):
             raise PermissionDenied()
         SpeakerComment.objects.filter(pk=comment.pk).update(is_deleted=True)
+        if not (
+            speaker.can_be_viewed_by(request.user, self.is_nec_member) and shows_comments(speaker, self.is_nec_member)
+        ):
+            return HttpResponse("")
         return render(
             request,
             "auctions/partials/speaker_comments.html",
@@ -750,6 +774,5 @@ class SpeakerCommentDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": SpeakerCommentForm(),
-                "notes_read_only": not self.is_nec_member,
             },
         )

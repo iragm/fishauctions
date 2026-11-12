@@ -484,14 +484,14 @@ class SpeakerAccessTests(TestCase):
         self.speaker.refresh_from_db()
         self.assertFalse(self.speaker.is_deleted)
 
-    def test_tags_and_comments_are_read_by_anyone_signed_in_and_left_by_nec_clubs(self):
+    def test_anyone_signed_in_reads_and_comments_and_nec_clubs_tag(self):
         url = reverse("speaker_detail", kwargs={"slug": self.speaker.slug})
         SpeakerComment.objects.create(speaker=self.speaker, user=self.officer, body="Brought great fish")
         SpeakerTag.objects.create(speaker=self.speaker, user=self.officer, tag="funny")
         outsider_page = self.get(self.outsider, url)
         self.assertContains(outsider_page, "Brought great fish")
         self.assertContains(outsider_page, "Funny")
-        self.assertNotContains(outsider_page, "Post comment")
+        self.assertContains(outsider_page, "Post comment")
         self.assertNotContains(outsider_page, "Tag this speaker")
         self.assertNotContains(Client().get(url), "Brought great fish")
         officer_page = self.get(self.officer, url)
@@ -852,7 +852,7 @@ class SpeakerCommentTests(TestCase):
         response = self.client.post(self.url, {"body": "Good stuff"})
         comment = SpeakerComment.objects.get()
         self.assertEqual(comment.club, self.club)
-        self.assertNotIn(self.club.name, comment.author_display)
+        self.assertNotIn(self.club.name, comment.author_username)
         self.assertNotContains(response, self.club.name)
 
     def test_an_empty_comment_is_rejected(self):

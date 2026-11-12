@@ -15461,7 +15461,14 @@ class SpeakerTag(models.Model):
 
 
 class SpeakerComment(models.Model):
-    """A note one club left about a speaker, shown on the speaker's panel."""
+    """A note a signed-in member left about a speaker, shown under their username on the speaker's panel.
+
+    ``club`` is the one NEC club they were representing, when there was exactly one: a club's note
+    survives its writer's account deletion, anyone else's words go with them.
+    """
+
+    #: How many comments one account may post in an hour, across every speaker.
+    HOURLY_LIMIT = 10
 
     speaker = models.ForeignKey(Speaker, on_delete=models.CASCADE, related_name="comments")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="speaker_comments")
@@ -15477,11 +15484,14 @@ class SpeakerComment(models.Model):
         return f"{self.user} on {self.speaker}"
 
     @property
-    def author_display(self):
-        """Just the person."""
-        if not self.user:
+    def author_username(self):
+        """The writer's username, which is what every reader sees. Never an email address: older accounts
+        could sign up with one as their username.
+        """
+        if not self.user or not self.user.is_active:
             return "Deleted user"
-        return self.user.get_full_name() or self.user.username
+        username = self.user.username
+        return "A member" if "@" in username else username
 
     def can_be_deleted_by(self, user):
         if not user or not user.is_authenticated:
