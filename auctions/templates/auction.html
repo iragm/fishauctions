@@ -2,6 +2,14 @@
 {% load crispy_forms_tags %}
 {% load currency_filters %}
 {% block title %} {{ auction.title }} {% endblock %}
+{% load seo_tags %}
+{% block extra_head %}{% auction_json_ld auction %}{% endblock %}
+{% block open_graph %}
+{% auction_summary auction as og_description %}
+{% absolute_uri auction.get_absolute_url as og_url %}
+{% if auction.club.icon %}{% absolute_uri auction.club.icon_display_url as og_image %}{% endif %}
+{% include "open_graph.html" with og_title=auction.title og_description=og_description og_url=og_url og_image=og_image %}
+{% endblock %}
 {% load static %}
 {% block extra_js %}
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v9.0" nonce="e1MMTYSx"></script>
@@ -156,6 +164,16 @@ function initMap() {
                 <input type="hidden" name="action" value="make_current">
                 <input type="hidden" name="auction" value="{{ auction.pk }}">
                 <button type="submit" class="btn btn-sm btn-info"><i class="bi bi-pin-angle"></i> Make this the current club auction</button>
+              </form>
+            </div>
+            {% endif %}
+
+            {% if offer_sample_data %}
+            <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+              <span><i class="bi bi-magic"></i> Looks like a test auction, do you want to pre-populate with some sample data?</span>
+              <form method="post" action="{% url 'auction_sample_data' slug=auction.slug %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-info">Add sample data</button>
               </form>
             </div>
             {% endif %}

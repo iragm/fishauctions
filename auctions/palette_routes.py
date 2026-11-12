@@ -1330,6 +1330,7 @@ EXCLUDED: dict[str, str] = {
     "auctiontosdelete": _API,
     "auctiontosmemo": _API,
     "auction_check_in": _ACTION_ONLY,
+    "auction_sample_data": "POST-only button on a test auction's own page; the banner there offers it.",
     "add_single_auctiontos_to_club": _API,
     "save_lot_ajax": _API,
     "auction_barcode_scan": _API,

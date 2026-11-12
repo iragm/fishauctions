@@ -16899,6 +16899,11 @@ NOT_A_SKILL: dict[str, str] = {
     # Bulk
     "AddAuctionUsersToClub": _BULK,
     "AuctionDisableBidding": _BULK,
+    "AuctionSampleData": (
+        "A one-time button on a test auction's own page that fills it with invented people and lots, so "
+        "somebody can see the site working. It has no use on a real auction, and an assistant adds real "
+        "people and lots with add_person and add_lot."
+    ),
     "BulkSetLotsWon": _BULK,
     "EnableBiddingForAllUsers": _BULK,
     "MarkInvoicesPaid": _BULK,

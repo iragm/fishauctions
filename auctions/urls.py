@@ -467,6 +467,11 @@ urlpatterns = [
         name="auction_post_end_banner",
     ),
     path(
+        "auctions/<slug:slug>/sample-data/",
+        login_required(views.AuctionSampleData.as_view()),
+        name="auction_sample_data",
+    ),
+    path(
         "auctions/<slug:slug>/users/disable-bidding/",
         login_required(views.AuctionDisableBidding.as_view()),
         name="auction_disable_bidding",

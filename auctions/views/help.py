@@ -3,16 +3,19 @@
 What the guides are and how they stay complete is in :mod:`auctions.help_guides`.
 """
 
+import datetime
+
 from django.conf import settings
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils import timezone
 from django.views.generic import TemplateView, View
 
 from auctions import help_guides
 from auctions.documents.search import web_documents
-from auctions.models import Auction, Document, Speaker
+from auctions.models import Auction, Club, Document, Speaker
 
 __all__ = ["AuctionHelp", "HelpGuideView", "HelpIndexView", "SitemapView"]
 
@@ -86,9 +89,14 @@ class AuctionHelp(View):
         return redirect(help_guides.guide_url(guide.slug, auction))
 
 
+SITEMAP_AUCTION_DAYS = 180
+
+
 class SitemapView(View):
-    """/sitemap.xml: the pages worth a search engine's time: the help, library documents shared with
-    search engines (``web`` visibility), and the speaker directory's public profiles.
+    """/sitemap.xml: the pages worth a search engine's time: the help, the about page, the club finder
+    and auction list, listed clubs, recently promoted auctions, library documents shared with search
+    engines (``web`` visibility), and the speaker directory's public profiles. Never a member page, an
+    invoice or a user page, and nothing robots.txt disallows.
     """
 
     def get(self, request):
@@ -100,6 +108,24 @@ class SitemapView(View):
             paths += [
                 document.get_absolute_url()
                 for document in web_documents().filter(status=Document.READY).only("pk", "title", "original_name")
+            ]
+            if settings.ENABLE_PROMO_PAGE:
+                paths.append(reverse("promo"))
+            paths += [reverse("clubs"), reverse("auctions")]
+            paths += [
+                reverse("club_detail", kwargs={"slug": club.slug})
+                for club in Club.objects.listed().only("pk", "slug").order_by("pk")
+            ]
+            # Only auctions the club promotes, from the last half year on: older ones are history.
+            paths += [
+                auction.get_absolute_url()
+                for auction in Auction.objects.filter(
+                    promote_this_auction=True,
+                    is_deleted=False,
+                    date_start__gte=timezone.now() - datetime.timedelta(days=SITEMAP_AUCTION_DAYS),
+                )
+                .only("pk", "slug")
+                .order_by("pk")
             ]
             paths.append(reverse("speaker_list"))
             paths += [

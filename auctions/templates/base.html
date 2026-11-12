@@ -62,6 +62,8 @@
         {% endif %}
         <link rel="manifest" href="{% url 'site_webmanifest' %}"/>
         <meta name="description" content="{% block meta_description %}{% endblock %}" />
+        {% if not request.is_private_page %}<meta property="og:site_name" content="{{ navbar_brand }}" />{% endif %}
+        {% block open_graph %}{% endblock %}
         {% if not allow_search_indexing %}<meta name="robots" content="noindex, nofollow" />{% endif %}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}

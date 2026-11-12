@@ -127,6 +127,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.send_auction_surveys",
         "schedule": 3600.0,  # Run every hour
     },
+    # "Ready for your next auction?" and the yearly copy prompt, to auction creators
+    "next_auction_emails": {
+        "task": "auctions.tasks.next_auction_emails",
+        "schedule": 3600.0,  # Run every hour
+    },
     # Set user locations - every 2 hours
     "set_user_location": {
         "task": "auctions.tasks.set_user_location",
