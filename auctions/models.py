@@ -3938,6 +3938,15 @@ class Species(models.Model):
             return f"{name} ({self.common_name})"
         return name or self.common_name
 
+    def get_absolute_url(self):
+        """The species' public page, with its name in the URL (``/species/12/betta-splendens/``)."""
+        from django.utils.text import slugify
+
+        slug = slugify(self.full_scientific_name or self.common_name)
+        if slug:
+            return reverse("species_detail_slug", kwargs={"pk": self.pk, "slug": slug})
+        return reverse("species_detail", kwargs={"pk": self.pk})
+
     def __str__(self):
         return self.label
 
