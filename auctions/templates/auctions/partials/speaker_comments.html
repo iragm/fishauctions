@@ -9,11 +9,12 @@ and SpeakerCommentDeleteView, so it has to stand alone.
   <div class="card-body p-2">
     <div class="d-flex justify-content-between align-items-start gap-2">
       <div class="min-w-0">
-        <small class="text-muted">{{ comment.author_display }} &middot; {{ comment.createdon|date:"M j, Y" }}</small>
+        {% comment %}Who wrote it names a member, so only NEC clubs see it; anyone else reads the note.{% endcomment %}
+        <small class="text-muted">{% if notes_read_only %}A club officer{% else %}{{ comment.author_display }}{% endif %} &middot; {{ comment.createdon|date:"M j, Y" }}</small>
         <div style="white-space: pre-line;">{{ comment.body }}</div>
       </div>
       {% comment %}Mirrors SpeakerComment.can_be_deleted_by, which is what actually enforces this.{% endcomment %}
-      {% if not notes_read_only and request.user == comment.user or not notes_read_only and request.user.is_superuser %}
+      {% if request.user == comment.user or request.user.is_superuser %}
       <button type="button" class="btn btn-sm btn-danger"
               hx-post="{% url 'speaker_comment_delete' speaker.slug comment.pk %}"
               hx-target="#speaker-comments-block"

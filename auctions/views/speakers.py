@@ -23,6 +23,7 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import truncatechars
 from django.urls import reverse
+from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, View
@@ -68,7 +69,9 @@ def own_speaker_profile(user):
 
 
 class SpeakerAccessMixin:
-    """Who is looking: their NEC clubs, if any. Gates nothing; the directory itself is public."""
+    """Who is looking: their NEC clubs and the clubs they admin, if any. Gates nothing; the directory
+    itself is public.
+    """
 
     def load_viewer(self, request):
         if getattr(self, "_viewer_loaded", False):
@@ -76,7 +79,6 @@ class SpeakerAccessMixin:
         self._viewer_loaded = True
         self._origin = None
         self.nec_clubs = list(clubs_with_any_permission(request.user)) if request.user.is_authenticated else []
-        self.admin_clubs = list(clubs_user_admins(request.user))
 
     def dispatch(self, request, *args, **kwargs):
         self.load_viewer(request)
@@ -87,6 +89,11 @@ class SpeakerAccessMixin:
         """Somebody the NEC-only parts are for: a permission in an NEC club, or a superuser."""
         user = self.request.user
         return bool(self.nec_clubs) or bool(user.is_authenticated and user.is_superuser)
+
+    @cached_property
+    def admin_clubs(self):
+        """Clubs this user admins; only the list and adding somebody else ask."""
+        return list(clubs_user_admins(self.request.user))
 
     @property
     def can_add_others(self):
@@ -143,7 +150,7 @@ class SpeakerAccessMixin:
 
 
 class NECSpeakerAccessMixin(LoginRequiredMixin, SpeakerAccessMixin):
-    """Gate a page to people involved with an NEC member club: tagging, comments, adding somebody else.
+    """Gate a page to people involved with an NEC member club: leaving tags and comments.
 
     Renders an explanation rather than a bare 403, since most people reaching it are in clubs that
     simply aren't NEC members.
@@ -408,12 +415,14 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
         context["is_nec_member"] = self.is_nec_member
         # Not where a scraper can harvest it. Somebody who listed themselves chose to be reached; contact
         # details a club officer typed in for somebody else stay with NEC clubs, as before the list opened.
-        context["show_contact_details"] = user.is_authenticated and bool(speaker.user_id or self.is_nec_member)
+        context["show_contact_details"] = user.is_authenticated and bool(
+            speaker.user_id or self.is_nec_member or speaker.is_owned_by(user)
+        )
         # Tags and comments: read by anyone signed in, left by NEC clubs, and only on pages those clubs can
         # list (SpeakerTagView looks the speaker up the same way), not on link-only or hidden ones.
-        context["show_club_notes"] = user.is_authenticated and speaker.visibility in (
-            Speaker.VISIBILITY_PUBLIC,
-            Speaker.VISIBILITY_NEC,
+        context["show_club_notes"] = user.is_authenticated and (
+            speaker.visibility == Speaker.VISIBILITY_PUBLIC
+            or (speaker.visibility == Speaker.VISIBILITY_NEC and self.is_nec_member)
         )
         context["notes_read_only"] = not self.is_nec_member
         if context["show_club_notes"]:
@@ -525,9 +534,8 @@ class SpeakerCreateView(ClubAdminSpeakerMixin, CreateView):
         """
         club_slug = (self.request.GET.get("club") or "").strip()
         if club_slug:
-            club = next((c for c in self.admin_clubs if c.slug == club_slug), None)
-            if club:
-                return club
+            # A club they don't admin is not one they can be representing, and guessing another is worse.
+            return next((c for c in self.admin_clubs if c.slug == club_slug), None)
         return self.admin_clubs[0] if len(self.admin_clubs) == 1 else None
 
     def form_valid(self, form):
@@ -693,6 +701,7 @@ class SpeakerTagView(NECSpeakerAccessMixin, View):
                 "tag_counts": speaker.tag_counts(),
                 "my_tags": speaker.tags_by_user(request.user),
                 "tag_groups": SpeakerTag.grouped_definitions(),
+                "notes_read_only": False,
             },
         )
 
@@ -718,15 +727,18 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": form,
+                "notes_read_only": False,
             },
         )
 
 
-class SpeakerCommentDeleteView(NECSpeakerAccessMixin, View):
-    """Remove your own comment (or, for a superuser, anyone's)."""
+class SpeakerCommentDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Remove your own comment (or, for a superuser, anyone's), even after leaving the NEC club you wrote
+    it from: it carries your name.
+    """
 
     def post(self, request, slug, pk):
-        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        speaker = get_object_or_404(Speaker.objects.filter(is_deleted=False), slug=slug)
         comment = get_object_or_404(SpeakerComment, pk=pk, speaker=speaker)
         if not comment.can_be_deleted_by(request.user):
             raise PermissionDenied()
@@ -738,5 +750,6 @@ class SpeakerCommentDeleteView(NECSpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": SpeakerCommentForm(),
+                "notes_read_only": not self.is_nec_member,
             },
         )
