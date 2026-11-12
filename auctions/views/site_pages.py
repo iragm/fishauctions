@@ -36,6 +36,9 @@ from django.views.generic.edit import (
 )
 
 from auctions import help_guides, help_stats
+from auctions.client_ip import visitor_coordinates
+from auctions.crawlers import is_crawler
+from auctions.helper_functions import cookie_coordinates
 from auctions.filters import (
     AuctionFilter,
     LotFilter,
@@ -53,8 +56,10 @@ from auctions.models import (
     Invoice,
     Lot,
     LotImage,
+    PickupLocation,
     SearchHistory,
     UserData,
+    distance_to,
 )
 from auctions.rate_limit import over_the_limit
 from auctions.tables import (
@@ -250,6 +255,68 @@ class PromoSite(TemplateView):
         context["photos"] = promo_lot_photos()
         context["site"] = help_stats.site_stats()
         return context
+
+
+def visitor_location(request):
+    """Where to look for things near the person: a location they gave (cookie, then account), else where
+    Cloudflare places their address. ``(None, None)`` when nothing says.
+    """
+    latitude, longitude = cookie_coordinates(request)
+    if latitude is not None and (latitude or longitude):
+        return latitude, longitude
+    if request.user.is_authenticated:
+        userdata = getattr(request.user, "userdata", None)
+        if userdata and (userdata.latitude or userdata.longitude):
+            return userdata.latitude, userdata.longitude
+    return visitor_coordinates(request)
+
+
+class PromoNearby(TemplateView):
+    """The promo page's "near you" strip, fetched by the page's own script after it loads: crawlers that
+    don't run scripts never ask, and the promo page itself stays one page for everyone. Empty when there
+    is nothing close, or no location to go on.
+    """
+
+    template_name = "auctions/partials/promo_nearby.html"
+    MILES = 100
+    LIMIT = 3
+
+    def nearby(self):
+        if is_crawler(self.request):
+            return []
+        latitude, longitude = visitor_location(self.request)
+        if latitude is None:
+            return []
+        now = timezone.now()
+        locations = (
+            PickupLocation.objects.annotate(distance=distance_to(latitude, longitude))
+            .filter(
+                distance__lte=self.MILES,
+                auction__isnull=False,
+                auction__is_deleted=False,
+                auction__promote_this_auction=True,
+                auction__date_start__lte=now + timedelta(days=90),
+            )
+            .filter(Q(auction__date_end__gte=now) | Q(auction__date_end__isnull=True, auction__date_start__gte=now - timedelta(hours=12)))
+            .select_related("auction", "auction__club")
+            .order_by("auction__date_start", "distance")
+        )
+        found = {}
+        for location in locations[:50]:
+            found.setdefault(location.auction_id, (location.auction, location.distance))
+        return list(found.values())[: self.LIMIT]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nearby"] = [{"auction": auction, "miles": round(float(miles))} for auction, miles in self.nearby()]
+        return context
+
+    def render_to_response(self, context, **response_kwargs):
+        response = super().render_to_response(context, **response_kwargs)
+        # Different for each visitor: never cached by Cloudflare or a browser, never indexed.
+        response["Cache-Control"] = "private, no-store"
+        response["X-Robots-Tag"] = "noindex"
+        return response
 
 
 class UploadTooLarge(TemplateView):

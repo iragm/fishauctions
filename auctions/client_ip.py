@@ -109,3 +109,28 @@ def address_bucket(address: str) -> str:
             return str(mapped)
         return str(ipaddress.ip_network(f"{parsed}/64", strict=False))
     return str(parsed)
+
+
+def visitor_coordinates(request):
+    """``(latitude, longitude)`` of the caller's address as Cloudflare places it, or ``(None, None)``.
+
+    Read from the ``CF-IPLatitude`` / ``CF-IPLongitude`` headers that Cloudflare's free "Add visitor
+    location headers" managed transform adds, so it costs nothing per lookup and needs no third party.
+    Believed only on the same terms as ``CF-Connecting-IP`` (:func:`_reached_us_from_cloudflare`): a
+    caller talking to the origin directly could otherwise put itself anywhere. City-level at best, so
+    it orders and filters nearby things; it is never saved as the person's location.
+    """
+    if request is None or not getattr(settings, "BEHIND_CLOUDFLARE", False):
+        return None, None
+    meta = getattr(request, "META", None) or {}
+    if not _reached_us_from_cloudflare(meta):
+        return None, None
+    try:
+        latitude = float(meta.get("HTTP_CF_IPLATITUDE", ""))
+        longitude = float(meta.get("HTTP_CF_IPLONGITUDE", ""))
+    except (TypeError, ValueError):
+        return None, None
+    # nan/inf fail these comparisons; 0,0 is Cloudflare's "unknown", not a place anyone bids from.
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180) or (latitude == 0 and longitude == 0):
+        return None, None
+    return latitude, longitude

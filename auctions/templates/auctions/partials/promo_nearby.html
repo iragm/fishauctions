@@ -1,0 +1,13 @@
+{% if nearby %}
+<section class="promo-nearby mx-auto my-4" style="max-width: 36rem;" aria-labelledby="promo-nearby-title">
+  <h2 id="promo-nearby-title" class="h5 text-center mb-3">Auctions near you</h2>
+  <div class="list-group">
+    {% for row in nearby %}
+    <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-3" href="{{ row.auction.get_absolute_url }}">
+      <span><span class="fw-semibold">{{ row.auction.title }}</span><br><small class="text-muted">{{ row.auction.date_start|date:"M j" }} &middot; {% if row.auction.is_online %}Online{% else %}In person{% endif %}</small></span>
+      <small class="text-muted text-nowrap">{{ row.miles }} mi</small>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}

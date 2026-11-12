@@ -48,6 +48,7 @@ from auctions.models import (
     PickupLocation,
     UserData,
 )
+from auctions.client_ip import visitor_coordinates
 from auctions.services import SHARED_MEMBER_FIELDS, clear_bidder_number_in
 from auctions.tasks import (
     maybe_send_membership_renewal_confirmation,
@@ -1057,7 +1058,7 @@ class AuctionStatsPermissionsMixin:
 
 
 class LocationMixin:
-    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from cookies or userdata.
+    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from cookies, userdata, or the IP.
     Call it before get_context_data; set ``no_location_message``.
     """
 
@@ -1080,6 +1081,12 @@ class LocationMixin:
             if self.request.user.is_authenticated:
                 latitude = self.request.user.userdata.latitude
                 longitude = self.request.user.userdata.longitude
+            else:
+                # Signed out, no click needed: where Cloudflare places their address, for distances
+                # only. The message stays, so they can still give a better one.
+                ip_latitude, ip_longitude = visitor_coordinates(self.request)
+                if ip_latitude is not None:
+                    latitude, longitude = ip_latitude, ip_longitude
         return latitude, longitude
 
     def get_context_data(self, **kwargs):
