@@ -130,7 +130,7 @@ PROMPTS: tuple[Prompt, ...] = (
         "One more thing worth saying out loud: if this is a job somebody does by hand a few times "
         "a year, the tools you already have here do it, and the honest answer is that there is "
         "nothing to build. If it is the opposite — this site genuinely cannot do it — say so "
-        "plainly and then request_a_skill, once, with what I was trying to do. Do not invent an "
+        "plainly and then request_feature, once, with what I was trying to do. Do not invent an "
         "endpoint that is not in the documentation.",
     ),
     Prompt(

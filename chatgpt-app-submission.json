@@ -3,8 +3,8 @@
   "schema_version": 1,
   "app_info": {
     "display_name": "Auction Fish",
-    "subtitle": "Run and bid in club auctions",
-    "description": "Auction Fish runs the fish and aquarium-plant auctions that aquarium clubs hold, and the club memberships behind them. Members can see what is for sale, add their own lots, bid, check what they owe and carry a membership card. The people running an auction can sign bidders in at the door, record what each lot sold for, settle invoices, and keep their club's members, events and breeder award points up to date. Every tool acts as the signed-in user and is refused whatever that person could not do on the website itself.",
+    "subtitle": "Aquarium auctions and clubs",
+    "description": "Auction Fish runs the fish and aquarium-plant auctions that aquarium clubs hold, and the club memberships behind them. Members can see what is for sale, add their own lots, bid, check what they owe and carry a membership card. The people running an auction can sign bidders in at the door, record what each lot sold for, settle invoices, and keep their club's members, events and breeder award points up to date. Members can also navigate pages, search help, inspect the public source code and submit feature requests. Every tool acts as the signed-in user and is refused whatever that person could not do on the website itself.",
     "category": "PRODUCTIVITY"
   },
   "tools": {
@@ -99,7 +99,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Changes data on this site: add one lot to an auction.",
+        "read_only_justification": "Changes data on this site: create one lot immediately in an auction.",
         "open_world_justification": "Reaches outside this site: the lot is listed on its auction's page, which anyone on the internet can read once the auction is public.",
         "destructive_justification": "It only adds a new lot, deleting and overwriting nothing, and remove_lot takes it down again."
       }
@@ -779,7 +779,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Only looks up and returns data (the features the signed-in user has asked for with request_a_skill, and where each stands).",
+        "read_only_justification": "Only looks up and returns data (the features the signed-in user has asked for with request_feature, and where each stands).",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
@@ -901,7 +901,7 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Only looks up and returns data (read this website's own source code, which is published as a public repository).",
+        "read_only_justification": "Only looks up and returns data (search and read auction.fish source code to investigate implementation, bugs or MCP connector behavior).",
         "open_world_justification": "Reaches outside this site: this site's own source code, published as a public repository.",
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
@@ -1124,7 +1124,7 @@
         "destructive_justification": "It only returns a link, so it deletes, overwrites and sends nothing."
       }
     },
-    "request_a_skill": {
+    "request_feature": {
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
@@ -1132,7 +1132,7 @@
         "idempotentHint": true
       },
       "justifications": {
-        "read_only_justification": "Changes data on this site: write down something this site should be able to do and can't.",
+        "read_only_justification": "Changes data on this site: submit an auction.fish feature request to the site owner.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
         "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
       }

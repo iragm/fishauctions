@@ -34,13 +34,14 @@ OUTPUT_PATH = Path(settings.BASE_DIR) / "chatgpt-app-submission.json"
 #: The listing. ``subtitle`` has a 30-character ceiling the form enforces silently.
 APP_INFO = {
     "display_name": "Auction Fish",
-    "subtitle": "Run and bid in club auctions",
+    "subtitle": "Aquarium auctions and clubs",
     "description": (
         "Auction Fish runs the fish and aquarium-plant auctions that aquarium clubs hold, and the "
         "club memberships behind them. Members can see what is for sale, add their own lots, bid, "
         "check what they owe and carry a membership card. The people running an auction can sign "
         "bidders in at the door, record what each lot sold for, settle invoices, and keep their "
-        "club's members, events and breeder award points up to date. Every tool acts as the "
+        "club's members, events and breeder award points up to date. Members can also navigate "
+        "pages, search help, inspect the public source code and submit feature requests. Every tool acts as the "
         "signed-in user and is refused whatever that person could not do on the website itself."
     ),
     "category": "PRODUCTIVITY",

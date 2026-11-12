@@ -1346,7 +1346,7 @@ def _club_default_items(user):
 EXAMPLE_LIMIT = 3
 
 #: Skills whose example makes no sense cold, before there is anything to undo or complain about.
-_NO_EXAMPLE = frozenset({"undo_last", "request_a_skill", "set_my_auction", "set_my_club", "answer_question"})
+_NO_EXAMPLE = frozenset({"undo_last", "request_feature", "set_my_auction", "set_my_club", "answer_question"})
 
 
 def _example_items(request):

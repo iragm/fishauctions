@@ -42,13 +42,12 @@ INTERNAL_ERROR = -32603
 
 #: What the host is told this server is, on ``initialize``.
 INSTRUCTIONS = (
-    "Tools for running and taking part in fish auctions and aquarium club membership on this "
-    "site: lots, bidders, check-in, invoices, club members and breeder award points. Every tool "
-    "acts as the signed-in user and is subject to that user's own permissions on each auction and "
-    "club, so a tool may refuse an action the same person could not perform on the website. "
-    "Start with my_context: it lists the auctions and clubs this user is part of. "
-    "Link pages only with the URLs tools return (go_to_page finds any page); never make one up. "
-    "When no tool can do what they asked, say so, and call request_a_skill if you have it. "
+    "auction.fish: auctions, club membership, invoices and breeder points. "
+    "Implementation or connector debugging: read_source. Website help: search_help. "
+    "Navigation: go_to_page returns the link to open. Feature requests: request_feature, if you have it. "
+    "Use my_context when the auction or club is unclear. If no available tool fits, explain "
+    "the limitation; do not invent tool names. "
+    "Tools enforce the signed-in user's permissions. Link only to returned URLs. "
     "Read-only tools are marked with readOnlyHint. "
     "Most tools take an optional `auction` or `club`; fill it in from my_context rather than "
     "omitting it, because there is no 'current page' here. Omitted, it means the one auction "
