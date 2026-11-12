@@ -22,12 +22,12 @@ import re
 import time
 import uuid
 from datetime import timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Sum
-from django.urls import Resolver404, resolve
+from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 
 from . import llm, palette_assist, palette_routes
@@ -69,14 +69,10 @@ def enabled(user) -> bool:
 
 
 def ask_url(user, words: str) -> str:
-    """``/ai/`` with ``words`` filled in and not sent, for a search that found nothing; ``""`` when this
-    person can't use the page or there are no words. The only place a search's dead end offers it."""
-    from urllib.parse import urlencode
-
-    from django.urls import reverse
-
+    """``/ai/`` with ``words`` filled in and not sent, for a help or lot search that found nothing; ``""``
+    when there are no words, this person can't use the page, or today's allowance is spent."""
     words = (words or "").strip()[:MAX_QUESTION_CHARS]
-    if not words or not enabled(user):
+    if not words or not enabled(user) or usage(user)["over"]:
         return ""
     return reverse("ai") + "?" + urlencode({"q": words})
 

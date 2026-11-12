@@ -310,15 +310,27 @@ class AskWhereSearchFailsTests(StandardTestCase):
         self.assertNotContains(response, reverse("ai") + "?q=")
 
     def test_an_empty_lot_search_offers_the_ai(self):
-        response = self.client.get(reverse("allLots"), {"query": "zorblax quuxing"})
+        response = self.client.get(reverse("allLots"), {"q": "zorblax quuxing"})
         self.assertContains(response, self.ask_url)
 
     def test_nobody_without_the_page_is_offered_it(self):
         UserData.objects.filter(user=self.user).update(use_llm_search=False)
         self.assertNotContains(self.client.get(reverse("help"), {"q": "zorblax quuxing"}), reverse("ai") + "?q=")
-        self.assertNotContains(self.client.get(reverse("allLots"), {"query": "zorblax quuxing"}), reverse("ai") + "?q=")
+        self.assertNotContains(self.client.get(reverse("allLots"), {"q": "zorblax quuxing"}), reverse("ai") + "?q=")
         self.client.logout()
         self.assertNotContains(self.client.get(reverse("help"), {"q": "zorblax quuxing"}), reverse("ai") + "?q=")
+
+    def test_a_lot_search_that_finds_something_does_not(self):
+        response = self.client.get(reverse("allLots"), {"q": self.lot.lot_name, "auction": self.lot.auction.slug})
+        self.assertTrue(response.context["object_list"], "the fixture's lot should be found")
+        self.assertNotContains(response, reverse("ai") + "?q=")
+
+    @override_settings(AI_PAGE_TOKENS_PER_DAY=1)
+    def test_nobody_over_the_allowance_is_offered_it(self):
+        LLMUsage.objects.create(
+            user=self.user, prompt_tokens=50, completion_tokens=50, total_tokens=100, tools_offered=ai_page.SURFACE
+        )
+        self.assertEqual(ai_page.ask_url(self.user, "zorblax"), "")
 
     def test_ask_url_is_blank_without_words(self):
         self.assertEqual(ai_page.ask_url(self.user, "  "), "")
