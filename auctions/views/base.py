@@ -260,6 +260,19 @@ def clubs_with_any_permission(user, nec_only=True):
     return base.filter(any_permission, members__user=user, members__is_deleted=False).distinct().order_by("name")
 
 
+def clubs_user_admins(user):
+    """Clubs where this user holds ``permission_admin``, on one live ClubMember row. Superusers get no
+    special rows here; callers that let them in check ``is_superuser`` themselves.
+    """
+    if not user.is_authenticated:
+        return Club.objects.none()
+    return (
+        Club.objects.filter(members__user=user, members__permission_admin=True, members__is_deleted=False)
+        .distinct()
+        .order_by("name")
+    )
+
+
 def user_can_add_edit_people(user, auction):
     """Whether this user may manage participants in a club-managed auction (non-raising). Shared with the
     palette's ``check_in``; callers also allowing auction admins check ``permission_check`` first.

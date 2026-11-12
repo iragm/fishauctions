@@ -438,14 +438,15 @@ class SpeakerAccessTests(TestCase):
                     self.assertEqual(response.status_code, 200)
                     self.assertContains(response, "Terry Talker")
 
-    def test_adding_somebody_else_still_needs_an_nec_club(self):
-        """Membership alone isn't the bar -- "some permission in an NEC club" is."""
-        for user in (self.plain_member, self.outsider):
+    def test_adding_somebody_else_takes_admin_permission_in_any_club(self):
+        """Membership, or a lesser permission, isn't the bar: admin in some club is, NEC or not."""
+        for user in (self.plain_member, self.officer):
             with self.subTest(user=user.username):
                 response = self.get(user, reverse("speaker_add"))
                 self.assertEqual(response.status_code, 403)
-                self.assertContains(response, "Northeast Council", status_code=403)
                 self.assertContains(response, reverse("speaker_add_self"), status_code=403)
+        self.assertEqual(self.get(self.outsider, reverse("speaker_add")).status_code, 200)
+        self.assertEqual(self.get(self.superuser, reverse("speaker_add")).status_code, 200)
 
     def test_writing_still_needs_an_account(self):
         anonymous = Client()
@@ -483,12 +484,19 @@ class SpeakerAccessTests(TestCase):
         self.speaker.refresh_from_db()
         self.assertFalse(self.speaker.is_deleted)
 
-    def test_tagging_and_comments_stay_with_nec_clubs(self):
+    def test_tags_and_comments_are_read_by_anyone_signed_in_and_left_by_nec_clubs(self):
         url = reverse("speaker_detail", kwargs={"slug": self.speaker.slug})
         SpeakerComment.objects.create(speaker=self.speaker, user=self.officer, body="Brought great fish")
-        self.assertNotContains(self.get(self.outsider, url), "Brought great fish")
+        SpeakerTag.objects.create(speaker=self.speaker, user=self.officer, tag="funny")
+        outsider_page = self.get(self.outsider, url)
+        self.assertContains(outsider_page, "Brought great fish")
+        self.assertContains(outsider_page, "Funny")
+        self.assertNotContains(outsider_page, "Post comment")
+        self.assertNotContains(outsider_page, "Tag this speaker")
         self.assertNotContains(Client().get(url), "Brought great fish")
-        self.assertContains(self.get(self.officer, url), "Brought great fish")
+        officer_page = self.get(self.officer, url)
+        self.assertContains(officer_page, "Post comment")
+        self.assertContains(officer_page, "Tag this speaker")
         response = self.get(self.outsider, reverse("speaker_tag", kwargs={"slug": self.speaker.slug}))
         self.assertEqual(response.status_code, 403)
 
@@ -501,13 +509,16 @@ class SpeakerAccessTests(TestCase):
         self.assertNotContains(self.get(self.outsider), "Terry Talker")
         self.assertContains(self.get(self.officer), "Terry Talker")
 
-    def test_any_single_club_permission_is_enough(self):
-        """Every permission flag opens the NEC-only parts, not just permission_view."""
+    def test_any_single_club_permission_is_enough_to_tag(self):
+        """Every permission flag in an NEC club opens tagging and comments, not just permission_view."""
         for field in ("permission_export", "permission_money", "permission_manage_bap", "permission_admin"):
             with self.subTest(field=field):
                 user = User.objects.create_user(f"user_{field}", f"{field}@example.com", "pw")
                 ClubMember.objects.create(club=self.nec_club, user=user, name=field, **{field: True})
-                self.assertEqual(self.get(user, reverse("speaker_add")).status_code, 200)
+                client = Client()
+                client.force_login(user)
+                response = client.post(reverse("speaker_tag", kwargs={"slug": self.speaker.slug}), {"tag": "funny"})
+                self.assertEqual(response.status_code, 200)
 
     def test_permission_in_someone_elses_row_does_not_count(self):
         """The permission and the user have to be on the same ClubMember row."""
@@ -526,7 +537,7 @@ class SpeakerListTests(TestCase):
             name="NEC Club", is_nec_club=True, latitude=41.8240, longitude=-71.4128, location="Providence, RI"
         )
         self.user = User.objects.create_user("officer", "officer@example.com", "pw")
-        ClubMember.objects.create(club=self.club, user=self.user, name="Officer", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.user, name="Officer", permission_admin=True)
         self.client = Client()
         self.client.force_login(self.user)
 
@@ -885,7 +896,7 @@ class SpeakerCreateDeleteTests(TestCase):
         self.user.first_name = "Ada"
         self.user.last_name = "Officer"
         self.user.save()
-        ClubMember.objects.create(club=self.club, user=self.user, name="Ada Officer", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.user, name="Ada Officer", permission_admin=True)
         self.other = User.objects.create_user("other", "other@example.com", "pw")
         ClubMember.objects.create(club=self.club, user=self.other, name="Other", permission_view=True)
         self.client = Client()
@@ -963,14 +974,14 @@ class SpeakerCreateDeleteTests(TestCase):
 
     def test_the_club_the_page_was_opened_from_wins(self):
         second = Club.objects.create(name="Second Club", is_nec_club=True)
-        ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_view=True)
+        ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_admin=True)
         self.client.post(f"{reverse('speaker_add')}?club={second.slug}", self.payload())
         self.assertEqual(Speaker.objects.get(name="Nobody, Ned").club, second)
 
     def test_no_club_is_recorded_when_the_user_is_in_several(self):
         """No club is recorded when the user is in several: a wrong attribution is worse than none."""
         second = Club.objects.create(name="Second Club", is_nec_club=True)
-        ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_view=True)
+        ClubMember.objects.create(club=second, user=self.user, name="Ada Officer", permission_admin=True)
         self.add()
         speaker = Speaker.objects.get(name="Nobody, Ned")
         self.assertIsNone(speaker.club)
@@ -1039,7 +1050,7 @@ class SpeakerCreateDeleteTests(TestCase):
     def test_a_member_already_in_the_directory_does_not_count_as_unlisted(self):
         """A member already in the directory isn't unlisted: "Speaker, Sally" and "Sally Speaker" are one person."""
         ClubMember.objects.filter(club=self.club).delete()
-        ClubMember.objects.create(club=self.club, user=self.user, name="Sally Speaker", permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.user, name="Sally Speaker", permission_admin=True)
         Speaker.objects.create(name="Speaker, Sally")
         response = self.client.get(reverse("speaker_list"))
         self.assertFalse(response.context["has_unlisted_members"])

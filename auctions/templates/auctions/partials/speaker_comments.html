@@ -13,7 +13,7 @@ and SpeakerCommentDeleteView, so it has to stand alone.
         <div style="white-space: pre-line;">{{ comment.body }}</div>
       </div>
       {% comment %}Mirrors SpeakerComment.can_be_deleted_by, which is what actually enforces this.{% endcomment %}
-      {% if request.user == comment.user or request.user.is_superuser %}
+      {% if not notes_read_only and request.user == comment.user or not notes_read_only and request.user.is_superuser %}
       <button type="button" class="btn btn-sm btn-danger"
               hx-post="{% url 'speaker_comment_delete' speaker.slug comment.pk %}"
               hx-target="#speaker-comments-block"
@@ -32,6 +32,7 @@ and SpeakerCommentDeleteView, so it has to stand alone.
 <p class="text-muted small">No comments yet.</p>
 {% endfor %}
 
+{% if not notes_read_only %}
 <form hx-post="{% url 'speaker_comment' speaker.slug %}" hx-target="#speaker-comments-block" hx-swap="innerHTML" class="mb-3">
   {% csrf_token %}
   {{ comment_form.body }}
@@ -40,3 +41,4 @@ and SpeakerCommentDeleteView, so it has to stand alone.
     <button type="submit" class="btn btn-sm btn-success text-dark"><i class="bi bi-chat-left-text"></i> Post comment</button>
   </div>
 </form>
+{% endif %}

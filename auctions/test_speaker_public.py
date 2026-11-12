@@ -382,7 +382,7 @@ class NecMemberStillSeesTheirPartsTests(TestCase):
         officer = User.objects.create_user(
             "officer", "officer@example.com", "pw", first_name="Ada", last_name="Officer"
         )
-        ClubMember.objects.create(club=club, user=officer, name="Ada Officer", permission_view=True)
+        ClubMember.objects.create(club=club, user=officer, name="Ada Officer", permission_admin=True)
         speaker = Speaker.objects.create(name="Talker, Terry", created_by=officer, club=club)
         client = Client()
         client.force_login(officer)
@@ -473,3 +473,34 @@ class ReviewFindingTests(TestCase):
         self.assertTrue(kept.imported_from_nec)
         self.assertEqual(kept.wordpress_post_id, 99)
         self.assertEqual(kept.url, "https://example.com/me.jpg")
+
+
+class ClubAdminsAddSpeakersTests(TestCase):
+    def test_an_admin_of_any_club_adds_somebody_and_their_club_is_recorded(self):
+        club = Club.objects.create(name="Ordinary Club", is_nec_club=False)
+        admin = User.objects.create_user("clubadmin", "clubadmin@example.com", "pw")
+        ClubMember.objects.create(club=club, user=admin, name="Club Admin", permission_admin=True)
+        client = Client()
+        client.force_login(admin)
+        self.assertContains(client.get(reverse("speaker_list")), reverse("speaker_add") + '"')
+        client.post(reverse("speaker_add"), {"name": "Guest, Gil", "location": "Boston, MA"})
+        speaker = Speaker.objects.get(name="Guest, Gil")
+        self.assertEqual((speaker.created_by, speaker.club), (admin, club))
+
+    def test_a_deleted_admin_row_does_not_count(self):
+        club = Club.objects.create(name="Ordinary Club")
+        former = User.objects.create_user("former", "former@example.com", "pw")
+        ClubMember.objects.create(club=club, user=former, name="Former", permission_admin=True, is_deleted=True)
+        client = Client()
+        client.force_login(former)
+        self.assertEqual(client.get(reverse("speaker_add")).status_code, 403)
+
+    def test_tags_show_in_the_list_for_anyone_signed_in(self):
+        speaker = Speaker.objects.create(name="Talker, Terry")
+        tagger = User.objects.create_user("tagger", "tagger@example.com", "pw")
+        SpeakerTag.objects.create(speaker=speaker, user=tagger, tag="funny")
+        reader = User.objects.create_user("reader", "reader@example.com", "pw")
+        client = Client()
+        client.force_login(reader)
+        self.assertContains(client.get(reverse("speaker_list")), "Funny")
+        self.assertNotContains(Client().get(reverse("speaker_list")), "Funny")
