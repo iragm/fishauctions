@@ -701,6 +701,39 @@ class AdminJobProposalTests(AdminEndpointCase):
                 self.assertTrue(result["isError"])
                 self.assertIn(expected, result["content"][0]["text"])
 
+    def test_the_club_directory_lists_prospects_without_their_contact_address(self):
+        from auctions.models import Club
+
+        harbor = Club.objects.create(
+            name="Harbor Aquarium Society",
+            homepage="https://www.harboraquarium.example.org/",
+            contact_email="membership@harboraquarium.example.org",
+            contact_method=Club.EMAIL,
+            outreach_stage=Club.PROSPECT,
+        )
+        Club.objects.create(name="Bay Killifish Association", outreach_stage=Club.LISTED)
+        result = self.call("list_clubs", {"search": "harbor"})
+        self.assertFalse(result["isError"], result)
+        clubs = result["structuredContent"]["clubs"]
+        self.assertEqual([club["club"] for club in clubs], [harbor.pk])
+        self.assertEqual(clubs[0]["stage"], Club.PROSPECT)
+        self.assertTrue(clubs[0]["has_contact_email"])
+        self.assertEqual(clubs[0]["contact_email_domain"], "harboraquarium.example.org")
+        self.assertNotIn("membership@", json.dumps(result))
+        listed = self.call("list_clubs", {"stage": "listed"})["structuredContent"]["clubs"]
+        self.assertNotIn(harbor.pk, [club["club"] for club in listed])
+        self.assertTrue(self.call("list_clubs", {"stage": "gone"})["isError"])
+
+    def test_the_club_directory_pages(self):
+        from auctions.models import Club
+
+        Club.objects.bulk_create(Club(name=f"Paging Club {number:03}") for number in range(admin.CLUB_DIRECTORY_PAGE + 5))
+        first = self.call("list_clubs", {"search": "Paging Club"})["structuredContent"]
+        self.assertEqual(len(first["clubs"]), admin.CLUB_DIRECTORY_PAGE)
+        rest = self.call("list_clubs", {"search": "Paging Club", "offset": first["next_offset"]})["structuredContent"]
+        self.assertEqual(len(rest["clubs"]), 5)
+        self.assertNotIn("next_offset", rest)
+
     def test_new_auctions_by_untrusted_creators_are_listed_with_their_facts(self):
         from auctions.models import Auction
 
