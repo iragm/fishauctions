@@ -4248,6 +4248,9 @@ class Auction(CachedPropertiesMixin, models.Model):
     followup_email_sent = models.BooleanField(default=False)
     followup_email_due = models.DateTimeField(blank=True, null=True)
     reprint_reminder_sent = models.BooleanField(default=False)
+    # auctions/next_auction.py: "ready for your next one?" to the creator, and the yearly copy prompt.
+    next_auction_email_sent = models.BooleanField(default=False)
+    anniversary_email_sent = models.BooleanField(default=False)
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
@@ -4925,6 +4928,23 @@ class Auction(CachedPropertiesMixin, models.Model):
     @property
     def add_lot_link(self):
         return f"{reverse('new_lot')}?auction={self.slug}"
+
+    @cached_property
+    def next_club_auction(self):
+        """The same club's next promoted auction that hasn't ended, or None: where an ended auction's page
+        and its invoice email point. Never another club's, and never one the club hasn't promoted.
+        """
+        if not self.club_id:
+            return None
+        now = timezone.now()
+        return (
+            Auction.objects.filter(club_id=self.club_id, is_deleted=False, promote_this_auction=True)
+            .exclude(pk=self.pk)
+            .filter(date_start__gt=self.date_start)
+            .filter(Q(is_online=True, date_end__gt=now) | Q(is_online=False, date_start__gt=now))
+            .order_by("date_start")
+            .first()
+        )
 
     @property
     def view_lot_link(self):
@@ -12161,6 +12181,8 @@ class PageView(CachedPropertiesMixin, models.Model):
         "email": "From a watched-lots email",
         "outbid": "From an outbid email",
         "notification": "From an invoice email",
+        "invoice_next": "From an invoice email (next auction)",
+        "seller_share": "Shared by the seller",
         "weekly_email": "From the weekly email",
         "admin": "From an admin page",
         "twitter": "Shared on X (Twitter)",

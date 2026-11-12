@@ -49,6 +49,7 @@ from auctions.models import (
     LotHistory,
     PickupLocation,
 )
+from auctions.sample_auction import offer_sample_data
 from auctions.services import (
     AUCTION_FIELDS_TO_CLONE,
     CONTACT_GATE_NEEDS_PHONE,
@@ -923,6 +924,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 or check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
             )
         )
+        context["offer_sample_data"] = offer_sample_data(self.auction, self.request.user)
         # Superusers: offer "make club admin"; see creator_club_admin_offer for which club.
         if self.request.user.is_superuser:
             offer = creator_club_admin_offer(self.auction)
@@ -931,14 +933,19 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["creator_club"], context["creator_club_source"] = offer
         if self.auction.closed:
             context["ended"] = True
-            messages.info(
-                self.request,
-                format_html(
+            following = self.auction.next_club_auction
+            if following:
+                ended_message = format_html(
+                    "This auction has ended; the next one is <a href='{}'>{}</a>.",
+                    following.get_absolute_url(),
+                    following.title,
+                )
+            else:
+                ended_message = format_html(
                     "This auction has ended.  You can't bid on anything, but you can still <a href='{}'>view lots</a>.",
                     self.auction.view_lot_link,
-                ),
-                extra_tags="safe",
-            )
+                )
+            messages.info(self.request, ended_message, extra_tags="safe")
         else:
             context["ended"] = False
 

@@ -17,6 +17,15 @@ Your lots{% else %}
 {% if auction %} for {{ auction }}{% endif %}
 {% endblock %}
 {% load static %}
+{% load seo_tags %}
+{% block open_graph %}
+{% if auction %}
+{% auction_summary auction as og_description %}
+{% absolute_uri request.path as og_url %}
+{% if auction.club.icon %}{% absolute_uri auction.club.icon_display_url as og_image %}{% endif %}
+{% include "open_graph.html" with og_title="Lots for "|add:auction.title og_description=og_description og_url=og_url og_image=og_image %}
+{% endif %}
+{% endblock %}
 {% block content %}
 {% if routeByLastAuction and auction %}
 <div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="{% url 'allLots' %}">View all lots instead</a>

@@ -4,6 +4,12 @@
 {% load webpush_notifications %}
 {% load currency_filters %}
 {% load species_tags %}
+{% load seo_tags %}
+{% block open_graph %}
+{% absolute_uri lot.get_absolute_url as og_url %}
+{% if lot.thumbnail and lot.thumbnail.display_url %}{% absolute_uri lot.thumbnail.display_url as og_image %}{% elif lot.auction.club.icon %}{% absolute_uri lot.auction.club.icon_display_url as og_image %}{% endif %}
+{% include "open_graph.html" with og_title=lot.lot_name og_description="Lot in "|add:lot.auction.title og_url=og_url og_image=og_image %}
+{% endblock %}
 {% block extra_head %}
     {% comment %}
     webpush.js dereferences the subscribe button on load, so only load it when the button is

@@ -1,4 +1,4 @@
-"""Ten reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
+"""Fourteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 
 Each answers a question the owner would otherwise decide by feel, and says so in its description:
 
@@ -14,6 +14,10 @@ Each answers a question the owner would otherwise decide by feel, and says so in
 ``seller_reach``         sellers in two or more clubs, and the club-less auctions they sold in
 ``feature_adoption_by_club``  which integrations each active club uses
 ``auction_setup_time``   creation to first lot, copied or fresh, and what gets changed after a copy
+``read_feedback``        post-auction survey comments newer than a cursor, oldest first, nobody named
+``club_first_touch``     where each new club's creator first arrived from, by their first signed-in view
+``outreach_outcomes``    clubs contacted 60+ days ago that then ran a real auction, by club health stage
+``tools_vs_retention``   whether clubs using more club tools are still running auctions
 =======================  ==========================================================================
 
 **Nobody is named.** A person is a user number at most, never a name, username or email; anything a
@@ -22,6 +26,12 @@ answers still go through :func:`auctions.mcp.admin.private_result` like every ad
 
 **Every read is bounded.** ``PageView`` is never purged and is the biggest table on the site, so each
 report over it takes ``days`` (capped) and stops at :data:`MAX_ROWS` rows, saying so when it does.
+
+``read_feedback`` can't write, so "never read twice" is a cursor: the caller passes back ``next_since``
+(and the ids it has already handled as ``seen``). ``survey_answered_on`` is set at the *first* answer, so a
+comment typed after the button click can sit before the cursor and be missed; ``seen`` only removes rows,
+it can't bring those back. A weekly routine that wants them passes a ``since`` a day or two earlier than
+``next_since`` and the ids it has handled.
 
 A 404 is a ``PageView`` titled :data:`NOT_FOUND_TITLE` (``404.html`` sets it), so ``dead_ends`` only
 sees 404s from the deploy that added that title onward.
@@ -832,6 +842,283 @@ def auction_setup_time(request, params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# --- E11 --------------------------------------------------------------------------------------------
+
+FEEDBACK_DEFAULT_DAYS = 7
+
+
+def _parse_since(text: str):
+    """An aware datetime from an ISO string, or ``None`` when it isn't one."""
+    from django.utils.dateparse import parse_datetime
+
+    try:
+        when = parse_datetime((text or "").strip())
+    except ValueError:
+        return None
+    if when is None:
+        return None
+    return timezone.make_aware(when) if timezone.is_naive(when) else when
+
+
+def _ids(text: str) -> list[int]:
+    return [int(part) for part in re.findall(r"\d+", text or "")][:2000]
+
+
+def read_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Survey comments answered after ``since``, oldest first, with a cursor so none is read twice."""
+    from auctions.models import AuctionTOS
+
+    raw = str(params.get("since") or "").strip()
+    since = _parse_since(raw) if raw else timezone.now() - timedelta(days=FEEDBACK_DEFAULT_DAYS)
+    if since is None:
+        return palette_actions._error(
+            f"since must be an ISO datetime such as 2026-01-31T12:00:00+00:00, not {raw[:40]!r}"
+        )
+    limit = max(1, min(_int(params, "limit", 50) or 50, 200))
+    seen = _ids(str(params.get("seen") or ""))
+    rows = (
+        AuctionTOS.objects.filter(survey_answered_on__gt=since)
+        .exclude(survey_comments="")
+        .exclude(pk__in=seen)
+        .select_related("auction", "auction__club")
+        .order_by("survey_answered_on", "pk")
+    )
+    found = list(rows[: limit + 1])
+    more = len(found) > limit
+    found = found[:limit]
+    items = [
+        {
+            "feedback": tos.pk,
+            "answered_on": tos.survey_answered_on.isoformat(),
+            "answer": tos.survey_answer or "",
+            "comments": palette_actions.untrusted(tos.survey_comments),
+            "auction": fence(tos.auction.title),
+            "auction_id": tos.auction_id,
+            "club": tos.auction.club.name if tos.auction.club_id else None,
+        }
+        for tos in found
+    ]
+    next_since = found[-1].survey_answered_on.isoformat() if found else since.isoformat()
+    summary = f"{len(items)} survey comments after {since.isoformat()}"
+    summary += "; more remain, call again with next_since." if more else "."
+    return _ok(
+        summary,
+        feedback=items,
+        more=more,
+        next_since=next_since,
+        note=(
+            "Comments about the website itself (not an auction or a club) go to suggest_feature. "
+            "A comment added after its answer button was clicked can sit before the cursor."
+        ),
+    )
+
+
+# --- E12 --------------------------------------------------------------------------------------------
+
+FIRST_TOUCH_VIEWS = 50
+NO_TOUCH = "(direct or unknown)"
+
+
+def _arrival_label(rows, own: str) -> str | None:
+    """The label of the first view in ``rows`` that says how somebody arrived, else ``None``."""
+    from auctions.models import PageView
+
+    for source, referrer in rows:
+        if source and source not in PageView.INTERNAL_SOURCES:
+            return PageView.SOURCE_LABELS.get(source) or fence(source)
+        host = site_of(referrer)
+        if host and host != own and not host.endswith("." + own):
+            return referrer_label(referrer, own)
+    return None
+
+
+def club_first_touch(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Where clubs come from: how the person who made each new club's first auction first arrived."""
+    from auctions.models import Auction, Club, PageView
+
+    days = _days(params, default=365, most=1095)
+    since = _since(days)
+    own = _own_host()
+    first: dict[int, tuple] = {}
+    for club_id, pk, posted, creator in (
+        Auction.objects.filter(is_deleted=False, club__isnull=False)
+        .order_by("date_posted", "pk")
+        .values_list("club_id", "pk", "date_posted", "created_by_id")
+        .iterator(chunk_size=5000)
+    ):
+        first.setdefault(club_id, (posted, creator))
+    recent = {club_id: row for club_id, row in first.items() if row[0] and row[0] >= since}
+    names = dict(Club.objects.filter(pk__in=list(recent)).values_list("pk", "name"))
+    by_label: Counter = Counter()
+    table = []
+    no_views = 0
+    for club_id, (posted, creator) in sorted(recent.items(), key=lambda item: item[1][0]):
+        views = (
+            list(
+                PageView.objects.filter(user_id=creator)
+                .order_by("date_start", "pk")
+                .values_list("source", "referrer")[:FIRST_TOUCH_VIEWS]
+            )
+            if creator
+            else []
+        )
+        if not views:
+            no_views += 1
+        label = _arrival_label(views, own) or NO_TOUCH
+        by_label[label] += 1
+        table.append(
+            {
+                "club": names.get(club_id, "(unknown)"),
+                "first_auction_made": posted.date().isoformat(),
+                "first_touch": label,
+            }
+        )
+    limit = max(1, min(_int(params, "limit", 50) or 50, 200))
+    summary = (
+        f"{len(table)} clubs made their first auction here in {days} days; "
+        f"{len(table) - by_label.get(NO_TOUCH, 0)} have a known first arrival. Views before sign-up are "
+        "anonymous, so this is the creator's first SIGNED-IN touch."
+    )
+    return _ok(
+        summary,
+        days=days,
+        clubs=len(table),
+        by_first_touch=_top(by_label, key="first_touch"),
+        clubs_whose_creator_has_no_page_views=no_views,
+        per_club=table[:limit],
+    )
+
+
+# --- E13 --------------------------------------------------------------------------------------------
+
+OUTREACH_WINDOW_DAYS = 60
+
+
+def outreach_outcomes(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Of the clubs contacted at least 60 days ago, how many then made a real auction."""
+    from auctions.club_health import ClubHealth, is_test_auction
+    from auctions.models import Auction, Club
+
+    days = _days(params, default=365, most=1095)
+    now = timezone.now()
+    window = timedelta(days=OUTREACH_WINDOW_DAYS)
+    clubs = list(
+        Club.objects.filter(date_contacted__gte=now - timedelta(days=days), date_contacted__lte=now - window).order_by(
+            "date_contacted"
+        )
+    )
+    ids = [club.pk for club in clubs]
+    stages = dict(ClubHealth.objects.filter(club_id__in=ids).values_list("club_id", "stage"))
+    posted: dict[int, list] = defaultdict(list)
+    for auction in Auction.objects.filter(club_id__in=ids, is_deleted=False).only(
+        "club_id", "date_posted", "slug", "title"
+    ):
+        if not is_test_auction(auction):
+            posted[auction.club_id].append(auction.date_posted)
+    table = []
+    by_stage: dict[str, dict[str, int]] = defaultdict(lambda: {"contacted": 0, "moved": 0})
+    stalls: Counter = Counter()
+    moved = 0
+    before_total = 0
+    for club in clubs:
+        contacted = club.date_contacted
+        after = sum(1 for when in posted[club.pk] if when and contacted < when <= contacted + window)
+        before = sum(1 for when in posted[club.pk] if when and contacted - window <= when <= contacted)
+        stage = stages.get(club.pk, "(no health row)")
+        by_stage[stage]["contacted"] += 1
+        by_stage[stage]["moved"] += bool(after)
+        moved += bool(after)
+        before_total += before
+        stalls[club.stall_reason or "(not known)"] += 1
+        table.append(
+            {
+                "club": club.name,
+                "contacted_on": contacted.date().isoformat(),
+                "auctions_in_60_days_after": after,
+                "auctions_in_60_days_before": before,
+                "stage_now": stage,
+            }
+        )
+    table.sort(key=lambda row: (-row["auctions_in_60_days_after"], row["contacted_on"]))
+    limit = max(1, min(_int(params, "limit", 50) or 50, 200))
+    summary = (
+        f"{len(clubs)} clubs were contacted {OUTREACH_WINDOW_DAYS}+ days ago; {moved} ({_share(moved, len(clubs))}%) "
+        f"made a real auction within {OUTREACH_WINDOW_DAYS} days after. Before contact they had made {before_total} "
+        "in the 60 days before, so some of that is clubs that were already running."
+    )
+    return _ok(
+        summary,
+        days=days,
+        contacted=len(clubs),
+        moved=moved,
+        share_moved=_share(moved, len(clubs)),
+        real_auctions_in_60_days_before_contact=before_total,
+        by_stage_now=[
+            {"stage": stage, **row, "percent_moved": _share(row["moved"], row["contacted"])}
+            for stage, row in sorted(by_stage.items())
+        ],
+        stall_reasons=_top(stalls, key="stall_reason"),
+        per_club=table[:limit],
+    )
+
+
+# --- E14 --------------------------------------------------------------------------------------------
+
+RUNNING_STAGES = ("active", "slipping")
+
+
+def _tool_bucket(count: int) -> str:
+    return "0 tools" if count == 0 else "1-2 tools" if count <= 2 else "3+ tools"
+
+
+def tools_vs_retention(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Whether clubs that use more club tools are still running auctions."""
+    from auctions.club_health import ClubHealth
+
+    health = list(ClubHealth.objects.filter(real_auctions__gte=1).values_list("stage", "real_auctions", "tools_used"))
+    groups: dict[str, list] = defaultdict(list)
+    per_tool: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"using": 0, "using_running": 0, "not": 0, "not_running": 0}
+    )
+    every_tool = {tool for _stage, _n, tools in health for tool in (tools or [])}
+    for stage, real, tools in health:
+        tools = tools if isinstance(tools, list) else []
+        groups[_tool_bucket(len(tools))].append((stage, real))
+        running = stage in RUNNING_STAGES
+        for tool in every_tool:
+            key = "using" if tool in tools else "not"
+            per_tool[tool][key] += 1
+            per_tool[tool][key + "_running"] += running
+    table = []
+    for bucket in ("0 tools", "1-2 tools", "3+ tools"):
+        rows = groups.get(bucket, [])
+        stages = Counter(stage for stage, _real in rows)
+        table.append(
+            {
+                "tools_used": bucket,
+                "clubs": len(rows),
+                **{stage: stages.get(stage, 0) for stage in ("active", "slipping", "dormant", "new")},
+                "percent_still_running": _share(sum(stages.get(s, 0) for s in RUNNING_STAGES), len(rows)),
+                "median_real_auctions": statistics.median(real for _stage, real in rows) if rows else None,
+            }
+        )
+    tools = [
+        {
+            "tool": tool,
+            "clubs_using": row["using"],
+            "percent_still_running_using": _share(row["using_running"], row["using"]),
+            "clubs_not_using": row["not"],
+            "percent_still_running_not_using": _share(row["not_running"], row["not"]),
+        }
+        for tool, row in sorted(per_tool.items(), key=lambda item: -item[1]["using"])
+    ]
+    summary = (
+        f"{len(health)} clubs have run a real auction. Still running means active or slipping. "
+        "Correlation, not proof: clubs that are already running may simply adopt more tools."
+    )
+    return _ok(summary, clubs=len(health), by_tools_used=table, by_tool=tools)
+
+
 # --- the catalogue ----------------------------------------------------------------------------------
 
 _DAYS = "integer, optional, default {default}, at most {most}. How far back to look."
@@ -959,5 +1246,65 @@ READS: list[Action] = [
         params={"days": _days_param(180, 730)},
         danger=DANGER_SAFE,
         resolver=auction_setup_time,
+    ),
+    Action(
+        name="read_feedback",
+        description=(
+            "Post-auction survey comments (what people typed after 'How was the auction?'), oldest first, "
+            "each with its answer (great or not_fun), auction and club, and nobody named. Reads never write, "
+            "so a routine passes the returned next_since back as since, and the feedback ids it has already "
+            "handled as seen, and nothing is read twice. Feedback about the website itself (not the auction "
+            "or the club) should go to suggest_feature."
+        ),
+        params={
+            "since": (
+                "string, optional, default 7 days ago. An ISO datetime; only comments answered strictly after "
+                "it are returned. Pass the previous call's next_since."
+            ),
+            "limit": "integer, optional, default 50, at most 200.",
+            "seen": "string, optional. Comma-separated feedback ids already handled, left out of the result.",
+        },
+        danger=DANGER_SAFE,
+        resolver=read_feedback,
+    ),
+    Action(
+        name="club_first_touch",
+        description=(
+            "Where clubs come from: for clubs whose first auction here was made in the window, how the "
+            "person who made it first arrived (a tracked link, Google, Facebook, another site, or direct or "
+            "unknown), by count and per club. Views before sign-up are anonymous, so this is the creator's "
+            "first signed-in view. Clubs only, no person named."
+        ),
+        params={
+            "days": _days_param(365, 1095),
+            "limit": "integer, optional, default 50, at most 200. How many clubs to list.",
+        },
+        danger=DANGER_SAFE,
+        resolver=club_first_touch,
+    ),
+    Action(
+        name="outreach_outcomes",
+        description=(
+            "Of the clubs contacted at least 60 days ago, how many made a real (non-test) auction within 60 "
+            "days after, split by the club's current health stage, with stall reasons and the auctions made "
+            "in the 60 days before contact for comparison. Does outreach move clubs?"
+        ),
+        params={
+            "days": _days_param(365, 1095),
+            "limit": "integer, optional, default 50, at most 200. How many clubs to list.",
+        },
+        danger=DANGER_SAFE,
+        resolver=outreach_outcomes,
+    ),
+    Action(
+        name="tools_vs_retention",
+        description=(
+            "Do clubs that use more of the club tools keep running auctions? Settles whether to push club "
+            "tools to auction-only clubs. Clubs with a real auction grouped by tools used (0, 1-2, 3+) with "
+            "stage counts, percent still running and median auctions, and each tool against clubs not using it."
+        ),
+        params={},
+        danger=DANGER_SAFE,
+        resolver=tools_vs_retention,
     ),
 ]

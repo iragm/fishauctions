@@ -8,6 +8,7 @@ import logging
 import re
 from decimal import Decimal
 from random import choice, uniform
+from urllib.parse import urlencode
 
 from dal import autocomplete
 from django.conf import settings
@@ -534,6 +535,7 @@ class MyLots(HTMxTableView):
         context["filter_bap"] = self.request.GET.get("query", "").strip().lower() == "bap"
         if not self.request.htmx:
             context["add_lot_auction"] = _last_joined_auction_taking_lots(self.request.user)
+            context["share_lots_url"] = _share_my_lots_url(self.request)
         return context
 
     def get(self, *args, **kwargs):
@@ -571,6 +573,26 @@ def _recent_auctions(user, limit=10):
         if tos.auction not in auctions:
             auctions.append(tos.auction)
     return auctions[:limit]
+
+
+def _share_my_lots_url(request):
+    """A link to the seller's own lots in their latest auction that hasn't ended, for them to post, or None."""
+    lot = (
+        Lot.objects.filter(
+            user=request.user,
+            is_deleted=False,
+            banned=False,
+            auction__isnull=False,
+            auction__is_deleted=False,
+        )
+        .select_related("auction")
+        .order_by("-auction__date_start", "-pk")
+        .first()
+    )
+    if not lot or lot.auction.closed or lot.auction.pretty_much_over:
+        return None
+    query = urlencode({"user": request.user.username, "auction": lot.auction.slug, "src": "seller_share"})
+    return request.build_absolute_uri(f"{reverse('user_lots')}?{query}")
 
 
 def _last_joined_auction_taking_lots(user):

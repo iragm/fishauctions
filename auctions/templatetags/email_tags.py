@@ -14,7 +14,7 @@ from django import template
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.cache import cache
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 
 from auctions.email_footer import mailing_address
@@ -186,3 +186,35 @@ def email_survey_text(context, mode):
     lines = [links["question"], *(f"{label} {links[answer]}" for answer, label in AuctionTOS.SURVEY_ANSWERS)]
     # Safe: plain text, where escaping would turn the query string's & into &amp;.
     return mark_safe("\n".join(lines) + "\n\n")  # noqa: S308
+
+
+def _next_auction(context):
+    """``(auction, url)`` for the invoice's club's next promoted auction (``Auction.next_club_auction``), or None."""
+    invoice = context.get("invoice")
+    auction = getattr(invoice, "auction", None)
+    following = auction.next_club_auction if auction else None
+    if not following:
+        return None
+    domain = context.get("domain") or Site.objects.get_current().domain
+    return following, f"https://{domain}{following.get_absolute_url()}?src=invoice_next"
+
+
+@register.simple_tag(takes_context=True)
+def email_next_auction(context):
+    """``{% email_next_auction %}``: one line linking the same club's next promoted auction; nothing otherwise."""
+    found = _next_auction(context)
+    if not found:
+        return ""
+    following, url = found
+    return format_html('<p>Next up: <a href="{}">{}</a></p>', url, following.title)
+
+
+@register.simple_tag(takes_context=True)
+def email_next_auction_text(context):
+    """:func:`email_next_auction` for the plain-text part."""
+    found = _next_auction(context)
+    if not found:
+        return ""
+    following, url = found
+    # Safe: plain text, where escaping would mangle the title.
+    return mark_safe(f"Next up: {following.title} {url}\n\n")  # noqa: S308

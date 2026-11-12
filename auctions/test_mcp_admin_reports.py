@@ -342,3 +342,172 @@ class ShortcutCandidateTests(Helpers):
         request.user = self.owner
         result = admin.palette_shortcut_candidates(request, {})
         self.assertEqual(result["actions_run"], [{"action": "add_person", "times": 2, "people": 1}])
+
+
+class FeedbackTests(Helpers):
+    def answer(self, tos, comments, when, answer="great"):
+        AuctionTOS.objects.filter(pk=tos.pk).update(
+            survey_comments=comments, survey_answer=answer, survey_answered_on=when
+        )
+
+    def test_cursor_seen_and_nobody_named(self):
+        now = timezone.now()
+        old = self.online_tos
+        new = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Zelda Quillfeather",
+            email="zelda.quill@elsewhere.test",
+        )
+        self.answer(old, "Too old to matter", now - datetime.timedelta(days=30))
+        self.answer(new, "The site is slow on my phone", now - datetime.timedelta(days=1), answer="not_fun")
+        empty = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Silent Sam"
+        )
+        self.answer(empty, "", now - datetime.timedelta(days=1))
+        result = self.run_report("read_feedback")
+        self.assertEqual([row["feedback"] for row in result["feedback"]], [new.pk])
+        row = result["feedback"][0]
+        self.assertEqual(row["answer"], "not_fun")
+        self.assertIn("The site is slow on my phone", row["comments"])
+        self.assertTrue(row["comments"].startswith(admin_reports.palette_actions.UNTRUSTED_OPEN))
+        self.assertEqual(row["auction_id"], self.online_auction.pk)
+        text = json.dumps(result)
+        for private in ("Zelda", "Quillfeather", "zelda.quill", "Silent Sam"):
+            self.assertNotIn(private, text)
+        self.assertFalse(result["more"])
+        again = self.run_report("read_feedback", {"since": result["next_since"]})
+        self.assertEqual(again["feedback"], [])
+        self.assertEqual(again["next_since"], result["next_since"])
+        excluded = self.run_report("read_feedback", {"since": "2000-01-01T00:00:00+00:00", "seen": str(old.pk)})
+        self.assertEqual([r["feedback"] for r in excluded["feedback"]], [new.pk])
+        everything = self.run_report("read_feedback", {"since": "2000-01-01T00:00:00+00:00"})
+        self.assertEqual([r["feedback"] for r in everything["feedback"]], [old.pk, new.pk])
+
+    def test_limit_says_more_remain(self):
+        now = timezone.now()
+        other = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Second"
+        )
+        self.answer(self.online_tos, "first", now - datetime.timedelta(hours=3))
+        self.answer(other, "second", now - datetime.timedelta(hours=2))
+        page = self.run_report("read_feedback", {"limit": 1})
+        self.assertEqual(len(page["feedback"]), 1)
+        self.assertTrue(page["more"])
+        rest = self.run_report("read_feedback", {"since": page["next_since"]})
+        self.assertEqual([r["feedback"] for r in rest["feedback"]], [other.pk])
+
+    def test_a_bad_since_is_refused(self):
+        request = RequestFactory().get("/mcp/admin/")
+        request.user = self.owner
+        self.assertFalse(admin_reports.read_feedback(request, {"since": "last tuesday"}).get("ok"))
+
+
+class AcquisitionTests(Helpers):
+    def club_with_first_auction(self, name, creator, posted_days_ago=10, title=None):
+        club = Club.objects.create(name=name)
+        auction = Auction.objects.create(
+            created_by=creator,
+            title=title or f"{name} swap",
+            club=club,
+            date_start=timezone.now() + datetime.timedelta(days=5),
+            date_end=timezone.now() + datetime.timedelta(days=6),
+        )
+        Auction.objects.filter(pk=auction.pk).update(
+            date_posted=timezone.now() - datetime.timedelta(days=posted_days_ago)
+        )
+        return club
+
+    def test_first_touch_skips_internal_sources(self):
+        self.club_with_first_auction("Touch club", self.user_with_no_lots)
+        self.view("/lots/", user=self.user_with_no_lots, source="lot_list", minutes_ago=50)
+        self.view("/", user=self.user_with_no_lots, source="qr", referrer="Google", minutes_ago=40)
+        self.view("/", user=self.user_with_no_lots, referrer="Facebook", minutes_ago=30)
+        self.club_with_first_auction("Silent club", self.user_who_does_not_join)
+        result = self.run_report("club_first_touch")
+        labels = {row["club"]: row["first_touch"] for row in result["per_club"]}
+        self.assertEqual(labels["Touch club"], PageView.SOURCE_LABELS["qr"])
+        self.assertEqual(labels["Silent club"], admin_reports.NO_TOUCH)
+        self.assertEqual(result["clubs_whose_creator_has_no_page_views"], 1)
+
+    def test_first_touch_falls_back_to_the_referrer_and_ignores_our_own_site(self):
+        own = admin_reports._own_host()
+        self.club_with_first_auction("Referred club", self.user_with_no_lots)
+        self.view("/", user=self.user_with_no_lots, referrer=f"{own}/lots/", minutes_ago=50)
+        self.view("/", user=self.user_with_no_lots, referrer="reefclub.example/forum", minutes_ago=40)
+        result = self.run_report("club_first_touch")
+        row = next(row for row in result["per_club"] if row["club"] == "Referred club")
+        self.assertEqual(row["first_touch"], "«reefclub.example»")
+        self.assertNotIn(self.user_with_no_lots.username, json.dumps(result))
+
+    def test_only_a_clubs_first_auction_counts_and_old_clubs_are_left_out(self):
+        club = self.club_with_first_auction("Veteran club", self.user_with_no_lots, posted_days_ago=800)
+        later = Auction.objects.create(
+            created_by=self.user_with_no_lots,
+            title="Veteran later",
+            club=club,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.assertTrue(later.pk)
+        result = self.run_report("club_first_touch", {"days": 365})
+        self.assertNotIn("Veteran club", [row["club"] for row in result["per_club"]])
+
+    def test_outreach_counts_a_real_auction_and_ignores_a_test_one(self):
+        long_ago = timezone.now() - datetime.timedelta(days=100)
+        movers = Club.objects.create(name="Mover club", date_contacted=long_ago)
+        testers = Club.objects.create(name="Tester club", date_contacted=long_ago)
+        recent = Club.objects.create(name="Too recent", date_contacted=timezone.now() - datetime.timedelta(days=10))
+        for club, title, offset in (
+            (movers, "Spring swap", 20),
+            (testers, "test auction", 20),
+            (movers, "Long before swap", -30),
+            (recent, "Recent swap", 5),
+        ):
+            auction = Auction.objects.create(
+                created_by=self.user,
+                title=title,
+                club=club,
+                date_start=timezone.now(),
+                date_end=timezone.now() + datetime.timedelta(days=1),
+            )
+            Auction.objects.filter(pk=auction.pk).update(
+                date_posted=club.date_contacted + datetime.timedelta(days=offset)
+            )
+        from auctions.club_health import compute_club_health
+
+        compute_club_health(movers)
+        result = self.run_report("outreach_outcomes")
+        self.assertEqual((result["contacted"], result["moved"], result["share_moved"]), (2, 1, 50))
+        self.assertEqual(result["real_auctions_in_60_days_before_contact"], 1)
+        rows = {row["club"]: row for row in result["per_club"]}
+        self.assertEqual(rows["Mover club"]["auctions_in_60_days_after"], 1)
+        self.assertEqual(rows["Tester club"]["auctions_in_60_days_after"], 0)
+        self.assertEqual(rows["Mover club"]["stage_now"], "new")
+        self.assertEqual(rows["Tester club"]["stage_now"], "(no health row)")
+        self.assertNotIn("Too recent", rows)
+
+    def test_tools_vs_retention_buckets(self):
+        from auctions.club_health import ClubHealth
+
+        def health(name, stage, real, tools):
+            club = Club.objects.create(name=name)
+            ClubHealth.objects.create(club=club, stage=stage, real_auctions=real, tools_used=tools)
+
+        health("None active", "active", 4, [])
+        health("None dormant", "dormant", 1, [])
+        health("Some slipping", "slipping", 3, ["members"])
+        health("Some dormant", "dormant", 2, ["members", "discord"])
+        health("Many active", "active", 6, ["members", "discord", "api keys"])
+        health("Never ran", "trial", 0, ["members", "discord", "api keys"])
+        result = self.run_report("tools_vs_retention")
+        rows = {row["tools_used"]: row for row in result["by_tools_used"]}
+        self.assertEqual((rows["0 tools"]["clubs"], rows["0 tools"]["percent_still_running"]), (2, 50))
+        self.assertEqual(rows["0 tools"]["median_real_auctions"], 2.5)
+        self.assertEqual((rows["1-2 tools"]["clubs"], rows["1-2 tools"]["slipping"]), (2, 1))
+        self.assertEqual((rows["3+ tools"]["clubs"], rows["3+ tools"]["percent_still_running"]), (1, 100))
+        tools = {row["tool"]: row for row in result["by_tool"]}
+        self.assertEqual((tools["members"]["clubs_using"], tools["members"]["percent_still_running_using"]), (3, 67))
+        self.assertEqual(tools["members"]["percent_still_running_not_using"], 50)
+        self.assertEqual(result["clubs"], 5)
