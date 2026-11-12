@@ -1334,6 +1334,9 @@ EXCLUDED: dict[str, str] = {
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,
     "species_quick_create": _API,
+    # Unlinked while new: a superuser reaches one from a lot's species name.
+    "species_detail": "One species' public page, for search engines and people browsing; find_species and price_history answer the same questions.",
+    "species_detail_slug": "One species' public page, with its name in the address; the same page as species_detail.",
     # Species gaps page buttons and the club API endpoint; the palette sends people to species_gaps.
     "species_cache_forget": _API,
     "species_approve": _API,

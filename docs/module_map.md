@@ -226,11 +226,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17077 lines)
+- **`palette_actions.py`** (17072 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2039 lines)
+- **`palette_routes.py`** (2042 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -283,7 +283,7 @@ this only quotes its opening sentence.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
 - **`species_matching.py`** (1290 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
-- **`species_stats.py`** (301 lines)
+- **`species_stats.py`** (322 lines)
   What the site's own sales say about one species, for its public page (``/species/<pk>/``).
   `public_lots`, `lots_for`, `price_guide`, `trend`, `popularity_rank`, `representative_photo`, `species_stats`, `varieties_with_lots`
 - **`square_offsite.py`** (338 lines)
@@ -676,7 +676,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_species_page.py`** (105 lines)
+- **`test_species_page.py`** (134 lines)
   The public species page and the numbers behind it (``auctions/species_stats.py``).
   `SpeciesPageTests`
 - **`test_species_search.py`** (188 lines)
@@ -1150,7 +1150,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
   `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
-- **`species.py`** (521 lines)
+- **`species.py`** (522 lines)
   Adding species and common names, the superuser's cleanup queue, and each species' public page.
 - **`usability.py`** (197 lines)
   The usability reports, and linking auctions to clubs.

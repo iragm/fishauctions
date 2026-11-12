@@ -36,7 +36,7 @@
     <div class="col-md-5">
       {% if stats.photo %}<img src="{{ stats.photo }}" class="img-fluid rounded mb-2" alt="{{ page_title }}" loading="lazy">{% endif %}
       {% if other_names %}<p class="small text-muted mb-1">Also called {{ other_names|join:", " }}</p>{% endif %}
-      {% if species.parent %}<p class="small mb-1">A variety of <a href="{{ species.parent.get_absolute_url }}"><i>{{ species.parent.full_scientific_name }}</i></a></p>{% endif %}
+      {% if species.parent.approved or species.parent and request.user.is_superuser %}<p class="small mb-1">A variety of <a href="{{ species.parent.get_absolute_url }}"><i>{{ species.parent.full_scientific_name }}</i></a></p>{% endif %}
       {% if fishbase_url %}<p class="small mb-1"><a href="{{ fishbase_url }}" target="_blank" rel="noopener">FishBase</a></p>{% endif %}
     </div>
     <div class="col-md-7">

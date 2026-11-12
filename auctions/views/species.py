@@ -465,7 +465,8 @@ class SpeciesDetailView(DetailView):
         self.object = self.get_object()
         canonical = self.object.get_absolute_url()
         if request.path != canonical:
-            return redirect(canonical, permanent=True)
+            query = request.META.get("QUERY_STRING", "")
+            return redirect(f"{canonical}?{query}" if query else canonical, permanent=True)
         return self.render_to_response(self.get_context_data(object=self.object))
 
     def get_context_data(self, **kwargs):

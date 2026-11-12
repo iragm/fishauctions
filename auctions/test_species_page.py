@@ -8,7 +8,7 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from auctions import species_stats
-from auctions.models import Lot, Species
+from auctions.models import Lot, LotImage, Species
 from auctions.test_support import isolated_cache
 from auctions.tests import StandardTestCase
 
@@ -26,6 +26,8 @@ class SpeciesPageTests(StandardTestCase):
             lot.species = species
             lot.winning_price = price
             lot.save()
+        # A second seller: one seller's prices are not a guide.
+        Lot.objects.filter(pk=cls.lotB.pk).update(auctiontos_seller=cls.admin_online_tos)
 
     def setUp(self):
         super().setUp()
@@ -35,7 +37,7 @@ class SpeciesPageTests(StandardTestCase):
         stats = species_stats.species_stats(self.betta)
         self.assertEqual(stats["lots"], 3)
         self.assertEqual(stats["sold"], 3)
-        self.assertEqual(stats["sellers"], 1)
+        self.assertEqual(stats["sellers"], 2)
         self.assertEqual(stats["buyers"], 1)
         self.assertEqual(stats["price"]["median"], "20")
         self.assertEqual(stats["trend"], "new")
@@ -51,6 +53,31 @@ class SpeciesPageTests(StandardTestCase):
         stats = species_stats.species_stats(self.betta)
         self.assertEqual(stats["lots"], 2)
         self.assertIsNone(stats["price"])
+
+    def test_one_seller_gets_no_price(self):
+        Lot.objects.filter(pk=self.lotB.pk).update(auctiontos_seller=self.online_tos)
+        self.assertIsNone(species_stats.species_stats(self.betta)["price"])
+
+    def test_auctions_with_private_stats_are_left_out(self):
+        self.online_auction.make_stats_public = False
+        self.online_auction.save()
+        self.assertEqual(species_stats.species_stats(self.betta)["lots"], 0)
+
+    def test_unapproved_cultivars_lots_stay_off_the_parent(self):
+        Species.objects.filter(pk=self.halfmoon.pk).update(approved=False)
+        self.assertEqual(species_stats.species_stats(self.betta)["lots"], 2)
+
+    def test_photo_only_from_promoted_auctions_and_own_uploads(self):
+        LotImage.objects.create(lot_number=self.lot, image_source="ACTUAL", url="https://example.com/a.jpg")
+        LotImage.objects.create(lot_number=self.lot, image_source="ACTUAL", image="images/betta.jpg")
+        self.online_auction.promote_this_auction = False
+        self.online_auction.save()
+        self.assertIsNone(species_stats.representative_photo(self.betta))
+        self.online_auction.promote_this_auction = True
+        self.online_auction.save()
+        photo = species_stats.representative_photo(self.betta)
+        self.assertIsNotNone(photo)
+        self.assertIn("betta.jpg", photo)
 
     def test_people_without_accounts_count_once_by_email(self):
         rows = [
@@ -86,8 +113,10 @@ class SpeciesPageTests(StandardTestCase):
         self.assertNotContains(response, self.online_tos.name)
 
     def test_a_wrong_slug_redirects_to_the_right_one(self):
-        response = self.client.get(f"/species/{self.betta.pk}/wrong/")
-        self.assertRedirects(response, self.betta.get_absolute_url(), status_code=301)
+        response = self.client.get(f"/species/{self.betta.pk}/wrong/?ref=x")
+        self.assertRedirects(
+            response, self.betta.get_absolute_url() + "?ref=x", status_code=301, fetch_redirect_response=False
+        )
         self.assertEqual(self.betta.get_absolute_url(), f"/species/{self.betta.pk}/betta-splendens/")
 
     def test_unapproved_species_is_only_for_superusers(self):

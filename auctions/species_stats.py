@@ -20,6 +20,7 @@ from django.db.models import Count, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
+from auctions import cloudflare_images
 from auctions.helper_functions import get_currency_symbol
 from auctions.models import Lot, LotImage, Species, UserData
 
@@ -32,6 +33,9 @@ PRICE_GUIDE_YEARS = 3
 #: Fewest sales before a price is quoted at all: one sale is an anecdote.
 MIN_SALES_FOR_PRICE = 3
 
+#: Fewest different sellers before a price is quoted: one seller's prices are that person's, not a guide.
+MIN_SELLERS_FOR_PRICE = 2
+
 #: Fewest lots, over the two years compared, before a trend is called.
 MIN_LOTS_FOR_TREND = 6
 
@@ -42,15 +46,22 @@ YEAR = datetime.timedelta(days=365)
 
 
 def public_lots():
-    """Lots that count anywhere public: not deleted, not removed, not in a deleted auction."""
-    return Lot.objects.filter(is_deleted=False, banned=False).exclude(auction__is_deleted=True)
+    """Lots that count anywhere public: not deleted, not removed, not in a deleted auction, and not in one
+    whose creator keeps its stats to themselves (``Auction.make_stats_public``).
+    """
+    return (
+        Lot.objects.filter(is_deleted=False, banned=False)
+        .exclude(auction__is_deleted=True)
+        .exclude(auction__make_stats_public=False)
+    )
 
 
 def lots_for(species):
     """The lots this species' page counts: its own, plus its cultivars' when it is a nominal species."""
     if species.parent_id or species.is_hybrid:
         return public_lots().filter(species=species)
-    return public_lots().filter(Q(species=species) | Q(species__parent=species))
+    # An unapproved cultivar is private to whoever added it, and so are its lots.
+    return public_lots().filter(Q(species=species) | Q(species__parent=species, species__approved=True))
 
 
 def _quantile(ordered: list[Decimal], fraction: float) -> Decimal:
@@ -67,11 +78,13 @@ def _money(value: Decimal) -> str:
     return f"{value:.0f}" if value == value.to_integral_value() else f"{value:.2f}"
 
 
-def price_guide(prices: list[Decimal], per_each: list[Decimal] | None, currency: str) -> dict | None:
+def price_guide(
+    prices: list[Decimal], per_each: list[Decimal] | None, currency: str, sellers: int = MIN_SELLERS_FOR_PRICE
+) -> dict | None:
     """The middle of what a lot sold for, and the range most sales fell in; None under
-    :data:`MIN_SALES_FOR_PRICE`.
+    :data:`MIN_SALES_FOR_PRICE`, or when one seller made every sale (the "guide" would be their prices).
     """
-    if len(prices) < MIN_SALES_FOR_PRICE:
+    if len(prices) < MIN_SALES_FOR_PRICE or sellers < MIN_SELLERS_FOR_PRICE:
         return None
     ordered = sorted(prices)
     symbol = get_currency_symbol(currency)
@@ -137,13 +150,19 @@ def popularity_rank(species, now) -> tuple[int, int] | None:
 
 
 def representative_photo(species) -> str | None:
-    """One picture of this species from its lots: a seller's own photo first, then the primary image, then the newest."""
-    images = LotImage.objects.filter(lot_number__in=lots_for(species).values("pk")).order_by(
-        "-is_primary", "-createdon"
+    """One picture of this species: a seller's own uploaded photo, from a lot in an auction shown to everyone,
+    primary images first, then the newest. Never a pasted link (it would put someone else's host on the page)
+    and never "not my photo". Not cached, so a removed lot's picture goes at once.
+    """
+    lots = lots_for(species).filter(Q(auction__isnull=True) | Q(auction__promote_this_auction=True))
+    images = (
+        LotImage.objects.filter(lot_number__in=lots.values("pk"), image_source__in=OWN_PHOTO_SOURCES)
+        .exclude(image="", cloudflare_image_id="")
+        .order_by("-is_primary", "-createdon")
     )
-    # A few of each: a row can have no picture left (display_url None), and that is cheaper to skip than to query.
-    for image in list(images.filter(image_source__in=OWN_PHOTO_SOURCES)[:5]) + list(images[:5]):
-        url = image.display_url
+    # A few: a row can have no picture left (display_url None), which is cheaper to skip than to query.
+    for image in images[:5]:
+        url = cloudflare_images.image_url(image.image, image.cloudflare_image_id)
         if url:
             return url
     return None
@@ -184,7 +203,6 @@ def _count(species, now) -> dict:
     sellers, buyers, auctions, clubs = set(), set(), set(), set()
     first_seen = last_seen = None
     lots = sold = unsold = bred = recent = prior = 0
-    multiples = False
     per_year = defaultdict(lambda: {"lots": 0, "sold": 0})
     # Keyed by whose currency the lot is in (Lot.currency: the auction's creator, else the seller), since
     # a currency is worked out per person, not stored on a column.
@@ -230,25 +248,29 @@ def _count(species, now) -> dict:
             # Donations sell for goodwill, not for what the fish is worth.
             if not row["donation"] and posted and posted >= price_since:
                 quantity = max(row["quantity"] or 1, 1)
-                multiples = multiples or quantity > 1
                 owner = row["auction__created_by_id"] or row["user_id"]
-                priced_by_owner[owner].append((price, price / quantity))
+                priced_by_owner[owner].append((price, quantity, seller))
         elif row["ended_unsold"]:
             unsold += 1
 
-    priced = defaultdict(lambda: {"prices": [], "each": []})
+    priced = defaultdict(lambda: {"prices": [], "each": [], "multiples": False, "sellers": set()})
     owners = {data.user_id: data for data in UserData.objects.filter(user_id__in=[pk for pk in priced_by_owner if pk])}
     for owner, sales in priced_by_owner.items():
         currency = owners[owner].currency if owner in owners else "USD"
-        for price, each in sales:
-            priced[currency]["prices"].append(price)
-            priced[currency]["each"].append(each)
+        bucket = priced[currency]
+        for price, quantity, seller in sales:
+            bucket["prices"].append(price)
+            bucket["each"].append(price / quantity)
+            bucket["multiples"] = bucket["multiples"] or quantity > 1
+            if seller:
+                bucket["sellers"].add(seller)
     guide = None
     if priced:
         # One currency: the one most of its sales were in. Mixing dollars and euros means nothing.
         currency = max(priced, key=lambda name: len(priced[name]["prices"]))
-        each = priced[currency]["each"]
-        guide = price_guide(priced[currency]["prices"], each if multiples else None, currency)
+        bucket = priced[currency]
+        each = bucket["each"] if bucket["multiples"] else None
+        guide = price_guide(bucket["prices"], each, currency, len(bucket["sellers"]))
     rank = popularity_rank(species, now)
     return {
         "lots": lots,
@@ -268,7 +290,6 @@ def _count(species, now) -> dict:
         "ranked_species": rank[1] if rank else None,
         "years": [{"year": year, **per_year[year]} for year in sorted(per_year, reverse=True)],
         "price": guide,
-        "photo": representative_photo(species),
     }
 
 
@@ -279,7 +300,7 @@ def species_stats(species, now=None) -> dict:
     if stats is None:
         stats = _count(species, now or timezone.now())
         cache.set(key, stats, CACHE_SECONDS)
-    return stats
+    return {**stats, "photo": representative_photo(species)}
 
 
 def varieties_with_lots(species) -> list[tuple[Species, int]]:
