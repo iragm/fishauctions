@@ -280,7 +280,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             and tos
             and tos.pickup_location
             and not tos.pickup_location.pickup_by_mail
-            and logistics.in_exchange_window(invoice.auction)
+            and logistics.shows_pickup_code(invoice.auction)
         ):
             context["pickup_qr_code"] = (
                 f"https://{Site.objects.get_current().domain}{reverse('invoice_by_pk', kwargs={'pk': invoice.pk})}"

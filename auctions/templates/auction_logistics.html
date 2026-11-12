@@ -29,7 +29,7 @@
 
 {% block extra_js %}
 {{ block.super }}
-<script src="{% static 'js/camera_scanner.js' %}" data-zxing-src="{% static 'js/vendor/zxing.min.js' %}"></script>
+{% include "auctions/camera_scanner.html" %}
 <script>
   (() => {
     const scanUrl = "{% url 'auction_logistics_scan' slug=auction.slug %}";

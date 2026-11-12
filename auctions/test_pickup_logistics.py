@@ -447,6 +447,13 @@ class CheckInTests(PickupTestCase):
         PickupLocation.objects.filter(pk=self.vt.pk).update(pickup_time=timezone.now() + datetime.timedelta(hours=1))
         self.assertContains(self.client.get(url), 'id="invoice-pickup-qr"')
 
+    def test_pickup_code_without_pickup_times(self):
+        PickupLocation.objects.filter(auction=self.multi).update(pickup_time=None, second_pickup_time=None)
+        auction = Auction.objects.get(pk=self.multi.pk)
+        self.assertTrue(logistics.shows_pickup_code(auction))
+        Auction.objects.filter(pk=auction.pk).update(date_end=timezone.now() + datetime.timedelta(hours=1))
+        self.assertFalse(logistics.shows_pickup_code(Auction.objects.get(pk=auction.pk)))
+
 
 class UsersFilterTests(PickupTestCase):
     def test_outstanding_and_unprinted(self):

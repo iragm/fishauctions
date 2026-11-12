@@ -193,14 +193,19 @@ class LotQueuePreviewTests(SimpleTestCase):
 
 class ZxingSourceIsNamedByTheTagTests(SimpleTestCase):
     """{% static %} hashes names when DEBUG is off, so camera_scanner.js can't find the reader from its own
-    file name; every page that loads it must say where the reader is.
+    file name; the one include that loads it says where the reader is.
     """
 
-    def test_every_page_passes_data_zxing_src(self):
+    def test_only_the_include_loads_the_scanner(self):
         templates = REPO_ROOT / "auctions" / "templates"
-        pages = [p for p in templates.rglob("*.html") if "js/camera_scanner.js" in p.read_text()]
-        self.assertTrue(pages)
-        for page in pages:
-            for line in page.read_text().splitlines():
-                if "js/camera_scanner.js" in line and "<script" in line:
-                    self.assertIn("data-zxing-src=\"{% static 'js/vendor/zxing.min.js' %}\"", line, page.name)
+        include = templates / "auctions" / "camera_scanner.html"
+        self.assertIn("data-zxing-src=", include.read_text())
+        loaders = {p for p in templates.rglob("*.html") if re.search(r"camera_scanner\.js", p.read_text())}
+        self.assertEqual(loaders, {include})
+
+    def test_the_include_renders_both_paths(self):
+        from django.template.loader import render_to_string
+
+        html = render_to_string("auctions/camera_scanner.html")
+        self.assertRegex(html, r'src="[^"]*camera_scanner[^"]*\.js"')
+        self.assertRegex(html, r'data-zxing-src="[^"]*zxing[^"]*\.js"')

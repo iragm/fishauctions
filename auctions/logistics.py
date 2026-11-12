@@ -180,6 +180,16 @@ def in_exchange_window(auction, now=None):
     return bool(window) and window[0] <= now <= window[1]
 
 
+def shows_pickup_code(auction, now=None):
+    """Whether invoices show the code the logistics page scans: in ``exchange_window``, or once bidding has
+    ended when no pickup has a time to make a window from.
+    """
+    now = now or timezone.now()
+    if exchange_window(auction) is None:
+        return bool(auction.date_end and auction.date_end <= now)
+    return in_exchange_window(auction, now)
+
+
 def _lots(count):
     return f"{count} lot{'' if count == 1 else 's'}"
 

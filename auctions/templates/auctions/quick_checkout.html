@@ -3,7 +3,7 @@
 {% load i18n %}
 {% block title %}Quick checkout for {{ auction }}{% endblock %}
 {% block extra_js %}
-{% if show_camera_scanner %}<script src="{% static 'js/camera_scanner.js' %}" data-zxing-src="{% static 'js/vendor/zxing.min.js' %}"></script>{% endif %}
+{% if show_camera_scanner %}{% include "auctions/camera_scanner.html" %}{% endif %}
 <script>
 $(document).ready(function() {
   (function(){
