@@ -49,7 +49,7 @@ this only quotes its opening sentence.
 - **`ads_admin.py`** (122 lines)
   The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
-- **`ai_page.py`** (335 lines)
+- **`ai_page.py`** (348 lines)
   ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
 - **`announcements.py`** (405 lines)
   Club announcements: one message, sent to the places a club's members look.
@@ -321,9 +321,9 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
-- **`test_ai_page.py`** (289 lines)
+- **`test_ai_page.py`** (324 lines)
   ``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance.
-  `answer`, `lookup`, `AIPageTests`, `AIPageLinkTests`, `LibraryAllowanceTests`
+  `answer`, `lookup`, `AIPageTests`, `AIPageLinkTests`, `LibraryAllowanceTests`, `AskWhereSearchFailsTests`
 - **`test_android_testers.py`** (135 lines)
   `AndroidTestersTests`, `AndroidTestersInviteTests`
 - **`test_app_crashes.py`** (132 lines)
@@ -1099,7 +1099,7 @@ Every view on the site, split by the part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1192 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (978 lines)
+- **`browse.py`** (982 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (510 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
@@ -1139,7 +1139,7 @@ Every view on the site, split by the part of it the view belongs to.
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (978 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
-- **`help.py`** (108 lines)
+- **`help.py`** (112 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
 - **`invoices.py`** (412 lines)

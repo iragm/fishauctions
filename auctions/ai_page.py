@@ -68,6 +68,19 @@ def enabled(user) -> bool:
     return palette_assist.assist_enabled_for(user)
 
 
+def ask_url(user, words: str) -> str:
+    """``/ai/`` with ``words`` filled in and not sent, for a search that found nothing; ``""`` when this
+    person can't use the page or there are no words. The only place a search's dead end offers it."""
+    from urllib.parse import urlencode
+
+    from django.urls import reverse
+
+    words = (words or "").strip()[:MAX_QUESTION_CHARS]
+    if not words or not enabled(user):
+        return ""
+    return reverse("ai") + "?" + urlencode({"q": words})
+
+
 def daily_limit() -> int:
     return int(getattr(settings, "AI_PAGE_TOKENS_PER_DAY", 0) or 0)
 

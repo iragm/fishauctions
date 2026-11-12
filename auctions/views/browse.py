@@ -193,6 +193,10 @@ class LotListView(AjaxListView):
             regardingAuction=self.auction,
         )
         context["embed"] = "all_lots"
+        # For an empty result only; the template decides that, since the list is paged by htmx.
+        from auctions import ai_page
+
+        context["ask_ai_url"] = ai_page.ask_url(self.request.user, self.request.GET.get("query", ""))
         if self.request.user.is_authenticated:
             context["lotsAreHidden"] = UserIgnoreCategory.objects.filter(user=self.request.user).count()
         else:
