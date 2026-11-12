@@ -188,6 +188,7 @@ def _delete_personal_rows(user):
         RemotePrintJob,
         SearchHistory,
         SignInStitch,
+        Speaker,
         SpeakerClaim,
         SpeakerTag,
         SquareSeller,
@@ -233,6 +234,10 @@ def _delete_personal_rows(user):
     SpeakerTag.objects.filter(user=user).delete()
     # Their own "This is me" requests.
     SpeakerClaim.objects.filter(user=user).delete()
+    # The speaker profile they listed themselves comes down. One they claimed (the NEC's record, or a
+    # club's) goes back to how it was before them, less the contact details they may have added.
+    Speaker.objects.filter(user=user, created_by=user).update(is_deleted=True, user=None, email="", phone="")
+    Speaker.objects.filter(user=user).update(user=None, email="", phone="")
     # Who they refused to sell to is their own list. Bans of them belong to whoever wrote them.
     UserBan.objects.filter(user=user).delete()
     # An ad response is the campaign owner's statistic: keep the row, lose the person.

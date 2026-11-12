@@ -346,7 +346,11 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
     def get(self, request, *args, **kwargs):
         merged_into = self._merged_into(kwargs.get("slug"))
         if merged_into is not None:
-            return redirect(merged_into.get_absolute_url(), permanent=True)
+            if self.template_name == SpeakerPanelView.template_name:
+                return redirect("speaker_panel", slug=merged_into.slug)
+            # Permanent only for a public page, so search engines move the old address's ranking across;
+            # anything else depends on who is asking, and a browser would cache a 301 for good.
+            return redirect(merged_into.get_absolute_url(), permanent=merged_into.is_indexable)
         response = super().get(request, *args, **kwargs)
         if self.template_name == SpeakerPanelView.template_name:
             # A fragment of a page, never a page of its own.
@@ -381,9 +385,16 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
         speaker = self.object
         user = self.request.user
         context["is_nec_member"] = self.is_nec_member
-        # Not where a scraper can harvest it.
-        context["show_contact_details"] = user.is_authenticated
-        if self.is_nec_member:
+        # Not where a scraper can harvest it. Somebody who listed themselves chose to be reached; contact
+        # details a club officer typed in for somebody else stay with NEC clubs, as before the list opened.
+        context["show_contact_details"] = user.is_authenticated and bool(speaker.user_id or self.is_nec_member)
+        # Tags and comments are NEC clubs' notes on pages those clubs can list (SpeakerTagView looks the
+        # speaker up the same way), not on link-only or hidden ones.
+        context["show_club_notes"] = self.is_nec_member and speaker.visibility in (
+            Speaker.VISIBILITY_PUBLIC,
+            Speaker.VISIBILITY_NEC,
+        )
+        if context["show_club_notes"]:
             context["tag_counts"] = speaker.tag_counts()
             context["my_tags"] = speaker.tags_by_user(user)
             context["tag_groups"] = SpeakerTag.grouped_definitions()
@@ -392,7 +403,7 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
         context["can_delete"] = speaker.can_be_deleted_by(user)
         context["can_edit"] = speaker.can_be_deleted_by(user)
         # "This is me" while nobody's account owns the page yet.
-        context["can_claim"] = not speaker.user_id and not speaker.is_owned_by(user)
+        context["can_claim"] = not speaker.user_id
         context["claim_pending"] = bool(
             context["can_claim"]
             and user.is_authenticated
@@ -578,12 +589,11 @@ class SpeakerClaimView(LoginRequiredMixin, SpeakerAccessMixin, View):
         speaker = get_object_or_404(Speaker.objects.filter(is_deleted=False), slug=slug)
         if not speaker.can_be_viewed_by(request.user, self.is_nec_member, request.POST.get("key", "")):
             raise Http404
-        if speaker.user_id or speaker.is_owned_by(request.user):
+        if speaker.user_id:
             messages.info(request, "This page already belongs to an account.")
         else:
-            SpeakerClaim.objects.update_or_create(
-                speaker=speaker, user=request.user, defaults={"status": SpeakerClaim.STATUS_OPEN}
-            )
+            # Once per person: a declined request is not put back in the queue by pressing again.
+            SpeakerClaim.objects.get_or_create(speaker=speaker, user=request.user)
             messages.success(request, "Thanks, we'll check it and link this page to your account.")
         url = speaker.get_absolute_url()
         key = request.POST.get("key", "")

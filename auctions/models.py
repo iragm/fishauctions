@@ -15304,10 +15304,12 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
         return speakers.filter(visibility__in=allowed)
 
     def is_owned_by(self, user):
-        """The person this profile is, or whoever typed it in."""
+        """The person this profile is; while it is nobody's account's, whoever typed it in."""
         if not user or not user.is_authenticated:
             return False
-        return user.pk in (self.user_id, self.created_by_id)
+        if self.user_id:
+            return self.user_id == user.pk
+        return bool(self.created_by_id and self.created_by_id == user.pk)
 
     def can_be_viewed_by(self, user, nec_member, key=""):
         """Whether this viewer may open the page. ``key`` is a share link's secret."""

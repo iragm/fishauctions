@@ -15,7 +15,7 @@ import unicodedata
 from django.db import transaction
 
 #: Fields the kept record takes from the other one when its own is blank.
-TEXT_FIELDS = ("bio", "programs", "email", "phone", "website", "facebook_page", "url")
+TEXT_FIELDS = ("bio", "programs", "email", "phone", "website", "facebook_page")
 
 #: How alike two names must be (difflib ratio over the name keys) to be listed as a likely pair.
 FUZZY_NAME_RATIO = 0.88
@@ -157,18 +157,29 @@ def merge_speakers(closed, kept):
             kept.location = closed.location
             kept.location_coordinates = closed.location_coordinates
             kept.latitude, kept.longitude = closed.latitude, closed.longitude
-        if closed.image and (theirs_wins or not kept.image):
+        # The photo moves as one: an upload and a pasted URL are two ways of giving the same thing.
+        closed_has_photo = bool(closed.image or closed.url)
+        if closed_has_photo and (theirs_wins or not (kept.image or kept.url)):
             kept.image = closed.image
             kept.cloudflare_image_id = closed.cloudflare_image_id
+            kept.url = closed.url
         if theirs_wins:
             kept.user_id = closed.user_id
             kept.visibility = closed.visibility
             if closed.name:
                 kept.name = closed.name
-        if not kept.created_by_id:
-            kept.created_by_id = closed.created_by_id
+        # Not created_by: that is who may edit a page nobody's account owns, and an imported page
+        # belongs to nobody but a superuser until the person themselves is linked.
         if not kept.club_id:
             kept.club_id = closed.club_id
+        if closed.imported_from_nec and not kept.imported_from_nec:
+            # The kept page carries the NEC credit, and a re-import finds it by the post id.
+            post_id = closed.wordpress_post_id
+            Speaker.objects.filter(pk=closed.pk).update(wordpress_post_id=None)
+            kept.imported_from_nec = True
+            kept.source_url = closed.source_url
+            if kept.wordpress_post_id is None:
+                kept.wordpress_post_id = post_id
         kept.save()
         kept.topics.add(*closed.topics.all())
         for tag in SpeakerTag.objects.filter(speaker=closed):

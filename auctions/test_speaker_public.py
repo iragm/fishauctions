@@ -189,6 +189,8 @@ class SearchEngineTests(TestCase):
         self.assertNotContains(Client().get(self.page), "terry@example.com")
         self.assertNotContains(Client().get(self.page), "401-555-0100")
         user = User.objects.create_user("reader", "reader@example.com", "pw")
+        # A page the person listed themselves (one a club typed in stays with NEC clubs).
+        Speaker.objects.filter(pk=self.speaker.pk).update(user=User.objects.create_user("terry", "t@example.com", "pw"))
         client = Client()
         client.force_login(user)
         self.assertContains(client.get(self.page), "terry@example.com")
@@ -388,3 +390,86 @@ class NecMemberStillSeesTheirPartsTests(TestCase):
         self.assertContains(page, "Added by Ada Officer (NEC Club)")
         self.assertContains(page, "Tags")
         self.assertContains(client.get(reverse("speaker_list")), reverse("speaker_add"))
+
+
+class ReviewFindingTests(TestCase):
+    """Holes the adversarial review found."""
+
+    def setUp(self):
+        self.officer = User.objects.create_user("officer", "officer@example.com", "pw")
+        self.person = User.objects.create_user("person", "person@example.com", "pw")
+
+    def test_a_merge_does_not_hand_an_imported_page_to_whoever_typed_the_duplicate(self):
+        kept = Speaker.objects.create(name="Smith, John", imported_from_nec=True)
+        closed = Speaker.objects.create(name="John Smith", created_by=self.officer)
+        merge_speakers(closed, kept)
+        kept.refresh_from_db()
+        self.assertIsNone(kept.created_by)
+        self.assertFalse(kept.can_be_deleted_by(self.officer))
+
+    def test_whoever_typed_somebody_in_loses_the_page_once_it_is_theirs(self):
+        speaker = Speaker.objects.create(name="Jane Doe", created_by=self.officer)
+        self.assertTrue(speaker.can_be_deleted_by(self.officer))
+        Speaker.objects.filter(pk=speaker.pk).update(user=self.person)
+        speaker.refresh_from_db()
+        self.assertFalse(speaker.can_be_deleted_by(self.officer))
+        self.assertTrue(speaker.can_be_deleted_by(self.person))
+
+    def test_deleting_the_account_takes_down_the_self_listing(self):
+        from auctions.account_deletion import delete_account
+
+        own = Speaker.objects.create(name="Jane Doe", user=self.person, created_by=self.person, email="j@example.com")
+        claimed = Speaker.objects.create(name="Doe, Janet", imported_from_nec=True, user=self.person, phone="555")
+        delete_account(self.person)
+        own.refresh_from_db()
+        claimed.refresh_from_db()
+        self.assertTrue(own.is_deleted)
+        self.assertEqual(own.email, "")
+        self.assertFalse(claimed.is_deleted)
+        self.assertIsNone(claimed.user)
+        self.assertEqual(claimed.phone, "")
+
+    def test_contact_details_typed_in_by_a_club_stay_with_nec_clubs(self):
+        speaker = Speaker.objects.create(name="Jane Doe", created_by=self.officer, email="jane@example.com")
+        client = Client()
+        client.force_login(self.person)
+        self.assertNotContains(client.get(speaker.get_absolute_url()), "jane@example.com")
+        Speaker.objects.filter(pk=speaker.pk).update(user=self.person)
+        stranger = User.objects.create_user("stranger", "stranger@example.com", "pw")
+        client.force_login(stranger)
+        self.assertContains(client.get(speaker.get_absolute_url()), "jane@example.com")
+
+    def test_the_sign_in_link_never_carries_a_share_key(self):
+        speaker = Speaker.objects.create(name="Jane Doe", visibility=Speaker.VISIBILITY_LINK, email="j@example.com")
+        response = Client().get(speaker.share_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "key%3D")
+
+    def test_a_merged_panel_redirects_to_the_kept_panel(self):
+        kept = Speaker.objects.create(name="Smith, John")
+        closed = Speaker.objects.create(name="John Smith")
+        merge_speakers(closed, kept)
+        response = Client().get(reverse("speaker_panel", kwargs={"slug": closed.slug}))
+        self.assertEqual(response.url, reverse("speaker_panel", kwargs={"slug": kept.slug}))
+
+    def test_a_declined_claim_is_not_reopened(self):
+        speaker = Speaker.objects.create(name="Jane Doe")
+        SpeakerClaim.objects.create(speaker=speaker, user=self.person, status=SpeakerClaim.STATUS_DECLINED)
+        client = Client()
+        client.force_login(self.person)
+        client.post(reverse("speaker_claim", kwargs={"slug": speaker.slug}))
+        self.assertEqual(SpeakerClaim.objects.get().status, SpeakerClaim.STATUS_DECLINED)
+
+    def test_a_merge_carries_the_nec_credit_and_the_persons_photo(self):
+        kept = Speaker.objects.create(name="John Smith", user=self.person, url="https://example.com/me.jpg")
+        closed = Speaker.objects.create(
+            name="Smith, John",
+            imported_from_nec=True,
+            source_url="https://northeastcouncil.org/x/",
+            wordpress_post_id=99,
+        )
+        merge_speakers(closed, kept)
+        kept.refresh_from_db()
+        self.assertTrue(kept.imported_from_nec)
+        self.assertEqual(kept.wordpress_post_id, 99)
+        self.assertEqual(kept.url, "https://example.com/me.jpg")

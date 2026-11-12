@@ -51,7 +51,7 @@ link. Nothing here assumes which — `standalone` only controls the close button
       <button type="submit" class="btn btn-sm btn-secondary"><i class="bi bi-person-check"></i> This is me</button>
     </form>
     {% else %}
-    <a class="btn btn-sm btn-secondary" rel="nofollow" href="{% url 'account_login' %}?next={{ speaker.share_url|urlencode }}"><i class="bi bi-person-check"></i> This is me</a>
+    <a class="btn btn-sm btn-secondary" rel="nofollow" href="{% url 'account_login' %}?next={{ speaker.get_absolute_url|urlencode }}"><i class="bi bi-person-check"></i> This is me</a>
     {% endif %}
   </div>
   {% endif %}
@@ -64,20 +64,20 @@ link. Nothing here assumes which — `standalone` only controls the close button
   {% if speaker.email or speaker.phone or speaker.website or speaker.facebook_page %}
   <h6 class="text-muted text-uppercase small">Contact</h6>
   <ul class="list-unstyled">
-    {% comment %}Email and phone only for people signed in, so a scraper can't harvest them.{% endcomment %}
+    {% comment %}Email and phone only for people signed in, so a scraper can't harvest them; on a page somebody else typed in, only for NEC clubs (SpeakerPanelView).{% endcomment %}
     {% if show_contact_details %}
     {% if speaker.email %}<li><i class="bi bi-envelope me-1"></i> <a href="mailto:{{ speaker.email }}">{{ speaker.email }}</a></li>{% endif %}
     {% if speaker.phone %}<li><i class="bi bi-telephone me-1"></i> {{ speaker.phone }}</li>{% endif %}
-    {% elif speaker.email or speaker.phone %}
-    <li><a rel="nofollow" href="{% url 'account_login' %}?next={{ speaker.share_url|urlencode }}">Sign in to see how to reach them.</a></li>
-    {% endif %}
+    {% elif speaker.email or speaker.phone %}{% if not request.user.is_authenticated %}
+    <li><a rel="nofollow" href="{% url 'account_login' %}?next={{ speaker.get_absolute_url|urlencode }}">Sign in to see how to reach them.</a></li>
+    {% endif %}{% endif %}
     {% if speaker.website %}<li><i class="bi bi-globe me-1"></i> <a href="{{ speaker.website }}" target="_blank" rel="noopener">{{ speaker.website }}</a></li>{% endif %}
     {% if speaker.facebook_page %}<li><i class="bi bi-facebook me-1"></i> <a href="{{ speaker.facebook_page }}" target="_blank" rel="noopener">Facebook</a></li>{% endif %}
   </ul>
   {% endif %}
 
   {% comment %}Tags and comments are NEC clubs' notes to each other, so nobody else sees them.{% endcomment %}
-  {% if is_nec_member %}
+  {% if show_club_notes %}
   <div id="speaker-tags-block">
     {% include "auctions/partials/speaker_tags.html" %}
   </div>

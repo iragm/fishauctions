@@ -26,7 +26,7 @@ this only quotes its opening sentence.
 - **`account_adapter.py`** (33 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
-- **`account_deletion.py`** (449 lines)
+- **`account_deletion.py`** (454 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
 - **`account_export.py`** (311 lines)
@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15675 lines)
+- **`models.py`** (15677 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -273,7 +273,7 @@ this only quotes its opening sentence.
   `FishAuctionsSocialAccountAdapter`
 - **`source_code.py`** (438 lines)
   This site's own source code, read out of the public repository it is published from.
-- **`speaker_duplicates.py`** (209 lines)
+- **`speaker_duplicates.py`** (220 lines)
   Duplicate speakers in the directory: finding them, and folding one into another.
   `name_key`, `possible_matches`, `duplicate_groups`, `suggested_keep`, `merge_problem`, `merge_speakers`, `link_speaker_to_account`
 - **`speaker_topics.py`** (200 lines)
@@ -672,9 +672,9 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speaker_public.py`** (390 lines)
+- **`test_speaker_public.py`** (475 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
-  `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`
+  `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`
 - **`test_speakers.py`** (1404 lines)
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
@@ -871,7 +871,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`import_fishbase.py`** (498 lines)
   Load the species picklist from a pinned FishBase snapshot, plus the curated aquarium list.
   `Command`
-- **`import_nec_speakers.py`** (406 lines)
+- **`import_nec_speakers.py`** (415 lines)
   Import the Northeast Council's speaker database from a WordPress WXR export.
   `clean_text`, `Command`
 - **`link_accounts.py`** (98 lines)
@@ -1147,7 +1147,7 @@ Every view on the site, split by the part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (687 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-- **`speakers.py`** (710 lines)
+- **`speakers.py`** (720 lines)
   The speaker directory: who will come and talk to a club, and what about.
 - **`species.py`** (441 lines)
   Adding species and common names, and the superuser's cleanup queue.
