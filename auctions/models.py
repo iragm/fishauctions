@@ -15478,8 +15478,13 @@ class SpeakerComment(models.Model):
 
     @property
     def author_username(self):
-        """The writer's username: what readers outside NEC clubs see."""
-        return self.user.username if self.user else "Deleted user"
+        """The writer's username, which is what every reader sees. Never an email address: older accounts
+        could sign up with one as their username.
+        """
+        if not self.user or not self.user.is_active:
+            return "Deleted user"
+        username = self.user.username
+        return "A member" if "@" in username else username
 
     @property
     def author_display(self):

@@ -522,12 +522,41 @@ class SignedInReadersTests(TestCase):
         client.force_login(user)
         return client.get(self.speaker.get_absolute_url())
 
-    def test_readers_outside_nec_clubs_see_the_writers_username_not_their_name(self):
+    def test_every_reader_sees_the_writers_username_not_their_name(self):
+        for user in (self.reader, self.officer):
+            with self.subTest(user=user.username):
+                page = self.page_for(user)
+                self.assertContains(page, "Great talk")
+                self.assertNotContains(page, "Ada Officer")
+                self.assertContains(page, ">officer &middot;")
+
+    def test_an_email_shaped_username_is_never_shown(self):
+        User.objects.filter(pk=self.officer.pk).update(username="ada@example.com")
         page = self.page_for(self.reader)
-        self.assertContains(page, "Great talk")
-        self.assertNotContains(page, "Ada Officer")
-        self.assertContains(page, "officer &middot;")
-        self.assertContains(self.page_for(self.officer), "Ada Officer")
+        self.assertNotContains(page, "ada@example.com")
+        self.assertContains(page, "A member &middot;")
+
+    def test_a_deactivated_writer_reads_as_deleted(self):
+        User.objects.filter(pk=self.officer.pk).update(is_active=False)
+        self.assertContains(self.page_for(self.reader), "Deleted user &middot;")
+
+    def test_anyone_signed_in_can_comment_but_not_tag(self):
+        client = Client()
+        client.force_login(self.reader)
+        response = client.post(
+            reverse("speaker_comment", kwargs={"slug": self.speaker.slug}), {"body": "Saw him in May"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(SpeakerComment.objects.filter(user=self.reader, body="Saw him in May").exists())
+        response = client.post(reverse("speaker_tag", kwargs={"slug": self.speaker.slug}), {"tag": "funny"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_nobody_comments_on_a_page_that_hides_comments(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_LINK)
+        client = Client()
+        client.force_login(self.reader)
+        response = client.post(reverse("speaker_comment", kwargs={"slug": self.speaker.slug}), {"body": "x"})
+        self.assertEqual(response.status_code, 404)
 
     def test_an_nec_only_page_shows_its_notes_only_to_nec_clubs(self):
         Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_NEC, user=self.reader)

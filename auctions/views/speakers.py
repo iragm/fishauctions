@@ -2,8 +2,8 @@
 
 The list and each public speaker's page are open to everyone, search engines included; a profile's
 ``visibility`` narrows that (``Speaker.listed_for`` / ``Speaker.can_be_viewed_by``). Anyone signed in reads
-tags and comments; leaving them stays behind ``NECSpeakerAccessMixin`` (any club permission in a club
-flagged ``is_nec_club``). Adding somebody else takes admin permission in any club
+tags and comments; tagging stays behind ``NECSpeakerAccessMixin`` (any club permission in a club
+flagged ``is_nec_club``) for tags; anyone signed in comments. Adding somebody else takes admin permission in any club
 (``ClubAdminSpeakerMixin``). Anyone signed in can add themselves.
 """
 
@@ -150,7 +150,7 @@ class SpeakerAccessMixin:
 
 
 class NECSpeakerAccessMixin(LoginRequiredMixin, SpeakerAccessMixin):
-    """Gate a page to people involved with an NEC member club: leaving tags and comments.
+    """Gate a page to people involved with an NEC member club: tagging speakers.
 
     Renders an explanation rather than a bare 403, since most people reaching it are in clubs that
     simply aren't NEC members.
@@ -424,7 +424,7 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
             speaker.visibility == Speaker.VISIBILITY_PUBLIC
             or (speaker.visibility == Speaker.VISIBILITY_NEC and self.is_nec_member)
         )
-        context["notes_read_only"] = not self.is_nec_member
+        context["tags_read_only"] = not self.is_nec_member
         if context["show_club_notes"]:
             context["tag_counts"] = speaker.tag_counts()
             context["my_tags"] = speaker.tags_by_user(user)
@@ -701,13 +701,15 @@ class SpeakerTagView(NECSpeakerAccessMixin, View):
                 "tag_counts": speaker.tag_counts(),
                 "my_tags": speaker.tags_by_user(request.user),
                 "tag_groups": SpeakerTag.grouped_definitions(),
-                "notes_read_only": False,
+                "tags_read_only": False,
             },
         )
 
 
-class SpeakerCommentView(NECSpeakerAccessMixin, View):
-    """Add a comment to a speaker, and re-render the comment list."""
+class SpeakerCommentView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Add a comment to a speaker, and re-render the comment list. Anyone signed in, on a page the
+    directory lists for them (public, or NEC-only for NEC clubs): the same pages that show comments.
+    """
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
@@ -727,7 +729,6 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": form,
-                "notes_read_only": False,
             },
         )
 
@@ -750,6 +751,5 @@ class SpeakerCommentDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
                 "speaker": speaker,
                 "comments": speaker.comments.filter(is_deleted=False).select_related("user", "club"),
                 "comment_form": SpeakerCommentForm(),
-                "notes_read_only": not self.is_nec_member,
             },
         )
