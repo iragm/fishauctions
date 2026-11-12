@@ -9,7 +9,7 @@
   <div class="mt-3">
     <form id="logistics-scan-form" class="d-flex flex-wrap gap-2 align-items-center">
       <button id="logistics-scan-toggle" type="button" class="btn btn-primary"><i class="bi bi-camera-video"></i> Scan</button>
-      <input id="logistics-scan-code" type="text" class="form-control w-auto" placeholder="Invoice or lot code" autocomplete="off" aria-label="Invoice or lot code">
+      <input id="logistics-scan-code" type="text" class="form-control w-auto" placeholder="Lot number" autocomplete="off" aria-label="Lot number, or a scanned code">
     </form>
     <div id="logistics-scanner-wrapper" class="mt-2 d-none">
       <div class="rounded border overflow-hidden w-100" style="aspect-ratio: 3 / 1;">
@@ -56,22 +56,26 @@
     async function post(fields) {
       const body = new FormData();
       Object.entries(fields).forEach(([key, value]) => body.append(key, value));
+      body.append("tab", "{{ tab.key }}");
       let payload = null;
+      let status = 0;
       try {
         const response = await fetch(scanUrl, { method: "POST", headers: { "X-CSRFToken": csrfToken }, body: body });
-        payload = await response.json();
+        status = response.status;
+        payload = response.ok ? await response.json() : null;
       } catch (error) {
         payload = null;
       }
       if (!payload) {
-        show("Scan failed -- check your connection and try again.", false);
+        show(status ? "Scan failed -- reload the page and sign in again." : "Scan failed -- check your connection and try again.", false);
         return false;
       }
       show(payload.message, payload.ok);
       if (payload.ok) {
         refreshTable();
       }
-      return payload.ok;
+      // The server read it, so hold this code off for the usual window rather than retrying at once.
+      return true;
     }
 
     result.addEventListener("click", (event) => {

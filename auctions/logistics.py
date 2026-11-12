@@ -108,22 +108,29 @@ def people(auction, tab):
 def mark_off(tos, which, user, marked):
     """Cross ``tos`` off the ``which`` pickup list (``marked``), or back on. The tap says which, rather than
     toggling, so two volunteers with the same list open can't undo each other.
+
+    Crossing a seller off the first pickup checks in their sold lots; bringing them back on undoes only the
+    check-ins made since they were crossed off, so lots scanned one at a time before that stay in.
     """
     field = "marked_off_second_pickup" if which == SECOND else "marked_off_first_pickup"
-    if bool(getattr(tos, field)) == marked:
+    previous = getattr(tos, field)
+    if bool(previous) != marked:
+        setattr(tos, field, timezone.now() if marked else None)
+        # Only the field: a full save pushes this row's contact fields up to its ClubMember.
+        tos.save(update_fields=[field])
+        label = "second" if which == SECOND else "first"
+        tos.auction.create_history(
+            applies_to="USERS",
+            action=f"{'Marked off' if marked else 'Cleared'} {tos.name} for the {label} pickup",
+            user=user,
+        )
+    if which != FIRST:
         return
-    setattr(tos, field, timezone.now() if marked else None)
-    # Only the field: a full save pushes this row's contact fields up to its ClubMember.
-    tos.save(update_fields=[field])
-    if which == FIRST:
-        # A seller at the first pickup has brought their lots with them.
-        check_in_lots(sold_lots(tos.auction).filter(auctiontos_seller=tos), marked)
-    label = "second" if which == SECOND else "first"
-    tos.auction.create_history(
-        applies_to="USERS",
-        action=f"{'Marked off' if marked else 'Cleared'} {tos.name} for the {label} pickup",
-        user=user,
-    )
+    lots = sold_lots(tos.auction).filter(auctiontos_seller=tos)
+    if marked:
+        check_in_lots(lots)
+    elif previous:
+        lots.filter(checked_in__gte=previous).update(checked_in=None)
 
 
 def sold_lots(auction):
@@ -135,11 +142,9 @@ def sold_lots(auction):
     )
 
 
-def check_in_lots(lots, marked=True):
-    """Mark ``lots`` as at the pickup, or not; returns how many changed."""
-    if marked:
-        return lots.filter(checked_in__isnull=True).update(checked_in=timezone.now())
-    return lots.filter(checked_in__isnull=False).update(checked_in=None)
+def check_in_lots(lots):
+    """Mark ``lots`` as at the pickup; returns how many changed."""
+    return lots.filter(checked_in__isnull=True).update(checked_in=timezone.now())
 
 
 def waiting_on(auction, tab):
@@ -185,13 +190,10 @@ def _check_in_seller(auction, tos, user):
     if not total:
         return None
     mark_off(tos, FIRST, user, marked=True)
-    # mark_off does nothing to lots when the name was already crossed off, but a single lot scanned
-    # since then is still checked in here.
-    check_in_lots(sold_lots(auction).filter(auctiontos_seller=tos))
     return format_html("{} accounted for from {}.", _lots(total), tos.name or "Unknown")
 
 
-def _scan_invoice(auction, pk, user):
+def _scan_invoice(auction, pk, user, which):
     from auctions.models import Invoice
 
     invoice = Invoice.objects.filter(pk=pk, auctiontos_user__auction=auction).select_related("auctiontos_user").first()
@@ -199,7 +201,8 @@ def _scan_invoice(auction, pk, user):
         return {"ok": False, "message": "That invoice isn't from this auction."}
     tos = invoice.auctiontos_user
     parts = []
-    sold = _check_in_seller(auction, tos, user)
+    # Sellers' lots all arrive at the first pickup; at the second, an invoice only says what to collect.
+    sold = _check_in_seller(auction, tos, user) if which == FIRST else None
     if sold:
         parts.append(sold)
     bought = sold_lots(auction).filter(auctiontos_winner=tos)
@@ -221,12 +224,33 @@ def _scan_invoice(auction, pk, user):
     return {"ok": True, "message": format_html(" ".join(["{}"] * len(parts)), *parts)}
 
 
-def _scan_lot(auction, pk):
-    lot = auction.lots_qs.filter(pk=pk, banned=False).select_related("auctiontos_seller__pickup_location").first()
-    if not lot:
-        return {"ok": False, "message": "That lot isn't in this auction."}
+def _find_lot(auction, code):
+    """A lot label (``/qr/<pk>/``) or a typed lot number, to ``(lot, error)``."""
+    lots = auction.lots_qs.filter(banned=False).select_related("auctiontos_seller__pickup_location")
+    match = re.search(r"/qr/(\d+)/?(?:[?#]|$)", code)
+    if match:
+        found = list(lots.filter(pk=int(match.group(1))))
+    elif auction.use_seller_dash_lot_numbering:
+        found = list(lots.filter(custom_lot_number=code)[:2])
+    elif code.isdigit():
+        found = list(lots.filter(lot_number_int=int(code))[:2])
+    else:
+        return None, "Scan an invoice or a lot label."
+    if len(found) > 1:
+        return None, "More than one lot has this number -- scan its label instead."
+    if not found:
+        return None, "That lot isn't in this auction."
+    return found[0], None
+
+
+def _scan_lot(auction, code):
+    lot, error = _find_lot(auction, code)
+    if error:
+        return {"ok": False, "message": error}
     if not lot.auctiontos_winner_id:
         return {"ok": False, "message": format_html("Lot {} didn't sell.", lot.lot_number_display)}
+    if lot.auctiontos_seller.pickup_location and lot.auctiontos_seller.pickup_location.pickup_by_mail:
+        return {"ok": False, "message": format_html("Lot {} ships by mail.", lot.lot_number_display)}
     if lot.checked_in:
         return {"ok": True, "message": format_html("Lot {} was already accounted for.", lot.lot_number_display)}
     seller = lot.auctiontos_seller
@@ -247,18 +271,16 @@ def _scan_lot(auction, pk):
     return {"ok": True, "message": message}
 
 
-def scan(auction, code, user):
-    """A code read on the logistics page: an invoice (``/invoices/<pk>/``) or a lot label (``/qr/<pk>/``).
-    Returns ``{"ok", "message"}``; the message is HTML.
+def scan(auction, code, user, which=FIRST):
+    """A code read on the logistics page: an invoice (``/invoices/<pk>/``), a lot label (``/qr/<pk>/``) or a
+    typed lot number. ``which`` is the pickup the page is on. Returns ``{"ok", "message"}``; the message is HTML.
     """
     code = (code or "").strip()
-    match = re.search(r"/invoices/(\d+)", code)
+    # Anchored, so a no-login link (/invoices/<uuid>/) is never read as the pk its digits start with.
+    match = re.search(r"/invoices/(\d+)/?(?:[?#]|$)", code)
     if match:
-        return _scan_invoice(auction, int(match.group(1)), user)
-    match = re.search(r"/qr/(\d+)", code)
-    if match:
-        return _scan_lot(auction, int(match.group(1)))
-    return {"ok": False, "message": "Scan an invoice or a lot label."}
+        return _scan_invoice(auction, int(match.group(1)), user, which)
+    return _scan_lot(auction, code)
 
 
 def check_in_seller(auction, tos_pk, user):

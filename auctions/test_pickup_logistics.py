@@ -369,11 +369,42 @@ class CheckInTests(PickupTestCase):
         self.assertIn("&lt;b&gt;", self.scan(self.invoice_code(self.ma_seller))["message"])
 
     def test_tap_checks_lots_in_and_out(self):
+        scanned = self.sell(self.ma_seller, self.vt_buyer)
+        self.scan(scanned.qr_code)
         lot = self.sell(self.ma_seller, self.vt_buyer)
         logistics.mark_off(self.ma_seller, logistics.FIRST, self.organizer, marked=True)
         self.assertIsNotNone(Lot.objects.get(pk=lot.pk).checked_in)
         logistics.mark_off(AuctionTOS.objects.get(pk=self.ma_seller.pk), logistics.FIRST, self.organizer, marked=False)
         self.assertIsNone(Lot.objects.get(pk=lot.pk).checked_in)
+        # Scanned before the name was crossed off, so a mistap doesn't lose it.
+        self.assertIsNotNone(Lot.objects.get(pk=scanned.pk).checked_in)
+
+    def test_no_login_link_is_not_read_as_a_pk(self):
+        self.sell(self.ma_seller, self.vt_buyer)
+        pk = self.invoice_for(self.ma_seller).pk
+        result = self.scan(f"https://example.com/invoices/{pk}0000-aaaa-bbbb-cccc-dddddddddddd/")
+        self.assertFalse(result["ok"])
+        self.assertIsNone(AuctionTOS.objects.get(pk=self.ma_seller.pk).marked_off_first_pickup)
+
+    def test_second_pickup_scan_only_reports(self):
+        self.sell(self.vt_seller, self.vt_buyer)
+        self.sell(self.ma_seller, self.vt_seller)
+        result = self.scan(self.invoice_code(self.vt_seller), tab=f"{self.vt.pk}-2")
+        self.assertIn("Vt Seller needs to collect 1 lot from 1 seller", result["message"])
+        self.assertIsNone(AuctionTOS.objects.get(pk=self.vt_seller.pk).marked_off_first_pickup)
+        self.assertFalse(Lot.objects.filter(checked_in__isnull=False).exists())
+
+    def test_typed_lot_number(self):
+        lot = self.sell(self.ma_seller, self.vt_buyer)
+        self.assertTrue(self.scan(str(Lot.objects.get(pk=lot.pk).lot_number_int))["ok"])
+        self.assertIsNotNone(Lot.objects.get(pk=lot.pk).checked_in)
+
+    def test_mail_lots_are_not_scanned_in(self):
+        mail = PickupLocation.objects.create(name="Mail", auction=self.multi, pickup_by_mail=True)
+        shipper = AuctionTOS.objects.create(auction=self.multi, pickup_location=mail, name="Shipper")
+        lot = self.sell(shipper, self.vt_buyer)
+        self.assertIn("ships by mail", self.scan(lot.qr_code)["message"])
+        self.assertFalse(self.scan(seller="abc")["ok"])
 
     def test_waiting_on(self):
         ma_tab = next(tab for tab in logistics.tabs(self.multi) if tab.location == self.ma)

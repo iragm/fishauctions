@@ -8873,6 +8873,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.seller_invoice = None
         self.buyer_invoice = None
         self.buy_now_used = False
+        self.checked_in = None
         self.save()
 
         # copy shipping locations

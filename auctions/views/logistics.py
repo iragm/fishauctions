@@ -73,13 +73,14 @@ class AuctionLogisticsScan(LoginRequiredMixin, AuctionViewMixin, View):
     def post(self, request):
         if not self.auction.is_online:
             raise Http404
-        if request.POST.get("seller"):
-            try:
-                seller = int(request.POST["seller"])
-            except ValueError:
-                raise Http404 from None
-            return JsonResponse(logistics.check_in_seller(self.auction, seller, request.user))
-        return JsonResponse(logistics.scan(self.auction, request.POST.get("code", ""), request.user))
+        seller = request.POST.get("seller")
+        if seller:
+            if not seller.isdigit():
+                return JsonResponse({"ok": False, "message": "That seller has no sold lots here."})
+            return JsonResponse(logistics.check_in_seller(self.auction, int(seller), request.user))
+        tab = next((tab for tab in logistics.tabs(self.auction) if tab.key == request.POST.get("tab")), None)
+        which = tab.which if tab else logistics.FIRST
+        return JsonResponse(logistics.scan(self.auction, request.POST.get("code", ""), request.user, which))
 
 
 class AuctionPostEndBanner(LoginRequiredMixin, AuctionViewMixin, TemplateView):

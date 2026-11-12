@@ -198,7 +198,7 @@ this only quotes its opening sentence.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
   `current`, `ContextFilter`, `set_user`, `RequestContextMiddleware`, `UserContextMiddleware`, `connect_celery`
-- **`logistics.py`** (343 lines)
+- **`logistics.py`** (365 lines)
   After an online auction: who comes to which pickup, and how far along the club is.
 - **`mailchimp.py`** (656 lines)
   One-way Django -> Mailchimp sync for clubs.
@@ -208,7 +208,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15562 lines)
+- **`models.py`** (15563 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -632,7 +632,7 @@ this only quotes its opening sentence.
 - **`test_paypal.py`** (1180 lines)
   PayPal: the webhooks, their event handlers, refund idempotency and the CSV export.
   `PayPalWebhookViewTests`, `PayPalWebhookEventHandlerTests`, `RefundWebhookIdempotencyTests`, `SquarePaymentUpdatedRefundResurrectionTests`, `PayPalCSVExportTests`, `PayPalLotRefundTests`
-- **`test_pickup_logistics.py`** (482 lines)
+- **`test_pickup_logistics.py`** (513 lines)
   Online auction pickups: holding lots for the second pickup, the day-before email, the logistics page,
   `PickupTestCase`, `HoldForSecondPickupTests`, `PickupPlanTests`, `PickupTomorrowEmailTests`, `LogisticsPageTests`, `PostAuctionBannerTests`, `CheckInTests`, `UsersFilterTests`, `LocationFilterTests`, `CreatedAheadChartTests`
 - **`test_printable_lot_list.py`** (148 lines)
@@ -1113,7 +1113,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`invoices.py`** (411 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
-- **`logistics.py`** (94 lines)
+- **`logistics.py`** (95 lines)
   Online auctions after bidding: the logistics page, its tap to cross a name off, its scanner, and the admin's
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionLogisticsScan`, `AuctionPostEndBanner`
 - **`lot_pages.py`** (1329 lines)
