@@ -2029,6 +2029,15 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
                 data["auction"] = lot.auction.slug
                 data["auction_title"] = lot.auction.title
                 data["auction_joined"] = command_palette._joined_auctions(user).filter(pk=lot.auction.pk).exists()
+    if pk and match.url_name == "invoice_by_pk" and "auction" not in data:
+        # Only for somebody who runs that auction: "mark bidder 14 paid" on the invoice means its auction.
+        from .models import Invoice
+
+        invoice = Invoice.objects.filter(pk=pk).select_related("auction").first()
+        if invoice and invoice.auction_id and invoice.auction.permission_check(user):
+            data["auction"] = invoice.auction.slug
+            data["auction_title"] = invoice.auction.title
+            data["auction_joined"] = True
     custom_lot_number = match.kwargs.get("custom_lot_number")
     if custom_lot_number and data.get("auction"):
         lot = Lot.objects.filter(

@@ -34,6 +34,7 @@ import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import timedelta
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -53,24 +54,29 @@ SIGNUP_PATHS = ("/signup/",)
 LOGIN_PATHS = ("/login/",)
 #: First path segments whose next segment is a slug, not a page.
 SLUG_PREFIXES = {"auctions", "clubs", "club", "lots", "users", "speakers", "help", "library", "species", "invoices"}
-#: Referrers that are search engines, social sites or mail, never a club's own site.
-GENERIC_REFERRERS = (
+#: Referrers that are search engines, social sites or mail, never a club's own site: matched against a
+#: whole label of the host, so ``planet.com`` isn't ``t.co`` and ``tubing.com`` isn't Bing.
+GENERIC_LABELS = {
     "google",
     "facebook",
-    "bing.",
+    "fb",
+    "messenger",
+    "bing",
     "duckduckgo",
     "yahoo",
     "baidu",
     "yandex",
     "ecosia",
     "instagram",
-    "t.co",
-    "android-app",
-    "mail.",
     "outlook",
+    "live",
     "chatgpt",
+    "openai",
     "localhost",
-)
+    "android-app",
+}
+GENERIC_HOSTS = {"t.co", "lm.facebook.com"}
+GENERIC_FIRST_LABELS = {"mail", "webmail"}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 fence = palette_actions.untrusted_short
@@ -140,6 +146,7 @@ def referrer_label(referrer: str, own: str) -> str:
     return fence(host or text[:60])
 
 
+@lru_cache(maxsize=4096)
 def browser_family(user_agent: str) -> str:
     """``Chrome Mobile``, ``Safari``, ``(crawler)``, ``(none)``: the browser, never the device."""
     from user_agents import parse
@@ -168,9 +175,28 @@ def _views(since, **filters):
 
 
 def _capped(queryset, fields: tuple[str, ...]):
-    """``(rows, stopped_early)``, newest last, at most :data:`MAX_ROWS`."""
-    rows = list(queryset.order_by("date_start").values_list(*fields)[: MAX_ROWS + 1])
-    return rows[:MAX_ROWS], len(rows) > MAX_ROWS
+    """``(rows, stopped_early)``, oldest first: the newest :data:`MAX_ROWS` when there are more, so a
+    report that stops early is missing the start of its window, never the latest days."""
+    rows = list(queryset.order_by("-date_start").values_list(*fields)[: MAX_ROWS + 1])
+    stopped = len(rows) > MAX_ROWS
+    rows = rows[:MAX_ROWS]
+    rows.reverse()
+    return rows, stopped
+
+
+def _stopped_note(found: dict[str, Any], summary: str, stopped: bool) -> str:
+    """Say in the summary, not only in a key, that the window was cut short."""
+    if not stopped:
+        return summary
+    found["stopped_after_rows"] = MAX_ROWS
+    return summary + f" Only the newest {MAX_ROWS:,} views were read: ask for fewer days."
+
+
+def is_generic_referrer(host: str) -> bool:
+    labels = host.split(".")
+    return (
+        host in GENERIC_HOSTS or labels[0] in GENERIC_FIRST_LABELS or any(label in GENERIC_LABELS for label in labels)
+    )
 
 
 def _depth_bucket(views: int) -> str:
@@ -250,9 +276,7 @@ def signup_funnel(request, params: dict[str, Any]) -> dict[str, Any]:
         "accounts_by_google_or_apple": social,
         "views_per_account": round(views / made, 1) if made else None,
     }
-    if stopped:
-        found["stopped_after_rows"] = MAX_ROWS
-    return _ok(summary, **found)
+    return _ok(_stopped_note(found, summary, stopped), **found)
 
 
 # --- E2 ---------------------------------------------------------------------------------------------
@@ -309,9 +333,7 @@ def entry_page_outcomes(request, params: dict[str, Any]) -> dict[str, Any]:
         "by_first_page": ranked(pages, "first_page"),
         "by_source": ranked(sources, "came_from"),
     }
-    if stopped:
-        found["stopped_after_rows"] = MAX_ROWS
-    return _ok(summary, **found)
+    return _ok(_stopped_note(found, summary, stopped), **found)
 
 
 # --- E3 ---------------------------------------------------------------------------------------------
@@ -440,8 +462,9 @@ def dead_ends(request, params: dict[str, Any]) -> dict[str, Any]:
     paths: Counter = Counter()
     pairs: Counter = Counter()
     for url, referrer in missing:
-        # The exact path matters for a 404 ("/None"), so it is kept, with numbers taken out.
-        path = re.sub(r"\d+", "<n>", (url or "")[:120])
+        # The exact path matters for a 404 ("/None"), so it is kept, with numbers taken out; under a
+        # prefix whose next segment names somebody or something (/users/<name>/) only the family is.
+        path = dead_end_path(url)
         paths[fence(path)] += 1
         pairs[(fence(path), referrer_label(referrer, own))] += 1
     logins, stopped_logins = _capped(_views(since).filter(url__startswith=LOGIN_PATHS[0]), ("referrer",))
@@ -463,9 +486,15 @@ def dead_ends(request, params: dict[str, Any]) -> dict[str, Any]:
         "login_from_page": _top(from_pages, key="was_on"),
         "note": "404s are counted from the deploy that titled the 404 page onward.",
     }
-    if stopped or stopped_logins:
-        found["stopped_after_rows"] = MAX_ROWS
-    return _ok(summary, **found)
+    return _ok(_stopped_note(found, summary, stopped or stopped_logins), **found)
+
+
+def dead_end_path(url: str) -> str:
+    path = (url or "").split("?")[0][:120]
+    first = path.strip("/").split("/")[0].lower() if path.startswith("/") else ""
+    if first in SLUG_PREFIXES or not path.startswith("/"):
+        return path_family(path)
+    return re.sub(r"\d+", "<n>", path)
 
 
 # --- E6 ---------------------------------------------------------------------------------------------
@@ -482,6 +511,28 @@ def _mcp_help_query(arguments: str) -> str:
     return str(data.get("query") or data.get("question") or "")
 
 
+#: Palette searches shorter than this are left out of the misses: names and lot numbers, not questions.
+PALETTE_MIN_WORDS = 3
+#: Phrases searched again; the rest are counted, most-asked first.
+RECHECKED = 200
+_STOPWORDS = {
+    "how", "the", "and", "for", "can", "you", "what", "does", "with", "this", "that", "are", "who", "why",
+    "when", "where", "there", "have", "from", "your", "into", "about", "want", "need", "get", "use",
+}  # fmt: skip
+
+
+def guide_answers(help_guides, phrase: str) -> bool:
+    """Whether one guide section holds every meaningful word of ``phrase``; a shared "how" isn't an answer."""
+    words = [word for word in re.findall(r"[a-z0-9']{3,}", phrase) if word not in _STOPWORDS]
+    if not words:
+        return False
+    for result in help_guides.search(phrase, limit=5):
+        text = f"{result.get('heading', '')} {result.get('text', '')}".lower()
+        if all(word in text for word in words):
+            return True
+    return False
+
+
 def help_search_misses(request, params: dict[str, Any]) -> dict[str, Any]:
     """Help searches (by agents and /ai/) and palette searches that found nothing, grouped by phrase.
 
@@ -495,9 +546,16 @@ def help_search_misses(request, params: dict[str, Any]) -> dict[str, Any]:
     since = _since(days)
     groups: dict[str, dict[str, Any]] = {}
 
+    from .admin import redact
+
     def add(text: str, where: str, who) -> None:
-        phrase = normalize_query(text)[:80]
+        # Redacted before normalizing, which would turn an email into words nothing recognises.
+        phrase = normalize_query(redact(text or ""))[:80]
         if not phrase:
+            return
+        # A palette search of one or two words is usually somebody's name or a lot; a help
+        # question is a phrase.
+        if where == "palette" and len(phrase.split()) < PALETTE_MIN_WORDS:
             return
         row = groups.setdefault(phrase, {"times": 0, "people": set(), "where": set()})
         row["times"] += 1
@@ -512,8 +570,9 @@ def help_search_misses(request, params: dict[str, Any]) -> dict[str, Any]:
     for search, user_id in bounces.values_list("search", "user_id")[:5000]:
         add(search, "palette", user_id)
     rows = []
-    for phrase, row in groups.items():
-        answered = bool(help_guides.search(phrase, limit=1))
+    ranked = sorted(groups.items(), key=lambda item: (-len(item[1]["people"]), -item[1]["times"]))
+    for phrase, row in ranked[:RECHECKED]:
+        answered = guide_answers(help_guides, phrase)
         rows.append(
             {
                 "phrase": fence(phrase),
@@ -527,7 +586,8 @@ def help_search_misses(request, params: dict[str, Any]) -> dict[str, Any]:
     open_rows = [row for row in rows if not row["a_guide_answers_it_now"]]
     limit = max(1, min(_int(params, "limit", 30) or 30, 100))
     summary = (
-        f"{len(rows)} phrases found nothing in {days} days; {len(open_rows)} still find no guide. "
+        f"{len(groups)} phrases found nothing in {days} days; {len(open_rows)} of the top {len(rows)} "
+        "still find no guide. "
         "Write help for the ones more than one person asked."
     )
     return _ok(summary, days=days, phrases=rows[:limit], still_unanswered=len(open_rows))
@@ -563,7 +623,7 @@ def referrers_without_club(request, params: dict[str, Any]) -> dict[str, Any]:
         host = site_of(referrer)
         if not host or host == own or host.endswith("." + own) or referrer in ("Google", "Facebook"):
             continue
-        if any(word in host for word in GENERIC_REFERRERS):
+        if is_generic_referrer(host):
             continue
         if host in known or any(host.endswith("." + k) or k.endswith("." + host) for k in known):
             continue
@@ -583,9 +643,7 @@ def referrers_without_club(request, params: dict[str, Any]) -> dict[str, Any]:
     limit = max(1, min(_int(params, "limit", 25) or 25, 100))
     summary = f"{len(table)} sites sent visitors in {days} days and match no club's homepage."
     found = {"days": days, "sites": table[:limit], "club_homepages_known": len(known)}
-    if stopped:
-        found["stopped_after_rows"] = MAX_ROWS
-    return _ok(summary, **found)
+    return _ok(_stopped_note(found, summary, stopped), **found)
 
 
 # --- E8 ---------------------------------------------------------------------------------------------
@@ -615,9 +673,7 @@ def seller_reach(request, params: dict[str, Any]) -> dict[str, Any]:
             "user": seller,
             "clubs": sorted(counts),
             "lots": sum(counts.values()),
-            "club_less_auctions": [{"auction": slug, "title": fence(title)} for slug, title in loose[seller].items()][
-                :5
-            ],
+            "club_less_auctions": list(loose[seller])[:5],
         }
         for seller, counts in clubs.items()
         if len(counts) >= 2

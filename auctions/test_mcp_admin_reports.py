@@ -9,7 +9,7 @@ from django.contrib.auth.models import User
 from django.test import RequestFactory
 from django.utils import timezone
 
-from auctions import command_palette
+from auctions import command_palette, palette_routes
 from auctions.mcp import admin, admin_reports
 from auctions.models import (
     Auction,
@@ -156,9 +156,19 @@ class ClubTests(Helpers):
         self.view("/", session="y", referrer="Google")
         self.view("/lots/3/a/", session="z", referrer="newclub.org/swap")
         self.view("/", session="w", referrer="bing.com")
+        self.view("/", session="v", referrer="planet.com/reef")
+        self.view("/", session="u", referrer="t.co/abc")
         result = self.run_report("referrers_without_club")
-        self.assertEqual([row["site"] for row in result["sites"]], ["«newclub.org»"])
-        self.assertEqual(result["sites"][0]["landed_on"], "/lots/<n>/*/")
+        self.assertEqual(sorted(row["site"] for row in result["sites"]), ["«newclub.org»", "«planet.com»"])
+        landed = {row["site"]: row["landed_on"] for row in result["sites"]}
+        self.assertEqual(landed["«newclub.org»"], "/lots/<n>/*/")
+
+    def test_a_capped_read_keeps_the_newest_rows(self):
+        self.view("/old/", session="o", minutes_ago=60)
+        self.view("/new/", session="n")
+        with mock.patch.object(admin_reports, "MAX_ROWS", 1):
+            rows, stopped = admin_reports._capped(PageView.objects.all(), ("url",))
+        self.assertEqual((rows, stopped), ([("/new/",)], True))
 
     def test_seller_reach_finds_a_seller_in_two_clubs(self):
         one, two = Club.objects.create(name="Club one"), Club.objects.create(name="Club two")
@@ -181,7 +191,8 @@ class ClubTests(Helpers):
         result = self.run_report("seller_reach")
         row = next(row for row in result["sellers"] if row["user"] == self.user_with_no_lots.pk)
         self.assertEqual(row["clubs"], ["Club one", "Club two"])
-        self.assertEqual(row["club_less_auctions"][0]["auction"], loose.slug)
+        self.assertEqual(row["club_less_auctions"], [loose.slug])
+        self.assertNotIn("Unfiled swap", json.dumps(result))
         self.assertNotIn("no_lots", json.dumps(result))
 
     def test_feature_adoption_lists_what_a_club_uses(self):
@@ -226,8 +237,10 @@ class DeadEndTests(Helpers):
         own = admin_reports._own_host()
         self.view("/None", session="n", title=admin_reports.NOT_FOUND_TITLE, referrer=f"{own}/signup/?next=None")
         self.view("/login/", session="m", referrer=f"{own}/lots/5/x/")
+        self.view("/users/someone/", session="k", title=admin_reports.NOT_FOUND_TITLE)
         result = self.run_report("dead_ends")
-        self.assertEqual(result["not_found_by_path"], [{"path": "«/None»", "views": 1}])
+        paths = {row["path"] for row in result["not_found_by_path"]}
+        self.assertEqual(paths, {"«/None»", "«/users/*/»"})
         self.assertEqual(result["login_from_page"][0]["was_on"], "(this site) /lots/<n>/*/")
 
     def test_help_misses_group_and_recheck(self):
@@ -236,16 +249,31 @@ class DeadEndTests(Helpers):
                 user=user,
                 tool="search_help",
                 outcome=MCPCall.EMPTY,
-                arguments=json.dumps({"query": "Zorblax quuxing?"}),
+                arguments=json.dumps({"query": "Zorblax quuxing works?"}),
             )
-        CommandPaletteSearch.objects.create(
-            user=self.user, search="zorblax quuxing", result=CommandPaletteSearch.RESULT_BOUNCE
+        bounce = CommandPaletteSearch.RESULT_BOUNCE
+        CommandPaletteSearch.objects.create(user=self.user, search="zorblax quuxing works", result=bounce)
+        CommandPaletteSearch.objects.create(user=self.user, search="Jane Doe", result=bounce)
+        MCPCall.objects.create(
+            user=self.user,
+            tool="search_help",
+            outcome=MCPCall.EMPTY,
+            arguments=json.dumps({"query": "jane.doe@mail.test refund"}),
         )
         result = self.run_report("help_search_misses")
+        text = json.dumps(result).lower()
+        self.assertNotIn("jane doe", text)
+        self.assertNotIn("mail test", text)
         row = result["phrases"][0]
-        self.assertEqual((row["phrase"], row["times"], row["people"]), ("«zorblax quuxing»", 3, 2))
+        self.assertEqual((row["phrase"], row["times"], row["people"]), ("«zorblax quuxing works»", 3, 2))
         self.assertFalse(row["a_guide_answers_it_now"])
-        self.assertEqual(result["still_unanswered"], 1)
+        self.assertEqual(result["still_unanswered"], 2)
+
+    def test_a_shared_common_word_is_not_an_answer(self):
+        from auctions import help_guides
+
+        self.assertFalse(admin_reports.guide_answers(help_guides, "how do i zorblax"))
+        self.assertTrue(admin_reports.guide_answers(help_guides, "preregistration discount"))
 
 
 class PageVerbTests(Helpers):
@@ -282,7 +310,16 @@ class PageVerbTests(Helpers):
         path = f"/invoices/{invoice.pk}/"
         with mock.patch("auctions.palette_assist.assist_enabled_for", return_value=True):
             items = command_palette.page_verb_items(self.request_for(self.user), path)
-            self.assertEqual([(item["type"], item["title"]) for item in items], [("example", "mark this invoice paid")])
+            bidder = self.online_tos.bidder_number
+            self.assertEqual(
+                [(item["type"], item["title"]) for item in items], [("example", f"mark bidder {bidder} paid")]
+            )
+            self.assertEqual(
+                palette_routes.page_context_from_path(self.user, path)["auction"], self.online_auction.slug
+            )
+            self.assertNotIn("auction", palette_routes.page_context_from_path(self.user_who_does_not_join, path))
+            with mock.patch("auctions.palette_assist.navigate_only", return_value=True):
+                self.assertEqual(command_palette.page_verb_items(self.request_for(self.user), path), [])
             self.assertEqual(command_palette.page_verb_items(self.request_for(self.user_who_does_not_join), path), [])
             Invoice.objects.filter(pk=invoice.pk).update(status="PAID")
             self.assertEqual(command_palette.page_verb_items(self.request_for(self.user), path), [])
@@ -298,9 +335,9 @@ class ShortcutCandidateTests(Helpers):
     def test_palette_writes_are_counted_reads_left_out(self):
         from auctions.models import LLMUsage
 
-        LLMUsage.objects.create(user=self.user, action="add_person", success=True)
-        LLMUsage.objects.create(user=self.user, action="add_person", success=True)
-        LLMUsage.objects.create(user=self.user, action="describe_lot", success=True)
+        for kind in ("done", "done", "countdown"):
+            LLMUsage.objects.create(user=self.user, action="add_person", success=True, response_kind=kind)
+        LLMUsage.objects.create(user=self.user, action="describe_lot", success=True, response_kind="done")
         request = RequestFactory().get("/mcp/admin/")
         request.user = self.owner
         result = admin.palette_shortcut_candidates(request, {})

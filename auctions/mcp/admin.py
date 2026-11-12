@@ -1278,7 +1278,10 @@ def _palette_writes_run(days: int = 90) -> list[dict[str, Any]]:
     from auctions.models import LLMUsage
 
     rows = (
-        LLMUsage.objects.filter(createdon__gte=timezone.now() - timedelta(days=days), success=True, cancelled=False)
+        # A "done" round is a write that ran; a countdown card nobody confirmed is a different kind.
+        LLMUsage.objects.filter(
+            createdon__gte=timezone.now() - timedelta(days=days), success=True, cancelled=False, response_kind="done"
+        )
         .exclude(action="")
         .values("action")
         .annotate(times=Count("pk"), people=Count("user", distinct=True))

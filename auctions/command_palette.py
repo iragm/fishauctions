@@ -1406,7 +1406,7 @@ MARK_PAID_PAGES = {"invoice_by_pk"}
 
 def page_verb_items(request, path):
     """The verb of the page the palette was opened on: "Add a lot" where people sell, "mark this invoice
-    paid" on an invoice its auction's admin is looking at. Empty anywhere else.
+    paid" on an unpaid invoice its auction's admin is looking at. Empty anywhere else.
 
     "Add a lot" is a link: it never acts on its own. "Mark paid" fills the box and stops, like an
     example, so the countdown card is still what writes.
@@ -1425,7 +1425,9 @@ def page_verb_items(request, path):
         return [_item("page", row["title"], row["url"], row["icon"], row["description"]) for row in _t_add_lot(user)]
     if page in ADD_LOT_PAGES and match.kwargs.get("slug"):
         auction = _joined_auctions(user).filter(slug=match.kwargs["slug"]).first()
-        if not auction or not auction.can_submit_lots or _use_bulk_add_lots(auction):
+        if not auction or _use_bulk_add_lots(auction):
+            return []
+        if not _member_can_add_lots(auction, _user_tos(user, auction)):
             return []
         return [
             _item(
@@ -1439,16 +1441,22 @@ def page_verb_items(request, path):
     if page in MARK_PAID_PAGES and match.kwargs.get("pk"):
         from . import palette_assist
 
-        invoice = Invoice.objects.filter(pk=match.kwargs["pk"]).select_related("auction").first()
+        invoice = Invoice.objects.filter(pk=match.kwargs["pk"]).select_related("auction", "auctiontos_user").first()
         if (
             not invoice
             or not invoice.auction_id
+            or not invoice.auctiontos_user_id
             or invoice.status == "PAID"
             or not invoice.auction.permission_check(user)
             or not palette_assist.assist_enabled_for(user)
+            or palette_assist.navigate_only(user)
         ):
             return []
-        return [_item("example", "mark this invoice paid", "", "bi-cash-coin")]
+        # Named by bidder number, the way the desk says it; the page context supplies the auction.
+        bidder = invoice.auctiontos_user.bidder_number
+        if not bidder:
+            return []
+        return [_item("example", f"mark bidder {bidder} paid", "", "bi-cash-coin")]
     return []
 
 
