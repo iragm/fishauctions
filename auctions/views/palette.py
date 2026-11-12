@@ -143,7 +143,8 @@ class CommandPaletteView(View):
         from auctions import command_palette
 
         q = request.GET.get("q", "")
-        groups = command_palette.with_ask_ai(command_palette.search(request, q), q, request.user)
+        path = request.GET.get("path", "")
+        groups = command_palette.with_ask_ai(command_palette.search(request, q, path=path), q, request.user)
         response = JsonResponse({"groups": groups})
         response["Cache-Control"] = "private, no-store"
         response["Pragma"] = "no-cache"

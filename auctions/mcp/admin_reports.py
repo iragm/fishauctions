@@ -1,0 +1,963 @@
+"""Ten reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
+
+Each answers a question the owner would otherwise decide by feel, and says so in its description:
+
+=======================  ==========================================================================
+``signup_funnel``        signup page views by referrer, browser family, session depth and the page they
+                         came from, then accounts made and verified: bot filter or form redesign first
+``entry_page_outcomes``  signed-out sessions' first page by source, and how many reach sign-up or log-in
+``club_retention``       clubs by the quarter of their first auction, and how many ran a 2nd and a 5th
+``unclaimed_people``     people a club added who have no account, by club, and whether they opened an invoice
+``dead_ends``            pages that 404'd and pages people were on when sent to log in, by referrer
+``help_search_misses``   help and palette searches that found nothing, grouped, still unanswered first
+``referrers_without_club``  sites sending visitors that match no club's homepage
+``seller_reach``         sellers in two or more clubs, and the club-less auctions they sold in
+``feature_adoption_by_club``  which integrations each active club uses
+``auction_setup_time``   creation to first lot, copied or fresh, and what gets changed after a copy
+=======================  ==========================================================================
+
+**Nobody is named.** A person is a user number at most, never a name, username or email; anything a
+visitor's browser or a member typed (a referrer, a search, an auction title) comes back fenced. The
+answers still go through :func:`auctions.mcp.admin.private_result` like every admin read.
+
+**Every read is bounded.** ``PageView`` is never purged and is the biggest table on the site, so each
+report over it takes ``days`` (capped) and stops at :data:`MAX_ROWS` rows, saying so when it does.
+
+A 404 is a ``PageView`` titled :data:`NOT_FOUND_TITLE` (``404.html`` sets it), so ``dead_ends`` only
+sees 404s from the deploy that added that title onward.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import statistics
+from collections import Counter, defaultdict
+from datetime import timedelta
+from functools import lru_cache
+from typing import Any
+from urllib.parse import urlsplit
+
+from django.db.models import Count, Min, Q
+from django.utils import timezone
+
+from auctions import palette_actions
+from auctions.palette_actions import DANGER_SAFE, Action, _int, _ok
+
+#: The most ``PageView`` rows one report reads; past it the report says it stopped early.
+MAX_ROWS = 300_000
+#: Rows of any one breakdown a report returns.
+TOP = 15
+#: What ``404.html`` puts in ``<title>``, and so in ``PageView.title``.
+NOT_FOUND_TITLE = "Page not found"
+SIGNUP_PATHS = ("/signup/",)
+LOGIN_PATHS = ("/login/",)
+#: First path segments whose next segment is a slug, not a page.
+SLUG_PREFIXES = {"auctions", "clubs", "club", "lots", "users", "speakers", "help", "library", "species", "invoices"}
+#: Referrers that are search engines, social sites or mail, never a club's own site: matched against a
+#: whole label of the host, so ``planet.com`` isn't ``t.co`` and ``tubing.com`` isn't Bing.
+GENERIC_LABELS = {
+    "google",
+    "facebook",
+    "fb",
+    "messenger",
+    "bing",
+    "duckduckgo",
+    "yahoo",
+    "baidu",
+    "yandex",
+    "ecosia",
+    "instagram",
+    "outlook",
+    "live",
+    "chatgpt",
+    "openai",
+    "localhost",
+    "android-app",
+}
+GENERIC_HOSTS = {"t.co", "lm.facebook.com"}
+GENERIC_FIRST_LABELS = {"mail", "webmail"}
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+fence = palette_actions.untrusted_short
+
+
+def _days(params: dict[str, Any], default: int = 30, most: int = 90) -> int:
+    return max(1, min(_int(params, "days", default) or default, most))
+
+
+def _since(days: int):
+    return timezone.now() - timedelta(days=days)
+
+
+def _share(part: int, whole: int) -> int:
+    """A whole-number percent, 0 for nothing."""
+    return round(100 * part / whole) if whole else 0
+
+
+def path_family(path: str) -> str:
+    """``/lots/123/blue-shrimp/`` -> ``/lots/<n>/*/``: which page, never which lot or whose."""
+    path = (path or "").split("?")[0].split("#")[0]
+    if not path.startswith("/"):
+        return "(another site)" if path else "(none)"
+    out: list[str] = []
+    for index, part in enumerate(p for p in path.split("/") if p):
+        if part.isdigit() or _UUID.match(part):
+            out.append("<n>")
+        elif index == 1 and out and out[0] in SLUG_PREFIXES:
+            out.append("*")
+        elif out and out[-1] == "<n>":
+            out.append("*")
+        else:
+            out.append(part.lower()[:40])
+        if len(out) >= 4:
+            break
+    return "/" + "/".join(out) + ("/" if out else "")
+
+
+def site_of(referrer: str) -> str:
+    """The host of a stored referrer (``clean_referrer`` already dropped the scheme and ``www.``)."""
+    text = (referrer or "").strip().lower()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "//" + text
+    host = urlsplit(text).hostname or ""
+    return host.removeprefix("www.")
+
+
+def _own_host() -> str:
+    from django.contrib.sites.models import Site
+
+    return Site.objects.get_current().domain.lower().removeprefix("www.")
+
+
+def referrer_label(referrer: str, own: str) -> str:
+    """Where a view came from: ``(direct)``, ``(this site) /path/``, ``Google``, or another site's host."""
+    text = (referrer or "").strip()
+    if not text:
+        return "(direct)"
+    if text in ("Google", "Facebook"):
+        return text
+    host = site_of(text)
+    if host == own or host.endswith("." + own):
+        rest = text.split("/", 1)[1] if "/" in text else ""
+        return "(this site) " + path_family("/" + rest)
+    return fence(host or text[:60])
+
+
+@lru_cache(maxsize=4096)
+def browser_family(user_agent: str) -> str:
+    """``Chrome Mobile``, ``Safari``, ``(crawler)``, ``(none)``: the browser, never the device."""
+    from user_agents import parse
+
+    from auctions.crawlers import CRAWLER_PATTERN
+
+    text = user_agent or ""
+    if not text:
+        return "(none)"
+    if CRAWLER_PATTERN.search(text):
+        return "(crawler)"
+    parsed = parse(text)
+    if parsed.is_bot:
+        return "(crawler)"
+    return parsed.browser.family or "(unknown)"
+
+
+def _top(counter: Counter, n: int = TOP, key: str = "name") -> list[dict[str, Any]]:
+    return [{key: name, "views": count} for name, count in counter.most_common(n)]
+
+
+def _views(since, **filters):
+    from auctions.models import PageView
+
+    return PageView.objects.filter(date_start__gte=since, **filters)
+
+
+def _capped(queryset, fields: tuple[str, ...]):
+    """``(rows, stopped_early)``, oldest first: the newest :data:`MAX_ROWS` when there are more, so a
+    report that stops early is missing the start of its window, never the latest days."""
+    rows = list(queryset.order_by("-date_start").values_list(*fields)[: MAX_ROWS + 1])
+    stopped = len(rows) > MAX_ROWS
+    rows = rows[:MAX_ROWS]
+    rows.reverse()
+    return rows, stopped
+
+
+def _stopped_note(found: dict[str, Any], summary: str, stopped: bool) -> str:
+    """Say in the summary, not only in a key, that the window was cut short."""
+    if not stopped:
+        return summary
+    found["stopped_after_rows"] = MAX_ROWS
+    return summary + f" Only the newest {MAX_ROWS:,} views were read: ask for fewer days."
+
+
+def is_generic_referrer(host: str) -> bool:
+    labels = host.split(".")
+    return (
+        host in GENERIC_HOSTS or labels[0] in GENERIC_FIRST_LABELS or any(label in GENERIC_LABELS for label in labels)
+    )
+
+
+def _depth_bucket(views: int) -> str:
+    if views <= 1:
+        return "1 page"
+    if views <= 3:
+        return "2-3 pages"
+    if views <= 10:
+        return "4-10 pages"
+    return "11+ pages"
+
+
+# --- E1 ---------------------------------------------------------------------------------------------
+
+
+def signup_funnel(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Who opens the signup page and how many of them become a verified account."""
+    from allauth.account.models import EmailAddress
+    from django.contrib.auth.models import User
+
+    from auctions.models import PageView
+
+    days = _days(params)
+    since = _since(days)
+    own = _own_host()
+    path_q = Q()
+    for path in SIGNUP_PATHS:
+        path_q |= Q(url__startswith=path)
+    rows, stopped = _capped(
+        _views(since).filter(path_q), ("session_id", "user_id", "referrer", "user_agent", "date_start")
+    )
+    by_referrer: Counter = Counter()
+    by_browser: Counter = Counter()
+    sessions: set[str] = set()
+    signed_in = 0
+    for session_id, user_id, referrer, user_agent, _when in rows:
+        by_referrer[referrer_label(referrer, own)] += 1
+        by_browser[browser_family(user_agent)] += 1
+        if user_id:
+            signed_in += 1
+        elif session_id:
+            sessions.add(session_id)
+    depth: Counter = Counter()
+    ids = list(sessions)
+    for start in range(0, len(ids), 1000):
+        chunk = ids[start : start + 1000]
+        counts = (
+            PageView.objects.filter(session_id__in=chunk, date_start__gte=since)
+            .values("session_id")
+            .annotate(n=Count("pk"))
+            .values_list("n", flat=True)
+        )
+        for count in counts:
+            depth[_depth_bucket(count)] += 1
+    joined = User.objects.filter(date_joined__gte=since)
+    made = joined.count()
+    verified = EmailAddress.objects.filter(user__in=joined, verified=True).values("user").distinct().count()
+    social = joined.filter(socialaccount__isnull=False).distinct().count()
+    views = len(rows)
+    summary = (
+        f"{views:,} signup page views in {days} days from {len(sessions):,} signed-out sessions; "
+        f"{made} accounts made, {verified} verified ({_share(verified, made)}%)."
+    )
+    crawler_views = by_browser.get("(crawler)", 0) + by_browser.get("(none)", 0)
+    if views:
+        summary += f" {_share(crawler_views, views)}% of the views have a crawler's browser or none."
+    found = {
+        "days": days,
+        "views": views,
+        "views_while_signed_in": signed_in,
+        "signed_out_sessions": len(sessions),
+        "by_referrer": _top(by_referrer, key="came_from"),
+        "by_browser": _top(by_browser, key="browser"),
+        "sessions_by_pages_seen": dict(sorted(depth.items())),
+        "accounts_made": made,
+        "accounts_verified": verified,
+        "accounts_by_google_or_apple": social,
+        "views_per_account": round(views / made, 1) if made else None,
+    }
+    return _ok(_stopped_note(found, summary, stopped), **found)
+
+
+# --- E2 ---------------------------------------------------------------------------------------------
+
+
+def entry_page_outcomes(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The first page of each signed-out session, where it came from, and whether it reached sign-up."""
+    days = _days(params, default=14, most=60)
+    since = _since(days)
+    own = _own_host()
+    rows, stopped = _capped(
+        _views(since, user__isnull=True).exclude(session_id__isnull=True).exclude(session_id=""),
+        ("session_id", "url", "referrer", "source", "user_agent"),
+    )
+    first: dict[str, tuple[str, str]] = {}
+    reached: set[str] = set()
+    crawlers: set[str] = set()
+    for session_id, url, referrer, source, user_agent in rows:
+        path = url or ""
+        if session_id not in first:
+            came = f"src={fence(source)}" if source else referrer_label(referrer, own)
+            first[session_id] = (path_family(path), came)
+            if browser_family(user_agent) == "(crawler)":
+                crawlers.add(session_id)
+        if path.startswith(SIGNUP_PATHS + LOGIN_PATHS):
+            reached.add(session_id)
+    pages: dict[str, dict[str, Any]] = {}
+    sources: dict[str, dict[str, Any]] = {}
+    for session_id, (page, came) in first.items():
+        if session_id in crawlers:
+            continue
+        hit = session_id in reached
+        for table, key in ((pages, page), (sources, came)):
+            row = table.setdefault(key, {"sessions": 0, "reached_signup_or_login": 0})
+            row["sessions"] += 1
+            row["reached_signup_or_login"] += hit
+
+    def ranked(table: dict[str, dict[str, Any]], label: str) -> list[dict[str, Any]]:
+        out = []
+        for key, row in sorted(table.items(), key=lambda item: -item[1]["sessions"])[:TOP]:
+            out.append({label: key, **row, "percent": _share(row["reached_signup_or_login"], row["sessions"])})
+        return out
+
+    total = len(first) - len(crawlers)
+    hits = len(reached - crawlers)
+    summary = (
+        f"{total:,} signed-out sessions in {days} days; {hits:,} ({_share(hits, total)}%) reached sign-up or "
+        "log-in. A session ends at sign-in, so joining an auction afterwards isn't seen here."
+    )
+    found = {
+        "days": days,
+        "sessions": total,
+        "crawler_sessions_left_out": len(crawlers),
+        "by_first_page": ranked(pages, "first_page"),
+        "by_source": ranked(sources, "came_from"),
+    }
+    return _ok(_stopped_note(found, summary, stopped), **found)
+
+
+# --- E3 ---------------------------------------------------------------------------------------------
+
+
+def _quarter(when) -> str:
+    return f"{when.year}-Q{(when.month - 1) // 3 + 1}"
+
+
+def club_retention(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Clubs grouped by the quarter of their first auction: how many came back for a 2nd and a 5th."""
+    from auctions.models import Auction
+
+    dates: dict[int, list] = defaultdict(list)
+    rows = (
+        Auction.objects.filter(is_deleted=False, club__isnull=False, date_start__lte=timezone.now())
+        .values_list("club_id", "date_start")
+        .order_by("date_start")
+    )
+    for club_id, start in rows:
+        dates[club_id].append(start)
+    cohorts: dict[str, dict[str, Any]] = {}
+    gaps: list[int] = []
+    for starts in dates.values():
+        row = cohorts.setdefault(_quarter(starts[0]), {"clubs": 0, "ran_a_2nd": 0, "ran_a_5th": 0})
+        row["clubs"] += 1
+        row["ran_a_2nd"] += len(starts) >= 2
+        row["ran_a_5th"] += len(starts) >= 5
+        if len(starts) >= 2:
+            gaps.append((starts[1] - starts[0]).days)
+    table = [
+        {
+            "first_auction": quarter,
+            **row,
+            "percent_2nd": _share(row["ran_a_2nd"], row["clubs"]),
+            "percent_5th": _share(row["ran_a_5th"], row["clubs"]),
+        }
+        for quarter, row in sorted(cohorts.items())
+    ]
+    clubs = len(dates)
+    seconds = sum(len(s) >= 2 for s in dates.values())
+    summary = (
+        f"{clubs} clubs have run an auction here; {seconds} ({_share(seconds, clubs)}%) ran a second. "
+        "Recent quarters haven't had time to, so read the older rows."
+    )
+    return _ok(
+        summary,
+        clubs=clubs,
+        cohorts=table,
+        median_days_first_to_second=int(statistics.median(gaps)) if gaps else None,
+    )
+
+
+# --- E4 ---------------------------------------------------------------------------------------------
+
+
+def unclaimed_people(request, params: dict[str, Any]) -> dict[str, Any]:
+    """People a club typed in (auction participants, members) whose email has no account here yet."""
+    from django.contrib.auth.models import User
+
+    from auctions.models import AuctionTOS, ClubMember, Invoice
+
+    accounts = {email.lower() for email in User.objects.exclude(email="").values_list("email", flat=True)}
+    clubs: dict[str, dict[str, set]] = defaultdict(lambda: {"people": set(), "opened": set()})
+    added = (
+        AuctionTOS.objects.filter(user__isnull=True, manually_added=True)
+        .exclude(email__isnull=True)
+        .exclude(email="")
+        .values_list("pk", "email", "auction__club__name")
+    )
+    tos_email: dict[int, tuple[str, str]] = {}
+    for pk, email, club in added.iterator(chunk_size=5000):
+        email = email.strip().lower()
+        if email in accounts:
+            continue
+        name = club or "(no club)"
+        clubs[name]["people"].add(email)
+        tos_email[pk] = (email, name)
+    members = (
+        ClubMember.objects.filter(user__isnull=True, is_deleted=False)
+        .exclude(email__isnull=True)
+        .exclude(email="")
+        .values_list("email", "club__name")
+    )
+    for email, club in members.iterator(chunk_size=5000):
+        email = email.strip().lower()
+        if email not in accounts:
+            clubs[club]["people"].add(email)
+    ids = list(tos_email)
+    for start in range(0, len(ids), 2000):
+        opened = Invoice.objects.filter(auctiontos_user_id__in=ids[start : start + 2000], opened=True)
+        for tos_id in opened.values_list("auctiontos_user_id", flat=True):
+            email, name = tos_email[tos_id]
+            clubs[name]["opened"].add(email)
+    everyone = set().union(*(row["people"] for row in clubs.values())) if clubs else set()
+    opened_any = set().union(*(row["opened"] for row in clubs.values())) if clubs else set()
+    table = sorted(
+        (
+            {
+                "club": name,
+                "people": len(row["people"]),
+                "opened_an_invoice_link": len(row["opened"]),
+                "percent_opened": _share(len(row["opened"]), len(row["people"])),
+            }
+            for name, row in clubs.items()
+        ),
+        key=lambda row: -row["people"],
+    )
+    limit = max(1, min(_int(params, "limit", 25) or 25, 200))
+    summary = (
+        f"{len(everyone):,} people a club added have no account; {len(opened_any):,} "
+        f"({_share(len(opened_any), len(everyone))}%) opened an invoice link, the ones a one-tap claim would reach."
+    )
+    return _ok(summary, people=len(everyone), opened_an_invoice_link=len(opened_any), clubs=table[:limit])
+
+
+# --- E5 ---------------------------------------------------------------------------------------------
+
+
+def dead_ends(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Pages that 404'd, by path and referrer, and the pages people were on when sent to log in."""
+    days = _days(params)
+    since = _since(days)
+    own = _own_host()
+    missing, stopped = _capped(_views(since, title=NOT_FOUND_TITLE), ("url", "referrer"))
+    paths: Counter = Counter()
+    pairs: Counter = Counter()
+    for url, referrer in missing:
+        # The exact path matters for a 404 ("/None"), so it is kept, with numbers taken out; under a
+        # prefix whose next segment names somebody or something (/users/<name>/) only the family is.
+        path = dead_end_path(url)
+        paths[fence(path)] += 1
+        pairs[(fence(path), referrer_label(referrer, own))] += 1
+    logins, stopped_logins = _capped(_views(since).filter(url__startswith=LOGIN_PATHS[0]), ("referrer",))
+    from_pages: Counter = Counter()
+    for (referrer,) in logins:
+        label = referrer_label(referrer, own)
+        if label.startswith("(this site)"):
+            from_pages[label] += 1
+    summary = f"{len(missing):,} not-found pages in {days} days"
+    summary += f", most at {paths.most_common(1)[0][0]}." if paths else "."
+    summary += f" {sum(from_pages.values()):,} log-in pages opened from one of ours."
+    found = {
+        "days": days,
+        "not_found": len(missing),
+        "not_found_by_path": _top(paths, key="path"),
+        "not_found_by_path_and_referrer": [
+            {"path": path, "came_from": came, "views": count} for (path, came), count in pairs.most_common(TOP)
+        ],
+        "login_from_page": _top(from_pages, key="was_on"),
+        "note": "404s are counted from the deploy that titled the 404 page onward.",
+    }
+    return _ok(_stopped_note(found, summary, stopped or stopped_logins), **found)
+
+
+def dead_end_path(url: str) -> str:
+    path = (url or "").split("?")[0][:120]
+    first = path.strip("/").split("/")[0].lower() if path.startswith("/") else ""
+    if first in SLUG_PREFIXES or not path.startswith("/"):
+        return path_family(path)
+    return re.sub(r"\d+", "<n>", path)
+
+
+# --- E6 ---------------------------------------------------------------------------------------------
+
+
+def _mcp_help_query(arguments: str) -> str:
+    try:
+        data = json.loads(arguments or "{}")
+    except ValueError:
+        match = re.search(r'"(?:query|question)"\s*:\s*"([^"]*)', arguments or "")
+        return match.group(1) if match else ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("query") or data.get("question") or "")
+
+
+#: Palette searches shorter than this are left out of the misses: names and lot numbers, not questions.
+PALETTE_MIN_WORDS = 3
+#: Phrases searched again; the rest are counted, most-asked first.
+RECHECKED = 200
+_STOPWORDS = {
+    "how", "the", "and", "for", "can", "you", "what", "does", "with", "this", "that", "are", "who", "why",
+    "when", "where", "there", "have", "from", "your", "into", "about", "want", "need", "get", "use",
+}  # fmt: skip
+
+
+def guide_answers(help_guides, phrase: str) -> bool:
+    """Whether one guide section holds every meaningful word of ``phrase``; a shared "how" isn't an answer."""
+    words = [word for word in re.findall(r"[a-z0-9']{3,}", phrase) if word not in _STOPWORDS]
+    if not words:
+        return False
+    for result in help_guides.search(phrase, limit=5):
+        text = f"{result.get('heading', '')} {result.get('text', '')}".lower()
+        if all(word in text for word in words):
+            return True
+    return False
+
+
+def help_search_misses(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Help searches (by agents and /ai/) and palette searches that found nothing, grouped by phrase.
+
+    Each group is searched again now, so a phrase a guide has since answered says so and sorts last.
+    """
+    from auctions import help_guides
+    from auctions.models import CommandPaletteSearch, MCPCall
+    from auctions.palette_assist import normalize_query
+
+    days = _days(params, default=30, most=180)
+    since = _since(days)
+    groups: dict[str, dict[str, Any]] = {}
+
+    from .admin import redact
+
+    def add(text: str, where: str, who) -> None:
+        # Redacted before normalizing, which would turn an email into words nothing recognises.
+        phrase = normalize_query(redact(text or ""))[:80]
+        if not phrase:
+            return
+        # A palette search of one or two words is usually somebody's name or a lot; a help
+        # question is a phrase.
+        if where == "palette" and len(phrase.split()) < PALETTE_MIN_WORDS:
+            return
+        row = groups.setdefault(phrase, {"times": 0, "people": set(), "where": set()})
+        row["times"] += 1
+        row["where"].add(where)
+        if who:
+            row["people"].add(who)
+
+    calls = MCPCall.objects.filter(createdon__gte=since, tool="search_help", outcome=MCPCall.EMPTY, admin=False)
+    for arguments, user_id in calls.values_list("arguments", "user_id")[:5000]:
+        add(_mcp_help_query(arguments), "help (agents and /ai/)", user_id)
+    bounces = CommandPaletteSearch.objects.filter(createdon__gte=since, result=CommandPaletteSearch.RESULT_BOUNCE)
+    for search, user_id in bounces.values_list("search", "user_id")[:5000]:
+        add(search, "palette", user_id)
+    rows = []
+    ranked = sorted(groups.items(), key=lambda item: (-len(item[1]["people"]), -item[1]["times"]))
+    for phrase, row in ranked[:RECHECKED]:
+        answered = guide_answers(help_guides, phrase)
+        rows.append(
+            {
+                "phrase": fence(phrase),
+                "times": row["times"],
+                "people": len(row["people"]),
+                "where": sorted(row["where"]),
+                "a_guide_answers_it_now": answered,
+            }
+        )
+    rows.sort(key=lambda row: (row["a_guide_answers_it_now"], -row["people"], -row["times"]))
+    open_rows = [row for row in rows if not row["a_guide_answers_it_now"]]
+    limit = max(1, min(_int(params, "limit", 30) or 30, 100))
+    summary = (
+        f"{len(groups)} phrases found nothing in {days} days; {len(open_rows)} of the top {len(rows)} "
+        "still find no guide. "
+        "Write help for the ones more than one person asked."
+    )
+    return _ok(summary, days=days, phrases=rows[:limit], still_unanswered=len(open_rows))
+
+
+# --- E7 ---------------------------------------------------------------------------------------------
+
+
+def club_hosts() -> set[str]:
+    """Every listed club's homepage host, ``www.`` dropped."""
+    from auctions.models import Club
+
+    hosts = set()
+    for homepage in Club.objects.exclude(homepage__isnull=True).exclude(homepage="").values_list("homepage", flat=True):
+        text = homepage.strip().lower()
+        host = site_of(re.sub(r"^https?://", "", text))
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def referrers_without_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Sites that sent visitors and match no club's homepage: clubs, forums and shops to reach out to."""
+    days = _days(params, default=90, most=365)
+    since = _since(days)
+    own = _own_host()
+    known = club_hosts()
+    rows, stopped = _capped(
+        _views(since).exclude(referrer__isnull=True).exclude(referrer=""), ("referrer", "session_id", "user_id", "url")
+    )
+    sites: dict[str, dict[str, Any]] = {}
+    for referrer, session_id, user_id, url in rows:
+        host = site_of(referrer)
+        if not host or host == own or host.endswith("." + own) or referrer in ("Google", "Facebook"):
+            continue
+        if is_generic_referrer(host):
+            continue
+        if host in known or any(host.endswith("." + k) or k.endswith("." + host) for k in known):
+            continue
+        row = sites.setdefault(host, {"views": 0, "visitors": set(), "landed_on": Counter()})
+        row["views"] += 1
+        row["visitors"].add(session_id or f"u{user_id}")
+        row["landed_on"][path_family(url or "")] += 1
+    table = [
+        {
+            "site": fence(host),
+            "views": row["views"],
+            "visitors": len(row["visitors"]),
+            "landed_on": row["landed_on"].most_common(1)[0][0],
+        }
+        for host, row in sorted(sites.items(), key=lambda item: -len(item[1]["visitors"]))
+    ]
+    limit = max(1, min(_int(params, "limit", 25) or 25, 100))
+    summary = f"{len(table)} sites sent visitors in {days} days and match no club's homepage."
+    found = {"days": days, "sites": table[:limit], "club_homepages_known": len(known)}
+    return _ok(_stopped_note(found, summary, stopped), **found)
+
+
+# --- E8 ---------------------------------------------------------------------------------------------
+
+
+def seller_reach(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Sellers with lots in two or more clubs' auctions, and the club-less auctions they also sold in."""
+    from auctions.models import Lot
+
+    days = _days(params, default=365, most=1095)
+    since = _since(days)
+    lots = Lot.objects.filter(is_deleted=False, date_posted__gte=since, auction__isnull=False).values_list(
+        "user_id", "auctiontos_seller__user_id", "auction__club__name", "auction__slug", "auction__title"
+    )
+    clubs: dict[int, Counter] = defaultdict(Counter)
+    loose: dict[int, dict[str, str]] = defaultdict(dict)
+    for user_id, tos_user_id, club, slug, title in lots.iterator(chunk_size=5000):
+        seller = tos_user_id or user_id
+        if not seller:
+            continue
+        if club:
+            clubs[seller][club] += 1
+        else:
+            loose[seller][slug] = title
+    reach = [
+        {
+            "user": seller,
+            "clubs": sorted(counts),
+            "lots": sum(counts.values()),
+            "club_less_auctions": list(loose[seller])[:5],
+        }
+        for seller, counts in clubs.items()
+        if len(counts) >= 2
+    ]
+    reach.sort(key=lambda row: (-len(row["clubs"]), -row["lots"]))
+    unfiled = Counter()
+    for seller in clubs:
+        if len(clubs[seller]) >= 2:
+            for slug in loose[seller]:
+                unfiled[slug] += 1
+    limit = max(1, min(_int(params, "limit", 25) or 25, 100))
+    summary = (
+        f"{len(reach)} sellers sold in two or more clubs' auctions in {days} days; they also sold in "
+        f"{len(unfiled)} auctions with no club. describe_person on a user number gives the rest."
+    )
+    return _ok(
+        summary,
+        days=days,
+        sellers=reach[:limit],
+        club_less_auctions_by_multi_club_sellers=[
+            {"auction": slug, "sellers": count} for slug, count in unfiled.most_common(TOP)
+        ],
+    )
+
+
+# --- E9 ---------------------------------------------------------------------------------------------
+
+FEATURES = (
+    "square",
+    "paypal",
+    "breeder_award_program",
+    "memberships",
+    "events",
+    "website_embeds",
+    "api",
+    "discord",
+    "mailing_list",
+    "google_calendar",
+    "donations",
+)
+
+
+def feature_adoption_by_club(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Which integrations each club with a recent auction uses, and which it doesn't."""
+    from auctions.models import Auction, Club, ClubAPIKey, ClubEvent, PayPalSeller, SquareSeller
+
+    days = _days(params, default=365, most=1095)
+    since = _since(days)
+    active_ids = set(
+        Auction.objects.filter(is_deleted=False, club__isnull=False, date_start__gte=since).values_list(
+            "club_id", flat=True
+        )
+    )
+    square = set(SquareSeller.objects.filter(club__isnull=False).values_list("club_id", flat=True))
+    paypal = set(PayPalSeller.objects.filter(club__isnull=False).values_list("club_id", flat=True))
+    events = set(ClubEvent.objects.filter(date_start__gte=since).values_list("club_id", flat=True))
+    api = set(ClubAPIKey.objects.filter(is_active=True, last_used_at__gte=since).values_list("club_id", flat=True))
+    auctions = dict(
+        Auction.objects.filter(is_deleted=False, club_id__in=active_ids, date_start__gte=since)
+        .values("club_id")
+        .annotate(n=Count("pk"))
+        .values_list("club_id", "n")
+    )
+    table = []
+    totals: Counter = Counter()
+    for club in Club.objects.filter(pk__in=active_ids).order_by("name"):
+        uses = {
+            "square": club.pk in square,
+            "paypal": club.pk in paypal or bool(club.paypal_client_id),
+            "breeder_award_program": club.enable_breeder_award_program,
+            "memberships": club.enable_membership,
+            "events": club.pk in events,
+            "website_embeds": bool(club.events_website_last_view and club.events_website_last_view >= since),
+            "api": club.pk in api,
+            "discord": bool(club.discord_server_id),
+            "mailing_list": bool(club.mailchimp_connected_on or club.brevo_connected_on),
+            "google_calendar": bool(club.google_calendar_connected_on),
+            "donations": club.enable_donation_tracking,
+        }
+        for name, used in uses.items():
+            totals[name] += bool(used)
+        table.append(
+            {
+                "club": club.name,
+                "auctions": auctions.get(club.pk, 0),
+                "uses": sorted(name for name, used in uses.items() if used),
+                "doesnt_use": sorted(name for name, used in uses.items() if not used),
+            }
+        )
+    table.sort(key=lambda row: -row["auctions"])
+    limit = max(1, min(_int(params, "limit", 40) or 40, 200))
+    summary = f"{len(table)} clubs ran an auction in {days} days. " + ", ".join(
+        f"{name.replace('_', ' ')} {totals[name]}" for name in FEATURES
+    )
+    return _ok(summary + ".", days=days, clubs_using=dict(totals), clubs=table[:limit])
+
+
+# --- E10 --------------------------------------------------------------------------------------------
+
+
+def auction_setup_time(request, params: dict[str, Any]) -> dict[str, Any]:
+    """From creating an auction to its first lot, copied or fresh, and the rules changed after a copy."""
+    from auctions.models import Auction, AuctionHistory
+
+    days = _days(params, default=180, most=730)
+    since = _since(days)
+    auctions = list(
+        Auction.objects.filter(is_deleted=False, date_posted__gte=since)
+        .annotate(first_lot=Min("lot__date_posted", filter=Q(lot__is_deleted=False)))
+        .values_list("pk", "date_posted", "first_lot", "is_online")
+    )
+    copied = set(
+        AuctionHistory.objects.filter(
+            auction_id__in=[row[0] for row in auctions], action__startswith="Created auction by copying"
+        ).values_list("auction_id", flat=True)
+    )
+    hours: dict[str, list[float]] = {"copied": [], "fresh": []}
+    no_lots: Counter = Counter()
+    for pk, posted, first_lot, _online in auctions:
+        kind = "copied" if pk in copied else "fresh"
+        if first_lot:
+            hours[kind].append((first_lot - posted).total_seconds() / 3600)
+        else:
+            no_lots[kind] += 1
+    changed: Counter = Counter()
+    changed_auctions: set[int] = set()
+    history = AuctionHistory.objects.filter(auction_id__in=copied, applies_to="RULES").values_list(
+        "auction_id", "changed_fields"
+    )
+    for auction_id, fields in history:
+        if isinstance(fields, dict) and fields:
+            changed_auctions.add(auction_id)
+            for name in fields:
+                changed[name] += 1
+
+    def describe(kind: str) -> dict[str, Any]:
+        values = hours[kind]
+        return {
+            "auctions": len(values) + no_lots[kind],
+            "with_no_lot_yet": no_lots[kind],
+            "median_hours_to_first_lot": round(statistics.median(values), 1) if values else None,
+        }
+
+    summary = (
+        f"{len(auctions)} auctions made in {days} days, {len(copied)} by copying another. "
+        f"Median hours to the first lot: copied {describe('copied')['median_hours_to_first_lot']}, "
+        f"fresh {describe('fresh')['median_hours_to_first_lot']}."
+    )
+    return _ok(
+        summary,
+        days=days,
+        copied=describe("copied"),
+        fresh=describe("fresh"),
+        copies_edited_afterwards=len(changed_auctions),
+        fields_changed_after_a_copy=[{"field": name, "times": count} for name, count in changed.most_common(TOP)],
+    )
+
+
+# --- the catalogue ----------------------------------------------------------------------------------
+
+_DAYS = "integer, optional, default {default}, at most {most}. How far back to look."
+
+
+def _days_param(default: int, most: int) -> str:
+    return _DAYS.format(default=default, most=most)
+
+
+READS: list[Action] = [
+    Action(
+        name="signup_funnel",
+        description=(
+            "The signup page's views by where they came from, browser family (crawlers marked) and how "
+            "many pages the session saw, then accounts made, verified and made with Google or Apple. "
+            "Settles whether to filter bots or redesign the form first. Nobody is named."
+        ),
+        params={"days": _days_param(30, 90)},
+        danger=DANGER_SAFE,
+        resolver=signup_funnel,
+    ),
+    Action(
+        name="entry_page_outcomes",
+        description=(
+            "The first page of each signed-out session, grouped by page and by source, with the share "
+            "that went on to sign up or log in. Settles which page gets a join control. Crawlers left out."
+        ),
+        params={"days": _days_param(14, 60)},
+        danger=DANGER_SAFE,
+        resolver=entry_page_outcomes,
+    ),
+    Action(
+        name="club_retention",
+        description=(
+            "Clubs grouped by the quarter of their first auction here, and the share that ran a 2nd and "
+            "a 5th, with the median days between the first two. Settles recurring auctions or onboarding."
+        ),
+        params={},
+        danger=DANGER_SAFE,
+        resolver=club_retention,
+    ),
+    Action(
+        name="unclaimed_people",
+        description=(
+            "People a club added (auction participants and members typed in) whose email has no "
+            "account here, counted by club, and how many opened an invoice link. Sizes a one-tap "
+            "account claim. Counts only, no emails."
+        ),
+        params={"limit": "integer, optional, default 25, at most 200. How many clubs to list."},
+        danger=DANGER_SAFE,
+        resolver=unclaimed_people,
+    ),
+    Action(
+        name="dead_ends",
+        description=(
+            "Pages people reached that don't exist (404s), by path and by the page that linked there, "
+            "and the pages of ours people were on when sent to log in. Finds broken links before "
+            "anyone reports them."
+        ),
+        params={"days": _days_param(30, 90)},
+        danger=DANGER_SAFE,
+        resolver=dead_ends,
+    ),
+    Action(
+        name="help_search_misses",
+        description=(
+            "Help searches by agents and /ai/, and command palette searches, that found nothing, grouped "
+            "by phrase with how many people asked; each is searched again now and marked if a guide "
+            "answers it since. What help to write next."
+        ),
+        params={
+            "days": _days_param(30, 180),
+            "limit": "integer, optional, default 30, at most 100.",
+        },
+        danger=DANGER_SAFE,
+        resolver=help_search_misses,
+    ),
+    Action(
+        name="referrers_without_club",
+        description=(
+            "Sites that sent visitors here and match no club's homepage (search engines and social "
+            "sites left out), with visitors and the page they landed on. Clubs and forums to reach out to."
+        ),
+        params={
+            "days": _days_param(90, 365),
+            "limit": "integer, optional, default 25, at most 100.",
+        },
+        danger=DANGER_SAFE,
+        resolver=referrers_without_club,
+    ),
+    Action(
+        name="seller_reach",
+        description=(
+            "Sellers with lots in two or more clubs' auctions, by user number, with the clubs and any "
+            "auctions with no club they also sold in. Warm introductions between clubs."
+        ),
+        params={
+            "days": _days_param(365, 1095),
+            "limit": "integer, optional, default 25, at most 100.",
+        },
+        danger=DANGER_SAFE,
+        resolver=seller_reach,
+    ),
+    Action(
+        name="feature_adoption_by_club",
+        description=(
+            "For each club with a recent auction: which of Square, PayPal, the breeder award program, "
+            "memberships, events, website embeds, the API, Discord, a mailing list, Google Calendar and "
+            "donations it uses and which it doesn't. What to suggest to each club."
+        ),
+        params={
+            "days": _days_param(365, 1095),
+            "limit": "integer, optional, default 40, at most 200.",
+        },
+        danger=DANGER_SAFE,
+        resolver=feature_adoption_by_club,
+    ),
+    Action(
+        name="auction_setup_time",
+        description=(
+            "Hours from creating an auction to its first lot, for copied and fresh auctions, how many "
+            "have no lot yet, and which rules people change after copying. Whether repeat auctions are "
+            "getting easier."
+        ),
+        params={"days": _days_param(180, 730)},
+        danger=DANGER_SAFE,
+        resolver=auction_setup_time,
+    ),
+]
