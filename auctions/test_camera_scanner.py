@@ -189,3 +189,18 @@ class LotQueuePreviewTests(SimpleTestCase):
         self.assertIn("aspect-ratio: 4 / 3", rule)
         lot_queue = (REPO_ROOT / "auctions" / "templates" / "auctions" / "lot_queue.html").read_text()
         self.assertIn('class="lot-queue-camera', lot_queue)
+
+
+class ZxingSourceIsNamedByTheTagTests(SimpleTestCase):
+    """{% static %} hashes names when DEBUG is off, so camera_scanner.js can't find the reader from its own
+    file name; every page that loads it must say where the reader is.
+    """
+
+    def test_every_page_passes_data_zxing_src(self):
+        templates = REPO_ROOT / "auctions" / "templates"
+        pages = [p for p in templates.rglob("*.html") if "js/camera_scanner.js" in p.read_text()]
+        self.assertTrue(pages)
+        for page in pages:
+            for line in page.read_text().splitlines():
+                if "js/camera_scanner.js" in line and "<script" in line:
+                    self.assertIn("data-zxing-src=\"{% static 'js/vendor/zxing.min.js' %}\"", line, page.name)

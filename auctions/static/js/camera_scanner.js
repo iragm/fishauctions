@@ -36,10 +36,16 @@
   // Self-hosted (see VENDOR_LIBRARIES.md): from a CDN, iPhones -- the only devices that need it --
   // couldn't scan at all on the flaky guest wifi typical of a venue, while Android carried on off
   // the native detector. Resolved relative to this script's URL, so it follows STATIC_URL.
+  // The tag names it (data-zxing-src), because {% static %} serves content-hashed names
+  // (camera_scanner.<hash>.js) when DEBUG is off: deriving it from this file's own name then
+  // missed, and every iPhone and Firefox loaded this file a second time instead of the reader.
   var ZXING_SRC = (function () {
     var tag = document.currentScript;
+    if (tag && tag.dataset && tag.dataset.zxingSrc) {
+      return tag.dataset.zxingSrc;
+    }
     if (tag && tag.src) {
-      return tag.src.replace(/camera_scanner\.js(\?.*)?$/, "vendor/zxing.min.js");
+      return tag.src.replace(/camera_scanner(\.[0-9a-f]+)?\.js(\?.*)?$/, "vendor/zxing.min.js");
     }
     return "/static/js/vendor/zxing.min.js";
   })();

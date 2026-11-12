@@ -27,7 +27,7 @@
 {% block extra_js %}
 {% comment %} Included directly (not only via the ribbon) because club permission_add_edit users can use this page without seeing the ribbon's admin block. {% endcomment %}
 {% include "auctions/barcode_scanner.html" %}
-<script src="{% static 'js/camera_scanner.js' %}"></script>
+<script src="{% static 'js/camera_scanner.js' %}" data-zxing-src="{% static 'js/vendor/zxing.min.js' %}"></script>
 <script>
   (() => {
     const toggleButton = document.getElementById("scan-toggle");
