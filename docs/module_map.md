@@ -693,7 +693,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_species_page.py`** (134 lines)
+- **`test_species_page.py`** (132 lines)
   The public species page and the numbers behind it (``auctions/species_stats.py``).
   `SpeciesPageTests`
 - **`test_species_search.py`** (188 lines)
@@ -1174,7 +1174,7 @@ Every view on the site, split by the part of it the view belongs to.
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (720 lines)
   The speaker directory: who will come and talk to a club, and what about.
-- **`species.py`** (522 lines)
+- **`species.py`** (523 lines)
   Adding species and common names, the superuser's cleanup queue, and each species' public page.
 - **`usability.py`** (197 lines)
   The usability reports, and linking auctions to clubs.
