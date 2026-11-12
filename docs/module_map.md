@@ -96,9 +96,9 @@ this only quotes its opening sentence.
 - **`cares.py`** (349 lines)
   The CARES conservation-priority list, kept in step with aquaristspecies.net.
   `CaresError`, `enabled`, `classification`, `fetch`, `Claimed`, `find_species`, `apply`, `sync`
-- **`client_ip.py`** (111 lines)
+- **`client_ip.py`** (138 lines)
   Where a request came from, for the things that count per address.
-  `client_ip`, `rate_limit_address`, `address_bucket`
+  `client_ip`, `rate_limit_address`, `address_bucket`, `visitor_coordinates`
 - **`cloudflare_cache.py`** (70 lines)
   Purging a file out of Cloudflare's edge cache.
   `enabled`, `purge_urls`
@@ -229,7 +229,7 @@ this only quotes its opening sentence.
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2043 lines)
+- **`palette_routes.py`** (2044 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -644,6 +644,9 @@ this only quotes its opening sentence.
 - **`test_promo.py`** (135 lines)
   The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
   `PromoPageTests`, `PromoPhotoTests`
+- **`test_promo_nearby.py`** (120 lines)
+  Auctions near a signed-out visitor, placed by Cloudflare's location headers: when the headers are believed,
+  `FakeRequest`, `VisitorCoordinatesTests`, `PromoNearbyTests`
 - **`test_query_counts.py`** (684 lines)
   Query-count guards for the N+1s that were fixed.
 - **`test_remote_print.py`** (540 lines)
@@ -759,7 +762,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (142 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1386 lines)
+- **`urls.py`** (1387 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -1071,7 +1074,7 @@ Every view on the site, split by the part of it the view belongs to.
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1147 lines)
+- **`base.py`** (1176 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (961 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -1144,7 +1147,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (687 lines)
+- **`site_pages.py`** (748 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
