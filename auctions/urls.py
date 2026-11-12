@@ -216,6 +216,8 @@ urlpatterns = [
     path("admin-dashboard/proposals/", views.AgentProposalsView.as_view(), name="agent_proposals"),
     path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
     path("species/name/", views.SpeciesCommonNameCreateView.as_view(), name="species_name_create"),
+    path("species/<int:pk>/", views.SpeciesDetailView.as_view(), name="species_detail"),
+    path("species/<int:pk>/<slug:slug>/", views.SpeciesDetailView.as_view(), name="species_detail_slug"),
     path("api/species/quick-add/", views.SpeciesQuickCreate.as_view(), name="species_quick_create"),
     path(
         "admin-dashboard/species-gaps/forget/<int:pk>/",

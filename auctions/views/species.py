@@ -1,4 +1,4 @@
-"""Adding species and common names, and the superuser's cleanup queue.
+"""Adding species and common names, the superuser's cleanup queue, and each species' public page.
 
 ``/species/new/`` and ``/species/name/`` are open to auction runners; a non-superuser's row is
 unapproved and scoped to them and their club. The gaps page approves, merges or rejects.
@@ -20,13 +20,13 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.generic import TemplateView, View
+from django.views.generic import DetailView, TemplateView, View
 from django.views.generic.edit import (
     CreateView,
     FormView,
 )
 
-from auctions import species_admin
+from auctions import species_admin, species_stats
 from auctions.forms import (
     SpeciesAdminForm,
     SpeciesCommonNameForm,
@@ -439,3 +439,84 @@ class SpeciesCommonNameCreateView(AuctionAdminAnywhereViewMixin, LotNameSpeciesM
                 "else's until a site admin approves it for everyone.",
             )
         return redirect(species_page_success_url(self.request))
+
+
+class SpeciesDetailView(DetailView):
+    """One species' public page: its names, a photo from its lots, CARES, a price guide and what the site's
+    sales say about it (:mod:`auctions.species_stats`). Open to anyone, linked only for superusers, and
+    kept out of search results until it is linked (:data:`INDEXED`).
+    """
+
+    #: Whether search engines may index species pages. Off while nothing public links to them.
+    INDEXED = False
+
+    model = Species
+    template_name = "species_detail.html"
+    context_object_name = "species"
+
+    def get_queryset(self):
+        queryset = Species.objects.select_related("parent", "category")
+        if self.request.user.is_superuser:
+            return queryset
+        # An unapproved row belongs to whoever added it until approved: not a public page yet.
+        return queryset.filter(approved=True)
+
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        canonical = self.object.get_absolute_url()
+        if request.path != canonical:
+            query = request.META.get("QUERY_STRING", "")
+            return redirect(f"{canonical}?{query}" if query else canonical, permanent=True)
+        return self.render_to_response(self.get_context_data(object=self.object))
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        species = self.object
+        stats = species_stats.species_stats(species)
+        names = []
+        seen = {normalize_species_name(species.common_name)} if species.common_name else set()
+        for name in species.common_names.filter(approved=True).order_by("-is_preferred", "name"):
+            key = normalize_species_name(name.name)
+            if key and key not in seen:
+                seen.add(key)
+                names.append(name.name)
+        habitat = [
+            word
+            for word, flag in (
+                ("freshwater", species.freshwater),
+                ("brackish", species.brackish),
+                ("saltwater", species.saltwater),
+            )
+            if flag
+        ]
+        name = species.full_scientific_name or species.common_name
+        title = f"{species.common_name} ({name})" if species.common_name and name != species.common_name else name
+        price = stats["price"]
+        if price:
+            description = (
+                f"{title}: sold {stats['sold']} times in fish club auctions, usually for "
+                f"{price['symbol']}{price['median']}."
+            )
+        elif stats["lots"]:
+            description = f"{title}: listed {stats['lots']} times in fish club auctions."
+        else:
+            description = f"{title} in fish club auctions."
+        context.update(
+            {
+                "stats": stats,
+                "price_years": species_stats.PRICE_GUIDE_YEARS,
+                "page_title": title,
+                "meta_description": description,
+                "other_names": names[:8],
+                "habitat": habitat,
+                "varieties": species_stats.varieties_with_lots(species),
+                "fishbase_url": (
+                    f"https://www.fishbase.se/summary/{species.speccode}"
+                    if species.source == "fishbase" and species.speccode
+                    else ""
+                ),
+                "canonical_url": self.request.build_absolute_uri(species.get_absolute_url()),
+                "indexable": self.INDEXED,
+            }
+        )
+        return context
