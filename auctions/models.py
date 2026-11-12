@@ -8384,6 +8384,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     category_checked = models.BooleanField(default=False)
     label_printed = models.BooleanField(default=False)
     label_needs_reprinting = models.BooleanField(default=False)
+    #: When a sold lot of an online auction reached the pickup (``auctions.logistics.check_in_lots``).
+    checked_in = models.DateTimeField(blank=True, null=True, default=None)
     # Kept through reprints; the stats page compares it to ``user`` to split seller from admin printing.
     label_first_printed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     partial_refund_percent = models.IntegerField(
@@ -8880,6 +8882,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.seller_invoice = None
         self.buyer_invoice = None
         self.buy_now_used = False
+        self.checked_in = None
         self.save()
 
         # copy shipping locations
