@@ -30,8 +30,8 @@ class PromoPageTests(StandardTestCase):
         )
 
     @override_settings(ENABLE_CLUB_FINDER=True)
-    def test_bring_your_club_goes_to_the_map(self):
-        self.assertContains(self.client.get(reverse("promo")), f'href="{reverse("clubs")}">Bring your club', count=1)
+    def test_bring_your_club_goes_straight_to_adding_one(self):
+        self.assertContains(self.client.get(reverse("promo")), f'href="{reverse("club_add")}">Bring your club', count=1)
 
     def test_about_is_the_promo_page_signed_in_too(self):
         self.client.force_login(self.user)

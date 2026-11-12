@@ -933,7 +933,7 @@ side. They are closed after the recommended-lots strip at the bottom of the page
             <div class="modal-footer">
                 {% comment %}One button, not two. The body is already one sentence with a sign-in link in it, and the sign-in page offers creating an account -- so a second primary button here said the same thing a third time.{% endcomment %}
                 {% if not user.is_authenticated %}
-                    <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
+                    <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" rel="nofollow" role="button" class="btn btn-primary">Sign in</a>
                 {% comment %}The auction test is not redundant: a standalone lot has no auction, and
                 user_tos is falsy for it too, so this used to reverse auction_main with an empty slug
                 and raise NoReverseMatch -- a 500 on any standalone lot a signed-in user opened.{% endcomment %}
