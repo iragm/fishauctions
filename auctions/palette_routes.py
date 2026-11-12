@@ -1258,6 +1258,7 @@ EXCLUDED: dict[str, str] = {
     ),
     "document_picture": "One picture from a document, shown on that document's page.",
     "promo": "Marketing for people who don't use the site yet; anyone who does is better served by the help.",
+    "promo_nearby": "A strip the promo page fetches for itself; auctions_near_me answers the same question.",
     "help_guide": (
         "One help guide. search_help answers with a link to the section that holds the answer, which "
         "beats landing on the top of a guide, and the help index lists every guide."
