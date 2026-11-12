@@ -382,7 +382,7 @@ class NecMemberStillSeesTheirPartsTests(TestCase):
         officer = User.objects.create_user(
             "officer", "officer@example.com", "pw", first_name="Ada", last_name="Officer"
         )
-        ClubMember.objects.create(club=club, user=officer, name="Ada Officer", permission_view=True)
+        ClubMember.objects.create(club=club, user=officer, name="Ada Officer", permission_admin=True)
         speaker = Speaker.objects.create(name="Talker, Terry", created_by=officer, club=club)
         client = Client()
         client.force_login(officer)
@@ -473,3 +473,94 @@ class ReviewFindingTests(TestCase):
         self.assertTrue(kept.imported_from_nec)
         self.assertEqual(kept.wordpress_post_id, 99)
         self.assertEqual(kept.url, "https://example.com/me.jpg")
+
+
+class ClubAdminsAddSpeakersTests(TestCase):
+    def test_an_admin_of_any_club_adds_somebody_and_their_club_is_recorded(self):
+        club = Club.objects.create(name="Ordinary Club", is_nec_club=False)
+        admin = User.objects.create_user("clubadmin", "clubadmin@example.com", "pw")
+        ClubMember.objects.create(club=club, user=admin, name="Club Admin", permission_admin=True)
+        client = Client()
+        client.force_login(admin)
+        self.assertContains(client.get(reverse("speaker_list")), reverse("speaker_add") + '"')
+        client.post(reverse("speaker_add"), {"name": "Guest, Gil", "location": "Boston, MA"})
+        speaker = Speaker.objects.get(name="Guest, Gil")
+        self.assertEqual((speaker.created_by, speaker.club), (admin, club))
+
+    def test_a_deleted_admin_row_does_not_count(self):
+        club = Club.objects.create(name="Ordinary Club")
+        former = User.objects.create_user("former", "former@example.com", "pw")
+        ClubMember.objects.create(club=club, user=former, name="Former", permission_admin=True, is_deleted=True)
+        client = Client()
+        client.force_login(former)
+        self.assertEqual(client.get(reverse("speaker_add")).status_code, 403)
+
+    def test_tags_show_in_the_list_for_anyone_signed_in(self):
+        speaker = Speaker.objects.create(name="Talker, Terry")
+        tagger = User.objects.create_user("tagger", "tagger@example.com", "pw")
+        SpeakerTag.objects.create(speaker=speaker, user=tagger, tag="funny")
+        reader = User.objects.create_user("reader", "reader@example.com", "pw")
+        client = Client()
+        client.force_login(reader)
+        self.assertContains(client.get(reverse("speaker_list")), "Funny")
+        self.assertNotContains(Client().get(reverse("speaker_list")), "Funny")
+
+
+class SignedInReadersTests(TestCase):
+    """What the second adversarial review found about notes readable by anyone signed in."""
+
+    def setUp(self):
+        self.nec_club = Club.objects.create(name="NEC Club", is_nec_club=True)
+        self.officer = User.objects.create_user("officer", "o@example.com", "pw", first_name="Ada", last_name="Officer")
+        self.row = ClubMember.objects.create(club=self.nec_club, user=self.officer, name="Ada", permission_view=True)
+        self.reader = User.objects.create_user("reader", "r@example.com", "pw")
+        self.speaker = Speaker.objects.create(name="Talker, Terry")
+        self.comment = SpeakerComment.objects.create(speaker=self.speaker, user=self.officer, body="Great talk")
+
+    def page_for(self, user):
+        client = Client()
+        client.force_login(user)
+        return client.get(self.speaker.get_absolute_url())
+
+    def test_readers_outside_nec_clubs_see_the_note_but_not_who_wrote_it(self):
+        page = self.page_for(self.reader)
+        self.assertContains(page, "Great talk")
+        self.assertNotContains(page, "Ada Officer")
+        self.assertContains(self.page_for(self.officer), "Ada Officer")
+
+    def test_an_nec_only_page_shows_its_notes_only_to_nec_clubs(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_NEC, user=self.reader)
+        page = self.page_for(self.reader)
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, "Great talk")
+
+    def test_a_former_officer_can_still_delete_their_own_comment(self):
+        self.row.delete()
+        client = Client()
+        client.force_login(self.officer)
+        self.assertContains(client.get(self.speaker.get_absolute_url()), "Delete this comment?")
+        client.post(reverse("speaker_comment_delete", kwargs={"slug": self.speaker.slug, "pk": self.comment.pk}))
+        self.comment.refresh_from_db()
+        self.assertTrue(self.comment.is_deleted)
+
+    def test_nobody_else_can_delete_it(self):
+        client = Client()
+        client.force_login(self.reader)
+        response = client.post(
+            reverse("speaker_comment_delete", kwargs={"slug": self.speaker.slug, "pk": self.comment.pk})
+        )
+        self.assertEqual(response.status_code, 403)
+        self.comment.refresh_from_db()
+        self.assertFalse(self.comment.is_deleted)
+
+    def test_a_club_named_in_the_link_that_they_dont_admin_records_no_club(self):
+        admin_club = Club.objects.create(name="Admin Club")
+        ClubMember.objects.create(club=admin_club, user=self.officer, name="Ada", permission_admin=True)
+        client = Client()
+        client.force_login(self.officer)
+        client.post(f"{reverse('speaker_add')}?club={self.nec_club.slug}", {"name": "Guest, Gil", "location": "Boston"})
+        self.assertIsNone(Speaker.objects.get(name="Guest, Gil").club)
+
+    def test_whoever_typed_in_contact_details_still_sees_them(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(created_by=self.reader, email="terry@example.com")
+        self.assertContains(self.page_for(self.reader), "terry@example.com")

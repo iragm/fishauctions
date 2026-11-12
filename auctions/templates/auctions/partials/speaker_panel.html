@@ -76,7 +76,7 @@ link. Nothing here assumes which — `standalone` only controls the close button
   </ul>
   {% endif %}
 
-  {% comment %}Tags and comments are NEC clubs' notes to each other, so nobody else sees them.{% endcomment %}
+  {% comment %}Tags and comments: read by anyone signed in, left by NEC clubs (SpeakerPanelView's show_club_notes and notes_read_only).{% endcomment %}
   {% if show_club_notes %}
   <div id="speaker-tags-block">
     {% include "auctions/partials/speaker_tags.html" %}

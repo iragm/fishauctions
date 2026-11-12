@@ -14,6 +14,8 @@ partial must stand alone — it's both part of the panel and the htmx response t
 <p class="text-muted small mb-2">No tags yet.</p>
 {% endif %}
 
+{% comment %}notes_read_only: signed in but not in an NEC club, so reading, not tagging (SpeakerPanelView).{% endcomment %}
+{% if not notes_read_only %}
 <div class="accordion accordion-flush mb-3" id="speaker-tag-accordion">
   <div class="accordion-item">
     <h2 class="accordion-header">
@@ -42,3 +44,4 @@ partial must stand alone — it's both part of the panel and the htmx response t
     </div>
   </div>
 </div>
+{% endif %}

@@ -26,7 +26,7 @@ have to behave identically and that file is the only copy of the behaviour.
     {% else %}
     <a class="btn btn-sm btn-secondary" rel="nofollow" href="{% url 'speaker_add_self' %}"><i class="bi bi-person-plus"></i> Add yourself</a>
     {% endif %}
-    {% if is_nec_member %}
+    {% if can_add_others %}
     <a class="btn btn-sm btn-info" href="{% url 'speaker_add' %}{% if club_query %}?club={{ club_query|urlencode }}{% endif %}">
       <i class="bi bi-person-plus-fill"></i> Add a speaker
     </a>
