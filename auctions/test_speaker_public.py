@@ -522,10 +522,11 @@ class SignedInReadersTests(TestCase):
         client.force_login(user)
         return client.get(self.speaker.get_absolute_url())
 
-    def test_readers_outside_nec_clubs_see_the_note_but_not_who_wrote_it(self):
+    def test_readers_outside_nec_clubs_see_the_writers_username_not_their_name(self):
         page = self.page_for(self.reader)
         self.assertContains(page, "Great talk")
         self.assertNotContains(page, "Ada Officer")
+        self.assertContains(page, "officer &middot;")
         self.assertContains(self.page_for(self.officer), "Ada Officer")
 
     def test_an_nec_only_page_shows_its_notes_only_to_nec_clubs(self):

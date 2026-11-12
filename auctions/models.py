@@ -15477,6 +15477,11 @@ class SpeakerComment(models.Model):
         return f"{self.user} on {self.speaker}"
 
     @property
+    def author_username(self):
+        """The writer's username: what readers outside NEC clubs see."""
+        return self.user.username if self.user else "Deleted user"
+
+    @property
     def author_display(self):
         """Just the person."""
         if not self.user:
