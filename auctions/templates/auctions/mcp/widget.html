@@ -159,6 +159,28 @@ const { App, applyHostStyleVariables } = globalThis.ExtApps;
     .trim();
 
   const renderers = {
+    navigation(data) {
+      if (!data.url || data.status !== "destination_resolved") {
+        root.append(el("p", "ew-empty", data.question || data.error || "Choose a destination to continue."));
+        return;
+      }
+      root.append(el("p", "ew-head", unfence(data.title) || "Continue on auction.fish"));
+      const open = el("button", "ew-btn", "Open page");
+      const message = el("p", "ew-line");
+      open.addEventListener("click", async () => {
+        if (superseded) return;
+        try {
+          const result = await app.openLink({ url: data.url });
+          message.textContent = result && result.isError
+            ? "The page could not be opened. Use the link in the conversation."
+            : "";
+        } catch (error) {
+          message.textContent = "The page could not be opened. Use the link in the conversation.";
+        }
+      });
+      root.append(open, message);
+    },
+
     lot(data) {
       const lot = data.lot || {};
       if (lot.images && lot.images.length && lot.images[0].url) {

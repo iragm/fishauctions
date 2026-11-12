@@ -166,7 +166,7 @@ def tools_for(user, query: str = "") -> list[dict[str, Any]]:
 
     shared = [
         tool
-        for tool in mcp_tools.tool_descriptors(user)
+        for tool in mcp_tools.tool_descriptors(user, palette=True)
         if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
     ]
     reads = [tool for tool in shared if not _is_a_write(tool)]
@@ -1298,7 +1298,7 @@ def note_missing_skill(request, query: str, reason: str) -> None:
     """Record a refusal as a skill request, on the model's behalf.
 
     ``cannot_do_this`` is the honest signal that somebody wanted something this site doesn't do, and it
-    was only ever written down when the model *also* chose to call ``request_a_skill`` — which it
+    was only ever written down when the model *also* chose to call ``request_feature`` — which it
     rarely did, so the queue stayed empty while the refusals piled up. Keyed on the query, so the same
     phrase from the same person updates one row. Best-effort: never breaks the reply.
     """
@@ -1308,7 +1308,7 @@ def note_missing_skill(request, query: str, reason: str) -> None:
     try:
         palette_actions.run_action(
             request,
-            "request_a_skill",
+            "request_feature",
             {
                 "skill": query[:100],
                 "reason": f"Asked in the command palette. The assistant refused: {reason}"[:2000],
@@ -2107,7 +2107,7 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             usage_id = record(result, FAIL_MODEL_ERROR, success=False)
             log_assist(user, query, KIND_ERROR)
             # The model saying the site can't do this is the one honest record of a missing skill,
-            # and it used to be kept only when the model also chose to call request_a_skill.
+            # and it used to be kept only when the model also chose to call request_feature.
             note_missing_skill(request, query, reply["message"])
             yield _give_up(request, query, reply["message"], usage_id)
             return

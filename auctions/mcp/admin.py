@@ -1295,6 +1295,9 @@ def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
     for story in found["recent_conversations"]:
         story["client"] = fence(story["client"])
         story["calls"] = [fence(step) for step in story["calls"]]
+    for search in found["recent_searches"]:
+        search["tool"] = tool_name(search["tool"])
+        search["arguments"] = fence(search["arguments"])
     found["ai_page"]["marked_not_helpful"] = [fence(query) for query in found["ai_page"]["marked_not_helpful"]]
     found["skills_asked_for"] = [fence(skill) for skill in found["skills_asked_for"]]
     summary = found.pop("summary")
@@ -2643,7 +2646,7 @@ def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     reason = _str(params, "reason")
     if evidence:
         reason = f"{reason}\n\nEvidence: {evidence}" if reason else f"Evidence: {evidence}"
-    result = palette_actions.request_a_skill(
+    result = palette_actions.request_feature(
         request, {"skill": feature, "reason": reason, "params": _str(params, "would_need")}
     )
     if result.get("request_id"):

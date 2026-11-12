@@ -11,7 +11,7 @@ Two invariants, checked for every action:
 * **Nothing about tenant A changes.** Every watched row is compared before and after, and a created
   row may not reference tenant A.
 
-An action that acts on the *caller's* own data (``set_my_auction``, ``request_a_skill``) passes both.
+An action that acts on the *caller's* own data (``set_my_auction``, ``request_feature``) passes both.
 """
 
 from __future__ import annotations

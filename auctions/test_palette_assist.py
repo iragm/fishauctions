@@ -2191,7 +2191,7 @@ class DriftTests(PaletteAssistTestCase):
         "watch_lot",
         "answer_question",
         "undo_last",
-        "request_a_skill",
+        "request_feature",
         # Which auction and club the rest of it means.
         "set_my_auction",
         "set_my_club",
