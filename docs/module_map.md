@@ -653,8 +653,8 @@ this only quotes its opening sentence.
 - **`test_promo.py`** (135 lines)
   The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
   `PromoPageTests`, `PromoPhotoTests`
-- **`test_promo_nearby.py`** (120 lines)
-  Auctions near a signed-out visitor, placed by Cloudflare's location headers: when the headers are believed,
+- **`test_promo_nearby.py`** (141 lines)
+  Auctions near a visitor with no location of their own, placed by Cloudflare's location headers: when the
   `FakeRequest`, `VisitorCoordinatesTests`, `PromoNearbyTests`
 - **`test_query_counts.py`** (684 lines)
   Query-count guards for the N+1s that were fixed.
@@ -1097,7 +1097,7 @@ Every view on the site, split by the part of it the view belongs to.
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1176 lines)
+- **`base.py`** (1179 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (978 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -1170,7 +1170,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (759 lines)
+- **`site_pages.py`** (770 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (720 lines)
   The speaker directory: who will come and talk to a club, and what about.

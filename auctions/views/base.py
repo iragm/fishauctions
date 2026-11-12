@@ -1069,15 +1069,18 @@ def _cookie_location(request):
 def visitor_location(request):
     """Where to measure "near" from, as ``(latitude, longitude)``, ``(0, 0)`` when nothing says.
 
-    A location the browser gave (cookie), then the account's; then, for a signed-out visitor only and
-    never a crawler, where Cloudflare places their address (``client_ip.visitor_coordinates``). A
-    signed-in user without one keeps being asked for theirs rather than measured from a guess.
+    A location the browser gave (cookie), then the account's; then, never for a crawler, where
+    Cloudflare places their address (``client_ip.visitor_coordinates``). That guess is only ever used
+    for this one answer and never saved: on an account it would be copied onto their lots and read as
+    a location they confirmed. A signed-in user measured from it is still asked for theirs.
     """
     latitude, longitude = _cookie_location(request)
     if latitude or longitude:
         return latitude, longitude
     if request.user.is_authenticated:
-        return request.user.userdata.latitude, request.user.userdata.longitude
+        userdata = request.user.userdata
+        if userdata.latitude or userdata.longitude:
+            return userdata.latitude, userdata.longitude
     if is_crawler(request):
         return 0, 0
     ip_latitude, ip_longitude = visitor_coordinates(request)

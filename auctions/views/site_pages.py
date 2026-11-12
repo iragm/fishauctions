@@ -475,7 +475,10 @@ class AllAuctions(LocationMixin, HTMxTableView):
             date_posted__gte=two_years_ago,
         )
         latitude, longitude = self.get_coordinates()
-        self._user_has_location = bool(latitude and longitude)
+        # A signed-in user measured from their IP is still asked to set a location.
+        self._user_has_location = bool(latitude and longitude) and not (
+            self.request.user.is_authenticated and getattr(self.request, "located_from_ip", False)
+        )
         if latitude and longitude:
             qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
         else:
@@ -502,7 +505,15 @@ class AllAuctions(LocationMixin, HTMxTableView):
         self.nearby_filter_active = False
         userdata = self.request.user.userdata
         self._base_qs = qs  # save pre-filter qs for auto-remove fallback
-        if latitude and longitude and userdata.show_nearby_auctions and self.request.GET.get("nearby") != "false":
+        # Not from an IP guess: hiding auctions needs a location they gave; the guess only orders and measures.
+        located_from_ip = getattr(self.request, "located_from_ip", False)
+        if (
+            latitude
+            and longitude
+            and not located_from_ip
+            and userdata.show_nearby_auctions
+            and self.request.GET.get("nearby") != "false"
+        ):
             online_distance = userdata.email_me_about_new_auctions_distance or 100
             in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
             qs = qs.annotate(
