@@ -42,6 +42,10 @@ class HelpIndexView(_HelpPage):
         query = (self.request.GET.get("q") or "").strip()
         context["query"] = query
         context["results"] = help_guides.search(query) if query else []
+        if query and not context["results"]:
+            from auctions import ai_page
+
+            context["ask_ai_url"] = ai_page.ask_url(self.request.user, query)
         context["groups"] = help_guides.shown_groups()
         ctx = context["help"]
         if ctx.auction:

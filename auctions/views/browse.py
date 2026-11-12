@@ -193,6 +193,12 @@ class LotListView(AjaxListView):
             regardingAuction=self.auction,
         )
         context["embed"] = "all_lots"
+        # Drawn only under "No lots found", which is always the first page, so the pages fetched while
+        # scrolling never pay for it.
+        if not self.request.GET.get("page"):
+            from auctions import ai_page
+
+            context["ask_ai_url"] = ai_page.ask_url(self.request.user, self.request.GET.get("q", ""))
         if self.request.user.is_authenticated:
             context["lotsAreHidden"] = UserIgnoreCategory.objects.filter(user=self.request.user).count()
         else:
