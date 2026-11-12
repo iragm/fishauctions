@@ -22,12 +22,12 @@ import re
 import time
 import uuid
 from datetime import timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Sum
-from django.urls import Resolver404, resolve
+from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 
 from . import llm, palette_assist, palette_routes
@@ -66,6 +66,15 @@ def enabled(user) -> bool:
     """Whether ``user`` may use the page: a model to run on, and ``UserData.use_llm_search``, the admin's
     lever for cutting somebody off the site's model."""
     return palette_assist.assist_enabled_for(user)
+
+
+def ask_url(user, words: str) -> str:
+    """``/ai/`` with ``words`` filled in and not sent, for a help or lot search that found nothing; ``""``
+    when there are no words, this person can't use the page, or today's allowance is spent."""
+    words = (words or "").strip()[:MAX_QUESTION_CHARS]
+    if not words or not enabled(user) or usage(user)["over"]:
+        return ""
+    return reverse("ai") + "?" + urlencode({"q": words})
 
 
 def daily_limit() -> int:

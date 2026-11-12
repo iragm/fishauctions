@@ -9,6 +9,7 @@
     <h5>Recently added lots will appear here shortly</h5>
     {% else %}
     <h5>No lots found</h5>
+    {% if ask_ai_url %}<p><a href="{{ ask_ai_url }}">Ask the AI</a></p>{% endif %}
     {% endif %}
   {% else %}
   <h5>You've already seen all your recommended lots</h5>
