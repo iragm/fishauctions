@@ -709,26 +709,55 @@ class AdminJobProposalTests(AdminEndpointCase):
             homepage="https://www.harboraquarium.example.org/",
             contact_email="membership@harboraquarium.example.org",
             contact_method=Club.EMAIL,
+            location="12 Member Lane, Springfield",
             outreach_stage=Club.PROSPECT,
         )
-        Club.objects.create(name="Bay Killifish Association", outreach_stage=Club.LISTED)
+        Club.objects.create(name="Bay Killifish Association", location="Bay Library", outreach_stage=Club.LISTED)
         result = self.call("list_clubs", {"search": "harbor"})
         self.assertFalse(result["isError"], result)
         clubs = result["structuredContent"]["clubs"]
         self.assertEqual([club["club"] for club in clubs], [harbor.pk])
         self.assertEqual(clubs[0]["stage"], Club.PROSPECT)
         self.assertTrue(clubs[0]["has_contact_email"])
-        self.assertEqual(clubs[0]["contact_email_domain"], "harboraquarium.example.org")
-        self.assertNotIn("membership@", json.dumps(result))
-        listed = self.call("list_clubs", {"stage": "listed"})["structuredContent"]["clubs"]
+        self.assertTrue(clubs[0]["contact_email_at_homepage_domain"])
+        text = json.dumps(result)
+        for secret in ("membership", "Member Lane"):
+            self.assertNotIn(secret, text)
+        listed = self.call("list_clubs", {"stage": "Approved and listed"})["structuredContent"]["clubs"]
         self.assertNotIn(harbor.pk, [club["club"] for club in listed])
-        self.assertTrue(self.call("list_clubs", {"stage": "gone"})["isError"])
+        self.assertIn("Bay Library", json.dumps(listed))
+        self.assertIn("Which stage", json.dumps(self.call("list_clubs", {"stage": "gone"})))
 
-    def test_the_club_directory_pages(self):
+    def test_the_club_directory_answers_whether_one_club_is_already_here(self):
         from auctions.models import Club
 
-        Club.objects.bulk_create(Club(name=f"Paging Club {number:03}") for number in range(admin.CLUB_DIRECTORY_PAGE + 5))
-        first = self.call("list_clubs", {"search": "Paging Club"})["structuredContent"]
+        harbor = Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org")
+        for arguments in (
+            {"name": "Some other name", "homepage": "harboraquarium.example.org/"},
+            {"name": "The Harbor Aquarium Society"},
+        ):
+            with self.subTest(arguments=arguments):
+                clubs = self.call("list_clubs", arguments)["structuredContent"]["clubs"]
+                self.assertEqual([club["club"] for club in clubs], [harbor.pk])
+        self.assertEqual(self.call("list_clubs", {"name": "Desert Killifish Guild"})["structuredContent"]["clubs"], [])
+
+    def test_the_club_directory_pages_within_the_size_cap(self):
+        from auctions.models import Club
+
+        Club.objects.bulk_create(
+            Club(
+                name=f"Paging Club {number:03}",
+                abbreviation="PC",
+                homepage=f"https://www.paging-club-{number:03}.example.org/",
+                facebook_page=f"https://www.facebook.com/groups/paging-club-{number:03}",
+                location="1234 Long Meeting Hall Road, Some Town, Some State 00000",
+                outreach_stage=Club.LISTED,
+            )
+            for number in range(admin.CLUB_DIRECTORY_PAGE + 5)
+        )
+        first = self.call("list_clubs", {"search": "Paging Club", "limit": 500})
+        self.assertFalse(first["isError"], first)
+        first = first["structuredContent"]
         self.assertEqual(len(first["clubs"]), admin.CLUB_DIRECTORY_PAGE)
         rest = self.call("list_clubs", {"search": "Paging Club", "offset": first["next_offset"]})["structuredContent"]
         self.assertEqual(len(rest["clubs"]), 5)
