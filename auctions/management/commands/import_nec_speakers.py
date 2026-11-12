@@ -213,9 +213,6 @@ class Command(BaseCommand):
             "programs": programs,
             "source_url": self._findtext(item, "link") or "",
             "imported_from_nec": True,
-            # Everything here came from the NEC's own database, so it stays NEC-only. Not settable
-            # from the add-speaker form.
-            "nec_only": True,
             **self._review_fields(item),
         }
         linked_user = self._user_for_email(self._speaker_email(item))
@@ -230,6 +227,12 @@ class Command(BaseCommand):
             )
             return not exists
 
+        # A profile the person now owns, or one merged into another, is theirs: a re-import leaves it be.
+        existing = Speaker.objects.filter(wordpress_post_id=post_id).values("user_id", "is_deleted").first()
+        if existing and (
+            existing["is_deleted"] or (existing["user_id"] and existing["user_id"] != getattr(linked_user, "pk", None))
+        ):
+            return False
         with transaction.atomic():
             speaker, created = Speaker.objects.update_or_create(wordpress_post_id=post_id, defaults=fields)
             speaker.topics.set(self._topics_for(item))

@@ -1700,6 +1700,8 @@ class SpeakerFilter(django_filters.FilterSet):
         self.longitude = kwargs.pop("longitude", None)
         self.nec_club_ids = kwargs.pop("nec_club_ids", ())
         self.user = kwargs.pop("user", None)
+        # Tags are NEC clubs' notes to each other; nobody else may filter by them.
+        self.show_tags = kwargs.pop("show_tags", True)
         # As ClubMemberFilter: keep it bound, or deleted speakers leak.
         if not data:
             data = {"query": ""}
@@ -1750,7 +1752,11 @@ class SpeakerFilter(django_filters.FilterSet):
         require_review = False
         remaining = []
         for token in tokens:
-            if token in self.TAG_TOKENS:
+            if not self.show_tags and (
+                token in self.TAG_TOKENS or token in ("untagged", "needsreview", "needs_review")
+            ):
+                remaining.append(token)
+            elif token in self.TAG_TOKENS:
                 wanted_tags.append(self.TAG_TOKENS[token])
             elif token in ("photo", "photos"):
                 require_photo = True

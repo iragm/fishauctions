@@ -7,11 +7,12 @@ from django.conf import settings
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.views.generic import TemplateView, View
 
 from auctions import help_guides
 from auctions.documents.search import web_documents
-from auctions.models import Auction, Document
+from auctions.models import Auction, Document, Speaker
 
 __all__ = ["AuctionHelp", "HelpGuideView", "HelpIndexView", "SitemapView"]
 
@@ -82,8 +83,8 @@ class AuctionHelp(View):
 
 
 class SitemapView(View):
-    """/sitemap.xml: the pages worth a search engine's time: the help, and library documents shared with
-    search engines (``web`` visibility).
+    """/sitemap.xml: the pages worth a search engine's time: the help, library documents shared with
+    search engines (``web`` visibility), and the speaker directory's public profiles.
     """
 
     def get(self, request):
@@ -95,6 +96,13 @@ class SitemapView(View):
             paths += [
                 document.get_absolute_url()
                 for document in web_documents().filter(status=Document.READY).only("pk", "title", "original_name")
+            ]
+            paths.append(reverse("speaker_list"))
+            paths += [
+                speaker.get_absolute_url()
+                for speaker in Speaker.objects.filter(is_deleted=False, visibility=Speaker.VISIBILITY_PUBLIC)
+                .only("pk", "slug")
+                .order_by("pk")
             ]
         body = render_to_string("sitemap.xml", {"urls": [base + path for path in paths]})
         return HttpResponse(body, content_type="application/xml")

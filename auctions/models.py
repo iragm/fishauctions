@@ -55,6 +55,7 @@ from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
 from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
+from django.utils.crypto import constant_time_compare
 from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
@@ -15134,10 +15135,22 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     """Someone who gives talks to aquarium clubs.
 
     Seeded from the NEC WordPress database; anyone with a permission in an NEC club can add more,
-    including people without accounts. `nec_only` keeps a speaker to NEC clubs.
+    including people without accounts, and anyone signed in can add themselves. `visibility` says who
+    may see the page; only public pages are listed for everyone and offered to search engines.
     """
 
     IMAGE_FIELD_NAME = "image"
+
+    VISIBILITY_PUBLIC = "public"
+    VISIBILITY_NEC = "nec"
+    VISIBILITY_LINK = "link"
+    VISIBILITY_HIDDEN = "hidden"
+    VISIBILITY_CHOICES = (
+        (VISIBILITY_PUBLIC, "Public"),
+        (VISIBILITY_NEC, "NEC member clubs only"),
+        (VISIBILITY_LINK, "Only people with the link"),
+        (VISIBILITY_HIDDEN, "Not public"),
+    )
 
     name = models.CharField(max_length=200, db_index=True)
     name.help_text = "The speaker's name, as you'd print it on a meeting flyer."
@@ -15159,7 +15172,7 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     url.help_text = "Or enter a URL to a photo instead of uploading one"
     topics = models.ManyToManyField(SpeakerTopic, blank=True, related_name="speakers")
     email = models.EmailField(max_length=255, blank=True, default="")
-    email.help_text = "Only shown to people who can see the speaker directory."
+    email.help_text = "Only shown to people who are signed in."
     phone = models.CharField(max_length=30, blank=True, default="")
     website = models.URLField(max_length=500, blank=True, default="")
     facebook_page = models.URLField(max_length=500, blank=True, default="")
@@ -15170,14 +15183,24 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     longitude = models.FloatField(blank=True, null=True, db_index=True)
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
 
-    nec_only = models.BooleanField(
-        default=False,
+    visibility = models.CharField(
+        max_length=10,
+        choices=VISIBILITY_CHOICES,
+        default=VISIBILITY_PUBLIC,
         db_index=True,
-        verbose_name="Only show to NEC member clubs",
-        help_text=(
-            "Keeps this speaker out of the directory for clubs that aren't NEC members.  "
-            "Everything imported from the NEC speaker database is set this way."
-        ),
+        verbose_name="Who can see this",
+        help_text="Public profiles can show up in search engines.",
+    )
+    link_key = models.CharField(max_length=32, blank=True, default="", editable=False)
+    link_key.help_text = "The secret in a link-only profile's share link. Filled on save."
+    merged_into = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name="merged_from",
+        help_text="The record this duplicate was merged into; its old URL redirects there.",
     )
     user = models.ForeignKey(
         User,
@@ -15234,8 +15257,71 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     def __str__(self):
         return str(self.name)
 
+    def save(self, *args, **kwargs):
+        if not self.link_key:
+            self.link_key = secrets.token_urlsafe(12)
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "link_key"}
+        super().save(*args, **kwargs)
+
     def get_absolute_url(self):
         return reverse("speaker_detail", kwargs={"slug": self.slug})
+
+    @property
+    def share_url(self):
+        """The page's address with the key a link-only profile needs; the plain address otherwise."""
+        url = self.get_absolute_url()
+        if self.visibility == self.VISIBILITY_LINK and self.link_key:
+            return f"{url}?key={self.link_key}"
+        return url
+
+    #: Where "Originally from the NEC" points when the import kept no page of its own.
+    NEC_WEBSITE = "https://northeastcouncil.org/"
+
+    @property
+    def nec_url(self):
+        """This speaker's page on the NEC's website, else the NEC's home page."""
+        if (self.source_url or "").startswith(("https://", "http://")):
+            return self.source_url
+        return self.NEC_WEBSITE
+
+    @property
+    def is_indexable(self):
+        """Whether search engines may index this page: only a public profile."""
+        return self.visibility == self.VISIBILITY_PUBLIC and not self.is_deleted
+
+    @classmethod
+    def listed_for(cls, user, nec_member):
+        """Speakers the directory lists for this viewer: public ones, NEC-only ones for NEC clubs, and
+        everything for a superuser. Link-only and not-public profiles are never listed to anyone else.
+        """
+        speakers = cls.objects.filter(is_deleted=False)
+        if user is not None and user.is_authenticated and user.is_superuser:
+            return speakers
+        allowed = [cls.VISIBILITY_PUBLIC]
+        if nec_member:
+            allowed.append(cls.VISIBILITY_NEC)
+        return speakers.filter(visibility__in=allowed)
+
+    def is_owned_by(self, user):
+        """The person this profile is, or whoever typed it in."""
+        if not user or not user.is_authenticated:
+            return False
+        return user.pk in (self.user_id, self.created_by_id)
+
+    def can_be_viewed_by(self, user, nec_member, key=""):
+        """Whether this viewer may open the page. ``key`` is a share link's secret."""
+        if self.is_deleted:
+            return False
+        if (user is not None and user.is_authenticated and user.is_superuser) or self.is_owned_by(user):
+            return True
+        if self.visibility == self.VISIBILITY_PUBLIC:
+            return True
+        if self.visibility == self.VISIBILITY_NEC:
+            return bool(nec_member)
+        if self.visibility == self.VISIBILITY_LINK:
+            return bool(self.link_key and key) and constant_time_compare(str(key), self.link_key)
+        return False
 
     @property
     def display_url(self):
@@ -15301,12 +15387,14 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
         return set(SpeakerTag.objects.filter(speaker=self, user=user).values_list("tag", flat=True))
 
     def can_be_deleted_by(self, user):
-        """Only the creator or a superuser may delete; imported rows only a superuser."""
+        """Only the person, whoever added them, or a superuser may edit or delete; imported rows only a
+        superuser until the person's own profile is merged in.
+        """
         if not user or not user.is_authenticated:
             return False
         if user.is_superuser:
             return True
-        return bool(self.created_by_id and self.created_by_id == user.pk)
+        return self.is_owned_by(user)
 
 
 class SpeakerTag(models.Model):
@@ -15382,6 +15470,33 @@ class SpeakerComment(models.Model):
         if not user or not user.is_authenticated:
             return False
         return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
+
+
+class SpeakerClaim(models.Model):
+    """Somebody pressing "This is me" on a speaker's page: a request, settled by a person approving an
+    admin connector proposal (``auctions.speaker_duplicates.link_speaker_to_account``), never on its own.
+    """
+
+    STATUS_OPEN = "open"
+    STATUS_APPROVED = "approved"
+    STATUS_DECLINED = "declined"
+    STATUS_CHOICES = (
+        (STATUS_OPEN, "Open"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_DECLINED, "Declined"),
+    )
+
+    speaker = models.ForeignKey(Speaker, on_delete=models.CASCADE, related_name="claims")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="speaker_claims")
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN, db_index=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["speaker", "user"], name="unique_speaker_claim_per_user")]
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.user} claims {self.speaker}"
 
 
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):

@@ -15,7 +15,7 @@ link. Nothing here assumes which — `standalone` only controls the close button
       </span>
       {% endif %}
       <div class="min-w-0">
-        <h4 class="mb-1">{{ speaker.display_name }}</h4>
+        {% if standalone %}<h1 class="h4 mb-1">{{ speaker.display_name }}</h1>{% else %}<h4 class="mb-1">{{ speaker.display_name }}</h4>{% endif %}
         {% if speaker.location %}
         <div class="text-muted small">
           <i class="bi bi-geo-alt me-1"></i>{{ speaker.location }}{% if distance %} <span class="text-muted">&middot; {{ distance }} miles away</span>{% endif %}
@@ -39,6 +39,23 @@ link. Nothing here assumes which — `standalone` only controls the close button
   <p style="white-space: pre-line;">{{ speaker.bio }}</p>
   {% endif %}
 
+  {% if can_claim %}
+  {% comment %}Only a request: SpeakerClaimView records it and a person approves it through the admin connector.{% endcomment %}
+  <div class="mb-3">
+    {% if claim_pending %}
+    <small class="text-muted"><i class="bi bi-hourglass-split me-1"></i>We're checking your request.</small>
+    {% elif request.user.is_authenticated %}
+    <form method="post" action="{% url 'speaker_claim' speaker.slug %}" class="d-inline">
+      {% csrf_token %}
+      {% if page_key %}<input type="hidden" name="key" value="{{ page_key }}">{% endif %}
+      <button type="submit" class="btn btn-sm btn-secondary"><i class="bi bi-person-check"></i> This is me</button>
+    </form>
+    {% else %}
+    <a class="btn btn-sm btn-secondary" rel="nofollow" href="{% url 'account_login' %}?next={{ speaker.share_url|urlencode }}"><i class="bi bi-person-check"></i> This is me</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if speaker.programs %}
   <h6 class="text-muted text-uppercase small">Talks</h6>
   <p style="white-space: pre-line;">{{ speaker.programs }}</p>
@@ -47,13 +64,20 @@ link. Nothing here assumes which — `standalone` only controls the close button
   {% if speaker.email or speaker.phone or speaker.website or speaker.facebook_page %}
   <h6 class="text-muted text-uppercase small">Contact</h6>
   <ul class="list-unstyled">
+    {% comment %}Email and phone only for people signed in, so a scraper can't harvest them.{% endcomment %}
+    {% if show_contact_details %}
     {% if speaker.email %}<li><i class="bi bi-envelope me-1"></i> <a href="mailto:{{ speaker.email }}">{{ speaker.email }}</a></li>{% endif %}
     {% if speaker.phone %}<li><i class="bi bi-telephone me-1"></i> {{ speaker.phone }}</li>{% endif %}
+    {% elif speaker.email or speaker.phone %}
+    <li><a rel="nofollow" href="{% url 'account_login' %}?next={{ speaker.share_url|urlencode }}">Sign in to see how to reach them.</a></li>
+    {% endif %}
     {% if speaker.website %}<li><i class="bi bi-globe me-1"></i> <a href="{{ speaker.website }}" target="_blank" rel="noopener">{{ speaker.website }}</a></li>{% endif %}
     {% if speaker.facebook_page %}<li><i class="bi bi-facebook me-1"></i> <a href="{{ speaker.facebook_page }}" target="_blank" rel="noopener">Facebook</a></li>{% endif %}
   </ul>
   {% endif %}
 
+  {% comment %}Tags and comments are NEC clubs' notes to each other, so nobody else sees them.{% endcomment %}
+  {% if is_nec_member %}
   <div id="speaker-tags-block">
     {% include "auctions/partials/speaker_tags.html" %}
   </div>
@@ -61,13 +85,25 @@ link. Nothing here assumes which — `standalone` only controls the close button
   <div id="speaker-comments-block">
     {% include "auctions/partials/speaker_comments.html" %}
   </div>
+  {% endif %}
+
+  {% if share_url %}
+  <div class="mb-3">
+    <label class="form-label small text-muted" for="speaker-share-url">Share link</label>
+    <input type="text" readonly class="form-control form-control-sm" id="speaker-share-url" value="{{ share_url }}" onclick="this.select()">
+  </div>
+  {% endif %}
 
   <hr>
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-    {% comment %}No "NEC only" badge: everything imported carries the flag and the directory is
-    NEC-only anyway, so it appeared on most cards and told the people who could see it nothing
-    they didn't already know. The flag itself still scopes who the speaker is shown to.{% endcomment %}
+    {% comment %}Who added a speaker names a member, so only NEC clubs see it; the NEC's own records say where they came from to everyone.{% endcomment %}
+    {% if speaker.imported_from_nec %}
+    <small class="text-muted">Originally from the <a href="{{ speaker.nec_url }}" target="_blank" rel="noopener">NEC</a></small>
+    {% elif is_nec_member %}
     <small class="text-muted">{{ speaker.attribution }}</small>
+    {% else %}
+    <span></span>
+    {% endif %}
     <div class="d-flex gap-2">
       {% if not standalone %}
       <a class="btn btn-sm btn-primary" href="{% url 'speaker_detail' speaker.slug %}"><i class="bi bi-box-arrow-up-right"></i> Open page</a>

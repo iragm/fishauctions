@@ -6181,6 +6181,7 @@ class SpeakerForm(forms.ModelForm):
         model = Speaker
         fields = [
             "name",
+            "visibility",
             "image",
             "url",
             "bio",
@@ -6195,6 +6196,7 @@ class SpeakerForm(forms.ModelForm):
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Jane Aquarist"}),
+            "visibility": forms.RadioSelect(),
             "bio": forms.Textarea(attrs={"rows": 5, "placeholder": "A paragraph about the speaker."}),
             "programs": forms.Textarea(
                 attrs={"rows": 4, "placeholder": "One talk per line, or however they list them."}
@@ -6209,8 +6211,13 @@ class SpeakerForm(forms.ModelForm):
             "programs": "The talks they offer.",
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, self_listing=False, **kwargs):
         super().__init__(*args, **kwargs)
+        if self_listing:
+            self.fields["name"].help_text = "Your name, as you'd like it on a meeting flyer."
+            self.fields["visibility"].label = "Who can see your profile"
+        # Left out means unchanged (a new speaker's default is public).
+        self.fields["visibility"].required = False
         self.fields["topics"].required = False
         self.fields["topics"].queryset = SpeakerTopic.objects.all()
         # A closed vocabulary (auctions/speaker_topics.py).
@@ -6227,6 +6234,7 @@ class SpeakerForm(forms.ModelForm):
         self.helper.attrs = {"enctype": "multipart/form-data"}
         self.helper.layout = Layout(
             "name",
+            "visibility",
             Fieldset(
                 "Photo",
                 "image",
@@ -6263,6 +6271,9 @@ class SpeakerForm(forms.ModelForm):
             msg = "Please enter the speaker's name"
             raise forms.ValidationError(msg)
         return name
+
+    def clean_visibility(self):
+        return self.cleaned_data.get("visibility") or self.instance.visibility or Speaker.VISIBILITY_PUBLIC
 
     def clean_url(self):
         """Validate that the URL points to an image. Same check LotImage's form runs."""
