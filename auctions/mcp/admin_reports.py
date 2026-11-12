@@ -28,7 +28,8 @@ answers still go through :func:`auctions.mcp.admin.private_result` like every ad
 report over it takes ``days`` (capped) and stops at :data:`MAX_ROWS` rows, saying so when it does.
 
 ``read_feedback`` can't write, so "never read twice" is a cursor: the caller passes back ``next_since``
-(and the ids it has already handled as ``seen``). ``survey_answered_on`` is set at the *first* answer, so a
+as ``since`` and ``next_seen`` as ``seen``: ``since`` is inclusive, so rows tied at the cursor come back once
+and ``seen`` drops them. ``survey_answered_on`` is set at the *first* answer, so a
 comment typed after the button click can sit before the cursor and be missed; ``seen`` only removes rows,
 it can't bring those back. A weekly routine that wants them passes a ``since`` a day or two earlier than
 ``next_since`` and the ids it has handled.
@@ -877,7 +878,7 @@ def read_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
     limit = max(1, min(_int(params, "limit", 50) or 50, 200))
     seen = _ids(str(params.get("seen") or ""))
     rows = (
-        AuctionTOS.objects.filter(survey_answered_on__gt=since)
+        AuctionTOS.objects.filter(survey_answered_on__gte=since)
         .exclude(survey_comments="")
         .exclude(pk__in=seen)
         .select_related("auction", "auction__club")
@@ -899,6 +900,8 @@ def read_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
         for tos in found
     ]
     next_since = found[-1].survey_answered_on.isoformat() if found else since.isoformat()
+    # since is inclusive, so the rows at exactly next_since come back as seen= next time, not as new rows.
+    next_seen = [tos.pk for tos in found if tos.survey_answered_on == found[-1].survey_answered_on] if found else seen
     summary = f"{len(items)} survey comments after {since.isoformat()}"
     summary += "; more remain, call again with next_since." if more else "."
     return _ok(
@@ -906,6 +909,7 @@ def read_feedback(request, params: dict[str, Any]) -> dict[str, Any]:
         feedback=items,
         more=more,
         next_since=next_since,
+        next_seen=",".join(str(pk) for pk in next_seen),
         note=(
             "Comments about the website itself (not an auction or a club) go to suggest_feature. "
             "A comment added after its answer button was clicked can sit before the cursor."
@@ -1064,7 +1068,7 @@ def outreach_outcomes(request, params: dict[str, Any]) -> dict[str, Any]:
 
 # --- E14 --------------------------------------------------------------------------------------------
 
-RUNNING_STAGES = ("active", "slipping")
+RUNNING_STAGES = ("active", "slipping", "new")
 
 
 def _tool_bucket(count: int) -> str:
@@ -1252,17 +1256,17 @@ READS: list[Action] = [
         description=(
             "Post-auction survey comments (what people typed after 'How was the auction?'), oldest first, "
             "each with its answer (great or not_fun), auction and club, and nobody named. Reads never write, "
-            "so a routine passes the returned next_since back as since, and the feedback ids it has already "
-            "handled as seen, and nothing is read twice. Feedback about the website itself (not the auction "
+            "so a routine passes the returned next_since back as since and next_seen back as seen, and "
+            "nothing is read twice. Feedback about the website itself (not the auction "
             "or the club) should go to suggest_feature."
         ),
         params={
             "since": (
-                "string, optional, default 7 days ago. An ISO datetime; only comments answered strictly after "
-                "it are returned. Pass the previous call's next_since."
+                "string, optional, default 7 days ago. An ISO datetime; comments answered at or after it are "
+                "returned. Pass the previous call's next_since."
             ),
             "limit": "integer, optional, default 50, at most 200.",
-            "seen": "string, optional. Comma-separated feedback ids already handled, left out of the result.",
+            "seen": "string, optional. Comma-separated feedback ids already handled, left out of the result: the previous call's next_seen.",
         },
         danger=DANGER_SAFE,
         resolver=read_feedback,

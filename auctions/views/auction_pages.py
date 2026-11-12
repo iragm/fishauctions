@@ -936,7 +936,8 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             following = self.auction.next_club_auction
             if following:
                 ended_message = format_html(
-                    "This auction has ended; the next one is <a href='{}'>{}</a>.",
+                    "This auction has ended: <a href='{}'>view lots</a>, or join the next one, <a href='{}'>{}</a>.",
+                    self.auction.view_lot_link,
                     following.get_absolute_url(),
                     following.title,
                 )

@@ -21,7 +21,7 @@ Your lots{% else %}
 {% block open_graph %}
 {% if auction %}
 {% auction_summary auction as og_description %}
-{% absolute_uri request.path as og_url %}
+{% absolute_uri request.get_full_path as og_url %}
 {% if auction.club.icon %}{% absolute_uri auction.club.icon_display_url as og_image %}{% endif %}
 {% include "open_graph.html" with og_title="Lots for "|add:auction.title og_description=og_description og_url=og_url og_image=og_image %}
 {% endif %}

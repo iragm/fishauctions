@@ -101,6 +101,30 @@ class SendNextAuctionTests(Helpers):
         self.assertTrue(auction.next_auction_email_sent)
 
     @patch(SEND)
+    def test_a_skipped_ask_keeps_the_anniversary(self, send):
+        auction = self.make("Fall club auction", days_ago=12)
+        self.make("Winter club auction", days_ago=-20, posted_days_ago=2)
+        next_auction.send_next_auction_emails()
+        auction.refresh_from_db()
+        self.assertTrue(auction.next_auction_email_sent)
+        self.assertFalse(auction.anniversary_email_sent)
+
+    @patch(SEND)
+    def test_clubless_test_then_a_club_auction_is_not_nudged(self, send):
+        self.make("test auction", days_ago=8, club=False)
+        self.make("Real club auction", days_ago=-5, posted_days_ago=7)
+        next_auction.send_next_auction_emails()
+        sent_for = [call.kwargs["context"]["auction"].title for call in send.call_args_list]
+        self.assertNotIn("test auction", sent_for)
+
+    @patch(SEND)
+    def test_inactive_creator_gets_nothing(self, send):
+        self.organizer.is_active = False
+        self.organizer.save()
+        self.make("Fall club auction", days_ago=12)
+        self.assertEqual(next_auction.send_next_auction_emails(), 0)
+
+    @patch(SEND)
     def test_auctions_marked_sent_never_send(self, send):
         self.make("Fall club auction", days_ago=12, next_auction_email_sent=True)
         self.assertEqual(next_auction.send_next_auction_emails(), 0)
@@ -163,6 +187,15 @@ class AnniversaryTests(Helpers):
         self.make("Club spring swap", days_ago=days, next_auction_email_sent=True)
         self.make("Club plant auction", days_ago=days - 1, next_auction_email_sent=True)
         self.assertEqual(next_auction.send_anniversary_emails(), 1)
+
+    @patch(SEND)
+    def test_a_close_neighbour_a_day_later_is_not_a_second_email(self, send):
+        days = self.year_ago()
+        self.make("Club spring swap", days_ago=days, next_auction_email_sent=True)
+        self.assertEqual(next_auction.send_anniversary_emails(), 1)
+        self.make("Club plant auction", days_ago=days - 3, next_auction_email_sent=True)
+        later = timezone.now() + datetime.timedelta(days=3)
+        self.assertEqual(next_auction.send_anniversary_emails(now=later), 0)
 
     @patch(SEND)
     def test_test_auctions_are_ignored(self, send):

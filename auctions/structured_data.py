@@ -69,9 +69,11 @@ def auction_event(request, auction):
         event["location"] = {"@type": "VirtualLocation", "url": url}
     else:
         place = {}
-        first = next((loc for loc in auction.physical_locations if loc.name or loc.address), None)
+        # PickupLocation.address is never shown to the public ("won't be shown to users"), so only the
+        # location's name and the auction's own region go out.
+        first = next((loc for loc in auction.physical_locations if loc.name), None)
         if first:
-            place = {"name": first.name or "", "address": first.address or ""}
+            place = {"name": first.name, "address": auction.location or ""}
         elif auction.club_id and auction.club.location:
             place = {"name": auction.club.name, "address": auction.club.location}
         place = {key: value for key, value in place.items() if value}

@@ -222,9 +222,9 @@ this only quotes its opening sentence.
 - **`module_map.py`** (181 lines)
   The map of this repository: which module does what, generated from the modules themselves.
   `Module`, `iter_modules`, `render`, `rule_violations`, `main`
-- **`next_auction.py`** (241 lines)
+- **`next_auction.py`** (272 lines)
   Asking an auction's creator to run the next one, automatically, at about the time it would be due.
-  `title_stem`, `expected_gap`, `next_auction_due`, `should_skip`, `next_auction_candidates`, `send_next_auction_emails`, `anniversary_candidates`, `has_successor`, `send_anniversary_emails`
+  `title_stem`, `expected_gap`, `next_auction_due`, `should_skip`, `next_auction_candidates`, `send_next_auction_emails`, `anniversary_candidates`, `has_successor`, `had_one_just_before`, `send_anniversary_emails`
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
@@ -297,7 +297,7 @@ this only quotes its opening sentence.
 - **`square_offsite.py`** (338 lines)
   Square payments taken in a connected account without this site: a club's own Payment Link or register.
   `square_time`, `order_source`, `record_payment`, `purge`, `record_refund`, `next_dues_payment`, `resolve_dues_payment`, `invoice_payment_hint`
-- **`structured_data.py`** (112 lines)
+- **`structured_data.py`** (114 lines)
   schema.org Event data (JSON-LD) for the auction page and the club page, so a search engine can show
   `script_tag`, `club_url`, `auction_summary`, `auction_event`, `club_events`
 - **`tables.py`** (1799 lines)
@@ -557,7 +557,7 @@ this only quotes its opening sentence.
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (1931 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_admin_reports.py`** (513 lines)
+- **`test_mcp_admin_reports.py`** (525 lines)
   The growth reports on ``/mcp/admin/`` (:mod:`auctions.mcp.admin_reports`), the 404 page's title they
   `Helpers`, `ShapeTests`, `FunnelTests`, `ClubTests`, `DeadEndTests`, `PageVerbTests`, `ShortcutCandidateTests`, `FeedbackTests`, `AcquisitionTests`
 - **`test_mcp_permissions.py`** (724 lines)
@@ -609,7 +609,7 @@ this only quotes its opening sentence.
 - **`test_money_views.py`** (577 lines)
   The views that move money or decide who owes it: bulk invoice status changes (ready, paid), the lot
   `MarkInvoicesReadyTests`, `MarkInvoicesPaidTests`, `LotRefundDialogTests`, `BulkSetLotsWonTests`, `InvoiceViewTests`, `InvoiceCreateViewTests`, `BidDeleteTests`, `DynamicSetLotWinnerTests`, `LotEndUnsoldTests`
-- **`test_next_auction.py`** (239 lines)
+- **`test_next_auction.py`** (272 lines)
   The emails that ask an auction's creator to run the next one (``auctions/next_auction.py``), the ended
   `Helpers`, `StemTests`, `NextAuctionDueTests`, `SendNextAuctionTests`, `AnniversaryTests`, `NextClubAuctionTests`, `ShareMyLotsTests`
 - **`test_offline_web.py`** (334 lines)
@@ -961,7 +961,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 - **`admin.py`** (3054 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_reports.py`** (1310 lines)
+- **`admin_reports.py`** (1314 lines)
   Fourteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
@@ -1108,7 +1108,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1154 lines)
+- **`auction_pages.py`** (1155 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)

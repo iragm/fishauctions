@@ -377,7 +377,7 @@ class FeedbackTests(Helpers):
         for private in ("Zelda", "Quillfeather", "zelda.quill", "Silent Sam"):
             self.assertNotIn(private, text)
         self.assertFalse(result["more"])
-        again = self.run_report("read_feedback", {"since": result["next_since"]})
+        again = self.run_report("read_feedback", {"since": result["next_since"], "seen": result["next_seen"]})
         self.assertEqual(again["feedback"], [])
         self.assertEqual(again["next_since"], result["next_since"])
         excluded = self.run_report("read_feedback", {"since": "2000-01-01T00:00:00+00:00", "seen": str(old.pk)})
@@ -395,8 +395,20 @@ class FeedbackTests(Helpers):
         page = self.run_report("read_feedback", {"limit": 1})
         self.assertEqual(len(page["feedback"]), 1)
         self.assertTrue(page["more"])
-        rest = self.run_report("read_feedback", {"since": page["next_since"]})
+        rest = self.run_report("read_feedback", {"since": page["next_since"], "seen": page["next_seen"]})
         self.assertEqual([r["feedback"] for r in rest["feedback"]], [other.pk])
+
+    def test_a_tie_at_the_page_edge_is_not_lost(self):
+        when = timezone.now() - datetime.timedelta(hours=1)
+        other = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Second"
+        )
+        self.answer(self.online_tos, "first", when)
+        self.answer(other, "second", when)
+        page = self.run_report("read_feedback", {"limit": 1})
+        rest = self.run_report("read_feedback", {"since": page["next_since"], "seen": page["next_seen"]})
+        got = [r["feedback"] for r in page["feedback"] + rest["feedback"]]
+        self.assertEqual(sorted(got), sorted([self.online_tos.pk, other.pk]))
 
     def test_a_bad_since_is_refused(self):
         request = RequestFactory().get("/mcp/admin/")

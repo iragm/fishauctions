@@ -15,10 +15,13 @@ Two emails, both to ``Auction.created_by`` and both one sentence and one button 
 * ``auction_anniversary`` (:func:`send_anniversary_emails`): :data:`ANNIVERSARY_LEAD` before a real
   auction's first anniversary, unless an auction with the same name (years, months and numbers aside,
   :func:`title_stem`) has been made since. It looks at auctions whose anniversary falls inside
-  :data:`ANNIVERSARY_WINDOW`, so an old auction never sends late.
+  :data:`ANNIVERSARY_WINDOW`, so an old auction never sends late. Auctions from before migration 0527 do
+  qualify: the anniversary of one held a year ago is the point.
 
-Sending one marks both flags, so an auction never gets the two emails. A flag is claimed with a
-conditional update before sending, so two overlapping runs can't both send. Nobody is emailed who has
+Sending one marks both flags, so an auction never gets the two emails; deciding not to send marks only
+its own. A flag is claimed with a conditional update before sending, so two overlapping runs can't both
+send. Of a club's auctions within :data:`CLUSTER` of each other, only the earliest gets an anniversary
+email. Nobody is emailed who has
 unsubscribed or has no usable address; their flag is set anyway.
 """
 
@@ -54,6 +57,8 @@ LOOKBACK = timedelta(days=800)
 ANNIVERSARY_LEAD = timedelta(weeks=10)
 ANNIVERSARY_WINDOW = timedelta(days=14)
 YEAR = timedelta(days=365)
+#: Auctions this close together share one anniversary email, the earliest one's.
+CLUSTER = timedelta(days=30)
 
 _MONTHS = (
     "january february march april may june july august september october november december "
@@ -78,25 +83,32 @@ def _siblings(auction):
     return Auction.objects.filter(_same_owner(auction), is_deleted=False).exclude(pk=auction.pk)
 
 
-def expected_gap(auction) -> timedelta:
-    """The club's (or creator's) median gap between real auctions, or :data:`DEFAULT_GAP`."""
+def expected_gap(auction, cache=None) -> timedelta:
+    """The club's (or creator's) median gap between real auctions, or :data:`DEFAULT_GAP`. ``cache`` (a
+    dict) keeps one answer per club or creator for a run."""
+    key = ("club", auction.club_id) if auction.club_id else ("user", auction.created_by_id)
+    if cache is not None and key in cache:
+        return cache[key]
     dates = [
         other.date_start
         for other in Auction.objects.filter(_same_owner(auction), is_deleted=False).only("slug", "title", "date_start")
         if not is_test_auction(other)
     ]
     days = median_gap(dates)
-    return timedelta(days=days) if days else DEFAULT_GAP
+    gap = timedelta(days=days) if days else DEFAULT_GAP
+    if cache is not None:
+        cache[key] = gap
+    return gap
 
 
-def next_auction_due(auction):
+def next_auction_due(auction, cache=None):
     """When the ``next_auction`` email should go, or ``None`` when it shouldn't go at all."""
     if is_test_auction(auction):
         return auction.date_posted + TEST_NUDGE_AFTER
     wound_down = auction.wind_down_time
     if not wound_down:
         return None
-    gap = expected_gap(auction)
+    gap = expected_gap(auction, cache)
     return wound_down + gap - min(MAX_LEAD, gap / 2)
 
 
@@ -106,13 +118,15 @@ def should_skip(auction) -> bool:
     if siblings.filter(date_posted__gt=auction.date_posted).exists():
         return True
     if is_test_auction(auction):
-        # Asking somebody who already runs real auctions to "run one for real" makes no sense.
-        return any(not is_test_auction(other) for other in siblings.only("slug", "title"))
+        # Asking somebody who already runs real auctions to "run one for real" makes no sense: theirs
+        # under any club count, so a club-less test followed by a club auction isn't asked.
+        theirs = Auction.objects.filter(Q(created_by_id=auction.created_by_id) | _same_owner(auction), is_deleted=False)
+        return any(not is_test_auction(other) for other in theirs.exclude(pk=auction.pk).only("slug", "title"))
     return False
 
 
 def _deliverable(user) -> bool:
-    if not user or user.userdata.has_unsubscribed:
+    if not user or not user.is_active or user.userdata.has_unsubscribed:
         return False
     try:
         validate_email((user.email or "").strip())
@@ -122,11 +136,13 @@ def _deliverable(user) -> bool:
 
 
 def _claim(auction, flag: str) -> bool:
-    """Mark both flags; True only for the run that flipped ``flag``."""
-    claimed = Auction.objects.filter(pk=auction.pk, **{flag: False}).update(
-        next_auction_email_sent=True, anniversary_email_sent=True
-    )
-    return bool(claimed)
+    """Set ``flag``; True only for the run that flipped it."""
+    return bool(Auction.objects.filter(pk=auction.pk, **{flag: False}).update(**{flag: True}))
+
+
+def _sent(auction):
+    """An email went: the auction won't get the other one too."""
+    Auction.objects.filter(pk=auction.pk).update(next_auction_email_sent=True, anniversary_email_sent=True)
 
 
 def _send(auction, template: str, title: str, context: dict):
@@ -167,10 +183,16 @@ def send_next_auction_emails(now=None) -> int:
     """Send every ``next_auction`` email that is due. Returns how many went."""
     now = now or timezone.now()
     sent = 0
+    gaps = {}
     for auction in next_auction_candidates(now):
         try:
-            due = next_auction_due(auction)
-            if due is None or now < due:
+            due = next_auction_due(auction, gaps)
+            if due is None:
+                if now > auction.date_posted + LATE_LIMIT:
+                    # No date to work from (an online auction with no end): never will be, so stop looking.
+                    _claim(auction, "next_auction_email_sent")
+                continue
+            if now < due:
                 continue
             if not _claim(auction, "next_auction_email_sent"):
                 continue
@@ -183,6 +205,7 @@ def send_next_auction_emails(now=None) -> int:
                 "Ready to run a real auction?" if test else "Ready for your next auction?",
                 {"is_test": test},
             )
+            _sent(auction)
             sent += 1
         except Exception:
             logger.exception("next auction email failed for auction %s", auction.pk)
@@ -215,26 +238,34 @@ def has_successor(auction) -> bool:
     return any(title_stem(other.title) == stem for other in later)
 
 
+def had_one_just_before(auction) -> bool:
+    """Whether the club or creator ran a real auction in the :data:`CLUSTER` before this one: then that one's
+    anniversary email covers both, so a club with a busy month hears once, not once per auction."""
+    earlier = (
+        _siblings(auction)
+        .filter(date_start__lt=auction.date_start, date_start__gte=auction.date_start - CLUSTER)
+        .only("slug", "title")
+    )
+    return any(not is_test_auction(other) for other in earlier)
+
+
 def send_anniversary_emails(now=None) -> int:
-    """Send every ``auction_anniversary`` email that is due, at most one per club or creator per run."""
+    """Send every ``auction_anniversary`` email that is due."""
     now = now or timezone.now()
     sent = 0
-    owners = set()
     for auction in anniversary_candidates(now):
         try:
-            if is_test_auction(auction):
-                continue
-            owner = ("club", auction.club_id) if auction.club_id else ("user", auction.created_by_id)
-            if owner in owners:
-                # A club with several auctions that week hears about the first one.
-                Auction.objects.filter(pk=auction.pk).update(anniversary_email_sent=True)
-                continue
             if not _claim(auction, "anniversary_email_sent"):
                 continue
-            if has_successor(auction) or not _deliverable(auction.created_by):
+            if (
+                is_test_auction(auction)
+                or has_successor(auction)
+                or had_one_just_before(auction)
+                or not _deliverable(auction.created_by)
+            ):
                 continue
-            owners.add(owner)
             _send(auction, "auction_anniversary", f"{auction} was almost a year ago", {})
+            _sent(auction)
             sent += 1
         except Exception:
             logger.exception("anniversary email failed for auction %s", auction.pk)

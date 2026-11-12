@@ -8,7 +8,7 @@
 {% block open_graph %}
 {% absolute_uri lot.get_absolute_url as og_url %}
 {% if lot.thumbnail and lot.thumbnail.display_url %}{% absolute_uri lot.thumbnail.display_url as og_image %}{% elif lot.auction.club.icon %}{% absolute_uri lot.auction.club.icon_display_url as og_image %}{% endif %}
-{% include "open_graph.html" with og_title=lot.lot_name og_description="Lot in "|add:lot.auction.title og_url=og_url og_image=og_image %}
+{% if lot.auction %}{% include "open_graph.html" with og_title=lot.lot_name og_description="Lot in "|add:lot.auction.title og_url=og_url og_image=og_image %}{% else %}{% include "open_graph.html" with og_title=lot.lot_name og_url=og_url og_image=og_image %}{% endif %}
 {% endblock %}
 {% block extra_head %}
     {% comment %}
