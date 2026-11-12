@@ -29,12 +29,16 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.utils.cache import patch_cache_control
 from django.utils.functional import cached_property
 from django.utils.http import url_has_allowed_host_and_scheme
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
 from rest_framework.permissions import BasePermission
 
+from auctions.client_ip import visitor_coordinates
+from auctions.crawlers import is_crawler
+from auctions.helper_functions import cookie_coordinates
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -48,7 +52,6 @@ from auctions.models import (
     PickupLocation,
     UserData,
 )
-from auctions.client_ip import visitor_coordinates
 from auctions.services import SHARED_MEMBER_FIELDS, clear_bidder_number_in
 from auctions.tasks import (
     maybe_send_membership_renewal_confirmation,
@@ -1057,37 +1060,56 @@ class AuctionStatsPermissionsMixin:
         return bool(self.auction.permission_check(self.request.user))
 
 
+def _cookie_location(request):
+    """The browser's location cookies as floats, ``(0, 0)`` when missing or unreadable."""
+    latitude, longitude = cookie_coordinates(request)
+    return (latitude, longitude) if latitude is not None else (0, 0)
+
+
+def visitor_location(request):
+    """Where to measure "near" from, as ``(latitude, longitude)``, ``(0, 0)`` when nothing says.
+
+    A location the browser gave (cookie), then the account's; then, for a signed-out visitor only and
+    never a crawler, where Cloudflare places their address (``client_ip.visitor_coordinates``). A
+    signed-in user without one keeps being asked for theirs rather than measured from a guess.
+    """
+    latitude, longitude = _cookie_location(request)
+    if latitude or longitude:
+        return latitude, longitude
+    if request.user.is_authenticated:
+        return request.user.userdata.latitude, request.user.userdata.longitude
+    if is_crawler(request):
+        return 0, 0
+    ip_latitude, ip_longitude = visitor_coordinates(request)
+    if ip_latitude is None:
+        return 0, 0
+    # Each answer now depends on the caller's address: no shared cache may keep one.
+    request.located_from_ip = True
+    return ip_latitude, ip_longitude
+
+
 class LocationMixin:
-    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from cookies, userdata, or the IP.
+    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from ``visitor_location``.
     Call it before get_context_data; set ``no_location_message``.
     """
 
-    # Shown to users without a location.
+    # Shown to users without a location they gave.
     no_location_message = "Click here to set your location"
 
     # Set automatically by get_coordinates().
     _location_message = None
 
     def get_coordinates(self):
-        try:
-            latitude = float(self.request.COOKIES.get("latitude", 0))
-            longitude = float(self.request.COOKIES.get("longitude", 0))
-        except (ValueError, TypeError):
-            latitude, longitude = 0, 0
-
-        if latitude == 0 and longitude == 0:
+        if _cookie_location(self.request) == (0, 0):
             self._location_message = self.no_location_message
-
-            if self.request.user.is_authenticated:
-                latitude = self.request.user.userdata.latitude
-                longitude = self.request.user.userdata.longitude
-            else:
-                # Signed out, no click needed: where Cloudflare places their address, for distances
-                # only. The message stays, so they can still give a better one.
-                ip_latitude, ip_longitude = visitor_coordinates(self.request)
-                if ip_latitude is not None:
-                    latitude, longitude = ip_latitude, ip_longitude
+        latitude, longitude = visitor_location(self.request)
         return latitude, longitude
+
+    def dispatch(self, request, *args, **kwargs):
+        response = super().dispatch(request, *args, **kwargs)
+        if getattr(request, "located_from_ip", False):
+            patch_cache_control(response, private=True)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

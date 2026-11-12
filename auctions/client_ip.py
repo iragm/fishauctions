@@ -116,9 +116,11 @@ def visitor_coordinates(request):
 
     Read from the ``CF-IPLatitude`` / ``CF-IPLongitude`` headers that Cloudflare's free "Add visitor
     location headers" managed transform adds, so it costs nothing per lookup and needs no third party.
-    Believed only on the same terms as ``CF-Connecting-IP`` (:func:`_reached_us_from_cloudflare`): a
-    caller talking to the origin directly could otherwise put itself anywhere. City-level at best, so
-    it orders and filters nearby things; it is never saved as the person's location.
+    Read only from a request that came through Cloudflare (:func:`_reached_us_from_cloudflare`). The
+    transform overwrites a copy the caller sends, but with it off one would pass; either way the most
+    a forged value does is move its sender, as a hand-set ``latitude`` cookie already can, so it is
+    only ever used for the caller's own answer, never stored, and pages built from it are private.
+    City-level at best, so it orders and filters nearby things.
     """
     if request is None or not getattr(settings, "BEHIND_CLOUDFLARE", False):
         return None, None

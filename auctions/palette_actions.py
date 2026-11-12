@@ -16676,10 +16676,6 @@ NOT_A_SKILL: dict[str, str] = {
         "members with the member tools."
     ),
     "BlogPostView": _REDIRECT,
-    "PromoNearby": (
-        "A strip of nearby auctions the promo page fetches for itself; an assistant finds them with "
-        "auctions_near_me."
-    ),
     "ReverifyEmailView": (
         "Sends a verification link to the person's own inbox, and clicking that link is the whole point, "
         "which an assistant can't do for them; join_auction's error links the page."

@@ -36,9 +36,6 @@ from django.views.generic.edit import (
 )
 
 from auctions import help_guides, help_stats
-from auctions.client_ip import visitor_coordinates
-from auctions.crawlers import is_crawler
-from auctions.helper_functions import cookie_coordinates
 from auctions.filters import (
     AuctionFilter,
     LotFilter,
@@ -67,7 +64,7 @@ from auctions.tables import (
 )
 
 from .auction_pages import AuctionInfo
-from .base import MILES_TO_KM, AuctionViewMixin, HTMxTableView, LocationMixin
+from .base import MILES_TO_KM, AuctionViewMixin, HTMxTableView, LocationMixin, visitor_location
 from .browse import LotListView
 
 logger = logging.getLogger(__name__)
@@ -257,48 +254,45 @@ class PromoSite(TemplateView):
         return context
 
 
-def visitor_location(request):
-    """Where to look for things near the person: a location they gave (cookie, then account), else where
-    Cloudflare places their address. ``(None, None)`` when nothing says.
-    """
-    latitude, longitude = cookie_coordinates(request)
-    if latitude is not None and (latitude or longitude):
-        return latitude, longitude
-    if request.user.is_authenticated:
-        userdata = getattr(request.user, "userdata", None)
-        if userdata and (userdata.latitude or userdata.longitude):
-            return userdata.latitude, userdata.longitude
-    return visitor_coordinates(request)
-
-
 class PromoNearby(TemplateView):
     """The promo page's "near you" strip, fetched by the page's own script after it loads: crawlers that
     don't run scripts never ask, and the promo page itself stays one page for everyone. Empty when there
-    is nothing close, or no location to go on.
+    is nothing close, or no location to go on. Where it measures from is ``visitor_location``, the same
+    answer the auction list uses.
     """
 
     template_name = "auctions/partials/promo_nearby.html"
     MILES = 100
     LIMIT = 3
+    PER_MINUTE = 20
 
     def nearby(self):
-        if is_crawler(self.request):
+        if not settings.ENABLE_PROMO_PAGE or over_the_limit(self.request, "promo-nearby", self.PER_MINUTE, 60):
             return []
         latitude, longitude = visitor_location(self.request)
-        if latitude is None:
+        if not latitude and not longitude:
             return []
         now = timezone.now()
+        # A box first, so the distance sum only runs on rows that could be close: 100 miles is under
+        # 1.5 degrees of latitude anywhere, and of longitude up to about 60 degrees north or south.
+        box = 1.5 if abs(latitude) < 60 else 4
         locations = (
-            PickupLocation.objects.annotate(distance=distance_to(latitude, longitude))
-            .filter(
-                distance__lte=self.MILES,
+            PickupLocation.objects.filter(
+                latitude__range=(latitude - 1.5, latitude + 1.5),
+                longitude__range=(longitude - box, longitude + box),
+                pickup_by_mail=False,
                 auction__isnull=False,
                 auction__is_deleted=False,
                 auction__promote_this_auction=True,
                 auction__date_start__lte=now + timedelta(days=90),
             )
-            .filter(Q(auction__date_end__gte=now) | Q(auction__date_end__isnull=True, auction__date_start__gte=now - timedelta(hours=12)))
-            .select_related("auction", "auction__club")
+            .filter(
+                Q(auction__date_end__gte=now)
+                | Q(auction__date_end__isnull=True, auction__date_start__gte=now - timedelta(hours=12))
+            )
+            .annotate(distance=distance_to(latitude, longitude))
+            .filter(distance__lte=self.MILES)
+            .select_related("auction")
             .order_by("auction__date_start", "distance")
         )
         found = {}
@@ -308,7 +302,7 @@ class PromoNearby(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["nearby"] = [{"auction": auction, "miles": round(float(miles))} for auction, miles in self.nearby()]
+        context["nearby"] = [{"auction": auction, "miles": miles} for auction, miles in self.nearby()]
         return context
 
     def render_to_response(self, context, **response_kwargs):

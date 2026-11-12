@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from auctions.client_ip import visitor_coordinates
 from auctions.models import Auction, PickupLocation
+from auctions.test_support import isolated_cache
 
 EDGE = "172.64.0.10"  # a Cloudflare address
 # Near Albany, NY; the auctions below sit around it.
@@ -40,7 +41,8 @@ class VisitorCoordinatesTests(TestCase):
                 self.assertEqual(visitor_coordinates(request), (None, None))
 
 
-@override_settings(BEHIND_CLOUDFLARE=True)
+@isolated_cache("promo-nearby")
+@override_settings(BEHIND_CLOUDFLARE=True, ENABLE_PROMO_PAGE=True)
 class PromoNearbyTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -93,10 +95,26 @@ class PromoNearbyTests(TestCase):
     def test_crawlers_get_nothing(self):
         self.assertEqual(self._strip(HTTP_USER_AGENT="Googlebot/2.1", **HERE).content.strip(), b"")
 
-    @override_settings(ENABLE_PROMO_PAGE=True)
+    def test_a_signed_in_user_without_a_location_is_not_guessed_at(self):
+        self.client.force_login(self.user)
+        self.assertNotContains(self._strip(**HERE), "Near and soon")
+
+    def test_mail_only_locations_are_not_near(self):
+        PickupLocation.objects.filter(auction=self.near).update(pickup_by_mail=True)
+        self.assertNotContains(self._strip(**HERE), "Near and soon")
+
+    @override_settings(ENABLE_PROMO_PAGE=False)
+    def test_nothing_without_the_promo_page(self):
+        self.assertEqual(self._strip(**HERE).content.strip(), b"")
+
     def test_the_promo_page_asks_for_it(self):
         self.assertContains(self.client.get(reverse("promo")), reverse("promo_nearby"))
 
     def test_the_auction_list_measures_from_the_address_for_signed_out_visitors(self):
         response = self.client.get(reverse("auctions"), **HERE)
         self.assertTrue(response.context["view"]._user_has_location)
+        self.assertIn("private", response["Cache-Control"])
+
+    def test_but_not_for_crawlers(self):
+        response = self.client.get(reverse("auctions"), HTTP_USER_AGENT="Googlebot/2.1", **HERE)
+        self.assertFalse(response.context["view"]._user_has_location)
