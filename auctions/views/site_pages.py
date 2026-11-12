@@ -525,6 +525,16 @@ class Leaderboard(ListView):
 VALID_LOT_ORDERS = frozenset(key for key, label in LotFilter.ORDER)
 
 
+def _club_current_auction_instead(auction):
+    """The club's current auction, when ``auction`` has ended and that one is another that hasn't."""
+    if not (auction.closed or auction.pretty_much_over) or not auction.club_id:
+        return None
+    current = auction.club.current_auction
+    if not current or current.pk == auction.pk or current.is_deleted or current.closed or current.pretty_much_over:
+        return None
+    return current
+
+
 class AllLots(LotListView, AuctionViewMixin):
     """Show all lots"""
 
@@ -580,6 +590,7 @@ class AllLots(LotListView, AuctionViewMixin):
             self.auction = context["auction"]
         if self.auction:
             context["is_auction_admin"] = self.is_auction_admin
+            context["club_current_auction"] = _club_current_auction_instead(self.auction)
             if self.auction.minutes_to_end < 1440 and self.auction.minutes_to_end > 0 and can_show_unloved_tip:
                 context["search_button_tooltip"] = "Try sorting by least popular to find deals!"
         if self.rewrite_url:

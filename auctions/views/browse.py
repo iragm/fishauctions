@@ -532,6 +532,7 @@ class MyLots(HTMxTableView):
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
         context["filter_bap"] = self.request.GET.get("query", "").strip().lower() == "bap"
+        context["add_lot_auction"] = _last_joined_auction_taking_lots(self.request.user)
         return context
 
     def get(self, *args, **kwargs):
@@ -571,13 +572,24 @@ def _recent_auctions(user, limit=10):
     return auctions[:limit]
 
 
+def _last_joined_auction_taking_lots(user):
+    """The auction ``user`` joined most recently of those they can add a lot to now, or None."""
+    tos = (
+        AuctionTOS.objects.filter(user=user, auction__in=user.userdata.available_auctions_to_submit_lots)
+        .select_related("auction")
+        .order_by("-createdon", "-pk")
+        .first()
+    )
+    return tos.auction if tos else None
+
+
 #: ``?auction=`` for the buying dashboard across every auction, and lots not in one.
 ALL_AUCTIONS = "all"
 
 
 class BuyingDashboard(HTMxTableView):
     """Buying dashboard: the lots you watched, bid on or won in one auction, ``?auction=<slug>`` or the last
-    one you used. ``?auction=all`` is every auction at once.
+    one you joined. ``?auction=all`` is every auction at once.
     """
 
     model = Lot
@@ -598,11 +610,15 @@ class BuyingDashboard(HTMxTableView):
             auction = Auction.objects.filter(slug=slug, is_deleted=False).first()
             if auction:
                 return auction
+        # The auction you joined last, rather than the last one you looked at: that may be one you never
+        # joined, with nothing of yours in it.
+        recent = _recent_auctions(self.request.user, limit=1)
+        if recent:
+            return recent[0]
         last = self.request.user.userdata.last_auction_used
         if last and not last.is_deleted:
             return last
-        recent = _recent_auctions(self.request.user, limit=1)
-        return recent[0] if recent else None
+        return None
 
     def get_lots(self):
         if self.all_auctions:

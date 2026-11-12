@@ -114,6 +114,13 @@ document.addEventListener("DOMContentLoaded", function() {
 <h5>{{location}}</h5>
 {% endif %}
 {% endif %}
+{% comment %}One tap turns a person a club added into an account: signing in with the address the club used links this invoice and everything else of theirs (signals.on_sign_in), silently.{% endcomment %}
+{% if using_no_login_link and show_links and not request.user.is_authenticated and not request.is_mobile_app and not invoice.auctiontos_user.user_id %}{% if GOOGLE_LOGIN_ENABLED or APPLE_LOGIN_ENABLED %}
+<div id="invoice-claim" class="d-flex flex-wrap gap-2 mt-2">
+  {% if GOOGLE_LOGIN_ENABLED %}<a id="invoice-claim-google" class="btn btn-sm btn-primary" rel="nofollow" href="/google/login/?process=login&next={{ request.path|urlencode }}"><i class="bi bi-google"></i> Continue with Google</a>{% endif %}
+  {% if APPLE_LOGIN_ENABLED %}<a id="invoice-claim-apple" class="btn btn-sm btn-primary" rel="nofollow" href="/apple/login/?process=login&next={{ request.path|urlencode }}"><i class="bi bi-apple"></i> Continue with Apple</a>{% endif %}
+</div>
+{% endif %}{% endif %}
 {% if survey_answers %}
 <form method="post" action="{% url 'auction_survey' slug=invoice.auction.slug %}" id="invoice-survey" class="d-flex flex-wrap align-items-center gap-2 mt-2">
   {% csrf_token %}

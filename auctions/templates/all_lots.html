@@ -23,6 +23,7 @@ Your lots{% else %}
   <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
   </div>
 {% endif %}
+{% if club_current_auction %}<div class="alert alert-info" role="alert">{{ auction }} has ended, <a href="{{ club_current_auction.view_lot_link }}">see the lots in {{ club_current_auction }}</a>.</div>{% endif %}
 <h3>
         {% comment %}A named menu, not a bare hamburger: the site menu is the only control allowed to be an icon on its own (style_reference.md).{% endcomment %}
         <button class="btn btn-primary btn-sm" id="search-form-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form"><i class="bi bi-funnel"></i> Search and filter</button>

@@ -70,6 +70,7 @@ from auctions.models import (
 from auctions.notifications import user_has_app_push
 from auctions.services import (
     copy_lot_images,
+    join_auction,
     missing_contact_info,
     readable_list,
     remove_bid,
@@ -913,6 +914,10 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
         context = super().get_context_data(**kwargs)
         context["title"] = "New lot"
         context["new"] = True
+        # From an auction's Add Lot the auction is already chosen, so "Put into an auction?" isn't asked.
+        context["auction_chosen"] = bool(
+            self.auction and context["form"].fields["auction"].queryset.filter(pk=self.auction.pk).exists()
+        )
 
         # Check if user needs to see the modal about joining an auction
         userData = self.request.user.userdata
@@ -1015,12 +1020,32 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
                     if self.auction.lot_submission_end_date < timezone.now():
                         error = "Lot submission has ended for this auction."
                 tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
+                if not tos and not error:
+                    tos = self._join_silently(request)
                 if not tos:
                     error = "You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction.</a>"
                 if error:
                     messages.error(request, error)
                     return redirect(self.auction.get_absolute_url())
         return super().dispatch(request, *args, **kwargs)
+
+    def _join_silently(self, request):
+        """Join ``self.auction`` for someone who clicked its Add Lot, or None where the Join button must ask.
+
+        Only from a page on this site (a link elsewhere can't join you to anything), and only where
+        there's nothing to choose: one pickup location at most, and no detail missing from the account.
+        """
+        auction = self.auction
+        if request.headers.get("Sec-Fetch-Site") != "same-origin":
+            referer = request.headers.get("Referer", "")
+            if not referer or not url_has_allowed_host_and_scheme(
+                referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+            ):
+                return None
+        if auction.closed or auction.pretty_much_over or auction.location_qs.count() > 1:
+            return None
+        tos, _created, problem = join_auction(request.user, auction, auction.location_qs.first())
+        return None if problem else tos
 
 
 class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):

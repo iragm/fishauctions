@@ -376,7 +376,7 @@ this only quotes its opening sentence.
   `BulkAddLotsAutoTests`, `UpdateAuctionStatsCommandTestCase`, `LotsByUserViewTest`, `ImportLotsFromCSVViewTests`
 - **`test_bulk_import_views.py`** (590 lines)
   Gaps in the bulk-import and export views: the per-row lot save (closed submission, bad input), the
-- **`test_buying.py`** (505 lines)
+- **`test_buying.py`** (515 lines)
   The buying dashboard: which lots it lists, the status badge, its keywords, and the one note above it.
   `BuyingDashboardTests`, `BuyingDashboardBiddingTests`, `FakeLayer`, `BuyingConsumerTests`, `BuyingDashboardPushNoteTests`
 - **`test_cache_hygiene.py`** (132 lines)
@@ -555,7 +555,7 @@ this only quotes its opening sentence.
 - **`test_mcp_widgets.py`** (197 lines)
   Tests for the MCP-app widgets: the ``ui://`` resources a host renders instead of the JSON.
   `BundleTests`, `CatalogueTests`, `DocumentTests`, `ResourceEndpointTests`
-- **`test_member_privacy.py`** (185 lines)
+- **`test_member_privacy.py`** (191 lines)
   Pages keyed on a member's UUID or membership number stay out of search, caches and Google's scripts,
   `MemberPagePrivacyTests`, `ClubInvoiceSquarePrefillTests`, `SuccessRedirectTests`, `EmailedKeyPagesArePrivateTests`
 - **`test_membership_flow.py`** (1702 lines)
@@ -655,6 +655,9 @@ this only quotes its opening sentence.
 - **`test_security.py`** (616 lines)
   Tests that AuctionTOS and user data are protected: unauthenticated and non-admin users can't reach
   `AuctionTOSSecurityTestCase`, `LotOrderCookieTestCase`, `AttachmentFilenameTestCase`, `ExportFilenameTestCase`, `CsvCellTestCase`, `ContentSecurityPolicyTestCase`, `ClientIpTestCase`, `TableCellMarkupTests`, `SummernoteSanitizerTests`
+- **`test_signup_links.py`** (153 lines)
+  Sign-in links, the one-tap claim on an invoice, and the shortcuts on the selling, buying, lots and new-lot pages.
+  `SocialButtonNextTests`, `InvoiceClaimTests`, `SellingAddLotTests`, `EndedAuctionLinksCurrentTests`, `NewLotJoinsSilentlyTests`
 - **`test_site_account_fixes.py`** (592 lines)
   Regression tests for a sweep of site and account fixes.
 - **`test_site_checks.py`** (256 lines)
@@ -1068,7 +1071,7 @@ Every view on the site, split by the part of it the view belongs to.
   The breeder award program: settings, overrides, awards and the lots behind them.
 - **`base.py`** (1147 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (961 lines)
+- **`browse.py`** (977 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (510 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
@@ -1117,7 +1120,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`logistics.py`** (78 lines)
   Online auctions after bidding: the logistics page, its tap to cross a name off, and the admin's progress banner.
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionPostEndBanner`
-- **`lot_pages.py`** (1329 lines)
+- **`lot_pages.py`** (1354 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -1139,7 +1142,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (687 lines)
+- **`site_pages.py`** (698 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (483 lines)
   The speaker directory: who will come and talk to a club, and what about.
