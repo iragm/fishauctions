@@ -16,7 +16,7 @@ def fill_link_keys(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0523_custom_checkbox_help_without_cares"),
+        ("auctions", "0524_lot_checked_in"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

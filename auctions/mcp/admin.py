@@ -65,7 +65,7 @@ INSTRUCTIONS = (
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
     "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
-    "palette_shortcut_candidates, mcp_usage, square_reconnects and untrusted_auction_creators. Nothing here "
+    "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects and untrusted_auction_creators. Nothing here "
     "changes the site; backup_database only copies its data offsite. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -1490,6 +1490,91 @@ def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Added {club.name} (club {club.pk}), {shown}.{where}", club=club.pk)
 
 
+#: Clubs per ``list_clubs`` page by default and at most: a full row with a website, Facebook page and
+#: meeting place is about 450 characters, so 30 stays well inside ``tools.MAX_RESULT_CHARS``.
+CLUB_DIRECTORY_PAGE = 30
+
+
+def _club_row(club) -> dict[str, Any]:
+    """One club as ``list_clubs`` shows it. Club admins and imports typed these, so they're fenced.
+
+    No contact address leaves this endpoint (:func:`private`), so only whether there is one and whether
+    it is at the club's own website's domain. An unlisted club's meeting place may be somebody's house
+    and was never published, so only listed clubs show theirs.
+    """
+    from auctions import club_import
+    from auctions.models import Club
+
+    email = (club.contact_email or "").strip()
+    email_domain = email.rpartition("@")[2].lower().removeprefix("www.") if email.count("@") == 1 else ""
+    homepage_domain = club_import.domain_of(club.homepage or "")
+    listed = club.outreach_stage == Club.LISTED
+    return {
+        "club": club.pk,
+        "name": palette_actions.untrusted_short(club.name),
+        "abbreviation": palette_actions.untrusted_short(club.abbreviation or ""),
+        "homepage": palette_actions.untrusted_short(club.homepage or ""),
+        "facebook_page": palette_actions.untrusted_short(club.facebook_page or ""),
+        "location": palette_actions.untrusted_short(club.location or "") if listed else "",
+        "on_the_map": club.latitude is not None and club.longitude is not None,
+        "has_contact_email": bool(email),
+        "contact_email_at_homepage_domain": bool(email_domain and email_domain == homepage_domain),
+        "contact_method": club.contact_method,
+        "stage": club.outreach_stage,
+        "active": club.active,
+    }
+
+
+def list_clubs(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The whole club directory, prospects included, with the details ``add_club`` and ``update_club`` set.
+
+    What an agent checks a pasted list of clubs against before proposing either. ``name`` (with an
+    optional ``homepage``) asks the question ``add_club`` itself asks, :func:`club_import.find_existing`:
+    same website domain, or a close enough name.
+    """
+    from django.db.models import Q
+
+    from auctions import club_import
+    from auctions.models import Club
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    clubs = Club.objects.order_by("name", "pk")
+    name = _str(params, "name")[:255]
+    if name:
+        found = club_import.ImportedClub(name=name, homepage=club_onboarding.web_address(_str(params, "homepage")))
+        existing = club_import.find_existing(found, list(clubs))
+        if existing is None:
+            return _ok("No club on the site matches that name or website.", clubs=[])
+        return _ok(f"That is club {existing.pk}.", clubs=[_club_row(existing)])
+    stages = dict(Club.OUTREACH_STAGE_CHOICES)
+    labels = {label.lower(): value for value, label in Club.OUTREACH_STAGE_CHOICES}
+    stage = _str(params, "stage").lower()
+    if stage:
+        stage = labels.get(stage, stage)
+        if stage not in stages:
+            return _need("Which stage? One of: " + ", ".join(stages) + ".")
+        clubs = clubs.filter(outreach_stage=stage)
+    search = _str(params, "search")[:100]
+    if search:
+        clubs = clubs.filter(
+            Q(name__icontains=search)
+            | Q(abbreviation__icontains=search)
+            | Q(homepage__icontains=search)
+            | Q(facebook_page__icontains=search)
+            | Q(location__icontains=search, outreach_stage=Club.LISTED)
+        )
+    total = clubs.count()
+    limit, offset = palette_actions._slice(params, CLUB_DIRECTORY_PAGE)
+    limit = min(limit, CLUB_DIRECTORY_PAGE)
+    rows = [_club_row(club) for club in clubs[offset : offset + limit]]
+    found = {"clubs": rows}
+    if offset + len(rows) < total:
+        found["next_offset"] = offset + len(rows)
+    showing = palette_actions._showing(total, limit, offset)
+    return _ok(f"{total} club{'s' if total != 1 else ''}.{showing}", **found)
+
+
 def _club(params: dict[str, Any]):
     """The club a step names, by number or exact name, and ``None`` if that isn't exactly one."""
     from auctions.models import Club
@@ -2153,7 +2238,7 @@ APPROVAL_ONLY: dict[str, Action] = {
             name="add_club",
             description=(
                 "Create a club the owner told you about. Check first that it isn't already on the site "
-                "(clubs_near_me, describe_club); a club that looks like one already here is refused. "
+                "(list_clubs with its name and homepage); a club that looks like one already here is refused. "
                 "Listed on the map and in club search unless listed is false."
             ),
             params={
@@ -2795,6 +2880,25 @@ ADMIN_TOOLS: dict[str, Action] = {
             params={"days": "integer, optional, default 7. How far back to look, at most 60."},
             danger=DANGER_SAFE,
             resolver=untrusted_auction_creators,
+        ),
+        Action(
+            name="list_clubs",
+            description=(
+                "The whole club directory, prospects included: each club's number, name, abbreviation, "
+                "website, Facebook page, meeting place (listed clubs only), contact method, whether it has "
+                "a contact email, and outreach stage. Pass name (and homepage) to ask whether one club is "
+                "already here, the same check add_club makes, before proposing add_club or update_club."
+            ),
+            params={
+                "name": "string, optional. A club's name: returns the one club on the site it matches, if any.",
+                "homepage": "string, optional, with name. Its website; a club at the same domain matches.",
+                "search": "string, optional. Only clubs whose name, abbreviation, website, Facebook or place contains this.",
+                "stage": "string, optional. listed, contacted or prospect.",
+                "limit": f"integer, optional, default {CLUB_DIRECTORY_PAGE}, at most {CLUB_DIRECTORY_PAGE}.",
+                "offset": "integer, optional, default 0. Skip this many clubs (next_offset).",
+            },
+            danger=DANGER_SAFE,
+            resolver=list_clubs,
         ),
         Action(
             name="square_reconnects",

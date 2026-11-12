@@ -9,6 +9,7 @@ import logging
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.sites.models import Site
 from django.db.models.base import Model as Model
 from django.forms import modelformset_factory
 from django.http import (
@@ -271,6 +272,18 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 },
             )
         context["is_auction_admin"] = self.auction and self.is_auction_admin
+        # Scanned at the pickup table on the logistics page (logistics.scan).
+        tos = invoice.auctiontos_user
+        if (
+            invoice.auction
+            and invoice.auction.is_online
+            and tos
+            and tos.pickup_location
+            and not tos.pickup_location.pickup_by_mail
+        ):
+            context["pickup_qr_code"] = (
+                f"https://{Site.objects.get_current().domain}{reverse('invoice_by_pk', kwargs={'pk': invoice.pk})}"
+            )
         is_owner = self.using_no_login_link or (
             invoice.auctiontos_user is not None and invoice.auctiontos_user.user_id == self.request.user.pk
         )
