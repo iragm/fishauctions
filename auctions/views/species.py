@@ -465,8 +465,9 @@ class SpeciesDetailView(DetailView):
         self.object = self.get_object()
         canonical = self.object.get_absolute_url()
         if request.path != canonical:
-            query = request.META.get("QUERY_STRING", "")
-            return redirect(f"{canonical}?{query}" if query else canonical, permanent=True)
+            # Only the address the species builds, never the request's query string: echoing that into a
+            # redirect is an open-redirect pattern (CodeQL py/url-redirection), and nothing here reads it.
+            return redirect(canonical, permanent=True)
         return self.render_to_response(self.get_context_data(object=self.object))
 
     def get_context_data(self, **kwargs):

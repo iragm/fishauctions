@@ -114,9 +114,7 @@ class SpeciesPageTests(StandardTestCase):
 
     def test_a_wrong_slug_redirects_to_the_right_one(self):
         response = self.client.get(f"/species/{self.betta.pk}/wrong/?ref=x")
-        self.assertRedirects(
-            response, self.betta.get_absolute_url() + "?ref=x", status_code=301, fetch_redirect_response=False
-        )
+        self.assertRedirects(response, self.betta.get_absolute_url(), status_code=301, fetch_redirect_response=False)
         self.assertEqual(self.betta.get_absolute_url(), f"/species/{self.betta.pk}/betta-splendens/")
 
     def test_unapproved_species_is_only_for_superusers(self):
