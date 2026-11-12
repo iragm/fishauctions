@@ -1,5 +1,6 @@
-"""Auctions near a signed-out visitor, placed by Cloudflare's location headers: when the headers are believed,
-what the promo page's strip lists, and the auction list's distances without a click."""
+"""Auctions near a visitor with no location of their own, placed by Cloudflare's location headers: when the
+headers are believed, what the promo page's strip lists, the auction list's distances without a click, and
+that a signed-in user's guess is never saved and hides nothing."""
 
 import datetime
 
@@ -95,9 +96,29 @@ class PromoNearbyTests(TestCase):
     def test_crawlers_get_nothing(self):
         self.assertEqual(self._strip(HTTP_USER_AGENT="Googlebot/2.1", **HERE).content.strip(), b"")
 
-    def test_a_signed_in_user_without_a_location_is_not_guessed_at(self):
+    def test_a_signed_in_user_without_a_location_is_measured_from_the_address_but_it_is_never_saved(self):
         self.client.force_login(self.user)
-        self.assertNotContains(self._strip(**HERE), "Near and soon")
+        self.assertContains(self._strip(**HERE), "Near and soon")
+        self.client.get(reverse("auctions"), **HERE)
+        self.user.userdata.refresh_from_db()
+        self.assertEqual((self.user.userdata.latitude, self.user.userdata.longitude), (0, 0))
+
+    def test_a_signed_in_user_measured_from_the_address_is_still_asked_and_nothing_is_hidden(self):
+        self.client.force_login(self.user)
+        someone_else = User.objects.create_user(username="far_club")
+        Auction.objects.filter(pk=self.far.pk).update(created_by=someone_else)
+        response = self.client.get(reverse("auctions"), **HERE)
+        self.assertFalse(response.context["user_has_location"])
+        self.assertFalse(response.context["nearby_filter_active"])
+        self.assertIn(self.far, list(response.context["view"].object_list))
+        self.assertIn("private", response["Cache-Control"])
+
+    def test_a_saved_location_beats_the_address(self):
+        self.client.force_login(self.user)
+        type(self.user.userdata).objects.filter(user=self.user).update(latitude=34.05, longitude=-118.25)
+        response = self._strip(**HERE)
+        self.assertContains(response, "Far away")
+        self.assertNotContains(response, "Near and soon")
 
     def test_mail_only_locations_are_not_near(self):
         PickupLocation.objects.filter(auction=self.near).update(pickup_by_mail=True)

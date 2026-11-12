@@ -653,8 +653,8 @@ this only quotes its opening sentence.
 - **`test_promo.py`** (135 lines)
   The promo page: where it shows, that every feature on it links to a real help section, and its photo strip.
   `PromoPageTests`, `PromoPhotoTests`
-- **`test_promo_nearby.py`** (120 lines)
-  Auctions near a signed-out visitor, placed by Cloudflare's location headers: when the headers are believed,
+- **`test_promo_nearby.py`** (141 lines)
+  Auctions near a visitor with no location of their own, placed by Cloudflare's location headers: when the
   `FakeRequest`, `VisitorCoordinatesTests`, `PromoNearbyTests`
 - **`test_query_counts.py`** (684 lines)
   Query-count guards for the N+1s that were fixed.
@@ -693,7 +693,7 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
-- **`test_species_page.py`** (134 lines)
+- **`test_species_page.py`** (132 lines)
   The public species page and the numbers behind it (``auctions/species_stats.py``).
   `SpeciesPageTests`
 - **`test_species_search.py`** (188 lines)
@@ -1097,7 +1097,7 @@ Every view on the site, split by the part of it the view belongs to.
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1189 lines)
+- **`base.py`** (1192 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (978 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -1170,11 +1170,11 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (759 lines)
+- **`site_pages.py`** (770 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (755 lines)
   The speaker directory: who will come and talk to a club, and what about.
-- **`species.py`** (522 lines)
+- **`species.py`** (523 lines)
   Adding species and common names, the superuser's cleanup queue, and each species' public page.
 - **`usability.py`** (197 lines)
   The usability reports, and linking auctions to clubs.
