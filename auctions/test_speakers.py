@@ -1,5 +1,5 @@
-"""Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
-tagging, and comments.
+"""Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
+tagging, comments, adding yourself, "This is me" claims, duplicates and the search-engine treatment.
 """
 
 import datetime
@@ -22,6 +22,7 @@ from auctions.models import (
     Club,
     ClubMember,
     Speaker,
+    SpeakerClaim,
     SpeakerComment,
     SpeakerTag,
     SpeakerTopic,
@@ -245,10 +246,10 @@ class ImportNecSpeakersTests(WritableMediaRoot, TestCase):
         self.assertEqual(speaker.bio, "Esther operates Aquaflora in Amsterdam.")
         self.assertEqual(speaker.programs, "")
 
-    def test_imported_rows_are_nec_only_and_unattributed(self):
+    def test_imported_rows_are_public_and_unattributed(self):
         self.run_import()
         speaker = Speaker.objects.get(wordpress_post_id=672)
-        self.assertTrue(speaker.nec_only)
+        self.assertEqual(speaker.visibility, Speaker.VISIBILITY_PUBLIC)
         self.assertTrue(speaker.imported_from_nec)
         self.assertIsNone(speaker.created_by)
         self.assertEqual(speaker.attribution, "Added from the NEC speaker database")
@@ -410,7 +411,7 @@ class SpeakerAccessTests(TestCase):
         self.outsider = User.objects.create_user("outsider", "outsider@example.com", "pw")
         ClubMember.objects.create(club=self.other_club, user=self.outsider, name="Outsider", permission_admin=True)
         self.superuser = User.objects.create_superuser("root", "root@example.com", "pw")
-        self.speaker = Speaker.objects.create(name="Talker, Terry", nec_only=True)
+        self.speaker = Speaker.objects.create(name="Talker, Terry")
 
     def get(self, user, url=None):
         client = Client()
@@ -423,48 +424,52 @@ class SpeakerAccessTests(TestCase):
     def test_superuser_can_see_the_directory(self):
         self.assertEqual(self.get(self.superuser).status_code, 200)
 
-    def test_member_of_an_nec_club_with_no_permission_is_told_why(self):
+    def test_the_directory_is_public(self):
+        """Anyone, signed in or not, sees the list and a public speaker's page."""
+        slug = self.speaker.slug
+        for client in (Client(), None):
+            for url in (
+                reverse("speaker_list"),
+                reverse("speaker_detail", kwargs={"slug": slug}),
+                reverse("speaker_panel", kwargs={"slug": slug}),
+            ):
+                with self.subTest(url=url, signed_in=client is None):
+                    response = client.get(url) if client else self.get(self.outsider, url)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertContains(response, "Terry Talker")
+
+    def test_adding_somebody_else_still_needs_an_nec_club(self):
         """Membership alone isn't the bar -- "some permission in an NEC club" is."""
-        response = self.get(self.plain_member)
-        self.assertEqual(response.status_code, 403)
-        self.assertContains(response, "Northeast Council", status_code=403)
+        for user in (self.plain_member, self.outsider):
+            with self.subTest(user=user.username):
+                response = self.get(user, reverse("speaker_add"))
+                self.assertEqual(response.status_code, 403)
+                self.assertContains(response, "Northeast Council", status_code=403)
+                self.assertContains(response, reverse("speaker_add_self"), status_code=403)
 
-    def test_admin_of_a_non_nec_club_is_told_why(self):
-        response = self.get(self.outsider)
-        self.assertEqual(response.status_code, 403)
-        self.assertContains(response, "Northeast Council", status_code=403)
-
-    def test_anonymous_users_are_sent_to_log_in(self):
-        response = Client().get(reverse("speaker_list"))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/login", response.url)
-
-    def test_no_speaker_url_is_readable_while_logged_out(self):
-        """Nothing about a speaker -- not a name, not a comment -- is public."""
+    def test_writing_still_needs_an_account(self):
         anonymous = Client()
         slug = self.speaker.slug
-        urls = [
-            reverse("speaker_list"),
+        for url in (
             reverse("speaker_add"),
-            reverse("speaker_detail", kwargs={"slug": slug}),
-            reverse("speaker_panel", kwargs={"slug": slug}),
+            reverse("speaker_add_self"),
             reverse("speaker_edit", kwargs={"slug": slug}),
-        ]
-        for url in urls:
+        ):
             with self.subTest(url=url):
                 response = anonymous.get(url)
                 self.assertEqual(response.status_code, 302, f"{url} did not redirect")
                 self.assertIn("/login", response.url)
-                self.assertNotIn(self.speaker.name, response.content.decode())
 
     def test_no_speaker_url_is_writable_while_logged_out(self):
         anonymous = Client()
         slug = self.speaker.slug
         posts = [
             (reverse("speaker_add"), {"name": "Sneaky, Sam", "location": "x"}),
+            (reverse("speaker_add_self"), {"name": "Sneaky, Sam", "location": "x"}),
             (reverse("speaker_delete", kwargs={"slug": slug}), {}),
             (reverse("speaker_tag", kwargs={"slug": slug}), {"tag": "engaging"}),
             (reverse("speaker_comment", kwargs={"slug": slug}), {"body": "hello"}),
+            (reverse("speaker_claim", kwargs={"slug": slug}), {}),
         ]
         for url, payload in posts:
             with self.subTest(url=url):
@@ -474,31 +479,44 @@ class SpeakerAccessTests(TestCase):
         self.assertFalse(Speaker.objects.filter(name="Sneaky, Sam").exists())
         self.assertEqual(SpeakerTag.objects.count(), 0)
         self.assertEqual(SpeakerComment.objects.count(), 0)
+        self.assertEqual(SpeakerClaim.objects.count(), 0)
         self.speaker.refresh_from_db()
         self.assertFalse(self.speaker.is_deleted)
 
-    def test_detail_page_is_scoped_too(self):
+    def test_tagging_and_comments_stay_with_nec_clubs(self):
         url = reverse("speaker_detail", kwargs={"slug": self.speaker.slug})
-        self.assertEqual(self.get(self.outsider, url).status_code, 403)
+        SpeakerComment.objects.create(speaker=self.speaker, user=self.officer, body="Brought great fish")
+        self.assertNotContains(self.get(self.outsider, url), "Brought great fish")
+        self.assertNotContains(Client().get(url), "Brought great fish")
+        self.assertContains(self.get(self.officer, url), "Brought great fish")
+        response = self.get(self.outsider, reverse("speaker_tag", kwargs={"slug": self.speaker.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_an_nec_only_speaker_is_hidden_from_everyone_else(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_NEC)
+        url = reverse("speaker_detail", kwargs={"slug": self.speaker.slug})
+        self.assertEqual(self.get(self.outsider, url).status_code, 404)
+        self.assertEqual(Client().get(url).status_code, 404)
         self.assertEqual(self.get(self.officer, url).status_code, 200)
+        self.assertNotContains(self.get(self.outsider), "Terry Talker")
+        self.assertContains(self.get(self.officer), "Terry Talker")
 
     def test_any_single_club_permission_is_enough(self):
-        """Every permission flag opens the directory, not just permission_view."""
+        """Every permission flag opens the NEC-only parts, not just permission_view."""
         for field in ("permission_export", "permission_money", "permission_manage_bap", "permission_admin"):
             with self.subTest(field=field):
                 user = User.objects.create_user(f"user_{field}", f"{field}@example.com", "pw")
                 ClubMember.objects.create(club=self.nec_club, user=user, name=field, **{field: True})
-                self.assertEqual(self.get(user).status_code, 200)
+                self.assertEqual(self.get(user, reverse("speaker_add")).status_code, 200)
 
     def test_permission_in_someone_elses_row_does_not_count(self):
         """The permission and the user have to be on the same ClubMember row."""
         lurker = User.objects.create_user("lurker", "lurker@example.com", "pw")
         ClubMember.objects.create(club=self.nec_club, user=lurker, name="Lurker")
         ClubMember.objects.create(club=self.nec_club, user=None, name="Someone Else", permission_admin=True)
-        self.assertEqual(self.get(lurker).status_code, 403)
+        self.assertEqual(self.get(lurker, reverse("speaker_add")).status_code, 403)
 
 
-@override_settings(SINGLE_CLUB_MODE=False)
 class SpeakerListTests(TestCase):
     """Filtering, distance, and the map payload."""
 
@@ -764,11 +782,13 @@ class SpeakerTaggingTests(TestCase):
         response = self.client.get(reverse("speaker_panel", kwargs={"slug": self.speaker.slug}))
         self.assertContains(response, "Would book again")
 
-    def test_the_panel_does_not_badge_a_speaker_as_nec_only(self):
-        """The directory is NEC-only, so the badge told its readers nothing."""
-        Speaker.objects.filter(pk=self.speaker.pk).update(nec_only=True)
-        response = self.client.get(reverse("speaker_panel", kwargs={"slug": self.speaker.slug}))
-        self.assertNotContains(response, "NEC only")
+    def test_an_imported_speaker_says_it_came_from_the_nec(self):
+        Speaker.objects.filter(pk=self.speaker.pk).update(
+            imported_from_nec=True, source_url="https://northeastcouncil.org/speaker/someone/"
+        )
+        response = Client().get(reverse("speaker_panel", kwargs={"slug": self.speaker.slug}))
+        self.assertContains(response, "Originally from the")
+        self.assertContains(response, 'href="https://northeastcouncil.org/speaker/someone/"')
 
     def test_no_longer_speaking_is_available(self):
         response = self.client.post(self.url, {"tag": "no_longer_speaking"})
@@ -900,17 +920,18 @@ class SpeakerCreateDeleteTests(TestCase):
         form = SpeakerForm(instance=speaker)
         self.assertFalse(form.fields["location"].required)
 
-    def test_new_speakers_default_to_not_nec_only(self):
+    def test_new_speakers_default_to_public(self):
         self.add()
-        self.assertFalse(Speaker.objects.get(name="Nobody, Ned").nec_only)
+        self.assertEqual(Speaker.objects.get(name="Nobody, Ned").visibility, Speaker.VISIBILITY_PUBLIC)
 
-    def test_nec_only_is_not_settable_from_the_form(self):
-        """Import and the Django admin only."""
-        from auctions.forms import SpeakerForm
+    def test_visibility_is_picked_on_the_form(self):
+        self.add(visibility=Speaker.VISIBILITY_LINK)
+        self.assertEqual(Speaker.objects.get(name="Nobody, Ned").visibility, Speaker.VISIBILITY_LINK)
 
-        self.assertNotIn("nec_only", SpeakerForm().fields)
-        self.add(nec_only="on")
-        self.assertFalse(Speaker.objects.get(name="Nobody, Ned").nec_only)
+    def test_an_unknown_visibility_is_refused(self):
+        response = self.add(visibility="everyone")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Speaker.objects.filter(name="Nobody, Ned").exists())
 
     def test_users_cannot_invent_topics(self):
         """The vocabulary is closed; the form offers no way to add to it."""
@@ -1034,22 +1055,39 @@ class SpeakerModelTests(TestCase):
         self.assertEqual(Speaker(name="Jungle Bob").display_name, "Jungle Bob")
         self.assertEqual(Speaker(name="McKeighen, Jr., Ken").display_name, "McKeighen, Jr., Ken")
 
-    def test_nec_only_speakers_are_hidden_from_non_nec_viewers(self):
-        """Nothing exercises this path yet, but it's the whole point of the flag."""
-        from auctions.views import NECSpeakerAccessMixin
+    def test_who_each_visibility_is_listed_for(self):
+        officer = User.objects.create_user("lister", "lister@example.com", "pw")
+        superuser = User.objects.create_superuser("root2", "root2@example.com", "pw")
+        for name, visibility in (
+            ("Public, Paula", Speaker.VISIBILITY_PUBLIC),
+            ("Club, Cleo", Speaker.VISIBILITY_NEC),
+            ("Link, Lou", Speaker.VISIBILITY_LINK),
+            ("Hidden, Hal", Speaker.VISIBILITY_HIDDEN),
+        ):
+            Speaker.objects.create(name=name, visibility=visibility)
 
-        Speaker.objects.create(name="Private, Pat", nec_only=True)
-        Speaker.objects.create(name="Public, Paula", nec_only=False)
+        def names(user, nec_member):
+            return set(Speaker.listed_for(user, nec_member).values_list("name", flat=True))
 
-        class FakeView(NECSpeakerAccessMixin):
-            nec_clubs = []
+        self.assertEqual(names(officer, False), {"Public, Paula"})
+        self.assertEqual(names(officer, True), {"Public, Paula", "Club, Cleo"})
+        self.assertEqual(len(names(superuser, False)), 4)
 
-            class request:
-                class user:
-                    is_superuser = False
+    def test_a_link_only_page_needs_its_key(self):
+        speaker = Speaker.objects.create(name="Link, Lou", visibility=Speaker.VISIBILITY_LINK)
+        self.assertTrue(speaker.link_key)
+        stranger = User.objects.create_user("stranger", "stranger@example.com", "pw")
+        self.assertFalse(speaker.can_be_viewed_by(stranger, True))
+        self.assertFalse(speaker.can_be_viewed_by(stranger, True, "wrong"))
+        self.assertTrue(speaker.can_be_viewed_by(stranger, False, speaker.link_key))
+        self.assertIn(speaker.link_key, speaker.share_url)
 
-        names = set(FakeView().visible_speakers().values_list("name", flat=True))
-        self.assertEqual(names, {"Public, Paula"})
+    def test_a_hidden_page_is_only_for_its_owner(self):
+        owner = User.objects.create_user("owner", "owner@example.com", "pw")
+        stranger = User.objects.create_user("stranger", "stranger@example.com", "pw")
+        speaker = Speaker.objects.create(name="Hidden, Hal", visibility=Speaker.VISIBILITY_HIDDEN, user=owner)
+        self.assertTrue(speaker.can_be_viewed_by(owner, False))
+        self.assertFalse(speaker.can_be_viewed_by(stranger, True, speaker.link_key))
 
     def test_a_speaker_added_today_is_recently_added(self):
         self.assertTrue(Speaker.objects.create(name="Fresh, Fred").is_recently_added)
@@ -1247,7 +1285,7 @@ class SpeakerPaletteRouteTests(TestCase):
         self.officer = User.objects.create_user("officer", "officer@example.com", "pw")
         ClubMember.objects.create(club=self.club, user=self.officer, name="Officer", permission_view=True)
         self.outsider = User.objects.create_user("outsider", "outsider@example.com", "pw")
-        self.speaker = Speaker.objects.create(name="O'Leary, Rachel", nec_only=True)
+        self.speaker = Speaker.objects.create(name="O'Leary, Rachel", visibility=Speaker.VISIBILITY_NEC)
         self.route = palette_routes.ROUTES["speaker_detail"]
 
     def resolve(self, user, target):
@@ -1275,8 +1313,8 @@ class SpeakerPaletteRouteTests(TestCase):
         self.assertIn("error", result)
         self.assertNotIn("url", result)
 
-    def test_a_speaker_who_is_not_nec_only_is_reachable_by_anyone(self):
-        public = Speaker.objects.create(name="Public, Paula", nec_only=False)
+    def test_a_public_speaker_is_reachable_by_anyone(self):
+        public = Speaker.objects.create(name="Public, Paula")
         self.assertEqual(self.resolve(self.outsider, "Paula Public").get("url"), public.get_absolute_url())
 
     def test_a_deleted_speaker_is_not_reachable(self):

@@ -1,6 +1,8 @@
 {% extends "auctions/htmx_table_view.html" %}
 {% load static %}
-{% block title %}Speaker directory{% endblock %}
+{% block title %}Aquarium club speakers{% endblock %}
+{% block meta_description %}Find speakers for your aquarium or fish club meeting, by topic and by how far they are from you.{% endblock %}
+{% block extra_head %}{% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}{% if request.GET %}<meta name="robots" content="noindex, follow">{% endif %}{% endblock %}
 
 {% comment %}
 The speaker directory. Extends the shared htmx table page so the filter box, chips and
@@ -17,10 +19,19 @@ have to behave identically and that file is the only copy of the behaviour.
 
 {% block htmx_table_ribbon %}
 <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
-  <h3 class="mb-0">Speakers</h3>
-  <a class="btn btn-sm btn-info" href="{% url 'speaker_add' %}{% if club_query %}?club={{ club_query|urlencode }}{% endif %}">
-    <i class="bi bi-person-plus-fill"></i> Add a speaker
-  </a>
+  <h1 class="h3 mb-0">Speakers</h1>
+  <div class="d-flex flex-wrap gap-2">
+    {% if own_profile %}
+    <a class="btn btn-sm btn-secondary" href="{% url 'speaker_detail' own_profile.slug %}"><i class="bi bi-person-badge"></i> Your speaker profile</a>
+    {% else %}
+    <a class="btn btn-sm btn-secondary" rel="nofollow" href="{% url 'speaker_add_self' %}"><i class="bi bi-person-plus"></i> Add yourself</a>
+    {% endif %}
+    {% if is_nec_member %}
+    <a class="btn btn-sm btn-info" href="{% url 'speaker_add' %}{% if club_query %}?club={{ club_query|urlencode }}{% endif %}">
+      <i class="bi bi-person-plus-fill"></i> Add a speaker
+    </a>
+    {% endif %}
+  </div>
 </div>
 
 {% comment %} Nudge to add the club's own members, since the club knows who speaks and the site doesn't.
@@ -30,7 +41,7 @@ as putting words in their mouth, and the list would be mostly wrong. {% endcomme
 <div class="mt-3 mb-3 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50" id="speaker-suggestions">
   <h5><i class="bi bi-person-plus me-1"></i> Do any of your club members give talks?</h5>
   <p class="mb-0">
-    <a class="link-light" href="{% url 'speaker_add' %}{% if club_query %}?club={{ club_query|urlencode }}{% endif %}">Add them</a> so other NEC clubs can find them.
+    <a class="link-light" href="{% url 'speaker_add' %}{% if club_query %}?club={{ club_query|urlencode }}{% endif %}">Add them</a> so other clubs can find them.
   </p>
 </div>
 {% endif %}

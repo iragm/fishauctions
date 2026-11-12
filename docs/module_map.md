@@ -26,13 +26,13 @@ this only quotes its opening sentence.
 - **`account_adapter.py`** (33 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
-- **`account_deletion.py`** (446 lines)
+- **`account_deletion.py`** (454 lines)
   Account deletion: what "delete my account" means here, and the machinery for it.
   `deletion_due_date`, `blacklist_refresh_tokens`, `request_deletion`, `cancel_deletion`, `deletion_summary`, `delete_account`, `process_due_deletions`
 - **`account_export.py`** (311 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_merge.py`** (423 lines)
+- **`account_merge.py`** (424 lines)
   Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
   `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
 - **`account_nav.py`** (201 lines)
@@ -154,7 +154,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (2038 lines)
+- **`filters.py`** (2044 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -162,7 +162,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6673 lines)
+- **`forms.py`** (6684 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -208,7 +208,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15563 lines)
+- **`models.py`** (15680 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -225,11 +225,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17076 lines)
+- **`palette_actions.py`** (17081 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2041 lines)
+- **`palette_routes.py`** (2046 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -272,6 +272,9 @@ this only quotes its opening sentence.
   `FishAuctionsSocialAccountAdapter`
 - **`source_code.py`** (438 lines)
   This site's own source code, read out of the public repository it is published from.
+- **`speaker_duplicates.py`** (220 lines)
+  Duplicate speakers in the directory: finding them, and folding one into another.
+  `name_key`, `possible_matches`, `duplicate_groups`, `suggested_keep`, `merge_problem`, `merge_speakers`, `link_speaker_to_account`
 - **`speaker_topics.py`** (200 lines)
   The speaker directory's fixed topic vocabulary.
   `canonical_topic_name`, `topic_needs_review`, `ensure_speaker_topics`
@@ -671,8 +674,11 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speakers.py`** (1366 lines)
-  Tests for the speaker directory: the NEC WordPress import, NEC-only scoping, the list and map view,
+- **`test_speaker_public.py`** (475 lines)
+  The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
+  `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`
+- **`test_speakers.py`** (1404 lines)
+  Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
 - **`test_species_search.py`** (188 lines)
@@ -714,7 +720,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (413 lines)
+- **`test_tenancy.py`** (416 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_timezones.py`** (85 lines)
@@ -756,7 +762,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (142 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1385 lines)
+- **`urls.py`** (1387 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -867,7 +873,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`import_fishbase.py`** (498 lines)
   Load the species picklist from a pinned FishBase snapshot, plus the curated aquarium list.
   `Command`
-- **`import_nec_speakers.py`** (403 lines)
+- **`import_nec_speakers.py`** (415 lines)
   Import the Northeast Council's speaker database from a WordPress WXR export.
   `clean_text`, `Command`
 - **`link_accounts.py`** (98 lines)
@@ -920,7 +926,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (2801 lines)
+- **`admin.py`** (3013 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
@@ -1110,7 +1116,7 @@ Every view on the site, split by the part of it the view belongs to.
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (978 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
-- **`help.py`** (100 lines)
+- **`help.py`** (108 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
 - **`invoices.py`** (411 lines)
@@ -1143,9 +1149,8 @@ Every view on the site, split by the part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (748 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-- **`speakers.py`** (483 lines)
+- **`speakers.py`** (720 lines)
   The speaker directory: who will come and talk to a club, and what about.
-  `NECSpeakerAccessMixin`, `SpeakerListView`, `SpeakerPanelView`, `SpeakerDetailView`, `SpeakerCreateView`, `SpeakerUpdateView`, `SpeakerDeleteView`, `SpeakerTagView`, `SpeakerCommentView`, `SpeakerCommentDeleteView`
 - **`species.py`** (441 lines)
   Adding species and common names, and the superuser's cleanup queue.
 - **`usability.py`** (197 lines)

@@ -953,11 +953,13 @@ urlpatterns = [
     # a club is passed as ?club=<slug> so officers can share the page.
     path("speakers/", views.SpeakerListView.as_view(), name="speaker_list"),
     path("speakers/add/", views.SpeakerCreateView.as_view(), name="speaker_add"),
+    path("speakers/add/me/", views.SpeakerSelfCreateView.as_view(), name="speaker_add_self"),
     path("speakers/<slug:slug>/", views.SpeakerDetailView.as_view(), name="speaker_detail"),
     path("speakers/<slug:slug>/panel/", views.SpeakerPanelView.as_view(), name="speaker_panel"),
     path("speakers/<slug:slug>/edit/", views.SpeakerUpdateView.as_view(), name="speaker_edit"),
     path("speakers/<slug:slug>/delete/", views.SpeakerDeleteView.as_view(), name="speaker_delete"),
     path("speakers/<slug:slug>/tag/", views.SpeakerTagView.as_view(), name="speaker_tag"),
+    path("speakers/<slug:slug>/claim/", views.SpeakerClaimView.as_view(), name="speaker_claim"),
     path("speakers/<slug:slug>/comment/", views.SpeakerCommentView.as_view(), name="speaker_comment"),
     path(
         "speakers/<slug:slug>/comment/<int:pk>/delete/",
