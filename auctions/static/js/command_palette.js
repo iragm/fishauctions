@@ -301,7 +301,7 @@
       function isStale() {
         return generation !== renderGeneration;
       }
-      fetch(searchUrl + "?q=" + encodeURIComponent(query), {
+      fetch(searchUrl + "?q=" + encodeURIComponent(query) + "&path=" + encodeURIComponent(window.location.pathname), {
         headers: { "X-Requested-With": "XMLHttpRequest" },
         credentials: "same-origin",
       })

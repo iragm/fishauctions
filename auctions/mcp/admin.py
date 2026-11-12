@@ -56,7 +56,7 @@ from auctions import club_onboarding, palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
-from . import admin_species, tools
+from . import admin_reports, admin_species, tools
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,10 @@ INSTRUCTIONS = (
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
     "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
-    "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects and untrusted_auction_creators. Nothing here "
+    "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects, untrusted_auction_creators, and ten growth "
+    "reports (signup_funnel, entry_page_outcomes, club_retention, unclaimed_people, dead_ends, "
+    "help_search_misses, referrers_without_club, seller_reach, feature_adoption_by_club, "
+    "auction_setup_time) that name nobody. Nothing here "
     "changes the site; backup_database only copies its data offsite. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -1259,7 +1262,35 @@ def palette_shortcut_candidates(request, params: dict[str, Any]) -> dict[str, An
     lookups = palette_assist.mine_preloaded_lookups(min_count)
     summary = f"{len(found)} phrase{'s' if len(found) != 1 else ''} the assistant always sends to the same page"
     summary += f", {len(disputed)} it answers more than one way, {len(lookups)} answered from one lookup."
-    return _ok(summary, candidates=found[:SHORTCUT_CANDIDATES_SHOWN], answered_two_ways=len(disputed))
+    return _ok(
+        summary,
+        candidates=found[:SHORTCUT_CANDIDATES_SHOWN],
+        answered_two_ways=len(disputed),
+        actions_run=_palette_writes_run(),
+    )
+
+
+def _palette_writes_run(days: int = 90) -> list[dict[str, Any]]:
+    """The writes people ran through the palette lately, most first: the verbs worth a place on the
+    page that uses them (``command_palette.page_verb_items``)."""
+    from django.db.models import Count
+
+    from auctions.models import LLMUsage
+
+    rows = (
+        LLMUsage.objects.filter(createdon__gte=timezone.now() - timedelta(days=days), success=True, cancelled=False)
+        .exclude(action="")
+        .values("action")
+        .annotate(times=Count("pk"), people=Count("user", distinct=True))
+        .order_by("-times")
+    )
+    found = []
+    for row in rows:
+        action = palette_actions.get_action(row["action"])
+        if action is None or tools.read_only(action):
+            continue
+        found.append({"action": action.name, "times": row["times"], "people": row["people"]})
+    return found[:15]
 
 
 def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -2626,11 +2657,14 @@ ADMIN_TOOLS: dict[str, Action] = {
             resolver=list_app_crashes,
         ),
         *admin_species.READS,
+        *admin_reports.READS,
         Action(
             name="palette_shortcut_candidates",
             description=(
                 "Phrases people type into the command palette that the assistant has sent to the same "
-                "page every time, and have no shortcut yet. Each can be proposed as add_palette_shortcut."
+                "page every time, and have no shortcut yet. Each can be proposed as add_palette_shortcut. "
+                "Also the writes people ran through the palette in 90 days, most first: verbs worth "
+                "offering on the page that uses them."
             ),
             params={
                 "min_count": "integer, optional, default 5, at least 5. How many times a phrase must have been asked.",

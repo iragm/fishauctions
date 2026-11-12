@@ -1397,10 +1397,68 @@ def _connect_ai_items(user):
     return [_item("page", "Connect an AI assistant", url, "bi-robot", "Claude, ChatGPT or Grok")]
 
 
-def default_items(request, *, app_deep_links=True):
+#: Pages whose own verb opens the palette's list: the one thing people come to that page to do.
+#: Extend it from ``palette_shortcut_candidates`` on ``/mcp/admin/``, whose ``actions_run`` says which
+#: verbs people run through the palette most.
+ADD_LOT_PAGES = {"auction_main", "auction_lot_list"}
+MARK_PAID_PAGES = {"invoice_by_pk"}
+
+
+def page_verb_items(request, path):
+    """The verb of the page the palette was opened on: "Add a lot" where people sell, "mark this invoice
+    paid" on an invoice its auction's admin is looking at. Empty anywhere else.
+
+    "Add a lot" is a link: it never acts on its own. "Mark paid" fills the box and stops, like an
+    example, so the countdown card is still what writes.
+    """
+    from django.urls import Resolver404, resolve
+
+    user = request.user
+    if not getattr(user, "is_authenticated", False) or not isinstance(path, str) or not path.startswith("/"):
+        return []
+    try:
+        match = resolve(path.split("?")[0].split("#")[0][:500])
+    except (Resolver404, Exception):  # noqa: BLE001 - a bad path is never worth an error
+        return []
+    page = match.url_name or ""
+    if page == "selling":
+        return [_item("page", row["title"], row["url"], row["icon"], row["description"]) for row in _t_add_lot(user)]
+    if page in ADD_LOT_PAGES and match.kwargs.get("slug"):
+        auction = _joined_auctions(user).filter(slug=match.kwargs["slug"]).first()
+        if not auction or not auction.can_submit_lots or _use_bulk_add_lots(auction):
+            return []
+        return [
+            _item(
+                "page",
+                "Add a lot",
+                f"{reverse('new_lot')}?auction={auction.slug}",
+                "bi-plus-circle",
+                auction.title,
+            )
+        ]
+    if page in MARK_PAID_PAGES and match.kwargs.get("pk"):
+        from . import palette_assist
+
+        invoice = Invoice.objects.filter(pk=match.kwargs["pk"]).select_related("auction").first()
+        if (
+            not invoice
+            or not invoice.auction_id
+            or invoice.status == "PAID"
+            or not invoice.auction.permission_check(user)
+            or not palette_assist.assist_enabled_for(user)
+        ):
+            return []
+        return [_item("example", "mark this invoice paid", "", "bi-cash-coin")]
+    return []
+
+
+def default_items(request, *, app_deep_links=True, path=""):
     """Groups shown when the palette opens with no query."""
     user = request.user
     groups = []
+    verbs = page_verb_items(request, path)
+    if verbs:
+        groups.append({"label": "On this page", "items": verbs})
     primary = []
     auction = _last_auction(user)
     if auction:
@@ -1466,14 +1524,14 @@ def default_items(request, *, app_deep_links=True):
     return groups
 
 
-def search(request, q, *, app_deep_links=True):
+def search(request, q, *, app_deep_links=True, path=""):
     """Grouped results for a query, or defaults when empty. ``app_deep_links=False`` omits the native
     destinations for clients that add their own.
     """
     user = request.user
     q = (q or "").strip()
     if not q:
-        return default_items(request, app_deep_links=app_deep_links)
+        return default_items(request, app_deep_links=app_deep_links, path=path)
     groups = []
     ql = q.lower()
 
