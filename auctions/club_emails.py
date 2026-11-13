@@ -1,4 +1,4 @@
-"""Two emails to clubs that already use the site, each once per club ever, to get them using more of it.
+"""Three emails to clubs that already use the site, each once per club ever.
 
 * ``monthly_invite`` (:func:`monthly_invite_due`): a club ran a big auction here, one with "annual" in
   its title or a gross over :data:`BIG_GROSS`, and it ended at least :data:`AFTER_AUCTION` ago (and no
@@ -8,12 +8,14 @@
   ``Club.auction_cadence``: "I'm in" (then on to copying the auction), "my club doesn't have monthly
   auctions" and "not interested in software for them". Any answer stops this email; so does a club
   that already runs auctions about monthly here (:func:`runs_monthly`), which gets the next one instead.
-  It ends with a link to add another club to the site.
 * ``club_tools`` (:func:`club_tools_due`): a club that made :data:`MONTHLY_AUCTIONS` real auctions within
   :data:`MONTHLY_WINDOW`. It goes to the creator of the club's latest auction and to that auction's
   admins, and lists the club management features (:data:`FEATURES`), each with its help guide and the
   club's own setup page. A club that answered "no monthly auctions" or "not interested" still gets it
   once it really does make that many: the answer stops only the question.
+* ``thanks`` (:func:`thanks_due`): a club that has finished :data:`THANKS_AFTER` real auctions here, one
+  within :data:`THANKS_ACTIVE`. A thank you to its latest auction's creator that asks them to tell
+  another club about the site. No link and no referral code: it's a nudge, not a program.
 
 The claim is a ``ClubEmail`` row per club and kind, inserted before sending. Each person it goes to also
 gets a ``FeatureEmail`` row of the same kind, so ``feature_email_results`` reports them beside the
@@ -36,7 +38,7 @@ from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core import signing
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
@@ -51,7 +53,10 @@ AFTER_AUCTION = datetime.timedelta(weeks=3)
 LOOKBACK = datetime.timedelta(days=400)
 MONTHLY_AUCTIONS = 3
 MONTHLY_WINDOW = datetime.timedelta(days=92)
-#: Clubs per day, across both kinds: one email per club is a few people at most.
+THANKS_AFTER = 10
+#: A club thanked must still be using the site: a finished auction this recent.
+THANKS_ACTIVE = datetime.timedelta(days=180)
+#: Clubs per day, across every kind: one email per club is a few people at most.
 PER_RUN = 25
 #: Someone who had any feature email this recently waits a day or two: never two in one morning.
 RECENT = datetime.timedelta(days=7)
@@ -232,7 +237,6 @@ def monthly_invite_context(club, auction, user, domain) -> dict:
         "club": club,
         "auction": auction,
         "buttons": buttons,
-        "add_club_url": _url(domain, reverse("club_add"), "monthly_invite"),
     }
 
 
@@ -249,9 +253,40 @@ def club_tools_context(club, auction, user, domain) -> dict:
     return {"subject": f"Club tools for {club.name}", "club": club, "auction": auction, "features": features}
 
 
+def thanks_due(now=None):
+    """``(club, latest auction)`` for each club that has finished :data:`THANKS_AFTER` real auctions here,
+    one of them within :data:`THANKS_ACTIVE`, and hasn't been thanked."""
+    from auctions.models import Auction, ClubEmail
+
+    now = now or timezone.now()
+    thanked = ClubEmail.objects.filter(kind="thanks").values_list("club_id", flat=True)
+    finished = Auction.objects.filter(
+        _ended_before(now), is_deleted=False, club__isnull=False, created_by__isnull=False
+    )
+    busy = (
+        finished.filter(club_id__in=finished.filter(date_start__gte=now - THANKS_ACTIVE).values("club_id"))
+        .exclude(club_id__in=thanked)
+        .values("club_id")
+        .annotate(made=Count("pk"))
+        .filter(made__gte=THANKS_AFTER)
+        .values_list("club_id", flat=True)
+    )
+    for club_id in list(busy):
+        auctions = _real(
+            finished.filter(club_id=club_id).select_related("club", "created_by__userdata").order_by("-date_start")
+        )
+        if len(auctions) >= THANKS_AFTER and auctions[0].date_start >= now - THANKS_ACTIVE:
+            yield auctions[0].club, auctions[0]
+
+
+def thanks_context(club, auction, user, domain) -> dict:
+    return {"subject": f"Thanks, {club.name}", "club": club, "auction": auction}
+
+
 KINDS = {
     "monthly_invite": (monthly_invite_due, lambda auction: [auction.created_by], monthly_invite_context),
     "club_tools": (club_tools_due, club_tools_recipients, club_tools_context),
+    "thanks": (thanks_due, lambda auction: [auction.created_by], thanks_context),
 }
 
 
