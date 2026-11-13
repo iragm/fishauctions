@@ -707,7 +707,7 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speaker_public.py`** (654 lines)
+- **`test_speaker_public.py`** (661 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
   `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`
 - **`test_speakers.py`** (1416 lines)
@@ -1199,7 +1199,7 @@ Every view on the site, split by the part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (770 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-- **`speakers.py`** (789 lines)
+- **`speakers.py`** (811 lines)
   The speaker directory: who will come and talk to a club, and what about.
 - **`species.py`** (523 lines)
   Adding species and common names, the superuser's cleanup queue, and each species' public page.
