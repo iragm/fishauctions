@@ -51,7 +51,7 @@ this only quotes its opening sentence.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
 - **`ai_page.py`** (344 lines)
   ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
-- **`announcements.py`** (405 lines)
+- **`announcements.py`** (407 lines)
   Club announcements: one message, sent to the places a club's members look.
 - **`app_crashes.py`** (131 lines)
   Crashes the mobile app reports about itself: storing them, grouping them into bugs, and reading them back.
@@ -88,7 +88,7 @@ this only quotes its opening sentence.
   `APIKeyAuthentication`, `OptionalAPIKeyAuthentication`, `ApiKeyThrottle`
 - **`backups.py`** (318 lines)
   Nightly offsite backup of the core tables: dumped, gzipped, encrypted with ``age``, uploaded to R2.
-- **`bidding.py`** (437 lines)
+- **`bidding.py`** (441 lines)
   Bidding logic for lots.
   `check_bidding_permissions`, `reset_lot_end_time`, `bid_on_lot`, `place_bid_and_broadcast`
 - **`brevo.py`** (573 lines)
@@ -168,7 +168,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6706 lines)
+- **`forms.py`** (6724 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -179,7 +179,7 @@ this only quotes its opening sentence.
 - **`geocoding.py`** (67 lines)
   Turning a typed address into a point on the map.
   `configured`, `geocode`
-- **`google_calendar.py`** (690 lines)
+- **`google_calendar.py`** (693 lines)
   Two-way Google Calendar sync for clubs.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
@@ -214,7 +214,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15782 lines)
+- **`models.py`** (15830 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -234,7 +234,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (314 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17105 lines)
+- **`palette_actions.py`** (17108 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -267,12 +267,12 @@ this only quotes its opening sentence.
   `SampleResult`, `load_fixture`, `auction_has_lots`, `offer_sample_data`, `scaled_price`, `load_sample_data`
 - **`serializers.py`** (871 lines)
   DRF serializers for the club API.
-- **`services.py`** (1646 lines)
+- **`services.py`** (1761 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
   `SessionStore`
-- **`signals.py`** (1104 lines)
+- **`signals.py`** (1106 lines)
   Signal handlers for the auctions app.
 - **`site_checks.py`** (238 lines)
   Checks for the site quietly not doing its job, which no error line would show. Read by ``site_health``.
@@ -438,6 +438,9 @@ this only quotes its opening sentence.
 - **`test_club_linking.py`** (558 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
+- **`test_club_managed_switch.py`** (250 lines)
+  Switching a copied club auction from copying people to managing them through the club, club-managed
+  `make_auction`, `ClubManagedSwitchTests`, `SeveralLocationsTests`, `JoinCardTests`
 - **`test_club_member_history.py`** (72 lines)
   `ClubMemberHistoryTests`
 - **`test_club_money.py`** (782 lines)
@@ -858,7 +861,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`auction_promos.py`** (335 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
-- **`auctiontos_notifications.py`** (308 lines)
+- **`auctiontos_notifications.py`** (309 lines)
   The participant emails that follow joining an auction, run every few minutes by cron: welcome,
   `send_tos_notification`, `Command`
 - **`backfill_lot_species.py`** (384 lines)
@@ -1123,16 +1126,16 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1155 lines)
+- **`auction_pages.py`** (1176 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1215 lines)
+- **`base.py`** (1224 lines)
   Shared view machinery: the mixins that decide who may see a page.
-- **`browse.py`** (1006 lines)
+- **`browse.py`** (1008 lines)
   The lot lists people browse, and what they do to a lot without opening it.
 - **`bulk_actions.py`** (510 lines)
   The bulk buttons on the auction admin pages: mark paid, set won, enable bidding.
@@ -1153,9 +1156,9 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_finder.py`** (230 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
   `ClubFinderView`, `ClubAddView`
-- **`club_integrations.py`** (1248 lines)
+- **`club_integrations.py`** (1249 lines)
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
-- **`club_members.py`** (1107 lines)
+- **`club_members.py`** (1108 lines)
   The club's list of people: joining, renewing, permissions, cards.
 - **`club_pages.py`** (612 lines)
   A club's public page, and the two links that identify a member on it.
@@ -1181,7 +1184,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`logistics.py`** (95 lines)
   Online auctions after bidding: the logistics page, its tap to cross a name off, its scanner, and the admin's
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionLogisticsScan`, `AuctionPostEndBanner`
-- **`lot_pages.py`** (1364 lines)
+- **`lot_pages.py`** (1369 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.

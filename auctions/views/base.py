@@ -323,6 +323,9 @@ def _upsert_clubmember_shadow_tos(
 ):
     if not member.bidder_number:
         member.generate_bidder_number(save=True)
+    # Somebody's own pick stays put unless a location is given: only a new row lands on the first location,
+    # and in an auction with several that one waits for the person to pick (AuctionTOS.needs_pickup_location).
+    chosen = pickup_location
     pickup_location = pickup_location or _default_pickup_location_for_auction(auction)
     if not pickup_location:
         return None
@@ -335,9 +338,15 @@ def _upsert_clubmember_shadow_tos(
             clubmember=member,
             bidder_number=member.bidder_number,
             manually_added=True,
+            pickup_location_confirmed=chosen is not None or not auction.multi_location,
         )
+    elif chosen is not None:
+        tos.pickup_location = chosen
+        tos.pickup_location_confirmed = True
+    if checked_in_at is not _UNSET and checked_in_at:
+        # Checked in at the door: they are where they are.
+        tos.pickup_location_confirmed = True
     tos.user = member.user
-    tos.pickup_location = pickup_location
     tos.clubmember = member
     # One person, one number: a shared number made winner lookups pick either.
     if member.bidder_number:
