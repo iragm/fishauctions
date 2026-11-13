@@ -412,6 +412,8 @@ def propagate_clubmember_to_shadow_tos(sender, instance, created, **kwargs):
                 bidding_allowed=bidding,
                 selling_allowed=member.selling_allowed,
                 manually_added=True,
+                # At the first location: someone in an auction with several picks theirs on joining.
+                pickup_location_confirmed=False,
                 **shared_member_values(member),
             )
             if not AuctionTOS.objects.filter(pk=row.pk).exists():

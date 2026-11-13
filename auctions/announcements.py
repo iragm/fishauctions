@@ -243,10 +243,12 @@ def _send_pushes(announcement):
 
     Queued rather than sent inline, so a 400-member club doesn't hold the request open.
     """
+    from auctions.feature_emails import add_src
     from auctions.notifications import CATEGORY_CLUB_ANNOUNCEMENT
     from auctions.tasks import send_push_to_user
 
-    url = club_url(announcement.club)
+    # Tagged so a tap on the push is counted as one (PageView.SOURCE_LABELS).
+    url = add_src(club_url(announcement.club), "announcement")
     sent = 0
     for member in reachable_members(announcement.club).select_related("user"):
         try:

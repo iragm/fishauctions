@@ -4456,6 +4456,14 @@ class Auction(CachedPropertiesMixin, models.Model):
     enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
     dismissed_square_banner = models.BooleanField(default=False, blank=True)
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
+    dismissed_club_managed_banner = models.BooleanField(
+        default=False,
+        blank=True,
+        help_text=(
+            "Set when an admin chose not to switch a copied auction from copying people to managing them "
+            "through the club. Not cloned: the next copy asks again."
+        ),
+    )
     dismissed_customize_event_banner = models.BooleanField(
         default=False,
         blank=True,
@@ -4983,6 +4991,31 @@ class Auction(CachedPropertiesMixin, models.Model):
     def use_check_in_mode(self):
         """True when club members are added as they check in."""
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
+
+    @cached_property
+    def offers_club_managed_switch(self):
+        """Whether to offer this auction's admins to manage people through the club instead of copying them:
+        a single-location club auction that copies people and is still as it was copied -- no lots,
+        invoices, joins, or edits to its people. ``services.switch_to_club_managed`` checks it again.
+        """
+        if not (
+            self.pk
+            and self.club_id
+            and self.copy_users_when_copying_this_auction
+            and not self.manage_users_through_club
+            and not self.dismissed_club_managed_banner
+            and not self.is_deleted
+        ):
+            return False
+        if self.multi_location or getattr(settings, "SINGLE_CLUB_MODE", False):
+            return False
+        if Lot.objects.filter(auction=self, is_deleted=False).exists():
+            return False
+        if Invoice.objects.filter(auction=self).exists():
+            return False
+        if AuctionTOS.objects.filter(auction=self, created_by_joining=True).exists():
+            return False
+        return not AuctionHistory.objects.filter(auction=self, applies_to="USERS").exists()
 
     @property
     def scans_club_cards(self):
@@ -6946,6 +6979,13 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE)
+    pickup_location_confirmed = models.BooleanField(
+        default=True,
+        help_text=(
+            "False on a row the club added to a club-managed auction at its first location: in an auction with "
+            "several locations, the person picks theirs before they bid or sell (needs_pickup_location)."
+        ),
+    )
     createdon = models.DateTimeField(auto_now_add=True, blank=True)
     confirm_email_sent = models.BooleanField(default=False, blank=True)
     second_confirm_email_sent = models.BooleanField(default=False, blank=True)
@@ -7078,7 +7118,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     @property
     def can_sell(self):
         """Allowed to sell, and not holding for the second pickup: a seller has to be there at the first."""
-        return self.selling_allowed and not self.holding_for_second_pickup
+        return self.selling_allowed and not self.holding_for_second_pickup and not self.needs_pickup_location
 
     @property
     def paddle_is_current(self):
@@ -7486,8 +7526,13 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         return self.auction.use_check_in_mode and self.checked_in is None
 
     @property
+    def needs_pickup_location(self):
+        """Added by the club to an auction with several locations, and hasn't picked one yet."""
+        return not self.pickup_location_confirmed and self.auction.multi_location
+
+    @property
     def can_bid_in_auction(self):
-        return self.bidding_allowed and not self.requires_check_in_before_bidding
+        return self.bidding_allowed and not self.requires_check_in_before_bidding and not self.needs_pickup_location
 
     @cached_property
     def invoice_link_html(self):
@@ -12200,6 +12245,8 @@ class PageView(CachedPropertiesMixin, models.Model):
         "twitter": "Shared on X (Twitter)",
         "facebook": "Shared on Facebook",
         "discord": "Posted on Discord",
+        "calendar": "From a club's calendar",
+        "announcement": "From a club announcement",
         "qr": "Scanned a printed QR code",
         "ar": "From lot scanning in the app",
         "ar_scan": "Scanned a label in the app",

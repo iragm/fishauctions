@@ -1995,21 +1995,35 @@ class AuctionJoin(forms.ModelForm):
             from urllib.parse import quote
 
             self.helper.form_action = f"{self.helper.form_action}?next={quote(next_url, safe='')}"
+        # Joined, the button only goes on to the lots, or saves a newly picked location (the script below).
         self.helper.layout = Layout(
             "i_agree",
             "time_spent_reading_rules",
             "pickup_location",
-            Submit("submit", "Join auction", css_class="agree_tos btn-success text-dark"),
+            Submit("submit", "View lots" if joined else "Join auction", css_class="agree_tos btn-success text-dark"),
         )
         if joined:
-            # The X opens auction.html's leave dialog.
+            # Opens auction.html's leave dialog.
             self.helper.layout.append(
                 HTML(
                     '<button type="button" class="btn btn-outline-danger ms-1" data-bs-toggle="modal" '
-                    'data-bs-target="#leave-auction-modal" title="Leave auction" aria-label="Leave auction">'
-                    '<i class="bi bi-x-lg"></i></button>'
+                    'data-bs-target="#leave-auction-modal"><i class="bi bi-x-lg"></i> Leave</button>'
                 )
             )
+            if auction.multi_location:
+                self.helper.layout.append(
+                    HTML(
+                        "<script>(function () {"
+                        "var select = document.getElementById('id_pickup_location');"
+                        "var button = document.querySelector('#rule-form [name=submit]');"
+                        "if (!select || !button) { return; }"
+                        "var saved = select.value;"
+                        "select.addEventListener('change', function () {"
+                        "button.value = select.value === saved ? 'View lots' : 'Change pickup location';"
+                        "});"
+                        "})();</script>"
+                    )
+                )
         self.fields["pickup_location"].queryset = auction.location_qs
         self.fields["time_spent_reading_rules"].widget = HiddenInput()
         # Offered for the locations with a second pickup time; the script shows it when one is picked.
@@ -2862,6 +2876,8 @@ class AuctionEditForm(forms.ModelForm):
                     phone_number=club_member.phone_number or "",
                     address=club_member.address or "",
                     manually_added=True,
+                    # At the first location: someone in an auction with several picks theirs on joining.
+                    pickup_location_confirmed=False,
                 )
 
     def save(self, commit=True):
@@ -3514,6 +3530,8 @@ class CreateLotForm(forms.ModelForm):
                         "auction",
                         "You don't have permission to sell lots in this auction",
                     )
+                elif auctiontos.needs_pickup_location:
+                    self.add_error("auction", "Pick your pickup location on the auction's page before you sell")
             try:
                 UserBan.objects.get(banned_user=self.user.pk, user=auction.created_by.pk)
                 self.add_error("auction", "You've been banned from selling lots in this auction")
