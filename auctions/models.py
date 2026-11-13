@@ -15201,11 +15201,13 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     IMAGE_FIELD_NAME = "image"
 
     VISIBILITY_PUBLIC = "public"
+    VISIBILITY_SIGNED_IN = "signed_in"
     VISIBILITY_NEC = "nec"
     VISIBILITY_LINK = "link"
     VISIBILITY_HIDDEN = "hidden"
     VISIBILITY_CHOICES = (
         (VISIBILITY_PUBLIC, "Public"),
+        (VISIBILITY_SIGNED_IN, "Anyone signed in"),
         (VISIBILITY_NEC, "NEC member clubs only"),
         (VISIBILITY_LINK, "Only people with the link"),
         (VISIBILITY_HIDDEN, "Not public"),
@@ -15351,13 +15353,15 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
 
     @classmethod
     def listed_for(cls, user, nec_member):
-        """Speakers the directory lists for this viewer: public ones, NEC-only ones for NEC clubs, and
-        everything for a superuser. Link-only and not-public profiles are never listed to anyone else.
+        """Speakers the directory lists for this viewer: public ones, signed-in-only ones for anyone signed
+        in, NEC-only ones for NEC clubs, and everything for a superuser. Link-only and not-public profiles are never listed to anyone else.
         """
         speakers = cls.objects.filter(is_deleted=False)
         if user is not None and user.is_authenticated and user.is_superuser:
             return speakers
         allowed = [cls.VISIBILITY_PUBLIC]
+        if user is not None and user.is_authenticated:
+            allowed.append(cls.VISIBILITY_SIGNED_IN)
         if nec_member:
             allowed.append(cls.VISIBILITY_NEC)
         return speakers.filter(visibility__in=allowed)
@@ -15378,6 +15382,8 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
             return True
         if self.visibility == self.VISIBILITY_PUBLIC:
             return True
+        if self.visibility == self.VISIBILITY_SIGNED_IN:
+            return bool(user is not None and user.is_authenticated)
         if self.visibility == self.VISIBILITY_NEC:
             return bool(nec_member)
         if self.visibility == self.VISIBILITY_LINK:

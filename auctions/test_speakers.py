@@ -9,7 +9,7 @@ from io import StringIO
 from unittest.mock import patch
 
 import requests
-from django.contrib.auth.models import User
+from django.contrib.auth.models import AnonymousUser, User
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.test.client import Client
@@ -1071,6 +1071,7 @@ class SpeakerModelTests(TestCase):
         superuser = User.objects.create_superuser("root2", "root2@example.com", "pw")
         for name, visibility in (
             ("Public, Paula", Speaker.VISIBILITY_PUBLIC),
+            ("Members, Mo", Speaker.VISIBILITY_SIGNED_IN),
             ("Club, Cleo", Speaker.VISIBILITY_NEC),
             ("Link, Lou", Speaker.VISIBILITY_LINK),
             ("Hidden, Hal", Speaker.VISIBILITY_HIDDEN),
@@ -1080,9 +1081,17 @@ class SpeakerModelTests(TestCase):
         def names(user, nec_member):
             return set(Speaker.listed_for(user, nec_member).values_list("name", flat=True))
 
-        self.assertEqual(names(officer, False), {"Public, Paula"})
-        self.assertEqual(names(officer, True), {"Public, Paula", "Club, Cleo"})
-        self.assertEqual(len(names(superuser, False)), 4)
+        self.assertEqual(names(AnonymousUser(), False), {"Public, Paula"})
+        self.assertEqual(names(officer, False), {"Public, Paula", "Members, Mo"})
+        self.assertEqual(names(officer, True), {"Public, Paula", "Members, Mo", "Club, Cleo"})
+        self.assertEqual(len(names(superuser, False)), 5)
+
+    def test_a_signed_in_only_page_is_for_anyone_signed_in(self):
+        speaker = Speaker.objects.create(name="Members, Mo", visibility=Speaker.VISIBILITY_SIGNED_IN)
+        stranger = User.objects.create_user("stranger", "stranger@example.com", "pw")
+        self.assertTrue(speaker.can_be_viewed_by(stranger, False))
+        self.assertFalse(speaker.can_be_viewed_by(AnonymousUser(), True, speaker.link_key))
+        self.assertFalse(speaker.is_indexable)
 
     def test_a_link_only_page_needs_its_key(self):
         speaker = Speaker.objects.create(name="Link, Lou", visibility=Speaker.VISIBILITY_LINK)
@@ -1333,38 +1342,30 @@ class SpeakerPaletteRouteTests(TestCase):
         self.assertIn("error", self.resolve(self.officer, "Rachel O'Leary"))
 
 
-@override_settings(SINGLE_CLUB_MODE=False)
+@override_settings(SINGLE_CLUB_MODE=False, ENABLE_CLUB_FINDER=True)
 class SpeakerNavigationTests(TestCase):
-    """The club sidebar link only exists for NEC clubs."""
+    """The directory is in the Clubs menu, under Find a club, and no longer in the club sidebar."""
 
     def setUp(self):
         self.user = User.objects.create_user("officer", "officer@example.com", "pw")
         self.client = Client()
         self.client.force_login(self.user)
 
-    def sidebar_for(self, is_nec_club):
+    def club_page(self, is_nec_club):
         club = Club.objects.create(name="A Club", is_nec_club=is_nec_club)
         ClubMember.objects.create(club=club, user=self.user, name="Officer", permission_admin=True)
         return self.client.get(reverse("club_admin", kwargs={"slug": club.slug}))
 
-    def test_nec_clubs_get_a_speakers_link(self):
-        response = self.sidebar_for(is_nec_club=True)
-        self.assertContains(response, reverse("speaker_list"))
-        self.assertContains(response, "Find speakers")
+    def test_the_clubs_menu_has_find_a_speaker_under_find_a_club(self):
+        for is_nec_club in (True, False):
+            with self.subTest(is_nec_club=is_nec_club):
+                body = self.club_page(is_nec_club).content.decode()
+                link = f'href="{reverse("speaker_list")}">Find a speaker</a>'
+                self.assertIn(link, body)
+                self.assertLess(body.index(">Find a club</a>"), body.index(link))
 
-    def test_other_clubs_do_not(self):
-        response = self.sidebar_for(is_nec_club=False)
-        self.assertNotContains(response, reverse("speaker_list"))
-
-    def test_find_speakers_sits_above_only_setup_and_club_history(self):
-        """ "Find speakers" sits above only Setup and Club history, asserted by position."""
-        body = self.sidebar_for(is_nec_club=True).content.decode()
-        find_speakers = body.index("Find speakers")
-        self.assertLess(find_speakers, body.index("Setup"))
-        self.assertLess(body.index("Setup"), body.index("Club history"))
-        # Everything else is above it.
-        for earlier in ("Club Home", "Members", "Map", "Print Barcodes", "Club stats"):
-            self.assertLess(body.index(earlier), find_speakers, f"{earlier} should be above Find speakers")
+    def test_the_club_sidebar_has_no_speakers_link(self):
+        self.assertNotContains(self.club_page(is_nec_club=True), "Find speakers")
 
 
 @override_settings(SINGLE_CLUB_MODE=False)

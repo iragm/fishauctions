@@ -96,9 +96,5 @@ def club_sidebar(context):
         "bap_url": bap_url,
         "show_donation_tracking": club.enable_donation_tracking and can_manage_donations,
         "show_announcements": can_send_announcements,
-        # The speaker directory is only for NEC member clubs, so the link only exists for them.
-        # Anyone in this sidebar already holds a club permission, which is the access bar.
-        "show_speakers": club.is_nec_club,
-        "speakers_url": reverse("speaker_list") + "?" + urlencode({"club": club.slug}),
         "show_library": can_use_library(user),
     }

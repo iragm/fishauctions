@@ -66,11 +66,8 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link {% if active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up me-1"></i> Club stats</a>
   {% endif %}
 
-  {% comment %}Find speakers, Setup and Club history are the tail of the nav on purpose: they're
-  occasional errands rather than things you come here to do, so they sit below the day-to-day links.{% endcomment %}
-  {% if show_speakers %}
-  <a class="nav-link {% if active_tab == 'speakers' %}active{% endif %}" href="{{ speakers_url }}"><i class="bi bi-person-fill me-1"></i> Find speakers</a>
-  {% endif %}
+  {% comment %}Setup and Club history are the tail of the nav on purpose: they're occasional errands
+  rather than things you come here to do, so they sit below the day-to-day links.{% endcomment %}
 
   {% if show_donation_tracking %}
   <a class="nav-link {% if active_tab == 'donations' %}active{% endif %}" href="{% url 'club_donation_vendors' club.slug %}"><i class="bi bi-gift me-1"></i> Donation Tracking</a>

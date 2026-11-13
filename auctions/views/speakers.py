@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
 from django.db.models.base import Model as Model
 from django.http import (
@@ -72,8 +73,8 @@ def own_speaker_profile(user):
 
 
 class SpeakerAccessMixin:
-    """Who is looking: their NEC clubs and the clubs they admin, if any. Gates nothing; the directory
-    itself is public.
+    """Who is looking: their NEC clubs and the clubs they admin, if any. Gates nothing itself; each profile's
+    ``visibility`` decides who sees it.
     """
 
     def load_viewer(self, request):
@@ -361,12 +362,21 @@ class SpeakerListView(SpeakerAccessMixin, HTMxTableView):
         return any(name.casefold() not in existing_names for name in member_names)
 
 
+class SignInToView(Exception):
+    """Raised while looking a page up: the viewer would see it once signed in. ``get`` turns it into a redirect."""
+
+    def __init__(self, next_url):
+        super().__init__(next_url)
+        self.next_url = next_url
+
+
 class SpeakerPanelView(SpeakerAccessMixin, DetailView):
     """The speaker card beside the list: an htmx fragment, and a whole page for a shared link (see
     SpeakerDetailView).
 
     Anyone may open a public profile; ``Speaker.can_be_viewed_by`` decides the rest, and a profile they
-    can't open is a 404 so its existence isn't confirmed. A merged duplicate's address redirects to the
+    can't open is a 404 so its existence isn't confirmed, except that a signed-out visitor to a whole page for
+    anyone signed in is sent to sign in. A merged duplicate's address redirects to the
     record it was merged into.
     """
 
@@ -375,6 +385,12 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
     context_object_name = "speaker"
 
     def get(self, request, *args, **kwargs):
+        try:
+            return self._get(request, *args, **kwargs)
+        except SignInToView as needs_sign_in:
+            return redirect_to_login(needs_sign_in.next_url)
+
+    def _get(self, request, *args, **kwargs):
         merged_into = self._merged_into(kwargs.get("slug"))
         if merged_into is not None:
             if self.template_name == SpeakerPanelView.template_name:
@@ -396,8 +412,22 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
                 return None
             speaker = speaker.merged_into
             if not speaker.is_deleted:
-                return speaker if speaker.can_be_viewed_by(self.request.user, self.is_nec_member) else None
+                if speaker.can_be_viewed_by(self.request.user, self.is_nec_member):
+                    return speaker
+                self._sign_in_to_view(speaker)
+                return None
         return None
+
+    def _sign_in_to_view(self, speaker):
+        """A signed-out visitor to a page for anyone signed in is asked to sign in. Anyone can sign up, so this
+        confirms nothing a free account wouldn't. Whole pages only: the panel is a fragment, and stays a 404.
+        """
+        if (
+            self.template_name != SpeakerPanelView.template_name
+            and speaker.visibility == Speaker.VISIBILITY_SIGNED_IN
+            and not self.request.user.is_authenticated
+        ):
+            raise SignInToView(speaker.get_absolute_url())
 
     def get_queryset(self):
         return Speaker.objects.filter(is_deleted=False).prefetch_related("topics")
@@ -405,6 +435,7 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
     def get_object(self, queryset=None):
         speaker = super().get_object(queryset)
         if not speaker.can_be_viewed_by(self.request.user, self.is_nec_member, self.request.GET.get("key", "")):
+            self._sign_in_to_view(speaker)
             raise Http404
         if not speaker.is_indexable:
             # Keeps it out of search engines, analytics and other sites' referrers (PrivatePageMiddleware).
@@ -707,8 +738,10 @@ class SpeakerTagView(NECSpeakerAccessMixin, View):
 
 
 def shows_comments(speaker, is_nec_member):
-    """Whether a page shows comments (and takes them): public ones, and NEC-only ones for NEC clubs."""
-    return speaker.visibility == Speaker.VISIBILITY_PUBLIC or (
+    """Whether a page shows comments (and takes them): public and signed-in-only ones, and NEC-only ones for
+    NEC clubs. A signed-in-only page is only ever open to someone signed in, and so is commenting.
+    """
+    return speaker.visibility in (Speaker.VISIBILITY_PUBLIC, Speaker.VISIBILITY_SIGNED_IN) or (
         speaker.visibility == Speaker.VISIBILITY_NEC and is_nec_member
     )
 

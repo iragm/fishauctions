@@ -168,7 +168,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6696 lines)
+- **`forms.py`** (6706 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -214,7 +214,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15776 lines)
+- **`models.py`** (15782 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -713,10 +713,10 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speaker_public.py`** (636 lines)
+- **`test_speaker_public.py`** (661 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
   `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`
-- **`test_speakers.py`** (1415 lines)
+- **`test_speakers.py`** (1416 lines)
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
@@ -1090,7 +1090,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `auction_nav_groups`
 - **`bap_filters.py`** (9 lines)
   `get_attr`
-- **`club_nav_tags.py`** (104 lines)
+- **`club_nav_tags.py`** (100 lines)
   `club_sidebar`
 - **`currency_filters.py`** (38 lines)
   `currency_symbol`, `format_price`
@@ -1205,7 +1205,7 @@ Every view on the site, split by the part of it the view belongs to.
   The superuser's dashboard: traffic, signups, referrers, the user map.
 - **`site_pages.py`** (770 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
-- **`speakers.py`** (778 lines)
+- **`speakers.py`** (811 lines)
   The speaker directory: who will come and talk to a club, and what about.
 - **`species.py`** (523 lines)
   Adding species and common names, the superuser's cleanup queue, and each species' public page.
