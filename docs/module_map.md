@@ -355,7 +355,7 @@ this only quotes its opening sentence.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
   Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images.
-- **`test_auction_nav.py`** (160 lines)
+- **`test_auction_nav.py`** (182 lines)
   `AuctionNavTests`, `ClubSidebarMembersLinkTests`
 - **`test_auction_promos.py`** (493 lines)
   ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.
@@ -1115,7 +1115,7 @@ Every view on the site, split by the part of it the view belongs to.
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1216 lines)
+- **`base.py`** (1215 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (1006 lines)
   The lot lists people browse, and what they do to a lot without opening it.

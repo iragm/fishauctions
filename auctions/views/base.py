@@ -258,15 +258,13 @@ MEMBER_LIST_PERMISSIONS = (
 
 
 def can_view_club_members(user, club):
-    """Whether ``user`` may open ``club``'s member list. One query, superusers always."""
+    """Whether ``user`` may open ``club``'s member list. Reads the same row ``check_club_permission`` does."""
     if not user or not user.is_authenticated:
         return False
     if user.is_superuser:
         return True
-    any_permission = Q()
-    for field in MEMBER_LIST_PERMISSIONS:
-        any_permission |= Q(**{field: True})
-    return ClubMember.objects.filter(any_permission, club=club, user=user, is_deleted=False).exists()
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    return bool(member) and any(getattr(member, field) for field in MEMBER_LIST_PERMISSIONS)
 
 
 def clubs_with_any_permission(user, nec_only=True):
@@ -1048,6 +1046,7 @@ class ClubViewMixin:
             return False
         return bool(
             self.can_access_admin
+            or can_view_club_members(self.request.user, self.club)
             or self.can_edit_settings
             or self.can_manage_bap
             or self.can_manage_money

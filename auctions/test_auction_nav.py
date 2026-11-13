@@ -124,11 +124,15 @@ class ClubSidebarMembersLinkTests(StandardTestCase):
         ClubMember.objects.create(club=self.club, user=user, name=username, **permissions)
         return user
 
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.club = Club.objects.create(name="Sidebar Club")
+        Auction.objects.filter(pk=cls.in_person_auction.pk).update(club=cls.club, manage_users_through_club="")
+        cls.in_person_auction.refresh_from_db()
+
     def setUp(self):
         super().setUp()
-        self.club = Club.objects.create(name="Sidebar Club")
-        Auction.objects.filter(pk=self.in_person_auction.pk).update(club=self.club, manage_users_through_club="")
-        self.in_person_auction.refresh_from_db()
         self.members_url = reverse("club_admin", kwargs={"slug": self.club.slug})
 
     def test_auction_runner_gets_members_link_when_people_are_not_managed_through_the_club(self):
@@ -144,7 +148,8 @@ class ClubSidebarMembersLinkTests(StandardTestCase):
         response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, f'href="{self.members_url}"')
-        self.assertContains(response, reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
+        users_url = reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug})
+        self.assertContains(response, f'href="{users_url}"><i class="bi bi-people-fill me-1"></i> Members</a>')
 
     def test_treasurer_without_member_access_gets_no_members_link(self):
         self.client.force_login(self._member("treasurer", permission_money=True))
@@ -159,3 +164,19 @@ class ClubSidebarMembersLinkTests(StandardTestCase):
         response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, f'href="{self.members_url}"')
+
+    def test_people_editor_gets_sidebar_and_members_link_on_the_member_list(self):
+        self.client.force_login(self._member("door", permission_add_edit=True))
+        response = self.client.get(self.members_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self.members_url}"><i class="bi bi-people-fill me-1"></i> Members</a>')
+
+    def test_deactivated_officer_loses_link_and_list(self):
+        user = self._member("former", permission_manage_auctions=True)
+        ClubMember.objects.filter(user=user).update(is_deleted=True)
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(created_by=user)
+        self.client.force_login(user)
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, f'href="{self.members_url}"')
+        self.assertEqual(self.client.get(self.members_url).status_code, 403)
