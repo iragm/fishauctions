@@ -443,7 +443,7 @@ this only quotes its opening sentence.
 - **`test_club_linking.py`** (558 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
-- **`test_club_managed_switch.py`** (250 lines)
+- **`test_club_managed_switch.py`** (253 lines)
   Switching a copied club auction from copying people to managing them through the club, club-managed
   `make_auction`, `ClubManagedSwitchTests`, `SeveralLocationsTests`, `JoinCardTests`
 - **`test_club_member_history.py`** (72 lines)
