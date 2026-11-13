@@ -143,7 +143,7 @@ this only quotes its opening sentence.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
 - **`donations.py`** (1163 lines)
   Donation tracking: asking vendors for donations and reading their replies.
-- **`duplicate_accounts.py`** (217 lines)
+- **`duplicate_accounts.py`** (243 lines)
   Finding people who seem to have two accounts, and telling each account once that merging exists.
   `likely_duplicate_pairs`, `accounts_to_email`, `send_merge_suggestions`
 - **`email_footer.py`** (37 lines)
@@ -305,7 +305,7 @@ this only quotes its opening sentence.
   `script_tag`, `club_url`, `auction_summary`, `auction_event`, `club_events`
 - **`tables.py`** (1799 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1920 lines)
+- **`tasks.py`** (1931 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -479,7 +479,7 @@ this only quotes its opening sentence.
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
-- **`test_duplicate_accounts.py`** (159 lines)
+- **`test_duplicate_accounts.py`** (175 lines)
   Likely duplicate accounts and the one-time email telling them merging exists (``auctions/duplicate_accounts.py``).
   `DuplicateAccountTests`
 - **`test_email_compliance.py`** (166 lines)
@@ -1230,7 +1230,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (301 lines)
+- **`celery.py`** (306 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)

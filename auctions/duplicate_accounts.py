@@ -12,12 +12,15 @@ A pair of active accounts is a likely duplicate when both of these hold:
 Each account in such a pair gets the ``account_merge_suggestion`` email once
 (``UserData.merge_suggested_on``). It says only that accounts can be merged: it never names, counts or
 hints at the other account, and nothing here shows an IP address to anyone. Run by hand with
-``manage.py suggest_account_merges``, which only counts unless given ``--send``.
+``manage.py suggest_account_merges`` (only counts unless given ``--send``), and weekly by the
+``suggest_account_merges`` task. The scan stops checking pairs after :data:`TIME_BUDGET` seconds; the
+rest are checked the next week, since nothing about a pair is stored until its email goes.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import timedelta
 
@@ -39,6 +42,9 @@ IP_LOOKBACK = timedelta(days=365)
 MAX_ACCOUNTS_PER_IP = 4
 #: Bigger groups of accounts with one name are a common name, not one person.
 MAX_SAME_NAME_GROUP = 6
+
+#: Seconds spent checking pairs for a shared address before stopping (the task's soft limit is 300).
+TIME_BUDGET = 200
 
 TEMPLATE = "account_merge_suggestion"
 
@@ -144,8 +150,12 @@ class _Connections:
         return any(self.household(ip) for ip in candidates)
 
 
-def likely_duplicate_pairs(now=None):
-    """Pairs of active, non-staff account pks that are probably one person and aren't already merging."""
+def likely_duplicate_pairs(now=None, budget=None):
+    """Pairs of active, non-staff account pks that are probably one person and aren't already merging.
+
+    Pairs whose accounts were both already emailed are skipped, and so are pairs not yet checked after
+    *budget* seconds.
+    """
     User = get_user_model()
     pairs = _flagged_record_pairs() | _same_name_pairs()
     if not pairs:
@@ -160,8 +170,24 @@ def likely_duplicate_pairs(now=None):
         ).values_list("pk", flat=True)
     )
     eligible -= set(UserData.objects.filter(merge_into_user__in=eligible).values_list("merge_into_user", flat=True))
+    emailed = set(
+        UserData.objects.filter(user_id__in=eligible, merge_suggested_on__isnull=False).values_list(
+            "user_id", flat=True
+        )
+    )
     connections = _Connections(now or timezone.now())
-    return sorted((a, b) for a, b in pairs if a in eligible and b in eligible and connections.shared(a, b))
+    stop = time.monotonic() + budget if budget else None
+    found = []
+    # Newest accounts first: when the budget runs out, the pairs left are the ones checked in earlier weeks.
+    for a, b in sorted(pairs, key=lambda pair: pair[1], reverse=True):
+        if stop and time.monotonic() > stop:
+            logger.info("duplicate account scan stopped at its time budget")
+            break
+        if a in emailed and b in emailed:
+            continue
+        if a in eligible and b in eligible and connections.shared(a, b):
+            found.append((a, b))
+    return sorted(found)
 
 
 def _deliverable(user) -> bool:
@@ -193,12 +219,12 @@ def accounts_to_email(pairs):
     return chosen
 
 
-def send_merge_suggestions(now=None) -> int:
+def send_merge_suggestions(now=None, budget=None) -> int:
     """Email every account :func:`accounts_to_email` picks, once each. Returns how many went."""
     now = now or timezone.now()
     domain = Site.objects.get_current().domain
     sent = 0
-    for user in accounts_to_email(likely_duplicate_pairs(now=now)):
+    for user in accounts_to_email(likely_duplicate_pairs(now=now, budget=budget)):
         # Claimed first, so overlapping runs can't both send; given back if the send fails.
         claimed = UserData.objects.filter(user=user, merge_suggested_on__isnull=True)
         if not claimed.update(merge_suggested_on=now):

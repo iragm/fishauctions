@@ -132,6 +132,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.next_auction_emails",
         "schedule": 3600.0,  # Run every hour
     },
+    # "More than one account?", once per account, to likely duplicates
+    "suggest_account_merges": {
+        "task": "auctions.tasks.suggest_account_merges",
+        "schedule": crontab(day_of_week=2, hour=15, minute=10),
+    },
     # Set user locations - every 2 hours
     "set_user_location": {
         "task": "auctions.tasks.set_user_location",

@@ -138,6 +138,22 @@ class DuplicateAccountTests(TestCase):
         UserData.objects.filter(user=a).update(merge_into_user=b, merge_requested_on=timezone.now())
         self.assertEqual(self.pairs(), [])
 
+    def test_a_spent_budget_checks_nothing_more(self):
+        self.make_user("pat1", ip="10.1.1.1")
+        self.make_user("pat2", ip="10.1.1.1")
+        with patch("auctions.duplicate_accounts.time.monotonic", side_effect=[0, 1000]):
+            self.assertEqual(duplicate_accounts.likely_duplicate_pairs(budget=10), [])
+
+    def test_the_weekly_task_sends(self):
+        from auctions.tasks import suggest_account_merges
+
+        self.make_user("pat1", ip="10.1.1.1")
+        self.make_user("pat2", ip="10.1.1.1")
+        with patch(SEND) as send:
+            suggest_account_merges.apply()
+            suggest_account_merges.apply()
+        self.assertEqual(send.call_count, 2)
+
     def test_the_command_only_counts_without_send(self):
         self.make_user("pat1", ip="10.1.1.1")
         self.make_user("pat2", ip="10.1.1.1")

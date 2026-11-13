@@ -24,6 +24,7 @@ concurrency 2, prefetch 1. Each rule below is a bug that already happened.
 
 ## PageView
 
-No periodic job runs over it and nothing purges it. `remove_duplicate_views` was deleted: it merged
+No periodic job scans it whole and nothing purges it. `suggest_account_merges` (weekly) reads it
+only by user or by address, on indexes, under a time budget. `remove_duplicate_views` was deleted: it merged
 return visits away. If a query is slow, bound the query. `admin_paginator.py` keeps the admin from
 counting it twice.
