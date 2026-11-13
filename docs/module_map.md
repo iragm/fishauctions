@@ -355,8 +355,8 @@ this only quotes its opening sentence.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
   Tests for the smaller auction surfaces: pickup locations, stats, bulk pages, watching, images.
-- **`test_auction_nav.py`** (116 lines)
-  `AuctionNavTests`
+- **`test_auction_nav.py`** (160 lines)
+  `AuctionNavTests`, `ClubSidebarMembersLinkTests`
 - **`test_auction_promos.py`** (493 lines)
   ``auction_promos``: when a promoted auction is announced, to whom, by which channel, and the sent log.
   `AuctionPromosTestCase`, `WindowTests`, `SendHourTests`, `AudienceTests`, `PushTests`, `SentLogTests`
@@ -1075,7 +1075,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `auction_nav_groups`
 - **`bap_filters.py`** (9 lines)
   `get_attr`
-- **`club_nav_tags.py`** (98 lines)
+- **`club_nav_tags.py`** (104 lines)
   `club_sidebar`
 - **`currency_filters.py`** (38 lines)
   `currency_symbol`, `format_price`
@@ -1115,7 +1115,7 @@ Every view on the site, split by the part of it the view belongs to.
   The JSON behind the charts on one auction's stats page, one view per chart, all behind
 - **`bap.py`** (638 lines)
   The breeder award program: settings, overrides, awards and the lots behind them.
-- **`base.py`** (1192 lines)
+- **`base.py`** (1216 lines)
   Shared view machinery: the mixins that decide who may see a page.
 - **`browse.py`** (1006 lines)
   The lot lists people browse, and what they do to a lot without opening it.
@@ -1142,7 +1142,7 @@ Every view on the site, split by the part of it the view belongs to.
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1107 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (623 lines)
+- **`club_pages.py`** (612 lines)
   A club's public page, and the two links that identify a member on it.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`
 - **`club_reports.py`** (830 lines)

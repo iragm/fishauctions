@@ -114,3 +114,48 @@ class AuctionNavTests(StandardTestCase):
         self.client.force_login(self.user)
         response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
         self.assertContains(response, "Scan club cards")
+
+
+class ClubSidebarMembersLinkTests(StandardTestCase):
+    """The sidebar's Members link reaches whoever the member list lets in, and nobody else."""
+
+    def _member(self, username, **permissions):
+        user = User.objects.create_user(username=username, password="testpassword")
+        ClubMember.objects.create(club=self.club, user=user, name=username, **permissions)
+        return user
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Sidebar Club")
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(club=self.club, manage_users_through_club="")
+        self.in_person_auction.refresh_from_db()
+        self.members_url = reverse("club_admin", kwargs={"slug": self.club.slug})
+
+    def test_auction_runner_gets_members_link_when_people_are_not_managed_through_the_club(self):
+        self.client.force_login(self._member("runner", permission_manage_auctions=True))
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self.members_url}"')
+        self.assertEqual(self.client.get(self.members_url).status_code, 200)
+
+    def test_managed_auction_points_members_at_its_users(self):
+        Auction.objects.filter(pk=self.in_person_auction.pk).update(manage_users_through_club="all")
+        self.client.force_login(self._member("managed_runner", permission_manage_auctions=True))
+        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.in_person_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, f'href="{self.members_url}"')
+        self.assertContains(response, reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
+
+    def test_treasurer_without_member_access_gets_no_members_link(self):
+        self.client.force_login(self._member("treasurer", permission_money=True))
+        response = self.client.get(reverse("club_treasurer_report", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, f'href="{self.members_url}"')
+        self.assertEqual(self.client.get(self.members_url).status_code, 403)
+
+    def test_bap_manager_on_club_page_gets_members_link(self):
+        Club.objects.filter(pk=self.club.pk).update(enable_breeder_award_program=True)
+        self.client.force_login(self._member("bap", permission_manage_bap=True))
+        response = self.client.get(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self.members_url}"')
