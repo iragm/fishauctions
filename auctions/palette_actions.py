@@ -17031,6 +17031,7 @@ NOT_A_SKILL: dict[str, str] = {
     "SquarePaymentSuccessView": _WEBHOOK,
     "SquareWebhookView": _WEBHOOK,
     "ClubMemberSelfServiceView": _TOKEN,
+    "ClubCadenceAnswerView": _TOKEN,
     "SelfServeContactLinkView": _TOKEN,
     "InvoiceNoLoginView": _TOKEN,
     # Other programs

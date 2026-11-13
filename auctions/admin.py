@@ -32,6 +32,7 @@ from .models import (
     ClubAnnouncement,
     ClubAPIKey,
     ClubDiscordRole,
+    ClubEmail,
     ClubEvent,
     ClubHistory,
     ClubMember,
@@ -336,6 +337,15 @@ class FeatureEmailAdmin(admin.ModelAdmin):
     list_display = ("sent_on", "kind", "user", "about")
     list_filter = ("kind",)
     raw_id_fields = ("user",)
+
+
+@admin.register(ClubEmail)
+class ClubEmailAdmin(admin.ModelAdmin):
+    """Once per club (auctions/club_emails.py). To send one again, delete this row and its recipients' ``FeatureEmail`` rows of the same kind."""
+
+    list_display = ("sent_on", "kind", "club")
+    list_filter = ("kind",)
+    raw_id_fields = ("club",)
 
 
 @admin.register(MobileDevice)

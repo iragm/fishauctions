@@ -1194,6 +1194,14 @@ def feature_emails(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def club_emails(self):
+    """The monthly-auction and club-tools emails (auctions/club_emails.py). Daily, 10:40am Eastern."""
+    from auctions import club_emails as emails
+
+    _safely("club emails", emails.send_club_emails)
+
+
+@shared_task(bind=True, ignore_result=True)
 def suggest_account_merges(self):
     """Tell likely duplicate accounts, once each, that merging exists (auctions/duplicate_accounts.py). Weekly."""
     from auctions import duplicate_accounts
