@@ -32,13 +32,13 @@ this only quotes its opening sentence.
 - **`account_export.py`** (311 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_merge.py`** (424 lines)
+- **`account_merge.py`** (425 lines)
   Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
   `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
 - **`account_nav.py`** (201 lines)
   The **Account setup** menu: which pages are in it, which one you're on, and where /account/setup/ lands.
   `Row`, `Group`, `active_page`, `remember`, `landing_url`, `groups_for`
-- **`admin.py`** (1583 lines)
+- **`admin.py`** (1599 lines)
   The Django admin: staff-only, and the few jobs that only live here.
 - **`admin_paginator.py`** (50 lines)
   Paginate the admin's biggest changelists without counting the whole table.
@@ -154,6 +154,9 @@ this only quotes its opening sentence.
 - **`error_views.py`** (67 lines)
   Error handlers that surface otherwise-swallowed tracebacks.
   `wants_page`, `error_404`, `error_500`
+- **`feature_emails.py`** (492 lines)
+  Telling people about a part of the site they aren't using, once per feature, a few times a year at most.
+  `Kind`, `add_src`, `start_date`, `daily_cap`, `takes_cards`, `quiet_people`, `paused`, `check_reactions`, `send_feature_emails`
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
@@ -165,7 +168,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6684 lines)
+- **`forms.py`** (6696 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -211,7 +214,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15729 lines)
+- **`models.py`** (15776 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -305,7 +308,7 @@ this only quotes its opening sentence.
   `script_tag`, `club_url`, `auction_summary`, `auction_event`, `club_events`
 - **`tables.py`** (1799 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1931 lines)
+- **`tasks.py`** (1939 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -414,7 +417,7 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1451 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_events.py`** (3083 lines)
+- **`test_club_events.py`** (3092 lines)
   Tests for club events, Google Calendar sync, and Discord events.
 - **`test_club_finder.py`** (297 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
@@ -496,6 +499,9 @@ this only quotes its opening sentence.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
 - **`test_error_pages.py`** (35 lines)
   `SubresourceNotFoundTests`
+- **`test_feature_emails.py`** (285 lines)
+  Feature emails (``auctions/feature_emails.py``), the outreach queue and ``record_outreach`` on
+  `Helpers`, `CapTests`, `SendTests`, `OutreachQueueTests`, `ResultsTests`
 - **`test_feature_requests_page.py`** (68 lines)
   /requests/: the web form for bug reports and feature requests, writing the same queue as request_feature.
   `FeatureRequestsPageTests`
@@ -968,10 +974,10 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (3054 lines)
+- **`admin.py`** (3119 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
-- **`admin_reports.py`** (1428 lines)
-  Fifteen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
+- **`admin_reports.py`** (1592 lines)
+  Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
 - **`auth.py`** (385 lines)
@@ -1162,7 +1168,7 @@ Every view on the site, split by the part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`documents.py`** (635 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
-- **`embeds.py`** (643 lines)
+- **`embeds.py`** (654 lines)
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (978 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
@@ -1230,7 +1236,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (306 lines)
+- **`celery.py`** (311 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)
@@ -1239,7 +1245,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1307 lines)
+- **`settings.py`** (1309 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

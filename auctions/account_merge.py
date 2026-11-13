@@ -131,6 +131,7 @@ REPOINTED = frozenset(
 REPOINTED_UNLESS_DUPLICATE = {
     "auctions.AbandonedBid.user": ("lot",),
     "auctions.CheckinNudge.user": ("auction", "kind"),
+    "auctions.FeatureEmail.user": ("kind",),
     "auctions.ObservedPrinter.user": ("ble_name", "model", "profile_slug"),
     "auctions.SignInStitch.user": ("session_id",),
     "auctions.SpeakerClaim.user": ("speaker",),

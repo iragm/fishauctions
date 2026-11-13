@@ -65,10 +65,10 @@ INSTRUCTIONS = (
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
     "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
-    "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects, untrusted_auction_creators, and fifteen growth "
+    "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects, untrusted_auction_creators, and seventeen growth "
     "reports (signup_funnel, entry_page_outcomes, club_retention, unclaimed_people, dead_ends, "
     "help_search_misses, referrers_without_club, seller_reach, feature_adoption_by_club, "
-    "auction_setup_time, read_feedback, club_first_touch, outreach_outcomes, tools_vs_retention, club_funnel) "
+    "auction_setup_time, read_feedback, club_first_touch, outreach_outcomes, tools_vs_retention, club_funnel, outreach_queue, feature_email_results) "
     "that name nobody. Nothing here "
     "changes the site; backup_database only copies its data offsite. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
@@ -1642,6 +1642,45 @@ def set_club_stage(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{club.name} is now “{stages[stage]}”.")
 
 
+#: What ``record_outreach`` accepts as the email that went: see ``admin_reports.outreach_queue``.
+OUTREACH_VERSIONS = {"a": "the general introduction", "b": "the one for a club with its own system"}
+
+
+def record_outreach(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Note that the owner wrote to a club: stamps ``date_contacted`` (which keeps it off
+    ``outreach_queue`` for two years) and logs which email it was. A listed club stays listed."""
+    from auctions.models import Club, ClubHistory
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club = _club(params)
+    if club is None:
+        return _error("There is no one club by that number or name.")
+    version = _str(params, "version", "a").lower()
+    if version not in OUTREACH_VERSIONS:
+        return _need("Which email? a (general) or b (club with its own system).")
+    reason = _str(params, "stall_reason").lower()
+    reasons = {value for value, _label in Club.STALL_REASON_CHOICES}
+    if reason and reason not in reasons:
+        return _need("stall_reason is one of: " + ", ".join(sorted(reasons - {""})) + ".")
+    club.date_contacted = timezone.now()
+    fields = ["date_contacted"]
+    if club.outreach_stage == Club.PROSPECT:
+        club.outreach_stage = Club.CONTACTED
+        fields.append("outreach_stage")
+    if reason:
+        club.stall_reason = reason
+        fields.append("stall_reason")
+    club.save(update_fields=fields)
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Outreach email {version.upper()} ({OUTREACH_VERSIONS[version]}) sent, through an approved proposal.",
+        applies_to="SETTINGS",
+    )
+    return _ok(f"Recorded outreach email {version.upper()} to {club.name}.", club=club.pk)
+
+
 def trust_user(request, params: dict[str, Any]) -> dict[str, Any]:
     """Mark one account trusted: it can promote auctions, take payments and email invoices."""
     from django.contrib.auth.models import User
@@ -2012,6 +2051,7 @@ UPDATABLE_CLUB_FIELDS = {
     "contact_email": 255,
     "contact_method": 20,
     "notes": 300,
+    "other_software": 20,
 }
 
 
@@ -2057,6 +2097,11 @@ def _club_changes(params: dict[str, Any]):
         methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
         if changes["contact_method"] not in methods:
             return club, {}, None, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
+    if "other_software" in changes:
+        changes["other_software"] = changes["other_software"].lower()
+        kinds = {value for value, _label in Club.OTHER_SOFTWARE_CHOICES}
+        if changes["other_software"] not in kinds:
+            return club, {}, None, "other_software is one of: " + ", ".join(sorted(kinds - {""})) + ", or empty."
     interests = None
     if "interests" in params:
         names = [name.strip() for name in _str(params, "interests").split(",") if name.strip()]
@@ -2099,7 +2144,7 @@ def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
             else ""
         )
     for field, value in changes.items():
-        setattr(club, field, value or (None if field != "contact_method" else ""))
+        setattr(club, field, value or (None if field not in ("contact_method", "other_software") else ""))
     club.save()
     if interests is not None:
         club.interests.set(interests)
@@ -2307,6 +2352,22 @@ APPROVAL_ONLY: dict[str, Action] = {
             resolver=set_club_stage,
         ),
         Action(
+            name="record_outreach",
+            description=(
+                "Record that the owner emailed a club from outreach_queue: it leaves the queue for two years, "
+                "and the club's history says which email went. A listed club stays listed."
+            ),
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "version": "string, optional, default a. a (general) or b (a club with its own system).",
+                "stall_reason": "string, optional. Why it stalled, if the owner already knows (uses_other, ...).",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Record an outreach email",
+            resolver=record_outreach,
+        ),
+        Action(
             name="trust_user",
             description="Trust an account: it can then promote auctions, take payments and email invoices.",
             params={"user": "string, required. The account's username, or its number."},
@@ -2385,6 +2446,10 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "contact_email": "string, optional. Where membership questions should go.",
                 "contact_method": "string, optional. email, webform or facebook: how to reach it.",
                 "notes": "string, optional. For the owner only, at most 300 characters.",
+                "other_software": (
+                    "string, optional. What it may run auctions on instead: mygroupauctions, own or other; "
+                    "empty clears it."
+                ),
                 "interests": "string, optional. Comma-separated interest names, replacing the club's.",
             },
             danger=DANGER_CONFIRM,

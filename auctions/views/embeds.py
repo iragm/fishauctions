@@ -48,6 +48,17 @@ from .club_members import BAP_EMBED_PROGRAM_FIELDS, BAP_EMBED_PROGRAM_LABELS
 
 logger = logging.getLogger(__name__)
 
+#: ``?src=`` on every link an embed shows, so a visit from a club's own website can be counted
+#: (``PageView.SOURCE_LABELS``). Nothing visible changes.
+EMBED_SOURCE = "embed"
+
+
+def _from_embed(request, path):
+    """The absolute URL of ``path``, marked as reached from a club's website (before any ``#event-N``)."""
+    from auctions.feature_emails import add_src
+
+    return add_src(request.build_absolute_uri(path), EMBED_SOURCE)
+
 
 def embed_mode_from_request(request):
     """Which representation was asked for: "light", "dark", "unstyled", "script", or None for JSON.
@@ -223,7 +234,7 @@ def _club_events_embed_rows(request, club, count, *, past=False):
                 "details": _embed_details(event),
                 "cancelled": event.cancelled,
                 "repeats": event.recurrence_summary,
-                "url": request.build_absolute_uri(event.get_absolute_url()),
+                "url": _from_embed(request, event.get_absolute_url()),
             }
         )
     return rows
@@ -387,7 +398,7 @@ def _club_auction_embed_row(request, auction):
         "is_online": auction.is_online,
         "location": club_events.auction_display_location(auction),
         "lots_open": lots_open,
-        "url": request.build_absolute_uri(auction.get_absolute_url()),
+        "url": _from_embed(request, auction.get_absolute_url()),
     }
 
 
