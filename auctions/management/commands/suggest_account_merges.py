@@ -20,4 +20,6 @@ class Command(BaseCommand):
             self.stdout.write(f"Sent {send_merge_suggestions()} emails.")
             return
         pairs = likely_duplicate_pairs()
-        self.stdout.write(f"{len(pairs)} likely duplicate pairs; {len(accounts_to_email())} accounts would be emailed.")
+        self.stdout.write(
+            f"{len(pairs)} likely duplicate pairs; {len(accounts_to_email(pairs))} accounts would be emailed."
+        )

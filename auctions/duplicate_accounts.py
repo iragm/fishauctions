@@ -5,8 +5,8 @@ A pair of active accounts is a likely duplicate when both of these hold:
 * **The same name.** Their auction or club records were flagged as possible duplicates of each other
   (``AuctionTOS.possible_duplicate``, ``ClubMember.possible_duplicate``; exact or nickname match), or
   the accounts' own first and last names are the same. A one-word name is never enough.
-* **The same connection.** They share an IP address: ``UserData.last_ip_address``, or a page view
-  within :data:`IP_LOOKBACK`. An address seen for more than :data:`MAX_ACCOUNTS_PER_IP` accounts is a
+* **The same connection.** They share an IP address: ``UserData.last_ip_address``, or a page view, within
+  :data:`IP_LOOKBACK`. An address seen for more than :data:`MAX_ACCOUNTS_PER_IP` accounts is a
   club venue, a school or a carrier, not a household, so it's no evidence.
 
 Each account in such a pair gets the ``account_merge_suggestion`` email once
@@ -18,6 +18,7 @@ hints at the other account, and nothing here shows an IP address to anyone. Run 
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -25,7 +26,6 @@ from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db.models import Count
-from django.db.models.functions import Lower, Trim
 from django.utils import timezone
 from post_office import mail
 
@@ -55,6 +55,7 @@ def _flagged_record_pairs():
     """Account pairs whose auction or club records were flagged as the same person."""
     pairs = set()
     tos = AuctionTOS.objects.filter(
+        auction__is_deleted=False,
         possible_duplicate__isnull=False,
         user__isnull=False,
         possible_duplicate__user__isnull=False,
@@ -74,68 +75,93 @@ def _flagged_record_pairs():
 
 
 def _same_name_pairs():
-    """Account pairs with the same first and last name."""
-    User = get_user_model()
-    named = (
-        User.objects.filter(is_active=True)
-        .annotate(f=Lower(Trim("first_name")), l=Lower(Trim("last_name")))
-        .exclude(f="")
-        .exclude(l="")
+    """Account pairs with the same first and last name. One read, grouped here."""
+    groups = defaultdict(list)
+    rows = (
+        get_user_model()
+        .objects.filter(is_active=True)
+        .exclude(first_name="")
+        .exclude(last_name="")
+        .order_by("pk")
+        .values_list("pk", "first_name", "last_name")
     )
-    groups = named.values("f", "l").annotate(n=Count("pk")).filter(n__gt=1, n__lte=MAX_SAME_NAME_GROUP).order_by()
+    for pk, first, last in rows.iterator():
+        key = (first.strip().lower(), last.strip().lower())
+        if all(key):
+            groups[key].append(pk)
     pairs = set()
-    for group in groups:
-        pks = sorted(named.filter(f=group["f"], l=group["l"]).values_list("pk", flat=True))
-        pairs.update((a, b) for i, a in enumerate(pks) for b in pks[i + 1 :])
+    for pks in groups.values():
+        if 1 < len(pks) <= MAX_SAME_NAME_GROUP:
+            pairs.update((a, b) for i, a in enumerate(pks) for b in pks[i + 1 :])
     return pairs
 
 
-def _household_ip(ip, since) -> bool:
-    """Whether few enough accounts use *ip* for it to mean anything."""
-    page_view_accounts = (
-        PageView.objects.filter(ip_address=ip, date_start__gte=since, user__isnull=False)
-        .order_by()
-        .values("user_id")
-        .distinct()[: MAX_ACCOUNTS_PER_IP + 1]
-        .count()
-    )
-    if page_view_accounts > MAX_ACCOUNTS_PER_IP:
-        return False
-    return UserData.objects.filter(last_ip_address=ip).count() <= MAX_ACCOUNTS_PER_IP
+class _Connections:
+    """Shared-IP checks for one run, caching how busy each address is."""
 
+    def __init__(self, now):
+        self.since = now - IP_LOOKBACK
+        self.busy = {}
 
-def share_a_connection(a, b, now=None) -> bool:
-    """Whether accounts *a* and *b* (pks) have used the same household-sized IP address."""
-    since = (now or timezone.now()) - IP_LOOKBACK
-    last = dict(UserData.objects.filter(user_id__in=[a, b]).values_list("user_id", "last_ip_address"))
-    candidates = set()
-    if last.get(a) and last.get(a) == last.get(b):
-        candidates.add(last[a])
-    candidates.update(
-        PageView.objects.filter(user_id__in=[a, b], date_start__gte=since)
-        .exclude(ip_address__isnull=True)
-        .exclude(ip_address="")
-        .order_by()
-        .values("ip_address")
-        .annotate(n=Count("user_id", distinct=True))
-        .filter(n=2)
-        .values_list("ip_address", flat=True)[:20]
-    )
-    return any(_household_ip(ip, since) for ip in candidates)
+    def household(self, ip) -> bool:
+        """Whether few enough accounts use *ip* for it to mean anything."""
+        if ip not in self.busy:
+            accounts = set(
+                PageView.objects.filter(ip_address=ip, date_start__gte=self.since, user__isnull=False)
+                .order_by()
+                .values_list("user_id", flat=True)
+                .distinct()[: MAX_ACCOUNTS_PER_IP + 1]
+            )
+            if len(accounts) <= MAX_ACCOUNTS_PER_IP:
+                accounts.update(
+                    UserData.objects.filter(last_ip_address=ip).values_list("user_id", flat=True)[
+                        : MAX_ACCOUNTS_PER_IP + 1
+                    ]
+                )
+            self.busy[ip] = len(accounts) > MAX_ACCOUNTS_PER_IP
+        return not self.busy[ip]
+
+    def shared(self, a, b) -> bool:
+        """Whether accounts *a* and *b* (pks) have used the same household-sized IP address lately."""
+        last = dict(
+            UserData.objects.filter(user_id__in=[a, b], last_activity__gte=self.since).values_list(
+                "user_id", "last_ip_address"
+            )
+        )
+        candidates = set()
+        if last.get(a) and last.get(a) == last.get(b):
+            candidates.add(last[a])
+        candidates.update(
+            PageView.objects.filter(user_id__in=[a, b], date_start__gte=self.since)
+            .exclude(ip_address__isnull=True)
+            .exclude(ip_address="")
+            .order_by()
+            .values("ip_address")
+            .annotate(n=Count("user_id", distinct=True))
+            .filter(n=2)
+            .values_list("ip_address", flat=True)
+        )
+        return any(self.household(ip) for ip in candidates)
 
 
 def likely_duplicate_pairs(now=None):
-    """Pairs of active, non-staff account pks that are probably one person."""
+    """Pairs of active, non-staff account pks that are probably one person and aren't already merging."""
     User = get_user_model()
     pairs = _flagged_record_pairs() | _same_name_pairs()
     if not pairs:
         return []
     eligible = set(
         User.objects.filter(
-            pk__in={pk for pair in pairs for pk in pair}, is_active=True, is_staff=False, is_superuser=False
+            pk__in={pk for pair in pairs for pk in pair},
+            is_active=True,
+            is_staff=False,
+            is_superuser=False,
+            userdata__merge_into_user__isnull=True,
         ).values_list("pk", flat=True)
     )
-    return sorted((a, b) for a, b in pairs if a in eligible and b in eligible and share_a_connection(a, b, now=now))
+    eligible -= set(UserData.objects.filter(merge_into_user__in=eligible).values_list("merge_into_user", flat=True))
+    connections = _Connections(now or timezone.now())
+    return sorted((a, b) for a, b in pairs if a in eligible and b in eligible and connections.shared(a, b))
 
 
 def _deliverable(user) -> bool:
@@ -149,26 +175,33 @@ def _deliverable(user) -> bool:
     return True
 
 
-def accounts_to_email(now=None):
-    """The accounts that would get the email: in a likely pair, never sent it, and reachable."""
-    User = get_user_model()
-    pks = {pk for pair in likely_duplicate_pairs(now=now) for pk in pair}
+def accounts_to_email(pairs):
+    """The accounts in *pairs* that would get the email: never sent it, reachable, one per address."""
     users = (
-        User.objects.filter(pk__in=pks, userdata__merge_suggested_on__isnull=True)
+        get_user_model()
+        .objects.filter(pk__in={pk for pair in pairs for pk in pair}, userdata__merge_suggested_on__isnull=True)
         .select_related("userdata")
         .order_by("pk")
     )
-    return [user for user in users if _deliverable(user)]
+    seen = set()
+    chosen = []
+    for user in users:
+        address = (user.email or "").strip().lower()
+        if address not in seen and _deliverable(user):
+            seen.add(address)
+            chosen.append(user)
+    return chosen
 
 
 def send_merge_suggestions(now=None) -> int:
-    """Email every account in :func:`accounts_to_email`, once each. Returns how many went."""
+    """Email every account :func:`accounts_to_email` picks, once each. Returns how many went."""
     now = now or timezone.now()
     domain = Site.objects.get_current().domain
     sent = 0
-    for user in accounts_to_email(now=now):
-        # Claimed first, so overlapping runs can't both send.
-        if not UserData.objects.filter(user=user, merge_suggested_on__isnull=True).update(merge_suggested_on=now):
+    for user in accounts_to_email(likely_duplicate_pairs(now=now)):
+        # Claimed first, so overlapping runs can't both send; given back if the send fails.
+        claimed = UserData.objects.filter(user=user, merge_suggested_on__isnull=True)
+        if not claimed.update(merge_suggested_on=now):
             continue
         try:
             mail.send(
@@ -178,6 +211,7 @@ def send_merge_suggestions(now=None) -> int:
             )
         except Exception:
             logger.exception("merge suggestion email failed for user %s", user.pk)
+            UserData.objects.filter(user=user, merge_suggested_on=now).update(merge_suggested_on=None)
             continue
         sent += 1
     return sent

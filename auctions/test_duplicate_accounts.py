@@ -1,5 +1,6 @@
 """Likely duplicate accounts and the one-time email telling them merging exists (``auctions/duplicate_accounts.py``)."""
 
+import datetime
 from io import StringIO
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.template import Context, Template
 from django.test import TestCase
+from django.utils import timezone
 from post_office.models import EmailTemplate
 
 from auctions import duplicate_accounts
@@ -106,6 +108,35 @@ class DuplicateAccountTests(TestCase):
         with patch(SEND) as send:
             self.assertEqual(duplicate_accounts.send_merge_suggestions(), 1)
         self.assertEqual(send.call_args.args[0], "pat2@example.com")
+
+    def test_a_failed_send_is_tried_again_next_run(self):
+        self.make_user("pat1", ip="10.1.1.1")
+        self.make_user("pat2", ip="10.1.1.1")
+        with patch(SEND, side_effect=RuntimeError):
+            self.assertEqual(duplicate_accounts.send_merge_suggestions(), 0)
+        self.assertFalse(UserData.objects.filter(merge_suggested_on__isnull=False).exists())
+        with patch(SEND):
+            self.assertEqual(duplicate_accounts.send_merge_suggestions(), 2)
+
+    def test_one_inbox_gets_one_email(self):
+        a = self.make_user("pat1", ip="10.1.1.1")
+        b = self.make_user("pat2", ip="10.1.1.1")
+        User.objects.filter(pk=b.pk).update(email=a.email.upper())
+        with patch(SEND) as send:
+            self.assertEqual(duplicate_accounts.send_merge_suggestions(), 1)
+        send.assert_called_once()
+
+    def test_an_old_last_ip_is_no_evidence(self):
+        a = self.make_user("pat1", ip="10.1.1.1")
+        self.make_user("pat2", ip="10.1.1.1")
+        UserData.objects.filter(user=a).update(last_activity=timezone.now() - datetime.timedelta(days=800))
+        self.assertEqual(self.pairs(), [])
+
+    def test_accounts_already_merging_are_left_out(self):
+        a = self.make_user("pat1", ip="10.1.1.1")
+        b = self.make_user("pat2", ip="10.1.1.1")
+        UserData.objects.filter(user=a).update(merge_into_user=b, merge_requested_on=timezone.now())
+        self.assertEqual(self.pairs(), [])
 
     def test_the_command_only_counts_without_send(self):
         self.make_user("pat1", ip="10.1.1.1")
