@@ -12546,6 +12546,11 @@ class UserData(CachedPropertiesMixin, models.Model):
         "Another account this user asked to be merged into. That account finishes it; see auctions.account_merge."
     )
     merge_requested_on = models.DateTimeField(null=True, blank=True)
+    merge_suggested_on = models.DateTimeField(null=True, blank=True)
+    merge_suggested_on.help_text = (
+        "When this account was sent the one-time email saying accounts can be merged "
+        "(auctions.duplicate_accounts). Set, it's never sent again."
+    )
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"

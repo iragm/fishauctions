@@ -43,7 +43,7 @@ def forwards(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0527_auction_next_auction_emails"),
+        ("auctions", "0528_merge_suggestion_email"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ("post_office", "0011_models_help_text"),
     ]
