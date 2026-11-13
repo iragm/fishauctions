@@ -55,7 +55,7 @@ class LeaveAuctionTests(TestCase):
     def test_your_own_join_can_be_undone(self):
         page = self._page()
         self.assertIn('data-bs-target="#leave-auction-modal"', page)
-        self.assertIn("Yes, leave", page)
+        self.assertIn('class="btn btn-danger">Leave</button>', page)
         response = self._leave()
         self.assertRedirects(response, self.auction.get_absolute_url(), fetch_redirect_response=False)
         self.assertFalse(self._still_in())
@@ -76,13 +76,13 @@ class LeaveAuctionTests(TestCase):
         page = self._page()
         self.assertIn("An organizer added you", page)
         self.assertIn("mailto:org@example.com", page)
-        self.assertNotIn("Yes, leave", page)
+        self.assertNotIn('class="btn btn-danger">Leave</button>', page)
         self._leave()
         self.assertTrue(self._still_in())
 
     def assertActivityBlocks(self):
         page = self._page()
-        self.assertIn("ask an organizer to take you out", page)
+        self.assertIn("only an organizer can take you out", page)
         self.assertIn("mailto:org@example.com", page)
         self._leave()
         self.assertTrue(self._still_in())
@@ -133,7 +133,7 @@ class LeaveAuctionTests(TestCase):
         self.auction.save()
         AuctionTOS.objects.filter(pk=self.tos.pk).delete()
         self.tos, _created, _problem = join_auction(self.leaver, self.auction, self.location)
-        self.assertIn("Yes, leave", self._page())
+        self.assertIn('class="btn btn-danger">Leave</button>', self._page())
         self.assertNotIn("paid Fish Club membership", self._page())
         ClubMember.objects.filter(pk=self.tos.clubmember_id).update(
             membership_expiration_date=timezone.localdate() + datetime.timedelta(days=30)

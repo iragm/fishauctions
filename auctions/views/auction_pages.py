@@ -65,6 +65,7 @@ from auctions.services import (
     missing_contact_info,
     paid_club_for,
     readable_list,
+    switch_to_club_managed,
 )
 
 from .base import (
@@ -767,6 +768,7 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
     DISMISSALS = {
         "dismiss_promo_banner": ("dismissed_promo_banner", "auction", "admin"),
         "dismiss_customize_event_banner": ("dismissed_customize_event_banner", "auction", "admin"),
+        "dismiss_club_managed_banner": ("dismissed_club_managed_banner", "auction", "admin"),
         "dismiss_paypal_banner": ("dismissed_paypal_banner", "auction", "creator"),
         "dismiss_square_banner": ("dismissed_square_banner", "auction", "creator"),
         "never_show_paypal_connect": ("never_show_paypal_connect", "userdata", "creator"),
@@ -791,6 +793,14 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
             row.save(update_fields=[field])
             if action in self.NEVER_SHOW_MESSAGES:
                 messages.info(request, self.NEVER_SHOW_MESSAGES[action])
+        elif action == "switch_to_club_managed":
+            self.require_auction_admin()
+            if switch_to_club_managed(self.auction, request.user):
+                messages.success(request, f"Users in this auction are now managed through {self.auction.club}.")
+            elif not self.auction.club_id or not check_club_permission(
+                request.user, self.auction.club, "permission_manage_auctions"
+            ):
+                raise PermissionDenied()
         elif action == "trust_creator" and request.user.is_superuser and self.auction.created_by:
             userdata = self.auction.created_by.userdata
             userdata.is_trusted = True
@@ -925,6 +935,14 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             )
         )
         context["offer_sample_data"] = offer_sample_data(self.auction, self.request.user)
+        # In place of the setup checklist: see Auction.offers_club_managed_switch.
+        context["offer_club_managed_switch"] = bool(
+            self.auction.club_id
+            and self.auction.copy_users_when_copying_this_auction
+            and self.is_auction_admin
+            and check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
+            and self.auction.offers_club_managed_switch
+        )
         # Superusers: offer "make club admin"; see creator_club_admin_offer for which club.
         if self.request.user.is_superuser:
             offer = creator_club_admin_offer(self.auction)
@@ -958,6 +976,9 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         if self.request.user.is_authenticated:
             tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
             existing_club_member = _find_club_member(self.auction.club, self.request.user, self.request.user.email)
+            if tos and tos.needs_pickup_location:
+                # The club added them; joining is picking a location, so the page asks as it would anyone.
+                tos = None
             if tos:
                 existingTos = tos.pickup_location
                 i_agree = True

@@ -155,6 +155,10 @@ def create_club_member_from_api(validated_data: dict, club, api_key):
 # AuctionTOS.save() merge the shadow away.
 
 
+#: An argument left out: keep what the code would otherwise set.
+_KEEP = object()
+
+
 def ensure_club_member(
     auction, *, user=None, name="", email="", phone_number="", address="", bidder_number="", admin_edited=True
 ):
@@ -167,7 +171,38 @@ def ensure_club_member(
     """
     if not auction.is_club_managed:
         return None, False
-    club = auction.club
+    return find_or_create_club_member(
+        auction.club,
+        auction,
+        user=user,
+        name=name,
+        email=email,
+        phone_number=phone_number,
+        address=address,
+        bidder_number=bidder_number,
+        admin_edited=admin_edited,
+    )
+
+
+def find_or_create_club_member(
+    club,
+    auction,
+    *,
+    user=None,
+    name="",
+    email="",
+    phone_number="",
+    address="",
+    bidder_number="",
+    admin_edited=True,
+    added_by=_KEEP,
+    bidding_allowed=_KEEP,
+    selling_allowed=_KEEP,
+):
+    """:func:`ensure_club_member` for *club*, whether or not *auction* is club-managed yet: *auction* is only
+    where the person came from (the source, the welcome letter, the approved-sellers rules). ``added_by`` and
+    the two permissions, when given, are set on a new member in its one save.
+    """
     member = None
     if user is not None:
         member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
@@ -186,7 +221,7 @@ def ensure_club_member(
             phone_number=phone_number or "",
             address=address or "",
             source=str(auction.title)[:200],
-            added_by=user,
+            added_by=user if added_by is _KEEP else added_by,
             admin_edited=admin_edited,
             # Held back from a participant until they first pay (ClubMember.welcome_after_first_payment).
             send_welcome_email=auction.send_club_welcome_letter,
@@ -196,6 +231,10 @@ def ensure_club_member(
             member.selling_allowed = False
         if auction.only_approved_bidders:
             member.bidding_allowed = False
+        if bidding_allowed is not _KEEP:
+            member.bidding_allowed = bidding_allowed
+        if selling_allowed is not _KEEP:
+            member.selling_allowed = selling_allowed
         if bidder_number and not ClubMember.objects.filter(club=club, bidder_number=bidder_number).exists():
             # Club-unique, so only when free.
             member.bidder_number = bidder_number
@@ -347,6 +386,7 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
         )
     if pickup_location is not None:
         obj.pickup_location = pickup_location
+        obj.pickup_location_confirmed = True
     if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
         return None, False, "address"
     if hold_for_second_pickup is not None:
@@ -400,8 +440,8 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
 
 
 LEAVE_REFUSALS = {
-    "added": "An organizer added you, so ask them to take you out.",
-    "activity": "You've already done things in this auction, so ask an organizer to take you out.",
+    "added": "An organizer added you, so only an organizer can take you out.",
+    "activity": "You've already taken part in this auction, so only an organizer can take you out.",
 }
 
 
@@ -879,6 +919,8 @@ def lot_add_block(auction, tos, is_admin, *, bulk=True):
         return LOT_ADD_BLOCK_NO_TOS, "You can't add lots until you join this auction"
     if not tos.selling_allowed and not is_admin:
         return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You don't have permission to add lots to this auction"
+    if tos.needs_pickup_location and not is_admin:
+        return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "Pick your pickup location on the auction's page before you sell"
     if not tos.can_sell and not is_admin:
         return LOT_ADD_BLOCK_SELLING_NOT_ALLOWED, "You're holding your lots for the second pickup, so you can't sell"
     if not is_admin and not auction.can_submit_lots:
@@ -1279,6 +1321,79 @@ def clone_auction(source, *, title, date_start, created_by, note=""):
 
     finish_new_auction(auction, created_by, copied_from=source, note=note)
     return auction
+
+
+def switch_to_club_managed(auction, acting_user):
+    """Manage a copied auction's people through its club instead of copying them, from the auction page's
+    banner (``Auction.offers_club_managed_switch``). Everyone the copy brought along is first added to the
+    club, matched by account, then email, so nobody is added twice (somebody with no email is added as they
+    are: a name is not enough to say two rows are one person); then the auction is switched to adding every club
+    member, and the auction's helpers keep their admin rights. A new member keeps their bidder number when the club has it free, and their bidding
+    and selling permissions. Returns False, changing nothing, when the auction no longer qualifies.
+    """
+    from django.db import transaction
+
+    from .forms import AuctionEditForm
+    from .views.base import check_club_permission
+
+    with transaction.atomic():
+        locked = Auction.objects.select_for_update().get(pk=auction.pk)
+        if not locked.offers_club_managed_switch:
+            return False
+        club = locked.club
+        if not check_club_permission(acting_user, club, "permission_manage_auctions"):
+            return False
+        added = 0
+        seen = set()
+        admins = set()
+        while True:
+            # A locking read, again until it finds nothing new: a join committed meanwhile is carried over too,
+            # instead of being deleted by the rebuild below without ever reaching the club.
+            rows = list(
+                AuctionTOS.objects.select_for_update()
+                .filter(auction=locked)
+                .exclude(pk__in=seen)
+                .select_related("user")
+                .order_by("createdon", "pk")
+            )
+            if not rows:
+                break
+            for tos in rows:
+                seen.add(tos.pk)
+                name = (tos.name or "").strip()
+                if name == "Unknown":
+                    name = ""
+                if not (tos.user_id or tos.email or name or tos.phone_number):
+                    # Nothing that says who this was.
+                    continue
+                member, created = find_or_create_club_member(
+                    club,
+                    locked,
+                    user=tos.user,
+                    name=name,
+                    email=(tos.email or "").strip(),
+                    phone_number=tos.phone_number or "",
+                    address=tos.address or "",
+                    bidder_number=tos.bidder_number or "",
+                    added_by=acting_user,
+                    bidding_allowed=tos.bidding_allowed,
+                    selling_allowed=tos.selling_allowed,
+                )
+                added += int(created)
+                if tos.is_admin:
+                    admins.add(member.pk)
+        locked.manage_users_through_club = "all"
+        locked.copy_users_when_copying_this_auction = False
+        locked.save(update_fields=["manage_users_through_club", "copy_users_when_copying_this_auction"])
+        AuctionEditForm._rebuild_auctiontos_from_club(locked)
+        # Helpers stay helpers: being an auction admin belongs to the auction, not the club.
+        AuctionTOS.objects.filter(auction=locked, clubmember__in=admins).update(is_admin=True)
+        locked.create_history(
+            applies_to="USERS",
+            action=f"Switched to managing users through {club}, adding {added} people to the club",
+            user=acting_user,
+        )
+    return True
 
 
 def finish_new_auction(auction, created_by, *, copied_from=None, note=""):

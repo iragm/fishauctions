@@ -3059,6 +3059,9 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
     remember_auction(request, auction)
     tos = _own_tos(user, auction)
     locations = list(auction.location_qs[:AMBIGUOUS_LIMIT])
+    if tos and tos.needs_pickup_location:
+        # The club added them; picking a location is their join (AuctionTOS.needs_pickup_location).
+        tos = None
     if tos:
         where = tos.pickup_location.name if tos.pickup_location else None
         summary = f"You're already in {auction.title} as bidder {tos.bidder_number or '(number not set yet)'}."

@@ -433,6 +433,11 @@ class ViewLot(DetailView):
                 if not tos.can_bid_in_auction:
                     if tos.requires_check_in_before_bidding:
                         context["user_specific_bidding_error"] = "You must check in at the event before you can bid"
+                    elif tos.needs_pickup_location:
+                        context["user_specific_bidding_error"] = format_html(
+                            "<a href='{}#join'>Pick your pickup location</a> before you bid",
+                            tos.auction.get_absolute_url(),
+                        )
                     else:
                         context["user_specific_bidding_error"] = (
                             "This auction requires admin approval before you can bid"

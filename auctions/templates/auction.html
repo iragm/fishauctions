@@ -384,7 +384,7 @@ function initMap() {
                             {% if location.users_must_coordinate_pickup %}
                                 <p>You must schedule your pickup time in advance.</p>
                             {% else %}
-                                <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
+                                <p><strong>{% if auction.is_online %}Pickup{% else %}Time{% endif %}:</strong> {{ location.pickup_time }}</p>
                             {% endif %}
                             <div class="btn-group flex-wrap" role="group">
                                 {%if location.has_coordinates %}
@@ -413,7 +413,7 @@ function initMap() {
                     <div class="modal-dialog modal-dialog-centered">
                         <div class="modal-content">
                             <div class="modal-header">
-                                <h5 class="modal-title" id="leave-auction-title">Leave auction?</h5>
+                                <h5 class="modal-title" id="leave-auction-title">Leave {{ auction.title }}?</h5>
                                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                             </div>
                             {% if leave_problem %}
@@ -434,8 +434,8 @@ function initMap() {
                             {% endif %}
                             <form method="post" action="{% url 'auction_leave' slug=auction.slug %}" class="modal-footer">
                                 {% csrf_token %}
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">No</button>
-                                <button type="submit" class="btn btn-danger">Yes, leave</button>
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Stay</button>
+                                <button type="submit" class="btn btn-danger">Leave</button>
                             </form>
                             {% endif %}
                         </div>
@@ -492,7 +492,7 @@ function initMap() {
                                 {% if location.users_must_coordinate_pickup %}
                                     <p>You must schedule your pickup time in advance.</p>
                                 {% else %}
-                                    <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
+                                    <p><strong>{% if auction.is_online %}Pickup{% else %}Time{% endif %}:</strong> {{ location.pickup_time }}</p>
                                 {% endif %}
 
                                 <div class="btn-group mb-3 flex-wrap" role="group">

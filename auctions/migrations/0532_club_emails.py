@@ -78,7 +78,7 @@ def backwards(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0530_speaker_visibility_signed_in"),
+        ("auctions", "0531_club_managed_banner_and_pickup_confirmed"),
         ("post_office", "0011_models_help_text"),
     ]
 
