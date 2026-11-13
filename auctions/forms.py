@@ -6213,15 +6213,25 @@ class SpeakerForm(forms.ModelForm):
 
     def __init__(self, *args, self_listing=False, **kwargs):
         super().__init__(*args, **kwargs)
-        if self_listing:
-            self.fields["name"].help_text = "Your name, as you'd like it on a meeting flyer."
-            self.fields["visibility"].label = "Who can see your profile"
+        self.self_listing = self_listing
         # Left out means unchanged (a new speaker's default is public).
         self.fields["visibility"].required = False
         self.fields["topics"].required = False
         self.fields["topics"].queryset = SpeakerTopic.objects.all()
         # A closed vocabulary (auctions/speaker_topics.py).
         self.fields["topics"].help_text = "Pick everything they talk about. Use Other if nothing fits."
+        if self_listing:
+            # Someone adding or editing themselves is "you", not "they".
+            self.fields["name"].help_text = "Your name, as you'd like it on a meeting flyer."
+            self.fields["visibility"].label = "Who can see your profile"
+            self.fields["bio"].help_text = "A paragraph or two about yourself."
+            self.fields["bio"].widget.attrs["placeholder"] = "A paragraph about yourself."
+            self.fields["programs"].help_text = "The talks you offer."
+            self.fields["programs"].widget.attrs["placeholder"] = "One talk per line, or however you list them."
+            self.fields["topics"].help_text = "Pick everything you talk about. Use Other if nothing fits."
+            self.fields[
+                "location"
+            ].help_text = "Roughly where you travel from. Used for the map and the distance filter."
         # Required when adding: no location means no map or distance filter.
         if not (self.instance and self.instance.pk):
             self.fields["location"].required = True
@@ -6268,7 +6278,7 @@ class SpeakerForm(forms.ModelForm):
     def clean_name(self):
         name = (self.cleaned_data.get("name") or "").strip()
         if not name:
-            msg = "Please enter the speaker's name"
+            msg = "Please enter your name" if self.self_listing else "Please enter the speaker's name"
             raise forms.ValidationError(msg)
         return name
 

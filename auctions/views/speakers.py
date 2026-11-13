@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
 from django.db.models.base import Model as Model
 from django.http import (
@@ -382,6 +383,14 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
             # Permanent only for a public page, so search engines move the old address's ranking across;
             # anything else depends on who is asking, and a browser would cache a 301 for good.
             return redirect(merged_into.get_absolute_url(), permanent=merged_into.is_indexable)
+        if (
+            not request.user.is_authenticated
+            and Speaker.objects.filter(
+                slug=kwargs.get("slug"), is_deleted=False, visibility=Speaker.VISIBILITY_SIGNED_IN
+            ).exists()
+        ):
+            # Open to anyone signed in, so signing in is the way in.
+            return redirect_to_login(request.get_full_path())
         response = super().get(request, *args, **kwargs)
         if self.template_name == SpeakerPanelView.template_name:
             # A fragment of a page, never a page of its own.
@@ -707,8 +716,10 @@ class SpeakerTagView(NECSpeakerAccessMixin, View):
 
 
 def shows_comments(speaker, is_nec_member):
-    """Whether a page shows comments (and takes them): public ones, and NEC-only ones for NEC clubs."""
-    return speaker.visibility == Speaker.VISIBILITY_PUBLIC or (
+    """Whether a page shows comments (and takes them): public and signed-in-only ones, and NEC-only ones for
+    NEC clubs. A signed-in-only page is only ever open to someone signed in, and so is commenting.
+    """
+    return speaker.visibility in (Speaker.VISIBILITY_PUBLIC, Speaker.VISIBILITY_SIGNED_IN) or (
         speaker.visibility == Speaker.VISIBILITY_NEC and is_nec_member
     )
 

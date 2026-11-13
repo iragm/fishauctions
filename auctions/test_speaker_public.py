@@ -54,6 +54,24 @@ class SelfAddTests(TestCase):
                 self.client.post(self.url, self.payload(visibility=value))
                 self.assertEqual(Speaker.objects.get(user=self.user).visibility, value)
 
+    def test_the_form_speaks_to_you(self):
+        body = self.client.get(self.url).content.decode()
+        for wording in ("about yourself", "The talks you offer.", "everything you talk about", "where you travel from"):
+            self.assertIn(wording, body)
+        for wording in ("they talk about", "where they travel from", "The talks they offer.", "about the speaker"):
+            self.assertNotIn(wording, body)
+
+    def test_a_signed_in_only_page_sends_a_visitor_to_sign_in(self):
+        speaker = Speaker.objects.create(name="Talker, Terry", visibility=Speaker.VISIBILITY_SIGNED_IN)
+        url = speaker.get_absolute_url()
+        response = Client().get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("account_login"), response["Location"])
+        self.assertNotIn(speaker.slug, Client().get(reverse("speaker_list")).content.decode())
+        page = self.client.get(url)
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page["X-Robots-Tag"], "noindex, nofollow, noarchive")
+
     def test_somebody_with_a_profile_is_sent_to_edit_it(self):
         speaker = Speaker.objects.create(name="Terry Talker", user=self.user)
         response = self.client.get(self.url)
