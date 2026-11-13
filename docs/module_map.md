@@ -143,6 +143,9 @@ this only quotes its opening sentence.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
 - **`donations.py`** (1163 lines)
   Donation tracking: asking vendors for donations and reading their replies.
+- **`duplicate_accounts.py`** (217 lines)
+  Finding people who seem to have two accounts, and telling each account once that merging exists.
+  `likely_duplicate_pairs`, `accounts_to_email`, `send_merge_suggestions`
 - **`email_footer.py`** (37 lines)
   The identification block every email this site sends has to carry.
   `mailing_address`
@@ -208,7 +211,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15724 lines)
+- **`models.py`** (15729 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -476,6 +479,9 @@ this only quotes its opening sentence.
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
+- **`test_duplicate_accounts.py`** (159 lines)
+  Likely duplicate accounts and the one-time email telling them merging exists (``auctions/duplicate_accounts.py``).
+  `DuplicateAccountTests`
 - **`test_email_compliance.py`** (166 lines)
   The parts of an outgoing email that anti-spam law requires, and the donation footer's address.
   `render`, `EveryEmailTemplateCarriesTheFooterTests`, `FooterContentsTests`, `UnconfiguredAddressTests`, `DonationRequestNeedsAnAddressTests`
@@ -935,6 +941,9 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`split_speaker_talks.py`** (174 lines)
   Recover the individual talk titles from an imported speaker's run-on "Programs:" list.
   `normalize`, `split_is_faithful`, `Command`
+- **`suggest_account_merges.py`** (25 lines)
+  Tell each account that seems to share an owner with another one, once, that accounts can be merged.
+  `Command`
 - **`sync_cares_species.py`** (20 lines)
   Run the weekly CARES species sync now: ``manage.py sync_cares_species``.
   `Command`
