@@ -19,8 +19,11 @@ Thanks for using auction.fish! Know of another club that might like to use it? W
 <p style="font-size: small;"><a href="https://{{ domain }}/notifications/">Stop emails about features</a></p>
 {% endblock %}
 """
-LINK_TEXT = "Know another club that might like it? Add it here: {{ add_club_url }}\n"
-LINK_HTML = '<p>Know another club that might like it? <a href="{{ add_club_url }}">Add it here</a>.</p>\n'
+
+
+def _without_link(text):
+    """Every line naming ``add_club_url``, however it was edited since: the sender no longer passes it."""
+    return "".join(line for line in text.splitlines(keepends=True) if "add_club_url" not in line)
 
 
 def forwards(apps, schema_editor):
@@ -31,8 +34,8 @@ def forwards(apps, schema_editor):
         defaults={"subject": "{{ subject }}", "content": THANKS_TEXT, "html_content": THANKS_HTML},
     )
     for template in EmailTemplate.objects.filter(name="club_email_monthly_invite"):
-        template.content = template.content.replace(LINK_TEXT, "")
-        template.html_content = template.html_content.replace(LINK_HTML, "")
+        template.content = _without_link(template.content)
+        template.html_content = _without_link(template.html_content)
         template.save(update_fields=["content", "html_content"])
 
 

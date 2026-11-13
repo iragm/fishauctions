@@ -13,9 +13,9 @@
   admins, and lists the club management features (:data:`FEATURES`), each with its help guide and the
   club's own setup page. A club that answered "no monthly auctions" or "not interested" still gets it
   once it really does make that many: the answer stops only the question.
-* ``thanks`` (:func:`thanks_due`): a club that has made :data:`THANKS_AFTER` real auctions here. A thank
-  you to its latest auction's creator that asks them to tell another club about the site. No link and
-  no referral code: it's a nudge, not a program.
+* ``thanks`` (:func:`thanks_due`): a club that has finished :data:`THANKS_AFTER` real auctions here, one
+  within :data:`THANKS_ACTIVE`. A thank you to its latest auction's creator that asks them to tell
+  another club about the site. No link and no referral code: it's a nudge, not a program.
 
 The claim is a ``ClubEmail`` row per club and kind, inserted before sending. Each person it goes to also
 gets a ``FeatureEmail`` row of the same kind, so ``feature_email_results`` reports them beside the
@@ -54,7 +54,9 @@ LOOKBACK = datetime.timedelta(days=400)
 MONTHLY_AUCTIONS = 3
 MONTHLY_WINDOW = datetime.timedelta(days=92)
 THANKS_AFTER = 10
-#: Clubs per day, across both kinds: one email per club is a few people at most.
+#: A club thanked must still be using the site: a finished auction this recent.
+THANKS_ACTIVE = datetime.timedelta(days=180)
+#: Clubs per day, across every kind: one email per club is a few people at most.
 PER_RUN = 25
 #: Someone who had any feature email this recently waits a day or two: never two in one morning.
 RECENT = datetime.timedelta(days=7)
@@ -252,12 +254,17 @@ def club_tools_context(club, auction, user, domain) -> dict:
 
 
 def thanks_due(now=None):
-    """``(club, latest auction)`` for each club with :data:`THANKS_AFTER` real auctions here, not yet thanked."""
+    """``(club, latest auction)`` for each club that has finished :data:`THANKS_AFTER` real auctions here,
+    one of them within :data:`THANKS_ACTIVE`, and hasn't been thanked."""
     from auctions.models import Auction, ClubEmail
 
+    now = now or timezone.now()
     thanked = ClubEmail.objects.filter(kind="thanks").values_list("club_id", flat=True)
+    finished = Auction.objects.filter(
+        _ended_before(now), is_deleted=False, club__isnull=False, created_by__isnull=False
+    )
     busy = (
-        Auction.objects.filter(is_deleted=False, club__isnull=False)
+        finished.filter(club_id__in=finished.filter(date_start__gte=now - THANKS_ACTIVE).values("club_id"))
         .exclude(club_id__in=thanked)
         .values("club_id")
         .annotate(made=Count("pk"))
@@ -266,16 +273,14 @@ def thanks_due(now=None):
     )
     for club_id in list(busy):
         auctions = _real(
-            Auction.objects.filter(club_id=club_id, is_deleted=False, created_by__isnull=False)
-            .select_related("club", "created_by__userdata")
-            .order_by("-date_posted")
+            finished.filter(club_id=club_id).select_related("club", "created_by__userdata").order_by("-date_start")
         )
-        if len(auctions) >= THANKS_AFTER:
+        if len(auctions) >= THANKS_AFTER and auctions[0].date_start >= now - THANKS_ACTIVE:
             yield auctions[0].club, auctions[0]
 
 
 def thanks_context(club, auction, user, domain) -> dict:
-    return {"subject": "Thanks from auction.fish", "club": club, "auction": auction}
+    return {"subject": f"Thanks, {club.name}", "club": club, "auction": auction}
 
 
 KINDS = {

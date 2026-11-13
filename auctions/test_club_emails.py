@@ -190,7 +190,7 @@ class TemplateTests(Helpers):
         email = Email.objects.filter(to=self.creator.email).latest("id")
         self.assertIn("Monthly auctions for Cichlid society", email.subject)
         self.assertIn("doesn&#x27;t have monthly auctions", email.html_message)
-        self.assertNotIn("/clubs/add/", email.message)
+        self.assertNotIn("Know another club", email.message)
         self.assertNotIn("{%", email.message)
         FeatureEmail.objects.filter(user=self.creator).update(sent_on=timezone.now() - 8 * DAY)
         for n in range(3):
@@ -279,9 +279,14 @@ class AwaitingReplyTests(LapsedQueueTests):
 
 @patch(SEND)
 class ThanksTests(Helpers):
+    def setUp(self):
+        super().setUp()
+        # Monthly auctions earn the club-tools email first; that one is tested above.
+        ClubEmail.objects.create(club=self.club, kind="club_tools")
+
     def test_ten_auctions_get_one_thank_you(self, send):
         for n in range(club_emails.THANKS_AFTER):
-            self.auction(f"Meeting {n}", ended_days_ago=400 + 40 * n, posted_days_ago=400 + 40 * n)
+            self.auction(f"Meeting {n}", ended_days_ago=10 + 30 * n, posted_days_ago=10 + 30 * n)
         club_emails.send_club_emails()
         self.assertEqual(self.sent(send), [(self.creator.email, "club_email_thanks")])
         send.reset_mock()
@@ -290,17 +295,35 @@ class ThanksTests(Helpers):
 
     def test_test_auctions_dont_count(self, send):
         for n in range(club_emails.THANKS_AFTER - 1):
-            self.auction(f"Meeting {n}", ended_days_ago=400 + 40 * n, posted_days_ago=400 + 40 * n)
+            self.auction(f"Meeting {n}", ended_days_ago=10 + 30 * n, posted_days_ago=10 + 30 * n)
         self.auction("test auction", ended_days_ago=5)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_a_club_that_stopped_years_ago_isnt_thanked(self, send):
+        for n in range(club_emails.THANKS_AFTER):
+            self.auction(f"Meeting {n}", ended_days_ago=400 + 40 * n, posted_days_ago=400 + 40 * n)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_an_unfinished_auction_doesnt_count(self, send):
+        for n in range(club_emails.THANKS_AFTER - 1):
+            self.auction(f"Meeting {n}", ended_days_ago=10 + 30 * n, posted_days_ago=10 + 30 * n)
+        self.auction("Next month", ended_days_ago=-30)
         club_emails.send_club_emails()
         self.assertEqual(self.sent(send), [])
 
 
 class ThanksTemplateTests(Helpers):
-    def test_it_renders_with_no_link_to_add_a_club(self):
+    def setUp(self):
+        super().setUp()
+        # Monthly auctions earn the club-tools email first; that one is tested above.
+        ClubEmail.objects.create(club=self.club, kind="club_tools")
+
+    def test_it_renders(self):
         for n in range(club_emails.THANKS_AFTER):
-            self.auction(f"Meeting {n}", ended_days_ago=400 + 40 * n, posted_days_ago=400 + 40 * n)
+            self.auction(f"Meeting {n}", ended_days_ago=10 + 30 * n, posted_days_ago=10 + 30 * n)
         club_emails.send_club_emails()
-        email = Email.objects.get(to=self.creator.email, subject="Thanks from auction.fish")
+        email = Email.objects.get(to=self.creator.email, subject="Thanks, Cichlid society")
         self.assertIn("Know of another club", email.message)
-        self.assertNotIn("/clubs/add/", email.message)
+        self.assertNotIn("{%", email.message)
