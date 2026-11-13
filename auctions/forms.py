@@ -2877,7 +2877,7 @@ class AuctionEditForm(forms.ModelForm):
                     address=club_member.address or "",
                     manually_added=True,
                     # At the first location: someone in an auction with several picks theirs on joining.
-                    pickup_location_confirmed=False,
+                    pickup_location_confirmed=not auction.multi_location,
                 )
 
     def save(self, commit=True):

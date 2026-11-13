@@ -5015,7 +5015,8 @@ class Auction(CachedPropertiesMixin, models.Model):
             return False
         if AuctionTOS.objects.filter(auction=self, created_by_joining=True).exists():
             return False
-        return not AuctionHistory.objects.filter(auction=self, applies_to="USERS").exists()
+        # The site's own lines (no user), such as the club admins added on copying, aren't edits.
+        return not AuctionHistory.objects.filter(auction=self, applies_to="USERS", user__isnull=False).exists()
 
     @property
     def scans_club_cards(self):

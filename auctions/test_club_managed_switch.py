@@ -133,6 +133,23 @@ class ClubManagedSwitchTests(TestCase):
         )
         self.assertNotIn("There's a better way to do this", self.page())
 
+    def test_helpers_stay_admins_and_namesakes_stay_two_people(self):
+        AuctionTOS.objects.filter(email="new@example.com").update(is_admin=True)
+        AuctionTOS.objects.create(
+            auction=self.auction, pickup_location=self.location, name="Paper Only", bidder_number="44"
+        )
+        url = reverse("auction_page_action", kwargs={"slug": self.auction.slug})
+        self.client.post(url, {"action": "switch_to_club_managed"})
+        new = ClubMember.objects.get(club=self.club, email="new@example.com")
+        self.assertTrue(AuctionTOS.objects.get(auction=self.auction, clubmember=new).is_admin)
+        self.assertEqual(ClubMember.objects.filter(club=self.club, name="Paper Only").count(), 2)
+        # A second press (a double click, another admin's stale tab) is not an error.
+        self.assertEqual(self.client.post(url, {"action": "switch_to_club_managed"}).status_code, 302)
+
+    def test_the_sites_own_history_lines_are_not_edits(self):
+        self.auction.create_history(applies_to="USERS", action="Automatically added an admin", user=None)
+        self.assertTrue(self.fresh().offers_club_managed_switch)
+
     def test_dont_show_again(self):
         self.client.post(
             reverse("auction_page_action", kwargs={"slug": self.auction.slug}),
@@ -192,6 +209,15 @@ class SeveralLocationsTests(TestCase):
         _upsert_clubmember_shadow_tos(self.auction, self.member)
         self.tos.refresh_from_db()
         self.assertEqual(self.tos.pickup_location, self.south)
+
+    def test_a_check_in_or_a_single_location_auction_needs_no_pick(self):
+        other = ClubMember.objects.create(club=self.club, name="Door", email="door@example.com")
+        tos = _upsert_clubmember_shadow_tos(self.auction, other, checked_in_at=timezone.now())
+        self.assertFalse(tos.needs_pickup_location)
+        self.south.delete()
+        single = Auction.objects.get(pk=self.auction.pk)
+        late = ClubMember.objects.create(club=self.club, name="Late", email="late@example.com")
+        self.assertTrue(AuctionTOS.objects.get(auction=single, clubmember=late).pickup_location_confirmed)
 
     def test_a_single_location_never_waits(self):
         self.south.delete()

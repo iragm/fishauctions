@@ -338,10 +338,13 @@ def _upsert_clubmember_shadow_tos(
             clubmember=member,
             bidder_number=member.bidder_number,
             manually_added=True,
-            pickup_location_confirmed=chosen is not None,
+            pickup_location_confirmed=chosen is not None or not auction.multi_location,
         )
     elif chosen is not None:
         tos.pickup_location = chosen
+        tos.pickup_location_confirmed = True
+    if checked_in_at is not _UNSET and checked_in_at:
+        # Checked in at the door: they are where they are.
         tos.pickup_location_confirmed = True
     tos.user = member.user
     tos.clubmember = member

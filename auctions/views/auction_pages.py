@@ -795,9 +795,12 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
                 messages.info(request, self.NEVER_SHOW_MESSAGES[action])
         elif action == "switch_to_club_managed":
             self.require_auction_admin()
-            if not switch_to_club_managed(self.auction, request.user):
+            if switch_to_club_managed(self.auction, request.user):
+                messages.success(request, f"Users in this auction are now managed through {self.auction.club}.")
+            elif not self.auction.club_id or not check_club_permission(
+                request.user, self.auction.club, "permission_manage_auctions"
+            ):
                 raise PermissionDenied()
-            messages.success(request, f"Users in this auction are now managed through {self.auction.club}.")
         elif action == "trust_creator" and request.user.is_superuser and self.auction.created_by:
             userdata = self.auction.created_by.userdata
             userdata.is_trusted = True
