@@ -132,6 +132,7 @@ class MonthlyInviteTests(Helpers):
         self.assertEqual(len(urls), 3)
         self.assertIn("?answer=monthly&src=email_monthly_invite", urls[0])
         self.assertIn("?answer=not_interested&src=email_monthly_invite", urls[2])
+        self.assertIn("/clubs/add/?src=email_monthly_invite", context["add_club_url"])
 
 
 @patch(SEND)
@@ -160,6 +161,12 @@ class ClubToolsTests(Helpers):
         club_emails.send_club_emails()
         self.assertNotIn("club_email_monthly_invite", [template for _to, template in self.sent(send)])
 
+    def test_a_club_that_said_no_monthly_still_gets_it_once_it_runs_three(self, send):
+        Club.objects.filter(pk=self.club.pk).update(auction_cadence="no_monthly")
+        self.monthly_club()
+        club_emails.send_club_emails()
+        self.assertIn("club_email_club_tools", [template for _to, template in self.sent(send)])
+
     def test_three_auctions_spread_over_a_year_dont_count(self, send):
         for n in range(3):
             self.auction(f"Meeting auction {n}", ended_days_ago=30, posted_days_ago=40 + 120 * n)
@@ -183,6 +190,7 @@ class TemplateTests(Helpers):
         email = Email.objects.filter(to=self.creator.email).latest("id")
         self.assertIn("Monthly auctions for Cichlid society", email.subject)
         self.assertIn("doesn&#x27;t have monthly auctions", email.html_message)
+        self.assertIn("Know another club", email.message)
         self.assertNotIn("{%", email.message)
         FeatureEmail.objects.filter(user=self.creator).update(sent_on=timezone.now() - 8 * DAY)
         for n in range(3):
@@ -251,3 +259,19 @@ class LapsedQueueTests(Helpers):
         self.assertIn(self.club.pk, lapsed)
         self.assertNotIn(never.pk, lapsed)
         self.assertNotIn(self.club.pk, cold)
+
+
+class AwaitingReplyTests(LapsedQueueTests):
+    def test_emailed_clubs_wait_for_a_reply_until_one_is_recorded(self):
+        from auctions.mcp import admin
+
+        Club.objects.filter(pk=self.club.pk).update(date_contacted=timezone.now() - 10 * DAY)
+        waiting = [row["club"] for row in self.run_report({"awaiting_reply": True})["clubs"]]
+        self.assertEqual(waiting, [self.club.pk])
+        request = RequestFactory().post("/mcp/admin/")
+        request.user = self.owner
+        admin.record_outreach(request, {"club": str(self.club.pk), "replied": True, "stall_reason": "cost"})
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.stall_reason, "cost")
+        self.assertIsNotNone(self.club.outreach_replied_on)
+        self.assertEqual(self.run_report({"awaiting_reply": True})["clubs"], [])

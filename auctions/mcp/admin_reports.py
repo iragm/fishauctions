@@ -52,7 +52,7 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
 
-from django.db.models import Count, Min, Q
+from django.db.models import Count, F, Min, Q
 from django.utils import timezone
 
 from auctions import palette_actions
@@ -1242,6 +1242,37 @@ def _miles(a, b) -> float:
     return 3958.8 * 2 * math.asin(math.sqrt(h))
 
 
+#: ``awaiting_reply=true``: emailed this recently and not heard from since.
+AWAITING_REPLY_DAYS = 60
+
+
+def _awaiting_reply(now, limit):
+    from auctions.models import Club
+
+    clubs = (
+        Club.objects.filter(date_contacted__gte=now - timedelta(days=AWAITING_REPLY_DAYS))
+        .filter(Q(outreach_replied_on__isnull=True) | Q(outreach_replied_on__lt=F("date_contacted")))
+        .order_by("date_contacted")
+    )
+    due = clubs.count()
+    domain = _own_host()
+    rows = [
+        {
+            "club": club.pk,
+            "name": fence(club.name),
+            "contacted": club.date_contacted.date().isoformat(),
+            "admin_url": f"https://{domain}/admin/auctions/club/{club.pk}/change/",
+        }
+        for club in clubs[:limit]
+    ]
+    summary = (
+        f"{due} clubs were emailed in the last {AWAITING_REPLY_DAYS} days and haven't been recorded as "
+        f"writing back; here are the {len(rows)} emailed longest ago. Ask the owner which replied, then "
+        "propose record_outreach with replied=true (and stall_reason if they said no)."
+    )
+    return _ok(summary, due=due, clubs=rows)
+
+
 def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     """The clubs to write to this week, one email each, and which email.
 
@@ -1262,6 +1293,8 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     days = max(30, min(_int(params, "days_since_contact", RECONTACT_DAYS) or RECONTACT_DAYS, 3650))
     limit = max(1, min(_int(params, "limit", 10) or 10, 50))
     lapsed = bool(_flag(params, "lapsed"))
+    if _flag(params, "awaiting_reply"):
+        return _awaiting_reply(now, limit)
     health = {row.club_id: row for row in ClubHealth.objects.all()}
     stages = {club_id: row.stage for club_id, row in health.items()}
     clubs = (
@@ -1602,6 +1635,10 @@ READS: list[Action] = [
             "lapsed": (
                 "boolean, optional, default false. True lists clubs that ran auctions here and stopped or are "
                 "late, longest silent first, instead of clubs that never started."
+            ),
+            "awaiting_reply": (
+                "boolean, optional, default false. True lists clubs emailed in the last 60 days that haven't "
+                "been recorded as writing back, instead."
             ),
         },
         danger=DANGER_SAFE,

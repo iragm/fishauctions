@@ -583,6 +583,11 @@ class Club(CloudflareImageMixin, models.Model):
         ("folded", "Club has folded"),
     )
     stall_reason = models.CharField(max_length=20, choices=STALL_REASON_CHOICES, blank=True, default="")
+    outreach_replied_on = models.DateTimeField(null=True, blank=True)
+    outreach_replied_on.help_text = (
+        "When the club last wrote back to an outreach email, as the owner reported it "
+        "(record_outreach with replied=true). outreach_queue(awaiting_reply=true) lists those that haven't."
+    )
     OTHER_SOFTWARE_CHOICES = (
         ("", "Not known"),
         ("mygroupauctions", "Possibly MyGroupAuctions"),

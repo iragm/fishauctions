@@ -1477,6 +1477,7 @@ EXCLUDED: dict[str, str] = {
     "club_member_by_uuid": _TOKEN,
     "club_member_by_number": _TOKEN,
     "club_member_unsubscribe": _TOKEN,
+    "club_cadence_answer": _TOKEN,
     "donation_unsubscribe": (
         "Vendor-facing opt-out, keyed on the vendor's uuid and only ever reached from a link in the "
         "mail we sent them. The vendors it is for don't have accounts here."

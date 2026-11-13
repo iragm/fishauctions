@@ -1667,6 +1667,20 @@ def record_outreach(request, params: dict[str, Any]) -> dict[str, Any]:
     reasons = {value for value, _label in Club.STALL_REASON_CHOICES}
     if reason and reason not in reasons:
         return _need("stall_reason is one of: " + ", ".join(sorted(reasons - {""})) + ".")
+    if _flag(params, "replied"):
+        club.outreach_replied_on = timezone.now()
+        fields = ["outreach_replied_on"]
+        if reason:
+            club.stall_reason = reason
+            fields.append("stall_reason")
+        club.save(update_fields=fields)
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action="Replied to outreach" + (f" ({reason})" if reason else "") + ", through an approved proposal.",
+            applies_to="SETTINGS",
+        )
+        return _ok(f"Recorded that {club.name} wrote back.", club=club.pk)
     club.date_contacted = timezone.now()
     fields = ["date_contacted"]
     if club.outreach_stage == Club.PROSPECT:
@@ -2367,7 +2381,8 @@ APPROVAL_ONLY: dict[str, Action] = {
             name="record_outreach",
             description=(
                 "Record that the owner emailed a club from outreach_queue: it leaves the queue for two years, "
-                "and the club's history says which email went. A listed club stays listed."
+                "and the club's history says which email went. A listed club stays listed. With replied=true, "
+                "record instead that the club wrote back, which takes it off outreach_queue(awaiting_reply=true)."
             ),
             params={
                 "club": "string, required. The club's number, or its exact name.",
@@ -2376,6 +2391,7 @@ APPROVAL_ONLY: dict[str, Action] = {
                     "(a club that stopped)."
                 ),
                 "stall_reason": "string, optional. Why it stalled, if the owner already knows (uses_other, ...).",
+                "replied": "boolean, optional, default false. True records a reply rather than an email sent.",
             },
             danger=DANGER_CONFIRM,
             idempotent=True,

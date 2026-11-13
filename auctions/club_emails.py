@@ -8,10 +8,12 @@
   ``Club.auction_cadence``: "I'm in" (then on to copying the auction), "my club doesn't have monthly
   auctions" and "not interested in software for them". Any answer stops this email; so does a club
   that already runs auctions about monthly here (:func:`runs_monthly`), which gets the next one instead.
+  It ends with a link to add another club to the site.
 * ``club_tools`` (:func:`club_tools_due`): a club that made :data:`MONTHLY_AUCTIONS` real auctions within
   :data:`MONTHLY_WINDOW`. It goes to the creator of the club's latest auction and to that auction's
   admins, and lists the club management features (:data:`FEATURES`), each with its help guide and the
-  club's own setup page.
+  club's own setup page. A club that answered "no monthly auctions" or "not interested" still gets it
+  once it really does make that many: the answer stops only the question.
 
 The claim is a ``ClubEmail`` row per club and kind, inserted before sending. Each person it goes to also
 gets a ``FeatureEmail`` row of the same kind, so ``feature_email_results`` reports them beside the
@@ -230,6 +232,7 @@ def monthly_invite_context(club, auction, user, domain) -> dict:
         "club": club,
         "auction": auction,
         "buttons": buttons,
+        "add_club_url": _url(domain, reverse("club_add"), "monthly_invite"),
     }
 
 

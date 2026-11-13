@@ -19,7 +19,9 @@ MONTHLY_TEXT = (
 Your club's monthly meeting auctions can run here too, the same way {{ auction.title }} did.
 
 {% for button in buttons %}{{ button.label }}: {{ button.url }}
-{% endfor %}"""
+{% endfor %}
+Know another club that might like it? Add it here: {{ add_club_url }}
+"""
     + STOP_TEXT
 )
 MONTHLY_HTML = (
@@ -29,6 +31,7 @@ Hey {{ user.first_name|default:"there" }},<br>
 <br>
 Your club's monthly meeting auctions can run here too, the same way {{ auction.title }} did.<br>
 {% for button in buttons %}{% email_button %}<a href="{{ button.url }}">{{ button.label }}</a>{% endemail_button %}{% endfor %}
+<p>Know another club that might like it? <a href="{{ add_club_url }}">Add it here</a>.</p>
 """
     + STOP_HTML
 )
@@ -112,6 +115,15 @@ class Migration(migrations.Migration):
             options={
                 "constraints": [models.UniqueConstraint(fields=("club", "kind"), name="club_email_once_per_kind")],
             },
+        ),
+        migrations.AddField(
+            model_name="club",
+            name="outreach_replied_on",
+            field=models.DateTimeField(
+                blank=True,
+                help_text="When the club last wrote back to an outreach email, as the owner reported it (record_outreach with replied=true). outreach_queue(awaiting_reply=true) lists those that haven't.",
+                null=True,
+            ),
         ),
         migrations.RunPython(forwards, backwards),
     ]
