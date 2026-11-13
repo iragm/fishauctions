@@ -54,9 +54,10 @@ EMBED_SOURCE = "embed"
 
 
 def _from_embed(request, path):
-    """The absolute URL of ``path``, marked as reached from a club's website."""
-    url = request.build_absolute_uri(path)
-    return f"{url}{'&' if '?' in url else '?'}src={EMBED_SOURCE}"
+    """The absolute URL of ``path``, marked as reached from a club's website (before any ``#event-N``)."""
+    from auctions.feature_emails import add_src
+
+    return add_src(request.build_absolute_uri(path), EMBED_SOURCE)
 
 
 def embed_mode_from_request(request):

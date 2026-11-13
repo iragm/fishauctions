@@ -4222,7 +4222,11 @@ class ChangeUserNotificationsForm(forms.ModelForm):
         )
 
     #: The two auction_promos opt-ins.
-    PROMO_FIELDS = ("email_me_about_new_auctions", "email_me_about_new_in_person_auctions")
+    PROMO_FIELDS = (
+        "email_me_about_new_auctions",
+        "email_me_about_new_in_person_auctions",
+        "email_me_about_new_features",
+    )
 
     def save(self, commit=True):
         # Ticking one of these asks for promotional messages again, which undoes an earlier "stop

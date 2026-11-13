@@ -41,10 +41,6 @@ class Helpers(StandardTestCase):
         cls.organizer = User.objects.create_user("fe_organizer", "fe_organizer@example.com", "pw")
         cls.owner = User.objects.create_superuser("fe_owner", "fe_owner@example.com", "pw")
 
-    def setUp(self):
-        super().setUp()
-        feature_emails._quiet_cache.clear()
-
     def ended_auction(self, **extra):
         now = timezone.now()
         auction = Auction.objects.create(
@@ -135,7 +131,7 @@ class SendTests(Helpers):
         self.assertEqual(self.sent_to(send, self.organizer), [])
 
     @patch(SEND)
-    def test_quiet_people_get_the_palette_email(self, send):
+    def test_quiet_people_get_the_library_email(self, send):
         quiet = User.objects.create_user("fe_quiet", "fe_quiet@example.com", "pw")
         busy = User.objects.create_user("fe_busy", "fe_busy@example.com", "pw")
         gone = User.objects.create_user("fe_gone", "fe_gone@example.com", "pw")
@@ -144,15 +140,30 @@ class SendTests(Helpers):
         _seen(gone, 900)
         feature_emails.send_feature_emails()
         kinds = dict(FeatureEmail.objects.filter(user__in=[quiet, busy, gone]).values_list("user__username", "kind"))
-        self.assertEqual(kinds, {"fe_quiet": "palette"})
+        self.assertEqual(kinds, {"fe_quiet": "library"})
 
     @patch(SEND)
-    def test_the_library_only_goes_to_people_who_have_it(self, send):
+    def test_after_the_library_comes_the_palette(self, send):
         reader = User.objects.create_user("fe_reader", "fe_reader@example.com", "pw")
-        UserData.objects.filter(user=reader).update(library_enabled=True)
         _seen(reader, 60)
+        FeatureEmail.objects.create(user=reader, kind="library")
+        FeatureEmail.objects.filter(user=reader).update(sent_on=timezone.now() - datetime.timedelta(days=200))
         feature_emails.send_feature_emails()
-        self.assertEqual(FeatureEmail.objects.get(user=reader).kind, "library")
+        self.assertTrue(FeatureEmail.objects.filter(user=reader, kind="palette").exists())
+
+    def test_add_src_keeps_the_fragment_last(self):
+        self.assertEqual(feature_emails.add_src("/a/?x=1#lots", "embed"), "/a/?x=1&src=embed#lots")
+
+    @patch(SEND, side_effect=RuntimeError("smtp down"))
+    def test_a_failed_send_frees_its_row(self, send):
+        _seen(User.objects.create_user("fe_fail", "fe_fail@example.com", "pw"), 60)
+        feature_emails.send_feature_emails()
+        self.assertFalse(FeatureEmail.objects.filter(user__username="fe_fail").exists())
+
+    def test_ticking_the_box_again_resubscribes(self):
+        from auctions.forms import ChangeUserNotificationsForm
+
+        self.assertIn("email_me_about_new_features", ChangeUserNotificationsForm.PROMO_FIELDS)
 
     @patch(SEND)
     def test_dues_go_to_staff_who_can_take_money(self, send):

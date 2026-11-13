@@ -10,9 +10,11 @@ Each :class:`Kind` is one email: who it's for, the one sentence and button, and 
   the right permission).
 * **Re-engagement** goes to people who have gone quiet: last seen between :data:`QUIET_AFTER` and
   :data:`QUIET_LIMIT` ago, by the latest of their last sign-in or activity, auction joined and bid. The
-  speaker directory (club staff), the library (people who have it), the command palette (everyone), "does
-  your club run an auction?" (members of a club with people here but no auctions), and, once
-  ``APP_STORE_URL`` is set, the iPhone app (in-person bidders from the past year).
+  speaker directory (club staff), the library and the command palette (everyone), and "does your club run
+  an auction?" (members of a club with people here but no auctions).
+* **Announcements**: once ``APP_STORE_URL`` is set, the iPhone app, to everyone who joined an in-person
+  auction in the past year, quiet or not. Its button goes straight to the App Store, so its clicks
+  aren't counted.
 
 Rules, all here: nothing before ``FEATURE_EMAILS_START``; each kind once per person ever
 (``FeatureEmail``'s unique constraint, claimed before sending); one per person per :data:`SPACING`;
@@ -20,21 +22,24 @@ nobody unsubscribed, opted out of ``email_me_about_new_features``, bounced, inac
 address. A day's sends are capped by :func:`daily_cap`, which ramps from :data:`RAMP_START` a day. If
 more than :data:`MAX_OPT_OUT_RATE` of the last :data:`WATCH_WINDOW`'s recipients opted out, or
 :data:`MAX_BOUNCE_RATE` bounced, a ``FeatureEmailPause`` row stops everything until somebody deletes it.
-No holdout group: there aren't enough people for one to say anything.
+No holdout group: there aren't enough people for one to say anything. A run stops itself after
+:data:`RUN_SECONDS`, well inside the task's soft time limit; the next day carries on.
 """
 
 from __future__ import annotations
 
 import datetime
 import logging
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
@@ -58,6 +63,8 @@ HAND_ENTERED_LOTS = 50
 SELLER_BRED_LOTS = 3
 DUES_MIN_MEMBERS = 10
 AWARE_CLUB_MEMBERS = 5
+#: How long one run may spend before leaving the rest for tomorrow (the task's soft limit is 300s).
+RUN_SECONDS = 200
 STAFF = Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True)
 
 
@@ -69,8 +76,19 @@ class Kind:
     button: str
     #: ``(user, about, path)`` for everyone this email is due to right now; ``about`` names the auction or
     #: club it concerns (for the report), ``path`` is where the button goes.
-    recipients: Callable[[datetime.datetime], Iterable[tuple[User, str, str]]]
+    recipients: Callable[[datetime.datetime, dict], Iterable[tuple[User, str, str]]]
     moment: bool = True
+    #: False when the button leaves the site, so no ``PageView`` can count the click.
+    tracked: bool = True
+
+
+def add_src(url: str, src: str) -> str:
+    """``url`` with ``src=<src>`` in its query, before any ``#fragment``."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    query = f"{parts.query}&src={src}" if parts.query else f"src={src}"
+    return urlunsplit(parts._replace(query=query))
 
 
 def start_date() -> datetime.date | None:
@@ -125,15 +143,30 @@ def _can_take_money(auction) -> bool:
     )
 
 
-def _card_checkout(now):
+def takes_cards(auction) -> bool:
+    """Whether buyers can already pay this auction's invoices online: its own switches, or for a club
+    auction the club's PayPal or Square (a club auction's own switches are always off)."""
+    if auction.paypal_payments_enabled or auction.enable_square_payments:
+        return True
+    return bool(auction.club_id and auction.club.effective_square_seller)
+
+
+def _card_checkout(now, run):
     from auctions.models import Invoice
 
-    for auction in _ended(now).filter(enable_online_payments=False, enable_square_payments=False):
-        if _can_take_money(auction) and Invoice.objects.filter(auction=auction).exists():
-            yield auction.created_by, auction.slug, reverse("edit_auction", kwargs={"slug": auction.slug})
+    for auction in _ended(now):
+        if takes_cards(auction) or not _can_take_money(auction):
+            continue
+        if not Invoice.objects.filter(auction=auction).exists():
+            continue
+        if auction.club_id:
+            path = reverse("club_edit", kwargs={"slug": auction.club.slug})
+        else:
+            path = reverse("edit_auction", kwargs={"slug": auction.slug})
+        yield auction.created_by, auction.slug, path
 
 
-def _dues(now):
+def _dues(now, run):
     from auctions.models import Club
 
     clubs = (
@@ -147,7 +180,7 @@ def _dues(now):
             yield user, club.slug, path
 
 
-def _discord_calendar(now):
+def _discord_calendar(now, run):
     seen = set()
     no_discord = Q(club__discord_server_id__isnull=True) | Q(club__discord_server_id="")
     for auction in _ended(now).filter(no_discord, club__isnull=False, club__google_calendar_id=""):
@@ -159,7 +192,7 @@ def _discord_calendar(now):
             yield user, auction.club.slug, path
 
 
-def _breeder_awards(now):
+def _breeder_awards(now, run):
     from auctions.models import Lot
 
     seen = set()
@@ -175,7 +208,7 @@ def _breeder_awards(now):
             yield user, auction.club.slug, path
 
 
-def _ai_lot_entry(now):
+def _ai_lot_entry(now, run):
     from auctions.models import Lot
 
     for auction in _ended(now):
@@ -184,37 +217,42 @@ def _ai_lot_entry(now):
             yield auction.created_by, auction.slug, reverse("ai")
 
 
-def _website_embed(now):
-    from auctions.models import Club
+def _website_embed(now, run):
+    from auctions.models import Club, PageView
 
-    stale = now - datetime.timedelta(days=90)
+    stale = now - datetime.timedelta(days=Club.EVENTS_EMBED_ACTIVE_DAYS)
     clubs = (
         Club.objects.filter(active=True, events__date_start__gt=now - MOMENT_WINDOW)
         .filter(Q(events_website_last_view__isnull=True) | Q(events_website_last_view__lt=stale))
         .distinct()
     )
     for club in clubs:
+        # The auction embed records no view of its own; a visit through one of its links shows it's there.
+        if PageView.objects.filter(source="embed", auction__club=club, date_start__gte=stale).exists():
+            continue
         path = reverse("club_website_integration", kwargs={"slug": club.slug})
         for user in _staff(club, Q(permission_edit_club=True)):
             yield user, club.slug, path
 
 
-_quiet_cache: dict = {}
-
-
-def quiet_people(now):
-    """Accounts last seen between :data:`QUIET_AFTER` and :data:`QUIET_LIMIT` ago, worked out once per run."""
-    if _quiet_cache.get("now") != now:
-        _quiet_cache.clear()
-        _quiet_cache.update(now=now, people=list(_quiet_people(now)))
-    return _quiet_cache["people"]
+def quiet_people(now, run):
+    """Accounts last seen between :data:`QUIET_AFTER` and :data:`QUIET_LIMIT` ago, worked out once per run
+    (``run`` is that run's scratch dict)."""
+    if "quiet" not in run:
+        run["quiet"] = list(_quiet_people(now))
+    return run["quiet"]
 
 
 def _quiet_people(now):
+    from auctions.models import AuctionTOS, Bid
+
     recent = now - QUIET_AFTER
     oldest = now - QUIET_LIMIT
+    # One subquery each rather than Max over two joins at once, which multiplies a person's rows.
+    joined = AuctionTOS.objects.filter(user=OuterRef("pk")).order_by("-createdon").values("createdon")[:1]
+    bid = Bid.objects.filter(user=OuterRef("pk")).order_by("-bid_time").values("bid_time")[:1]
     people = User.objects.filter(is_active=True, userdata__last_activity__gte=oldest).annotate(
-        last_joined=Max("auctiontos__createdon"), last_bid=Max("bid__bid_time")
+        last_joined=Subquery(joined), last_bid=Subquery(bid)
     )
     for user in people.select_related("userdata"):
         seen = max(when for when in (user.userdata.last_activity, user.last_joined, user.last_bid) if when)
@@ -222,31 +260,31 @@ def _quiet_people(now):
             yield user
 
 
-def _speakers(now):
+def _speakers(now, run):
     from auctions.models import ClubMember
 
     staff = set(ClubMember.objects.filter(STAFF, user__isnull=False).values_list("user_id", flat=True))
-    for user in quiet_people(now):
+    for user in quiet_people(now, run):
         if user.pk in staff:
             yield user, "", reverse("speaker_list")
 
 
-def _library(now):
-    for user in quiet_people(now):
-        if user.userdata.library_enabled:
-            yield user, "", reverse("library")
+def _library(now, run):
+    # Every account has the library (documents.search.can_use_library).
+    for user in quiet_people(now, run):
+        yield user, "", reverse("library")
 
 
-def _palette(now):
-    for user in quiet_people(now):
+def _palette(now, run):
+    for user in quiet_people(now, run):
         yield user, "", "/"
 
 
-def _aware_clubs(now):
+def _aware_clubs(now, run):
     """Members here of a club that has never made an auction."""
     from auctions.club_health import ClubHealth
 
-    quiet = {user.pk: user for user in quiet_people(now)}
+    quiet = {user.pk: user for user in quiet_people(now, run)}
     for health in ClubHealth.objects.filter(stage="aware", real_auctions=0, test_auctions=0).select_related("club"):
         club = health.club
         members = [
@@ -257,7 +295,7 @@ def _aware_clubs(now):
             yield user, club.slug, reverse("help_guide", kwargs={"slug": "run-an-in-person-auction"})
 
 
-def _iphone_app(now):
+def _iphone_app(now, run):
     url = getattr(settings, "APP_STORE_URL", "")
     if not url:
         return
@@ -320,6 +358,7 @@ KINDS = (
         "Get it",
         _iphone_app,
         moment=False,
+        tracked=False,
     ),
     Kind(
         "who_runs_your_auction",
@@ -355,10 +394,6 @@ KINDS = (
     ),
 )
 BY_KEY = {kind.key: kind for kind in KINDS}
-
-
-def _track(path: str, key: str) -> str:
-    return f"{path}{'&' if '?' in path else '?'}src=email_{key}"
 
 
 def paused() -> bool:
@@ -402,7 +437,7 @@ def _eligible(user, now, recently: set[int]) -> bool:
 def _send(user, kind: Kind, path: str):
     """Always an email, never a push: the ramp, the bounce check and the opt-out are all about email."""
     domain = Site.objects.get_current().domain
-    url = path if path.startswith("http") else f"https://{domain}{_track(path, kind.key)}"
+    url = path if path.startswith("http") else add_src(f"https://{domain}{path}", f"email_{kind.key}")
     context = {
         "subject": kind.subject,
         "sentence": kind.sentence,
@@ -428,22 +463,30 @@ def send_feature_emails(now=None) -> int:
     recently = set(FeatureEmail.objects.filter(sent_on__gte=now - SPACING).values_list("user_id", flat=True))
     had = set(FeatureEmail.objects.values_list("user_id", "kind"))
     sent = 0
+    run: dict = {}
+    began = time.monotonic()
     for kind in sorted(KINDS, key=lambda kind: not kind.moment):
-        for user, about, path in kind.recipients(now):
-            if sent >= cap:
+        for user, about, path in kind.recipients(now, run):
+            if sent >= cap or time.monotonic() - began > RUN_SECONDS:
                 return sent
             if (user.pk, kind.key) in had or not _eligible(user, now, recently):
                 continue
             try:
                 with transaction.atomic():
-                    FeatureEmail.objects.create(user=user, kind=kind.key, about=about[:100])
+                    row = FeatureEmail.objects.create(user=user, kind=kind.key, about=about[:100])
             except IntegrityError:
                 continue
             had.add((user.pk, kind.key))
-            recently.add(user.pk)
             try:
                 _send(user, kind, path)
-                sent += 1
+            except SoftTimeLimitExceeded:
+                row.delete()
+                raise
             except Exception:
+                # Not sent, so not counted, and free to go another day.
+                row.delete()
                 logger.exception("feature email %s failed for user %s", kind.key, user.pk)
+                continue
+            recently.add(user.pk)
+            sent += 1
     return sent

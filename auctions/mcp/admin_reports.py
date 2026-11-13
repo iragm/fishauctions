@@ -1336,7 +1336,11 @@ def feature_email_results(request, params: dict[str, Any]) -> dict[str, Any]:
         counts["bounced"] += bool(data.email_bounced_on and data.email_bounced_on >= row.sent_on)
     pause = FeatureEmailPause.objects.order_by("-created_on").first()
     start = feature_emails.start_date()
-    table = [{"kind": kind, **counts} for kind, counts in sorted(by_kind.items(), key=lambda item: -item[1]["sent"])]
+    untracked = {kind.key for kind in feature_emails.KINDS if not kind.tracked}
+    table = [
+        {"kind": kind, **counts, **({"clicked": None} if kind in untracked else {})}
+        for kind, counts in sorted(by_kind.items(), key=lambda item: -item[1]["sent"])
+    ]
     sent = sum(row["sent"] for row in table)
     summary = (
         f"{sent} feature emails in the last {days} days. "
