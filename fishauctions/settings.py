@@ -770,6 +770,8 @@ ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=Fals
 ALLOW_SEARCH_INDEXING = parse_bool_env(os.environ.get("ALLOW_SEARCH_INDEXING") or None, default=True)
 # The phone app's store pages. The help's app guide says the app isn't out yet until one is set.
 APP_STORE_URL = os.environ.get("APP_STORE_URL", "")
+# No feature email (auctions/feature_emails.py) goes before this date; blank turns them off.
+FEATURE_EMAILS_START = os.environ.get("FEATURE_EMAILS_START", "2027-01-04")
 PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "")
 # Google Play's closed test, until PLAY_STORE_URL is set. Testers join this Google Group (the closed
 # track's tester list) and then opt in at PLAY_TESTING_URL. Blank hides /android-testers/ and its banner.

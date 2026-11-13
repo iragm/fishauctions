@@ -1186,6 +1186,14 @@ def next_auction_emails(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def feature_emails(self):
+    """Today's share of the feature emails (auctions/feature_emails.py). Daily, 10:10am Eastern."""
+    from auctions import feature_emails as emails
+
+    _safely("feature emails", emails.send_feature_emails)
+
+
+@shared_task(bind=True, ignore_result=True)
 def suggest_account_merges(self):
     """Tell likely duplicate accounts, once each, that merging exists (auctions/duplicate_accounts.py). Weekly."""
     from auctions import duplicate_accounts

@@ -37,6 +37,8 @@ from .models import (
     ClubMember,
     CommandPalettePage,
     CommandPaletteSearch,
+    FeatureEmail,
+    FeatureEmailPause,
     GeneralInterest,
     Invoice,
     InvoicePayment,
@@ -320,6 +322,20 @@ class UserAdmin(BaseUserAdmin):
     # Doesn't seem to work; use admin/auth/user/?o=-4.
     last_activity.admin_order_field = "userdata__last_activity"
     last_activity.short_description = "Last activity"
+
+
+@admin.register(FeatureEmailPause)
+class FeatureEmailPauseAdmin(admin.ModelAdmin):
+    """Delete the row to let feature emails resume (auctions/feature_emails.py)."""
+
+    list_display = ("created_on", "reason")
+
+
+@admin.register(FeatureEmail)
+class FeatureEmailAdmin(admin.ModelAdmin):
+    list_display = ("sent_on", "kind", "user", "about")
+    list_filter = ("kind",)
+    raw_id_fields = ("user",)
 
 
 @admin.register(MobileDevice)

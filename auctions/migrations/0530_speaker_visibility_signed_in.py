@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0528_merge_suggestion_email"),
+        ("auctions", "0529_feature_emails_and_outreach"),
     ]
 
     operations = [

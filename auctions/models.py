@@ -583,6 +583,17 @@ class Club(CloudflareImageMixin, models.Model):
         ("folded", "Club has folded"),
     )
     stall_reason = models.CharField(max_length=20, choices=STALL_REASON_CHOICES, blank=True, default="")
+    OTHER_SOFTWARE_CHOICES = (
+        ("", "Not known"),
+        ("mygroupauctions", "Possibly MyGroupAuctions"),
+        ("own", "Its own software"),
+        ("other", "Something else"),
+    )
+    other_software = models.CharField(max_length=20, choices=OTHER_SOFTWARE_CHOICES, blank=True, default="")
+    other_software.help_text = (
+        "What the club may run its auctions on instead. Picks the outreach email that doesn't ask it to "
+        "switch (admin_reports.outreach_queue); a guess is fine."
+    )
     stall_reason.help_text = (
         "Why this club stopped where it did, in a word that can be counted. Set it when somebody "
         "answers; notes are free text and cannot say which objection is worth fixing."
@@ -12183,6 +12194,7 @@ class PageView(CachedPropertiesMixin, models.Model):
         "notification": "From an invoice email",
         "invoice_next": "From an invoice email (next auction)",
         "seller_share": "Shared by the seller",
+        "embed": "From a club's own website",
         "weekly_email": "From the weekly email",
         "admin": "From an admin page",
         "twitter": "Shared on X (Twitter)",
@@ -12491,6 +12503,10 @@ class UserData(CachedPropertiesMixin, models.Model):
     email_me_about_new_in_person_auctions_distance.help_text = (
         "miles, from your address. Also used to filter the auction list when your location is set."
     )
+    email_me_about_new_features = models.BooleanField(
+        default=True, blank=True, verbose_name="Tell me about site features I'm not using yet"
+    )
+    email_me_about_new_features.help_text = "A few times a year at most (auctions.feature_emails)"
     show_nearby_auctions = models.BooleanField(default=True, blank=True, verbose_name="Only show nearby auctions")
     show_nearby_auctions.help_text = (
         "When your location is set, only show auctions near you on the auction list. "
@@ -13236,6 +13252,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         self.email_me_about_new_chat_replies = False
         self.send_reminder_emails_about_joining_auctions = False
         self.email_me_about_new_in_person_auctions = False
+        self.email_me_about_new_features = False
         self.has_unsubscribed = True
         self.last_activity = timezone.now()
         self.save()
@@ -15733,3 +15750,33 @@ class SignInStitch(models.Model):
 
     def __str__(self):
         return f"{self.user} signed in holding {self.session_id[:12]}"
+
+
+class FeatureEmail(models.Model):
+    """One feature email to one person (:mod:`auctions.feature_emails`): each kind goes once ever.
+
+    Claimed by insert before sending, so two overlapping runs can't both send it.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="feature_emails")
+    kind = models.CharField(max_length=40)
+    sent_on = models.DateTimeField(auto_now_add=True, db_index=True)
+    #: The auction or club it was about, for the results report; nothing links back.
+    about = models.CharField(max_length=100, blank=True, default="")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "kind"], name="feature_email_once_per_kind")]
+
+    def __str__(self):
+        return f"{self.kind} to user {self.user_id}"
+
+
+class FeatureEmailPause(models.Model):
+    """While any row exists, no feature email goes. The sender adds one when people opt out or mail
+    bounces faster than :data:`auctions.feature_emails.MAX_OPT_OUT_RATE` allows; delete it to resume."""
+
+    created_on = models.DateTimeField(auto_now_add=True)
+    reason = models.CharField(max_length=300)
+
+    def __str__(self):
+        return f"Feature emails paused {self.created_on:%Y-%m-%d}: {self.reason}"
