@@ -105,8 +105,8 @@ this only quotes its opening sentence.
 - **`cloudflare_images.py`** (154 lines)
   Cloudflare Images integration.
   `CloudflareImagesError`, `enabled`, `delivery_url`, `image_url`, `upload`, `delete`, `sync_variants`
-- **`club_emails.py`** (340 lines)
-  Two emails to clubs that already use the site, each once per club ever, to get them using more of it.
+- **`club_emails.py`** (370 lines)
+  Three emails to clubs that already use the site, each once per club ever.
 - **`club_events.py`** (464 lines)
   Keeps a club's event list, its Google Calendar, and its Discord events in step.
 - **`club_health.py`** (390 lines)
@@ -419,9 +419,9 @@ this only quotes its opening sentence.
 - **`test_club_api_read.py`** (1451 lines)
   The club REST API's read side: members, BAP lots, auctions and lots.
   `ClubAPITests`, `ClubAPIKeyMemberPermissionTests`, `ClubBapLotAPITests`, `ClubAuctionReadAPITests`, `ParseBoolEnvTests`, `RequireSecureProdSecretsTests`, `ClubAuctionIntegrationTests`
-- **`test_club_emails.py`** (277 lines)
+- **`test_club_emails.py`** (306 lines)
   The monthly-auction and club-tools emails (``auctions/club_emails.py``), the page that takes a club's
-  `Helpers`, `MonthlyInviteTests`, `ClubToolsTests`, `TemplateTests`, `AnswerPageTests`, `LapsedQueueTests`, `AwaitingReplyTests`
+  `Helpers`, `MonthlyInviteTests`, `ClubToolsTests`, `TemplateTests`, `AnswerPageTests`, `LapsedQueueTests`, `AwaitingReplyTests`, `ThanksTests`, `ThanksTemplateTests`
 - **`test_club_events.py`** (3092 lines)
   Tests for club events, Google Calendar sync, and Discord events.
 - **`test_club_finder.py`** (297 lines)
