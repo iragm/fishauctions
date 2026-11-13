@@ -55,6 +55,7 @@ from .base import (
     _last_n_month_starts,
     _process_invoice_membership_renewal,
     _ytd_month_starts,
+    can_view_club_members,
     safe_next_url,
 )
 
@@ -465,20 +466,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        if request.user.is_authenticated and not request.user.is_superuser:
-            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
-            if not member or not any(
-                [
-                    member.permission_admin,
-                    member.permission_view,
-                    member.permission_export,
-                    member.permission_add_edit,
-                    member.permission_edit_club,
-                    member.permission_manage_auctions,
-                    member.permission_manage_bap,
-                ]
-            ):
-                raise PermissionDenied()
+        if request.user.is_authenticated and not can_view_club_members(request.user, self.club):
+            raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):

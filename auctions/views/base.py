@@ -245,6 +245,28 @@ CLUB_PERMISSION_FIELDS = (
 )
 
 
+#: Any one of these opens the club's member list (``ClubAdminView``); the sidebar's Members link uses the same set.
+MEMBER_LIST_PERMISSIONS = (
+    "permission_admin",
+    "permission_view",
+    "permission_export",
+    "permission_add_edit",
+    "permission_edit_club",
+    "permission_manage_auctions",
+    "permission_manage_bap",
+)
+
+
+def can_view_club_members(user, club):
+    """Whether ``user`` may open ``club``'s member list. Reads the same row ``check_club_permission`` does."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    return bool(member) and any(getattr(member, field) for field in MEMBER_LIST_PERMISSIONS)
+
+
 def clubs_with_any_permission(user, nec_only=True):
     """Clubs where this user holds at least one permission. One ``filter()`` call on purpose, so a single
     ClubMember row must satisfy all conditions.
@@ -1024,6 +1046,7 @@ class ClubViewMixin:
             return False
         return bool(
             self.can_access_admin
+            or can_view_club_members(self.request.user, self.club)
             or self.can_edit_settings
             or self.can_manage_bap
             or self.can_manage_money
