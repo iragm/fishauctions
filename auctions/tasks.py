@@ -1194,6 +1194,17 @@ def feature_emails(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def suggest_account_merges(self):
+    """Tell likely duplicate accounts, once each, that merging exists (auctions/duplicate_accounts.py). Weekly."""
+    from auctions import duplicate_accounts
+
+    _safely(
+        "merge suggestions",
+        lambda: duplicate_accounts.send_merge_suggestions(budget=duplicate_accounts.TIME_BUDGET),
+    )
+
+
+@shared_task(bind=True, ignore_result=True)
 def email_unseen_chats(self):
     """Send notifications about unread chat messages."""
     call_command("email_unseen_chats")

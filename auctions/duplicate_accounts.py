@@ -12,20 +12,25 @@ A pair of active accounts is a likely duplicate when both of these hold:
 Each account in such a pair gets the ``account_merge_suggestion`` email once
 (``UserData.merge_suggested_on``). It says only that accounts can be merged: it never names, counts or
 hints at the other account, and nothing here shows an IP address to anyone. Run by hand with
-``manage.py suggest_account_merges``, which only counts unless given ``--send``.
+``manage.py suggest_account_merges`` (only counts unless given ``--send``), and weekly by the
+``suggest_account_merges`` task. A pair is checked only while one of its accounts can still be told.
+A run stops checking after :data:`TIME_BUDGET` seconds; pairs go in a fresh random order each run, so
+the ones it didn't reach get their turn in later weeks.
 """
 
 from __future__ import annotations
 
 import logging
+import random
+import time
 from collections import defaultdict
 from datetime import timedelta
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db.models import Count
 from django.utils import timezone
 from post_office import mail
 
@@ -39,6 +44,9 @@ IP_LOOKBACK = timedelta(days=365)
 MAX_ACCOUNTS_PER_IP = 4
 #: Bigger groups of accounts with one name are a common name, not one person.
 MAX_SAME_NAME_GROUP = 6
+
+#: Seconds a weekly run spends finding pairs before it sends; the task's soft limit is 300.
+TIME_BUDGET = 150
 
 TEMPLATE = "account_merge_suggestion"
 
@@ -96,72 +104,56 @@ def _same_name_pairs():
     return pairs
 
 
+def _clock():
+    return time.monotonic()
+
+
 class _Connections:
-    """Shared-IP checks for one run, caching how busy each address is."""
+    """Shared-IP checks for one run. Each account's addresses and each address's busyness are read once."""
 
     def __init__(self, now):
         self.since = now - IP_LOOKBACK
         self.busy = {}
+        self.addresses = {}
 
     def household(self, ip) -> bool:
         """Whether few enough accounts use *ip* for it to mean anything."""
         if ip not in self.busy:
-            accounts = set(
+            accounts = (
                 PageView.objects.filter(ip_address=ip, date_start__gte=self.since, user__isnull=False)
                 .order_by()
                 .values_list("user_id", flat=True)
                 .distinct()[: MAX_ACCOUNTS_PER_IP + 1]
             )
-            if len(accounts) <= MAX_ACCOUNTS_PER_IP:
-                accounts.update(
-                    UserData.objects.filter(last_ip_address=ip).values_list("user_id", flat=True)[
-                        : MAX_ACCOUNTS_PER_IP + 1
-                    ]
-                )
-            self.busy[ip] = len(accounts) > MAX_ACCOUNTS_PER_IP
+            self.busy[ip] = len(list(accounts)) > MAX_ACCOUNTS_PER_IP
         return not self.busy[ip]
+
+    def _of(self, pk):
+        if pk not in self.addresses:
+            self.addresses[pk] = set(
+                PageView.objects.filter(user_id=pk, date_start__gte=self.since)
+                .exclude(ip_address__isnull=True)
+                .exclude(ip_address="")
+                .order_by()
+                .values_list("ip_address", flat=True)
+                .distinct()
+            )
+            last = (
+                UserData.objects.filter(user_id=pk, last_activity__gte=self.since)
+                .values_list("last_ip_address", flat=True)
+                .first()
+            )
+            if last:
+                self.addresses[pk].add(last)
+        return self.addresses[pk]
 
     def shared(self, a, b) -> bool:
         """Whether accounts *a* and *b* (pks) have used the same household-sized IP address lately."""
-        last = dict(
-            UserData.objects.filter(user_id__in=[a, b], last_activity__gte=self.since).values_list(
-                "user_id", "last_ip_address"
-            )
-        )
-        candidates = set()
-        if last.get(a) and last.get(a) == last.get(b):
-            candidates.add(last[a])
-        candidates.update(
-            PageView.objects.filter(user_id__in=[a, b], date_start__gte=self.since)
-            .exclude(ip_address__isnull=True)
-            .exclude(ip_address="")
-            .order_by()
-            .values("ip_address")
-            .annotate(n=Count("user_id", distinct=True))
-            .filter(n=2)
-            .values_list("ip_address", flat=True)
-        )
-        return any(self.household(ip) for ip in candidates)
+        return any(self.household(ip) for ip in self._of(a) & self._of(b))
 
 
-def likely_duplicate_pairs(now=None):
-    """Pairs of active, non-staff account pks that are probably one person and aren't already merging."""
-    User = get_user_model()
-    pairs = _flagged_record_pairs() | _same_name_pairs()
-    if not pairs:
-        return []
-    eligible = set(
-        User.objects.filter(
-            pk__in={pk for pair in pairs for pk in pair},
-            is_active=True,
-            is_staff=False,
-            is_superuser=False,
-            userdata__merge_into_user__isnull=True,
-        ).values_list("pk", flat=True)
-    )
-    eligible -= set(UserData.objects.filter(merge_into_user__in=eligible).values_list("merge_into_user", flat=True))
-    connections = _Connections(now or timezone.now())
-    return sorted((a, b) for a, b in pairs if a in eligible and b in eligible and connections.shared(a, b))
+def _address(user):
+    return (user.email or "").strip().lower()
 
 
 def _deliverable(user) -> bool:
@@ -175,33 +167,88 @@ def _deliverable(user) -> bool:
     return True
 
 
+def _told_addresses(users):
+    """The addresses, of those *users* have, that some account already got the email at."""
+    wanted = {_address(user) for user in users}
+    told = (
+        get_user_model()
+        .objects.filter(userdata__merge_suggested_on__isnull=False)
+        .exclude(email="")
+        .values_list("email", flat=True)
+    )
+    return {email.strip().lower() for email in told.iterator()} & wanted
+
+
+def likely_duplicate_pairs(now=None, deadline=None):
+    """Pairs of active, non-staff account pks that are probably one person, where one of the two can still
+    be told: not emailed, reachable, and not already merging.
+
+    Checking stops at *deadline* (a :func:`_clock` reading); the pairs found by then are returned.
+    """
+    User = get_user_model()
+    pairs = _flagged_record_pairs() | _same_name_pairs()
+    if not pairs:
+        return []
+    users = {
+        user.pk: user
+        for user in User.objects.filter(
+            pk__in={pk for pair in pairs for pk in pair},
+            is_active=True,
+            is_staff=False,
+            is_superuser=False,
+            userdata__merge_into_user__isnull=True,
+        ).select_related("userdata")
+    }
+    for pk in UserData.objects.filter(merge_into_user__in=list(users)).values_list("merge_into_user", flat=True):
+        users.pop(pk, None)
+    told = _told_addresses(users.values())
+    can_tell = {
+        pk
+        for pk, user in users.items()
+        if not user.userdata.merge_suggested_on and _deliverable(user) and _address(user) not in told
+    }
+    pairs = [(a, b) for a, b in pairs if a in users and b in users and (a in can_tell or b in can_tell)]
+    random.shuffle(pairs)
+    connections = _Connections(now or timezone.now())
+    found = []
+    for a, b in pairs:
+        if deadline and _clock() > deadline:
+            logger.info("duplicate account scan stopped at its time budget")
+            break
+        if connections.shared(a, b):
+            found.append((a, b))
+    return sorted(found)
+
+
 def accounts_to_email(pairs):
-    """The accounts in *pairs* that would get the email: never sent it, reachable, one per address."""
-    users = (
+    """The accounts in *pairs* that would get the email: never sent it, reachable, one per address ever."""
+    users = list(
         get_user_model()
         .objects.filter(pk__in={pk for pair in pairs for pk in pair}, userdata__merge_suggested_on__isnull=True)
         .select_related("userdata")
         .order_by("pk")
     )
-    seen = set()
+    seen = _told_addresses(users)
     chosen = []
     for user in users:
-        address = (user.email or "").strip().lower()
-        if address not in seen and _deliverable(user):
-            seen.add(address)
+        if _address(user) not in seen and _deliverable(user):
+            seen.add(_address(user))
             chosen.append(user)
     return chosen
 
 
-def send_merge_suggestions(now=None) -> int:
-    """Email every account :func:`accounts_to_email` picks, once each. Returns how many went."""
+def send_merge_suggestions(now=None, budget=None) -> int:
+    """Email every account :func:`accounts_to_email` picks, once each. Returns how many went.
+
+    *budget* is the seconds allowed for finding pairs, counted from the call.
+    """
+    deadline = _clock() + budget if budget else None
     now = now or timezone.now()
     domain = Site.objects.get_current().domain
     sent = 0
-    for user in accounts_to_email(likely_duplicate_pairs(now=now)):
+    for user in accounts_to_email(likely_duplicate_pairs(now=now, deadline=deadline)):
         # Claimed first, so overlapping runs can't both send; given back if the send fails.
-        claimed = UserData.objects.filter(user=user, merge_suggested_on__isnull=True)
-        if not claimed.update(merge_suggested_on=now):
+        if not UserData.objects.filter(user=user, merge_suggested_on__isnull=True).update(merge_suggested_on=now):
             continue
         try:
             mail.send(
@@ -209,6 +256,9 @@ def send_merge_suggestions(now=None) -> int:
                 template=TEMPLATE,
                 context={"user": user, "domain": domain, "unsubscribe": str(user.userdata.unsubscribe_link)},
             )
+        except SoftTimeLimitExceeded:
+            # The email may already be queued: keep the claim, since twice is worse than never.
+            raise
         except Exception:
             logger.exception("merge suggestion email failed for user %s", user.pk)
             UserData.objects.filter(user=user, merge_suggested_on=now).update(merge_suggested_on=None)
