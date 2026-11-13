@@ -17,13 +17,13 @@
 {% if auction.shows_post_end_banner %}<div hx-get="{% url 'auction_post_end_banner' slug=auction.slug %}" hx-trigger="load" hx-target="this" hx-swap="outerHTML"></div>{% endif %}
 {% if offer_club_managed_switch %}
 {% comment %}In place of the setup checklist, while a copied club auction is still as it was copied: see Auction.offers_club_managed_switch and services.switch_to_club_managed.{% endcomment %}
-<div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>You have copy users turned on.  There's a better way to do this: Manage users through club</h5>
+<div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Simpler user management</h5>
+  <div>You have copy users turned on.  There's a better way to do this: Manage users through club</div>
+  <small class="text-white-50">Right now, changes to users (such as email addresses) in this auction stay in this auction. If you turn on manage users through club, changes made here will also be made in older auctions.  I don't see any downside to this, and recommend turning it on.</small>
   <div>
     <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="switch_to_club_managed" class="btn btn-info btn-sm mt-2">Enable now</button></form>
     <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_club_managed_banner" class="btn btn-secondary btn-sm mt-2">Don't show again</button></form>
   </div>
-  <a class="small text-white" data-bs-toggle="collapse" href="#club-managed-explainer" role="button" aria-expanded="false" aria-controls="club-managed-explainer">What's this do?</a>
-  <div class="collapse" id="club-managed-explainer"><small class="text-white-50">Right now, changes to users (such as email addresses) in this auction stay in this auction. If you turn on manage users through club, changes made here will also be made in older auctions.  I don't see any downside to this, and recommend turning it on.</small></div>
 </div>
 {% elif not auction.admin_checklist_completed and not auction.admin_checklist_basics_done or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>

@@ -74,7 +74,10 @@ class ClubManagedSwitchTests(TestCase):
 
     def test_the_banner_takes_the_place_of_the_checklist(self):
         body = self.page()
+        self.assertIn("Simpler user management", body)
         self.assertIn("There's a better way to do this", body)
+        self.assertIn("changes made here will also be made in older auctions", body)
+        self.assertNotIn("What's this do?", body)
         self.assertIn('value="switch_to_club_managed"', body)
         self.assertNotIn("Finish setting up", body)
 
