@@ -52,11 +52,11 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
 
-from django.db.models import Count, Min, Q
+from django.db.models import Count, F, Min, Q
 from django.utils import timezone
 
 from auctions import palette_actions
-from auctions.palette_actions import DANGER_SAFE, Action, _int, _ok
+from auctions.palette_actions import DANGER_SAFE, Action, _flag, _int, _ok
 
 #: The most ``PageView`` rows one report reads; past it the report says it stopped early.
 MAX_ROWS = 300_000
@@ -1227,6 +1227,8 @@ def club_funnel(request, params: dict[str, Any]) -> dict[str, Any]:
 #: Clubs ``outreach_queue`` writes to, by ``ClubHealth`` stage: not running auctions here now. A club
 #: with no health row yet counts as ``empty``.
 COLD_STAGES = ("aware", "trial", "dormant", "empty")
+#: ``lapsed=true``: ran real auctions here, and has stopped or is late.
+LAPSED_STAGES = ("slipping", "dormant")
 #: How long a contacted club stays off the queue: people change jobs in a club.
 RECONTACT_DAYS = 730
 CONTACT_ORDER = {"email": 0, "webform": 1, "facebook": 2, "": 3}
@@ -1240,6 +1242,37 @@ def _miles(a, b) -> float:
     return 3958.8 * 2 * math.asin(math.sqrt(h))
 
 
+#: ``awaiting_reply=true``: emailed this recently and not heard from since.
+AWAITING_REPLY_DAYS = 60
+
+
+def _awaiting_reply(now, limit):
+    from auctions.models import Club
+
+    clubs = (
+        Club.objects.filter(date_contacted__gte=now - timedelta(days=AWAITING_REPLY_DAYS))
+        .filter(Q(outreach_replied_on__isnull=True) | Q(outreach_replied_on__lt=F("date_contacted")))
+        .order_by("date_contacted")
+    )
+    due = clubs.count()
+    domain = _own_host()
+    rows = [
+        {
+            "club": club.pk,
+            "name": fence(club.name),
+            "contacted": club.date_contacted.date().isoformat(),
+            "admin_url": f"https://{domain}/admin/auctions/club/{club.pk}/change/",
+        }
+        for club in clubs[:limit]
+    ]
+    summary = (
+        f"{due} clubs were emailed in the last {AWAITING_REPLY_DAYS} days and haven't been recorded as "
+        f"writing back; here are the {len(rows)} emailed longest ago. Ask the owner which replied, then "
+        "propose record_outreach with replied=true (and stall_reason if they said no)."
+    )
+    return _ok(summary, due=due, clubs=rows)
+
+
 def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     """The clubs to write to this week, one email each, and which email.
 
@@ -1248,14 +1281,22 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     stopped, then the rest; email before web form before Facebook. Version ``b`` (don't ask them to
     switch) goes to a club marked ``other_software`` or stalled on ``uses_other``. No address leaves: the
     row says which door to knock on and links the club's admin page, where the owner reads it.
+
+    ``lapsed=true`` is the other list: clubs that ran real auctions here and stopped or are late
+    (``LAPSED_STAGES``), longest silent first, for the owner to write to by hand. Their last auction's
+    creator is the way in, so contact details aren't required; version ``lapsed``.
     """
-    from auctions.club_health import ClubHealth
+    from auctions.club_health import ClubHealth, is_test_auction
     from auctions.models import Auction, Club
 
     now = timezone.now()
     days = max(30, min(_int(params, "days_since_contact", RECONTACT_DAYS) or RECONTACT_DAYS, 3650))
     limit = max(1, min(_int(params, "limit", 10) or 10, 50))
-    stages = dict(ClubHealth.objects.values_list("club_id", "stage"))
+    lapsed = bool(_flag(params, "lapsed"))
+    if _flag(params, "awaiting_reply"):
+        return _awaiting_reply(now, limit)
+    health = {row.club_id: row for row in ClubHealth.objects.all()}
+    stages = {club_id: row.stage for club_id, row in health.items()}
     clubs = (
         Club.objects.filter(active=True)
         .exclude(stall_reason__in=("folded", "not_interested"))
@@ -1265,15 +1306,21 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     for club in clubs:
         stage = stages.get(club.pk, "empty")
         reachable = club.contact_method or club.contact_email or club.homepage or club.facebook_page
-        if stage in COLD_STAGES and reachable:
+        if lapsed:
+            if stage in LAPSED_STAGES and health[club.pk].real_auctions:
+                candidates.append((club, stage))
+        elif stage in COLD_STAGES and reachable:
             candidates.append((club, stage))
-    candidates.sort(
-        key=lambda row: (
-            COLD_STAGES.index(row[1]),
-            CONTACT_ORDER.get(row[0].contact_method or ("email" if row[0].contact_email else ""), 3),
-            row[0].date_contacted or now.replace(year=1970),
+    if lapsed:
+        candidates.sort(key=lambda row: -(health[row[0].pk].days_since_last_auction or 0))
+    else:
+        candidates.sort(
+            key=lambda row: (
+                COLD_STAGES.index(row[1]),
+                CONTACT_ORDER.get(row[0].contact_method or ("email" if row[0].contact_email else ""), 3),
+                row[0].date_contacted or now.replace(year=1970),
+            )
         )
-    )
     running = [
         club
         for club in Club.objects.filter(health__stage__in=("active", "new"), latitude__isnull=False)
@@ -1289,8 +1336,9 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
                 "club": fence(other.name),
                 "miles": round(_miles((club.latitude, club.longitude), (other.latitude, other.longitude))),
             }
-        last = Auction.objects.filter(club=club, is_deleted=False).order_by("-date_posted").first()
-        version = "b" if club.other_software or club.stall_reason == "uses_other" else "a"
+        recent = Auction.objects.filter(club=club, is_deleted=False).order_by("-date_posted")[:10]
+        last = next((auction for auction in recent if not is_test_auction(auction)), None)
+        version = "lapsed" if lapsed else ("b" if club.other_software or club.stall_reason == "uses_other" else "a")
         rows.append(
             {
                 "club": club.pk,
@@ -1306,9 +1354,18 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
                 "last_contacted": club.date_contacted.date().isoformat() if club.date_contacted else None,
                 "nearest_club_running_auctions_here": nearest,
                 "last_auction_creator_user": last.created_by_id if last else None,
+                "last_auction": last.date_start.date().isoformat() if last else None,
+                "real_auctions": health[club.pk].real_auctions if club.pk in health else 0,
+                "auction_cadence": club.auction_cadence,
                 "admin_url": f"https://{domain}/admin/auctions/club/{club.pk}/change/",
             }
         )
+    if lapsed:
+        summary = (
+            f"{len(candidates)} clubs ran auctions here and stopped or are late; here are the {len(rows)} "
+            "silent longest. Write to each by hand; propose record_outreach with version lapsed after."
+        )
+        return _ok(summary, due=len(candidates), clubs=rows)
     summary = (
         f"{len(candidates)} clubs are due a first or renewed outreach email; here are the next {len(rows)}. "
         "Version a introduces the site; b doesn't ask a club with its own system to switch. "
@@ -1575,6 +1632,14 @@ READS: list[Action] = [
         params={
             "limit": "integer, optional, default 10, at most 50. How many clubs.",
             "days_since_contact": "integer, optional, default 730. Clubs contacted more recently are left out.",
+            "lapsed": (
+                "boolean, optional, default false. True lists clubs that ran auctions here and stopped or are "
+                "late, longest silent first, instead of clubs that never started."
+            ),
+            "awaiting_reply": (
+                "boolean, optional, default false. True lists clubs emailed in the last 60 days that haven't "
+                "been recorded as writing back, instead."
+            ),
         },
         danger=DANGER_SAFE,
         resolver=outreach_queue,

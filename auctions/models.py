@@ -583,11 +583,26 @@ class Club(CloudflareImageMixin, models.Model):
         ("folded", "Club has folded"),
     )
     stall_reason = models.CharField(max_length=20, choices=STALL_REASON_CHOICES, blank=True, default="")
+    outreach_replied_on = models.DateTimeField(null=True, blank=True)
+    outreach_replied_on.help_text = (
+        "When the club last wrote back to an outreach email, as the owner reported it "
+        "(record_outreach with replied=true). outreach_queue(awaiting_reply=true) lists those that haven't."
+    )
     OTHER_SOFTWARE_CHOICES = (
         ("", "Not known"),
         ("mygroupauctions", "Possibly MyGroupAuctions"),
         ("own", "Its own software"),
         ("other", "Something else"),
+    )
+    AUCTION_CADENCE_CHOICES = (
+        ("", "Not asked"),
+        ("monthly", "Runs its monthly auctions here"),
+        ("no_monthly", "Has no monthly auctions"),
+        ("not_interested", "Doesn't want software for its monthly auctions"),
+    )
+    auction_cadence = models.CharField(max_length=20, choices=AUCTION_CADENCE_CHOICES, blank=True, default="")
+    auction_cadence.help_text = (
+        "The club's own answer to the monthly-auction email (auctions/club_emails.py); any answer stops that email."
     )
     other_software = models.CharField(max_length=20, choices=OTHER_SOFTWARE_CHOICES, blank=True, default="")
     other_software.help_text = (
@@ -15817,6 +15832,24 @@ class FeatureEmail(models.Model):
 
     def __str__(self):
         return f"{self.kind} to user {self.user_id}"
+
+
+class ClubEmail(models.Model):
+    """One club email (:mod:`auctions.club_emails`) to one club: each kind goes once per club ever.
+
+    Claimed by insert before sending, so two overlapping runs can't both send it. Who it went to is in
+    ``FeatureEmail``, one row per person, which is what the results report and the opt-out watch read.
+    """
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="club_emails")
+    kind = models.CharField(max_length=40)
+    sent_on = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["club", "kind"], name="club_email_once_per_kind")]
+
+    def __str__(self):
+        return f"{self.kind} to club {self.club_id}"
 
 
 class FeatureEmailPause(models.Model):

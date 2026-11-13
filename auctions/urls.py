@@ -1051,6 +1051,11 @@ urlpatterns = [
     ),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/setup/", views.ClubSetupView.as_view(), name="club_setup"),
+    path(
+        "clubs/<slug:slug>/how-often/<str:token>/",
+        views.ClubCadenceAnswerView.as_view(),
+        name="club_cadence_answer",
+    ),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(
         "clubs/<slug:slug>/membership-settings/",

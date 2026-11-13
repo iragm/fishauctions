@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Monthly auctions for {{ club.name }}{% endblock %}
+{% comment %}One sentence per state; the buttons say the rest. style_reference.md.{% endcomment %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <h3 class="mb-3">Monthly auctions for {{ club.name }}</h3>
+    {% if saved %}
+    <p>Thanks, that's saved, and you won't be asked again.</p>
+    {% else %}
+    <form method="post" class="d-grid gap-2">
+      {% csrf_token %}
+      {% for value, label in answers %}
+      <button type="submit" name="answer" value="{{ value }}" class="btn {% if value == answer %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ label }}</button>
+      {% endfor %}
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

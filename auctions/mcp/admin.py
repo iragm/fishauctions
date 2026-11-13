@@ -1643,7 +1643,11 @@ def set_club_stage(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 #: What ``record_outreach`` accepts as the email that went: see ``admin_reports.outreach_queue``.
-OUTREACH_VERSIONS = {"a": "the general introduction", "b": "the one for a club with its own system"}
+OUTREACH_VERSIONS = {
+    "a": "the general introduction",
+    "b": "the one for a club with its own system",
+    "lapsed": "a personal note to a club that stopped",
+}
 
 
 def record_outreach(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -1658,11 +1662,25 @@ def record_outreach(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error("There is no one club by that number or name.")
     version = _str(params, "version", "a").lower()
     if version not in OUTREACH_VERSIONS:
-        return _need("Which email? a (general) or b (club with its own system).")
+        return _need("Which email? a (general), b (club with its own system) or lapsed (a club that stopped).")
     reason = _str(params, "stall_reason").lower()
     reasons = {value for value, _label in Club.STALL_REASON_CHOICES}
     if reason and reason not in reasons:
         return _need("stall_reason is one of: " + ", ".join(sorted(reasons - {""})) + ".")
+    if _flag(params, "replied"):
+        club.outreach_replied_on = timezone.now()
+        fields = ["outreach_replied_on"]
+        if reason:
+            club.stall_reason = reason
+            fields.append("stall_reason")
+        club.save(update_fields=fields)
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action="Replied to outreach" + (f" ({reason})" if reason else "") + ", through an approved proposal.",
+            applies_to="SETTINGS",
+        )
+        return _ok(f"Recorded that {club.name} wrote back.", club=club.pk)
     club.date_contacted = timezone.now()
     fields = ["date_contacted"]
     if club.outreach_stage == Club.PROSPECT:
@@ -2052,6 +2070,7 @@ UPDATABLE_CLUB_FIELDS = {
     "contact_method": 20,
     "notes": 300,
     "other_software": 20,
+    "auction_cadence": 20,
 }
 
 
@@ -2102,6 +2121,11 @@ def _club_changes(params: dict[str, Any]):
         kinds = {value for value, _label in Club.OTHER_SOFTWARE_CHOICES}
         if changes["other_software"] not in kinds:
             return club, {}, None, "other_software is one of: " + ", ".join(sorted(kinds - {""})) + ", or empty."
+    if "auction_cadence" in changes:
+        changes["auction_cadence"] = changes["auction_cadence"].lower()
+        answers = {value for value, _label in Club.AUCTION_CADENCE_CHOICES}
+        if changes["auction_cadence"] not in answers:
+            return club, {}, None, "auction_cadence is one of: " + ", ".join(sorted(answers - {""})) + ", or empty."
     interests = None
     if "interests" in params:
         names = [name.strip() for name in _str(params, "interests").split(",") if name.strip()]
@@ -2144,7 +2168,9 @@ def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
             else ""
         )
     for field, value in changes.items():
-        setattr(club, field, value or (None if field not in ("contact_method", "other_software") else ""))
+        setattr(
+            club, field, value or (None if field not in ("contact_method", "other_software", "auction_cadence") else "")
+        )
     club.save()
     if interests is not None:
         club.interests.set(interests)
@@ -2355,12 +2381,17 @@ APPROVAL_ONLY: dict[str, Action] = {
             name="record_outreach",
             description=(
                 "Record that the owner emailed a club from outreach_queue: it leaves the queue for two years, "
-                "and the club's history says which email went. A listed club stays listed."
+                "and the club's history says which email went. A listed club stays listed. With replied=true, "
+                "record instead that the club wrote back, which takes it off outreach_queue(awaiting_reply=true)."
             ),
             params={
                 "club": "string, required. The club's number, or its exact name.",
-                "version": "string, optional, default a. a (general) or b (a club with its own system).",
+                "version": (
+                    "string, optional, default a. a (general), b (a club with its own system) or lapsed "
+                    "(a club that stopped)."
+                ),
                 "stall_reason": "string, optional. Why it stalled, if the owner already knows (uses_other, ...).",
+                "replied": "boolean, optional, default false. True records a reply rather than an email sent.",
             },
             danger=DANGER_CONFIRM,
             idempotent=True,
@@ -2449,6 +2480,10 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "other_software": (
                     "string, optional. What it may run auctions on instead: mygroupauctions, own or other; "
                     "empty clears it."
+                ),
+                "auction_cadence": (
+                    "string, optional. The club's answer about monthly auctions, when it replied in words: "
+                    "monthly, no_monthly or not_interested; empty clears it and lets the email ask again."
                 ),
                 "interests": "string, optional. Comma-separated interest names, replacing the club's.",
             },

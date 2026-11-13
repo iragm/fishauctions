@@ -1,4 +1,4 @@
-"""A club's public page, and the two links that identify a member on it.
+"""A club's public page, the two links that identify a member on it, and the answer link in a club email.
 
 ``ClubDetailView`` is what a club hands out as its address here. The by-UUID and by-number views
 below it are what a membership card's barcode resolves to.
@@ -12,12 +12,14 @@ from urllib.parse import quote_plus
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.models import User
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
 from django.db.models import (
     Q,
 )
 from django.db.models.base import Model as Model
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
@@ -35,6 +37,7 @@ from auctions.forms import (
 from auctions.models import (
     Auction,
     BapAward,
+    Club,
     ClubHistory,
     ClubMember,
     Invoice,
@@ -610,3 +613,47 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
             filters.append(("<i class='bi bi-envelope-exclamation'></i> Not in Brevo", "nonbrevo"))
         filters.append(("<i class='bi bi-archive'></i> Deactivated", "deactivated"))
         return filters
+
+
+class ClubCadenceAnswerView(TemplateView):
+    """The answer to the monthly-auction email (auctions/club_emails.py), from a signed link in it.
+
+    GET only shows the three answers, the emailed one highlighted; POST stores it. Mail clients fetch
+    every link in a message. "I'm in" goes on to copying the auction the email was about.
+    """
+
+    private_page = True
+    template_name = "auctions/club_cadence_answer.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        from auctions import club_emails
+
+        self.club = get_object_or_404(Club, slug=kwargs["slug"])
+        data = club_emails.read_token(kwargs["token"]) or {}
+        if data.get("club") != self.club.pk:
+            raise Http404
+        self.answerer = User.objects.filter(pk=data.get("user")).first()
+        self.emailed_auction = Auction.objects.filter(pk=data.get("auction"), club=self.club, is_deleted=False).first()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        from auctions import club_emails
+
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["answers"] = list(club_emails.ANSWERS.items())
+        context["answer"] = self.request.GET.get("answer", "")
+        return context
+
+    def post(self, request, *args, **kwargs):
+        from auctions import club_emails
+
+        answer = request.POST.get("answer", "")
+        if not club_emails.record_answer(self.club, self.answerer, answer):
+            return self.get(request, *args, **kwargs)
+        if answer == "monthly":
+            auction = self.emailed_auction
+            return redirect(
+                f"{reverse('create_auction')}?copy={auction.slug}" if auction else reverse("create_auction")
+            )
+        return self.render_to_response({**self.get_context_data(**kwargs), "saved": True})

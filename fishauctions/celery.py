@@ -137,6 +137,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.feature_emails",
         "schedule": crontab(hour=10, minute=10),  # CELERY_TIMEZONE is Eastern
     },
+    # Once per club: monthly auctions after a big one, then the club tools (auctions/club_emails.py)
+    "club_emails": {
+        "task": "auctions.tasks.club_emails",
+        "schedule": crontab(hour=10, minute=40),
+    },
     # "More than one account?", once per account, to likely duplicates
     "suggest_account_merges": {
         "task": "auctions.tasks.suggest_account_merges",
