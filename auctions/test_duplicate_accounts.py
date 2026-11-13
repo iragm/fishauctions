@@ -126,6 +126,34 @@ class DuplicateAccountTests(TestCase):
             self.assertEqual(duplicate_accounts.send_merge_suggestions(), 1)
         send.assert_called_once()
 
+    def test_an_inbox_told_last_week_is_not_told_again(self):
+        a = self.make_user("pat1", ip="10.1.1.1")
+        b = self.make_user("pat2", ip="10.1.1.1")
+        User.objects.filter(pk=b.pk).update(email=a.email.upper())
+        with patch(SEND) as send:
+            duplicate_accounts.send_merge_suggestions()
+            duplicate_accounts.send_merge_suggestions()
+        send.assert_called_once()
+        self.assertEqual(duplicate_accounts.likely_duplicate_pairs(), [])
+
+    def test_pairs_nobody_can_be_told_about_are_not_checked(self):
+        a = self.make_user("pat1", ip="10.1.1.1")
+        b = self.make_user("pat2", ip="10.1.1.1")
+        UserData.objects.filter(user=a).update(merge_suggested_on=timezone.now())
+        UserData.objects.filter(user=b).update(has_unsubscribed=True)
+        with patch.object(duplicate_accounts._Connections, "shared") as shared:
+            self.assertEqual(duplicate_accounts.likely_duplicate_pairs(), [])
+        shared.assert_not_called()
+
+    def test_a_time_limit_during_a_send_keeps_the_claim(self):
+        from celery.exceptions import SoftTimeLimitExceeded
+
+        self.make_user("pat1", ip="10.1.1.1")
+        self.make_user("pat2", ip="10.1.1.1")
+        with patch(SEND, side_effect=SoftTimeLimitExceeded), self.assertRaises(SoftTimeLimitExceeded):
+            duplicate_accounts.send_merge_suggestions()
+        self.assertEqual(UserData.objects.filter(merge_suggested_on__isnull=False).count(), 1)
+
     def test_an_old_last_ip_is_no_evidence(self):
         a = self.make_user("pat1", ip="10.1.1.1")
         self.make_user("pat2", ip="10.1.1.1")
@@ -141,8 +169,9 @@ class DuplicateAccountTests(TestCase):
     def test_a_spent_budget_checks_nothing_more(self):
         self.make_user("pat1", ip="10.1.1.1")
         self.make_user("pat2", ip="10.1.1.1")
-        with patch("auctions.duplicate_accounts.time.monotonic", side_effect=[0, 1000]):
-            self.assertEqual(duplicate_accounts.likely_duplicate_pairs(budget=10), [])
+        with patch("auctions.duplicate_accounts._clock", return_value=1000):
+            self.assertEqual(duplicate_accounts.likely_duplicate_pairs(deadline=10), [])
+        self.assertEqual(len(duplicate_accounts.likely_duplicate_pairs(deadline=None)), 1)
 
     def test_the_weekly_task_sends(self):
         from auctions.tasks import suggest_account_merges

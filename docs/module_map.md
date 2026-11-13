@@ -143,7 +143,7 @@ this only quotes its opening sentence.
   `DonationPermissionMixin`, `ClubDonationVendorsView`, `ClubDonationSettingsView`, `DonationVendorPanelView`, `DonationVendorDeleteView`, `DonationContactView`, `DonationDossierView`, `DonationEmailPreviewView`, `DonationUnsubscribeView`, `InboundDonationEmailView`
 - **`donations.py`** (1163 lines)
   Donation tracking: asking vendors for donations and reading their replies.
-- **`duplicate_accounts.py`** (243 lines)
+- **`duplicate_accounts.py`** (267 lines)
   Finding people who seem to have two accounts, and telling each account once that merging exists.
   `likely_duplicate_pairs`, `accounts_to_email`, `send_merge_suggestions`
 - **`email_footer.py`** (37 lines)
@@ -479,7 +479,7 @@ this only quotes its opening sentence.
   The library (``auctions/documents/``): reading files, passages, tags, search, who sees what, the pages,
 - **`test_donations.py`** (3014 lines)
   Tests for donation tracking: routing, the inbound webhook, the LLM seams, and the UI gates.
-- **`test_duplicate_accounts.py`** (175 lines)
+- **`test_duplicate_accounts.py`** (204 lines)
   Likely duplicate accounts and the one-time email telling them merging exists (``auctions/duplicate_accounts.py``).
   `DuplicateAccountTests`
 - **`test_email_compliance.py`** (166 lines)
