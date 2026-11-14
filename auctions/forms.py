@@ -27,7 +27,7 @@ from allauth.account.forms import ResetPasswordForm, SignupForm
 from bootstrap_datepicker_plus.widgets import (
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
-from crispy_forms.bootstrap import Div, Field, PrependedAppendedText, PrependedText
+from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete, forward
@@ -869,22 +869,6 @@ class LotFormSetHelper(FormHelper):
         self.form_method = "post"
 
         self.template = "auctions/bulk_add_lots_row.html"
-
-
-class InvoiceAdjustmentFormSetHelper(FormHelper):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.form_method = "post"
-        self.template = "auctions/bulk_add_invoice_adjustments_row.html"
-        self.layout = Layout(
-            Div(
-                Div("adjustment_type", css_class="col-md-4"),
-                # Whole dollars only.
-                Div(PrependedText("amount", "$"), css_class="col-md-4"),
-                Div("notes", css_class="col-md-4"),
-                css_class="row",
-            )
-        )
 
 
 class InvoiceAdjustmentForm(forms.ModelForm):

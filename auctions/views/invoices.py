@@ -12,8 +12,8 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
-from django.db.models.base import Model as Model
 from django.core.exceptions import PermissionDenied
+from django.db.models.base import Model as Model
 from django.http import (
     Http404,
     HttpResponse,
@@ -190,7 +190,9 @@ class InvoiceAdjustmentSave(LoginRequiredMixin, View):
         adjustment_id = request.POST.get("adjustment", "")
         if adjustment_id and not adjustment_id.isdigit():
             return HttpResponseBadRequest("Bad adjustment")
-        existing = InvoiceAdjustment.objects.filter(pk=adjustment_id, invoice=invoice).first() if adjustment_id else None
+        existing = (
+            InvoiceAdjustment.objects.filter(pk=adjustment_id, invoice=invoice).first() if adjustment_id else None
+        )
         if adjustment_id and existing is None:
             return HttpResponseBadRequest("Bad adjustment")
 

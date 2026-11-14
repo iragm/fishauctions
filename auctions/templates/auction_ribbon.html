@@ -134,6 +134,7 @@
       <a class="nav-link {% if active_tab == 'more' %}active{% endif %}" href="{% url 'auction_pages' slug=auction.slug %}"><i class="bi bi-three-dots"></i><span class='d-none d-md-inline'> More</span></a>
     </li>
 </ul>
+{% if palette_assist_enabled and view.is_auction_admin or palette_assist_enabled and is_auction_admin %}<input type="text" class="form-control form-control-sm my-2" data-palette-box data-placeholders='["add Bob Smith, bidder 42","lot 12 sold to 34 for $5","mark Bob&#39;s invoice paid"]' aria-label="Ask">{% endif %}
 {% comment %} Every auction admin page listens for USB HID barcode scanner input (club auctions only). {% endcomment %}
 {% include 'auctions/barcode_scanner.html' %}
 

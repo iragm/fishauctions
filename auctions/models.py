@@ -13871,9 +13871,7 @@ class SquareSeller(models.Model):
 
         try:
             # Convert amount to cents, half-up like PayPal
-            refund_amount_cents = int(
-                (Decimal(str(refund_amount)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP)
-            )
+            refund_amount_cents = int((Decimal(str(refund_amount)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
             client.refunds.refund_payment(
                 payment_id=payment.external_id,

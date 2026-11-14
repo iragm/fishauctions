@@ -57,9 +57,7 @@ class InvoiceAdjustmentSaveTests(StandardTestCase):
 
     def test_non_admin_forbidden(self):
         self.client.force_login(self.userB)
-        response = self.client.post(
-            reverse("invoice_adjustment_save", kwargs={"pk": self.invoiceB.pk}), self.row()
-        )
+        response = self.client.post(reverse("invoice_adjustment_save", kwargs={"pk": self.invoiceB.pk}), self.row())
         self.assertEqual(response.status_code, 403)
         self.assertFalse(InvoiceAdjustment.objects.filter(invoice=self.invoiceB, amount=5).exists())
 
