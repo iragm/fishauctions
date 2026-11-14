@@ -14,6 +14,7 @@ from typing import Any
 
 from django.apps import apps
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,30 @@ def reads_structured_content(credential: Credential | None) -> bool:
 def oauth_enabled() -> bool:
     """Whether this deployment is also an OAuth authorization server."""
     return apps.is_installed("oauth2_provider")
+
+
+def has_ai_agent(user) -> bool:
+    """Whether ``user`` has connected an AI agent: a live API key, or a sign-in from one."""
+    if not getattr(user, "is_authenticated", False):
+        return False
+    from auctions.models import UserAPIKey
+
+    cached = getattr(user, "_has_ai_agent", None)
+    if cached is not None:
+        return cached
+    live_key = UserAPIKey.objects.filter(user=user, is_active=True).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+    )
+    user._has_ai_agent = live_key.exists() or _has_a_sign_in(user)
+    return user._has_ai_agent
+
+
+def _has_a_sign_in(user) -> bool:
+    if not oauth_enabled():
+        return False
+    from oauth2_provider.models import get_refresh_token_model
+
+    return get_refresh_token_model().objects.filter(user=user, revoked__isnull=True).exists()
 
 
 def bearer_token(request) -> str:

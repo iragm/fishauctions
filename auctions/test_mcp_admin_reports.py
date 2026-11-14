@@ -305,6 +305,7 @@ class PageVerbTests(Helpers):
         self.assertEqual(command_palette.page_verb_items(self.request_for(self.user), "not a path"), [])
         self.assertEqual(command_palette.page_verb_items(self.request_for(self.user), "/no/such/page/"), [])
 
+    @override_settings(ASSISTANT_BOX_WRITES=True)
     def test_invoice_page_offers_mark_paid_to_its_admin_only(self):
         invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.online_tos, auction=self.online_auction)
         path = f"/invoices/{invoice.pk}/"
