@@ -29,12 +29,16 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.utils.cache import patch_cache_control
 from django.utils.functional import cached_property
 from django.utils.http import url_has_allowed_host_and_scheme
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
 from rest_framework.permissions import BasePermission
 
+from auctions.client_ip import visitor_coordinates
+from auctions.crawlers import is_crawler
+from auctions.helper_functions import cookie_coordinates
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -241,6 +245,28 @@ CLUB_PERMISSION_FIELDS = (
 )
 
 
+#: Any one of these opens the club's member list (``ClubAdminView``); the sidebar's Members link uses the same set.
+MEMBER_LIST_PERMISSIONS = (
+    "permission_admin",
+    "permission_view",
+    "permission_export",
+    "permission_add_edit",
+    "permission_edit_club",
+    "permission_manage_auctions",
+    "permission_manage_bap",
+)
+
+
+def can_view_club_members(user, club):
+    """Whether ``user`` may open ``club``'s member list. Reads the same row ``check_club_permission`` does."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    return bool(member) and any(getattr(member, field) for field in MEMBER_LIST_PERMISSIONS)
+
+
 def clubs_with_any_permission(user, nec_only=True):
     """Clubs where this user holds at least one permission. One ``filter()`` call on purpose, so a single
     ClubMember row must satisfy all conditions.
@@ -254,6 +280,19 @@ def clubs_with_any_permission(user, nec_only=True):
     for field in CLUB_PERMISSION_FIELDS:
         any_permission |= Q(**{f"members__{field}": True})
     return base.filter(any_permission, members__user=user, members__is_deleted=False).distinct().order_by("name")
+
+
+def clubs_user_admins(user):
+    """Clubs where this user holds ``permission_admin``, on one live ClubMember row. Superusers get no
+    special rows here; callers that let them in check ``is_superuser`` themselves.
+    """
+    if not user.is_authenticated:
+        return Club.objects.none()
+    return (
+        Club.objects.filter(members__user=user, members__permission_admin=True, members__is_deleted=False)
+        .distinct()
+        .order_by("name")
+    )
 
 
 def user_can_add_edit_people(user, auction):
@@ -284,6 +323,9 @@ def _upsert_clubmember_shadow_tos(
 ):
     if not member.bidder_number:
         member.generate_bidder_number(save=True)
+    # Somebody's own pick stays put unless a location is given: only a new row lands on the first location,
+    # and in an auction with several that one waits for the person to pick (AuctionTOS.needs_pickup_location).
+    chosen = pickup_location
     pickup_location = pickup_location or _default_pickup_location_for_auction(auction)
     if not pickup_location:
         return None
@@ -296,9 +338,15 @@ def _upsert_clubmember_shadow_tos(
             clubmember=member,
             bidder_number=member.bidder_number,
             manually_added=True,
+            pickup_location_confirmed=chosen is not None or not auction.multi_location,
         )
+    elif chosen is not None:
+        tos.pickup_location = chosen
+        tos.pickup_location_confirmed = True
+    if checked_in_at is not _UNSET and checked_in_at:
+        # Checked in at the door: they are where they are.
+        tos.pickup_location_confirmed = True
     tos.user = member.user
-    tos.pickup_location = pickup_location
     tos.clubmember = member
     # One person, one number: a shared number made winner lookups pick either.
     if member.bidder_number:
@@ -1007,6 +1055,7 @@ class ClubViewMixin:
             return False
         return bool(
             self.can_access_admin
+            or can_view_club_members(self.request.user, self.club)
             or self.can_edit_settings
             or self.can_manage_bap
             or self.can_manage_money
@@ -1056,31 +1105,59 @@ class AuctionStatsPermissionsMixin:
         return bool(self.auction.permission_check(self.request.user))
 
 
+def _cookie_location(request):
+    """The browser's location cookies as floats, ``(0, 0)`` when missing or unreadable."""
+    latitude, longitude = cookie_coordinates(request)
+    return (latitude, longitude) if latitude is not None else (0, 0)
+
+
+def visitor_location(request):
+    """Where to measure "near" from, as ``(latitude, longitude)``, ``(0, 0)`` when nothing says.
+
+    A location the browser gave (cookie), then the account's; then, never for a crawler, where
+    Cloudflare places their address (``client_ip.visitor_coordinates``). That guess is only ever used
+    for this one answer and never saved: on an account it would be copied onto their lots and read as
+    a location they confirmed. A signed-in user measured from it is still asked for theirs.
+    """
+    latitude, longitude = _cookie_location(request)
+    if latitude or longitude:
+        return latitude, longitude
+    if request.user.is_authenticated:
+        userdata = request.user.userdata
+        if userdata.latitude or userdata.longitude:
+            return userdata.latitude, userdata.longitude
+    if is_crawler(request):
+        return 0, 0
+    ip_latitude, ip_longitude = visitor_coordinates(request)
+    if ip_latitude is None:
+        return 0, 0
+    # Each answer now depends on the caller's address: no shared cache may keep one.
+    request.located_from_ip = True
+    return ip_latitude, ip_longitude
+
+
 class LocationMixin:
-    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from cookies or userdata.
+    """Location-aware views: ``get_coordinates()`` returns (latitude, longitude) from ``visitor_location``.
     Call it before get_context_data; set ``no_location_message``.
     """
 
-    # Shown to users without a location.
+    # Shown to users without a location they gave.
     no_location_message = "Click here to set your location"
 
     # Set automatically by get_coordinates().
     _location_message = None
 
     def get_coordinates(self):
-        try:
-            latitude = float(self.request.COOKIES.get("latitude", 0))
-            longitude = float(self.request.COOKIES.get("longitude", 0))
-        except (ValueError, TypeError):
-            latitude, longitude = 0, 0
-
-        if latitude == 0 and longitude == 0:
+        if _cookie_location(self.request) == (0, 0):
             self._location_message = self.no_location_message
-
-            if self.request.user.is_authenticated:
-                latitude = self.request.user.userdata.latitude
-                longitude = self.request.user.userdata.longitude
+        latitude, longitude = visitor_location(self.request)
         return latitude, longitude
+
+    def dispatch(self, request, *args, **kwargs):
+        response = super().dispatch(request, *args, **kwargs)
+        if getattr(request, "located_from_ip", False):
+            patch_cache_control(response, private=True)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

@@ -5,10 +5,37 @@
 {% block htmx_table %}
   {{ block.super }}
   <a href="{% url 'my_lot_report' %}" class="btn btn-primary"><i class="bi bi-download"></i> Export my sold lots CSV</a>
+  {% if share_lots_url %}
+  <button type="button" class="btn btn-primary" id="share-my-lots" data-url="{{ share_lots_url }}"><i class="bi bi-share"></i> Promote my lots</button>
+  {% endif %}
 {% endblock %}
 
 {% block extra_js %}
   {{ block.super }}
+  {% comment %}Promote my lots: the phone's own share sheet where there is one, else the link is copied and the
+  button says so for a moment. The link carries src=seller_share, so the lot pages' "how people found it" counts
+  it.{% endcomment %}
+  <script>
+    $('#share-my-lots').on('click', function () {
+      var button = $(this);
+      var url = button.data('url');
+      if (navigator.share) {
+        navigator.share({url: url}).catch(function () {});
+        return;
+      }
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(function () {
+          var label = button.html();
+          button.html('<i class="bi bi-check"></i> Link copied');
+          setTimeout(function () { button.html(label); }, 2000);
+        }).catch(function () {
+          $.toast({title: 'Copy failed', type: 'danger'});
+        });
+      } else {
+        $.toast({title: 'Copy failed', type: 'danger'});
+      }
+    });
+  </script>
   <script>
     $.ajax({
       type: "POST",

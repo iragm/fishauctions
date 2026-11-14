@@ -13,6 +13,7 @@ from django.contrib.humanize.templatetags.humanize import naturalday
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import F
 from django.urls import reverse
+from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join, strip_tags
 from django.utils.safestring import mark_safe
 
@@ -1343,6 +1344,8 @@ class SpeakerHTMxTable(tables.Table):
             page_url,
             record.display_name,
         )
+        if record.user_id:
+            link = format_html('{} <i class="bi bi-patch-check-fill text-info" title="Claimed"></i>', link)
         if not record.is_recently_added:
             return link
         # bg-success needs dark text for contrast; see style_reference.md.
@@ -1715,19 +1718,43 @@ def _stacked(first, second):
 
 
 class DocumentHTMxTable(tables.Table):
-    """The library list: title, author, year and who can read it. Newest first until a header is clicked."""
+    """The library list: a picture, title, author, year, club, topics and who can read it. Newest first until
+    a header is clicked. Topics and years link to the same list narrowed to them.
+    """
 
     hide_string = "d-md-table-cell d-none"
+    thumb = tables.Column(accessor="pk", verbose_name="", orderable=False)
     title = tables.Column(accessor="pk", verbose_name="Title", order_by=("title", "original_name"))
     author = tables.Column(verbose_name="Author", attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
     year = tables.Column(verbose_name="Year")
+    club = tables.Column(
+        accessor="club.name",
+        verbose_name="Club",
+        default="",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    topics = tables.Column(
+        accessor="pk",
+        verbose_name="Topics",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     visibility = tables.Column(verbose_name="Who can read it")
 
     class Meta:
         model = Document
-        fields = ("title", "author", "year", "visibility")
+        fields = ("thumb", "title", "author", "year", "club", "topics", "visibility")
         template_name = "tables/bootstrap_htmx.html"
         empty_text = "Nothing here yet. Old newsletters, BAP reports, care sheets: scans and photos of pages are fine."
+
+    def render_thumb(self, record):
+        picture = next(iter(record.pictures.all()), None)
+        if picture is None:
+            return ""
+        return format_html(
+            "<img src='{}' alt='' class='rounded' style='width:40px;height:40px;object-fit:cover;'>",
+            reverse("document_picture", args=[picture.pk]),
+        )
 
     def render_title(self, record):
         link = format_html("<a href='{}'>{}</a>", record.get_absolute_url(), record.display_title)
@@ -1735,9 +1762,20 @@ class DocumentHTMxTable(tables.Table):
             return link
         return format_html("{} <span class='badge bg-secondary'>{}</span>", link, record.get_status_display())
 
+    def render_year(self, value):
+        return format_html("<a href='{}?year={}'>{}</a>", reverse("library"), value, value)
+
+    def render_topics(self, record):
+        from auctions.documents.models import TOPIC_LABELS
+
+        keys = [key for key in record.topics if key in TOPIC_LABELS][:3]
+        return format_html_join(
+            " ",
+            "<a class='badge bg-secondary' href='{}?topic={}'>{}</a>",
+            ((reverse("library"), key, TOPIC_LABELS[key]) for key in keys),
+        )
+
     def render_visibility(self, record):
-        if record.club_id:
-            return format_html("{} &middot; {}", record.get_visibility_display(), record.club.name)
         return record.get_visibility_display()
 
 
@@ -1776,8 +1814,17 @@ class LogisticsHTMxTable(tables.Table):
         self.tab = tab
         super().__init__(*args, exclude=exclude, **kwargs)
 
+    @cached_property
+    def waiting_on(self):
+        return logistics.waiting_on(self.tab.location.auction, self.tab)
+
     def render_name(self, value, record):
-        return logistics_name_cell(record, self.tab.which)
+        cell = logistics_name_cell(record, self.tab.which)
+        sellers = self.waiting_on.get(record.pk) if record.pickup_now else None
+        if not sellers:
+            return cell
+        waiting = sellers[0] if len(sellers) == 1 else f"{len(sellers)} sellers"
+        return format_html("{} <span class='text-muted small'>(waiting on {})</span>", cell, waiting)
 
     def render_invoice(self, value, record):
         return record.invoice_link_html

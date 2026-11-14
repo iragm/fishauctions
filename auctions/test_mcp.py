@@ -359,10 +359,10 @@ class CallToolTests(StandardTestCase):
         self.assertEqual(result["structuredContent"], json.loads(self._text(result)))
         self.assertIn("too big", result["structuredContent"]["error"])
 
-    def test_a_plain_sentence_error_carries_no_structure(self):
+    def test_an_execution_error_carries_a_machine_readable_code(self):
         result = tools.call_tool(self._request_for(self.user), "add_lot", {"name": "guppies"}, writes=False)
         self.assertTrue(result["isError"])
-        self.assertNotIn("structuredContent", result)
+        self.assertEqual(result["structuredContent"]["error_code"], "execution_error")
 
     def test_a_disambiguation_carries_structure_too(self):
         result = tools.call_tool(self._request_for(self.user), "watch_lot", {})

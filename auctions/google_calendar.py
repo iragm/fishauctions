@@ -279,8 +279,11 @@ def _event_times(event):
 
 
 def _absolute_auction_url(event):
+    """The auction's page, tagged so a visit from the club's Google calendar is counted (``PageView.SOURCE_LABELS``)."""
+    from auctions.feature_emails import add_src
+
     domain = Site.objects.get_current().domain
-    return f"https://{domain}{event.auction.get_absolute_url()}"
+    return add_src(f"https://{domain}{event.auction.get_absolute_url()}", "calendar")
 
 
 def _mark_pushed(event, read_at, **fields):

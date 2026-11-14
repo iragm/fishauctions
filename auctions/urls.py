@@ -216,6 +216,8 @@ urlpatterns = [
     path("admin-dashboard/proposals/", views.AgentProposalsView.as_view(), name="agent_proposals"),
     path("species/new/", views.SpeciesCreateView.as_view(), name="species_create"),
     path("species/name/", views.SpeciesCommonNameCreateView.as_view(), name="species_name_create"),
+    path("species/<int:pk>/", views.SpeciesDetailView.as_view(), name="species_detail"),
+    path("species/<int:pk>/<slug:slug>/", views.SpeciesDetailView.as_view(), name="species_detail_slug"),
     path("api/species/quick-add/", views.SpeciesQuickCreate.as_view(), name="species_quick_create"),
     path(
         "admin-dashboard/species-gaps/forget/<int:pk>/",
@@ -331,6 +333,7 @@ urlpatterns = [
     re_path(r"^mcp/admin/?$", AdminMCPEndpointView.as_view(), name="mcp_admin"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
     path("about/", views.PromoSite.as_view(), name="promo"),
+    path("about/nearby/", views.PromoNearby.as_view(), name="promo_nearby"),
     path("upload-too-large/", views.UploadTooLarge.as_view(), name="upload_too_large"),
     path("account/", views.MyAccount.as_view(), name="account"),
     path("account/setup/", views.AccountSetupRedirect.as_view(), name="account_setup"),
@@ -339,6 +342,11 @@ urlpatterns = [
         "invoices/<int:pk>/",
         login_required(views.InvoiceView.as_view()),
         name="invoice_by_pk",
+    ),
+    path(
+        "api/invoice/<int:pk>/adjustment/",
+        views.InvoiceAdjustmentSave.as_view(),
+        name="invoice_adjustment_save",
     ),
     path("invoices/<uuid:uuid>/", views.InvoiceNoLoginView.as_view(), name="invoice_no_login"),
     path(
@@ -449,6 +457,11 @@ urlpatterns = [
         name="auction_logistics",
     ),
     path(
+        "auctions/<slug:slug>/logistics/scan/",
+        login_required(views.AuctionLogisticsScan.as_view()),
+        name="auction_logistics_scan",
+    ),
+    path(
         "auctions/<slug:slug>/logistics/<int:pk>/<int:which>/",
         login_required(views.AuctionLogisticsMark.as_view()),
         name="auction_logistics_mark",
@@ -457,6 +470,11 @@ urlpatterns = [
         "auctions/<slug:slug>/post-end-banner/",
         login_required(views.AuctionPostEndBanner.as_view()),
         name="auction_post_end_banner",
+    ),
+    path(
+        "auctions/<slug:slug>/sample-data/",
+        login_required(views.AuctionSampleData.as_view()),
+        name="auction_sample_data",
     ),
     path(
         "auctions/<slug:slug>/users/disable-bidding/",
@@ -737,6 +755,7 @@ urlpatterns = [
     path("help/", views.HelpIndexView.as_view(), name="help"),
     path("help/<slug:slug>/", views.HelpGuideView.as_view(), name="help_guide"),
     path("support/", views.SupportView.as_view(), name="support"),
+    path("account/request-access/", views.AccessRequestView.as_view(), name="access_request"),
     path("requests/", views.FeatureRequestsView.as_view(), name="feature_requests"),
     # /contact/ is the App Store Support URL and what older links point at. Unnamed on purpose: a
     # name would put it in front of the palette route audit as a page to describe.
@@ -947,11 +966,13 @@ urlpatterns = [
     # a club is passed as ?club=<slug> so officers can share the page.
     path("speakers/", views.SpeakerListView.as_view(), name="speaker_list"),
     path("speakers/add/", views.SpeakerCreateView.as_view(), name="speaker_add"),
+    path("speakers/add/me/", views.SpeakerSelfCreateView.as_view(), name="speaker_add_self"),
     path("speakers/<slug:slug>/", views.SpeakerDetailView.as_view(), name="speaker_detail"),
     path("speakers/<slug:slug>/panel/", views.SpeakerPanelView.as_view(), name="speaker_panel"),
     path("speakers/<slug:slug>/edit/", views.SpeakerUpdateView.as_view(), name="speaker_edit"),
     path("speakers/<slug:slug>/delete/", views.SpeakerDeleteView.as_view(), name="speaker_delete"),
     path("speakers/<slug:slug>/tag/", views.SpeakerTagView.as_view(), name="speaker_tag"),
+    path("speakers/<slug:slug>/claim/", views.SpeakerClaimView.as_view(), name="speaker_claim"),
     path("speakers/<slug:slug>/comment/", views.SpeakerCommentView.as_view(), name="speaker_comment"),
     path(
         "speakers/<slug:slug>/comment/<int:pk>/delete/",
@@ -1036,6 +1057,11 @@ urlpatterns = [
     ),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/setup/", views.ClubSetupView.as_view(), name="club_setup"),
+    path(
+        "clubs/<slug:slug>/how-often/<str:token>/",
+        views.ClubCadenceAnswerView.as_view(),
+        name="club_cadence_answer",
+    ),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(
         "clubs/<slug:slug>/membership-settings/",

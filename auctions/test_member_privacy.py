@@ -79,11 +79,17 @@ class MemberPagePrivacyTests(TestCase):
         self.assertIsNotNone(self.member.last_club_activity)
 
     @override_settings(ALLOW_SEARCH_INDEXING=True)
-    def test_robots_disallows_member_pages(self):
+    def test_robots_lets_crawlers_read_member_pages_noindex(self):
         body = self.client.get("/robots.txt").content.decode()
-        for path in ("/clubs/*/member/", "/clubs/*/member-number/", "/invoices/", "/unsubscribe/"):
-            self.assertIn(f"Disallow: {path}", body)
+        # Disallowed, a member page Google already had would never be refetched, so never dropped.
+        for path in ("/clubs/*/member/", "/clubs/*/member-number/"):
+            self.assertNotIn(f"Disallow: {path}", body)
+        # Opening these changes something; sign-in and sign-up are one URL per page that links them.
+        for path in ("/invoices/", "/unsubscribe/", "/login/", "/signup/"):
+            self.assertIn(f"Disallow: {path}\n", body)
         self.assertIn("Sitemap:", body)
+        response = self.client.get(self.uuid_url(), HTTP_USER_AGENT=GOOGLEBOT)
+        self.assertIn("noindex", response["X-Robots-Tag"])
 
 
 class ClubInvoiceSquarePrefillTests(TestCase):

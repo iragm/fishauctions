@@ -206,10 +206,10 @@ MAIL_STUCK_AFTER = timedelta(hours=1)
 
 def invariants(since) -> dict[str, Any]:
     """Rows that shouldn't stay as they are: each count should be 0."""
-    from django.db.models import Q
+    from django.db.models import Count, Q
     from post_office.models import STATUS, Email
 
-    from auctions.models import Lot
+    from auctions.models import AuctionTOS, Lot
 
     now = timezone.now()
     found: dict[str, Any] = {}
@@ -232,6 +232,27 @@ def invariants(since) -> dict[str, Any]:
         )
     except Exception as exc:
         found["emails_failed"] = {"error": f"{type(exc).__name__}"}
+    # Groups of more than one row: the join and numbering races the auction lock is there to stop.
+    try:
+        found["duplicate_people_in_auction"] = (
+            AuctionTOS.objects.filter(user__isnull=False)
+            .values("auction", "user")
+            .annotate(copies=Count("pk"))
+            .filter(copies__gt=1)
+            .count()
+        )
+    except Exception as exc:
+        found["duplicate_people_in_auction"] = {"error": f"{type(exc).__name__}"}
+    try:
+        found["duplicate_bidder_numbers_in_auction"] = (
+            AuctionTOS.objects.exclude(bidder_number="")
+            .values("auction", "bidder_number")
+            .annotate(copies=Count("pk"))
+            .filter(copies__gt=1)
+            .count()
+        )
+    except Exception as exc:
+        found["duplicate_bidder_numbers_in_auction"] = {"error": f"{type(exc).__name__}"}
     found["problems"] = [
         f"{name.replace('_', ' ')}: {value}" for name, value in found.items() if isinstance(value, int) and value
     ]

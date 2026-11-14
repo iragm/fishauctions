@@ -17,12 +17,22 @@ Your lots{% else %}
 {% if auction %} for {{ auction }}{% endif %}
 {% endblock %}
 {% load static %}
+{% load seo_tags %}
+{% block open_graph %}
+{% if auction %}
+{% auction_summary auction as og_description %}
+{% absolute_uri request.get_full_path as og_url %}
+{% if auction.club.icon %}{% absolute_uri auction.club.icon_display_url as og_image %}{% endif %}
+{% include "open_graph.html" with og_title="Lots for "|add:auction.title og_description=og_description og_url=og_url og_image=og_image %}
+{% endif %}
+{% endblock %}
 {% block content %}
 {% if routeByLastAuction and auction %}
 <div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="{% url 'allLots' %}">View all lots instead</a>
   <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
   </div>
 {% endif %}
+{% if club_current_auction %}<div class="alert alert-info" role="alert">{{ auction }} has ended, <a href="{{ club_current_auction.view_lot_link }}">see the lots in {{ club_current_auction }}</a>.</div>{% endif %}
 <h3>
         {% comment %}A named menu, not a bare hamburger: the site menu is the only control allowed to be an icon on its own (style_reference.md).{% endcomment %}
         <button class="btn btn-primary btn-sm" id="search-form-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form"><i class="bi bi-funnel"></i> Search and filter</button>
@@ -64,9 +74,9 @@ Your lots{% else %}
                   <small class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</small>
                 {% else %}
                   {% if not request.user.is_authenticated %}
-                    <a href="{% url 'account_login' %}?next={% url 'auction_main' slug=auction.slug %}">Login and join this auction</a>
+                    <a href="{% url 'account_login' %}?next={% url 'auction_main' slug=auction.slug %}%23join">Sign in and join this auction</a>
                   {% else %}
-                  Join this auction <a href="{% url 'auction_main' slug=auction.slug %}">at the bottom of this page</a> to participate
+                  Join this auction <a href="{% url 'auction_main' slug=auction.slug %}#join">at the bottom of this page</a> to participate
                   {%endif%}
                 {%endif%}
               {% else %}

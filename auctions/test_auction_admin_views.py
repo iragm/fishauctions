@@ -225,7 +225,7 @@ class AuctionDropdownOptionsAPITests(StandardTestCase):
         self.assertEqual(self.client.get(self.url).status_code, 403)
 
     def test_get_lists_the_auctions_options(self):
-        self.client.force_login(self.user_with_no_lots)
+        self.client.force_login(self.admin_user)
         response = self.client.get(self.url)
         self.assertEqual([o["value"] for o in response.json()["options"]], ["River"])
 

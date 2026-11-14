@@ -34,6 +34,7 @@ from django.views.generic.edit import (
 )
 
 from auctions import club_events, discord_events, help_guides
+from auctions.feature_emails import add_src
 from auctions.forms import (
     ClubEventForm,
 )
@@ -687,7 +688,7 @@ class ClubEventsICalView(View):
                 *_ical_event_times(event),
                 *event.recurrence_lines,
                 f"SUMMARY:{_ical_escape(event.title)}",
-                f"URL:https://{domain}{event.get_absolute_url()}",
+                f"URL:{add_src(f'https://{domain}{event.get_absolute_url()}', 'calendar')}",
                 "STATUS:CANCELLED" if event.cancelled else "STATUS:CONFIRMED",
             ]
             if event.description:

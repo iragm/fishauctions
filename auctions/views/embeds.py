@@ -12,6 +12,7 @@ from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -47,6 +48,17 @@ from .base import ClubViewMixin, club_from_url
 from .club_members import BAP_EMBED_PROGRAM_FIELDS, BAP_EMBED_PROGRAM_LABELS
 
 logger = logging.getLogger(__name__)
+
+#: ``?src=`` on every link an embed shows, so a visit from a club's own website can be counted
+#: (``PageView.SOURCE_LABELS``). Nothing visible changes.
+EMBED_SOURCE = "embed"
+
+
+def _from_embed(request, path):
+    """The absolute URL of ``path``, marked as reached from a club's website (before any ``#event-N``)."""
+    from auctions.feature_emails import add_src
+
+    return add_src(request.build_absolute_uri(path), EMBED_SOURCE)
 
 
 def embed_mode_from_request(request):
@@ -223,7 +235,7 @@ def _club_events_embed_rows(request, club, count, *, past=False):
                 "details": _embed_details(event),
                 "cancelled": event.cancelled,
                 "repeats": event.recurrence_summary,
-                "url": request.build_absolute_uri(event.get_absolute_url()),
+                "url": _from_embed(request, event.get_absolute_url()),
             }
         )
     return rows
@@ -387,7 +399,7 @@ def _club_auction_embed_row(request, auction):
         "is_online": auction.is_online,
         "location": club_events.auction_display_location(auction),
         "lots_open": lots_open,
-        "url": request.build_absolute_uri(auction.get_absolute_url()),
+        "url": _from_embed(request, auction.get_absolute_url()),
     }
 
 
@@ -450,13 +462,21 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from auctions.tasks import refresh_announcement_opens
 
         cutoff = timezone.now() - timedelta(days=30)
-        recent = [r for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
-        for announcement in recent:
-            try:
-                refresh_announcement_opens.delay(announcement.pk)
-            except Exception:
-                logger.warning("Could not queue an open-count refresh for announcement %s", announcement.pk)
-                break
+        pks = [r.pk for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
+        if not pks:
+            return
+
+        def _enqueue(pks=pks):
+            # One callback for all of them: with the broker down, the first failure stops the rest, so the
+            # page doesn't wait on a connection timeout per announcement.
+            for pk in pks:
+                try:
+                    refresh_announcement_opens.delay(pk)
+                except Exception:
+                    logger.warning("Could not queue an open-count refresh for announcement %s", pk)
+                    break
+
+        transaction.on_commit(_enqueue)
 
     def post(self, request, *args, **kwargs):
         form = self.get_form(request.POST)

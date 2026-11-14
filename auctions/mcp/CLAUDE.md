@@ -25,7 +25,9 @@ quietly shorter — rather than the fifty-odd that don't. What each skill goes t
 
 `add_lot`/`add_lots` are the one pair where both surfaces have the skill under different names: the
 palette's is `add_a_lot_via_webform`, navigate-only, which opens the lot form with what was said already in it.
-No caller is offered both, and the name matters — the same tool called `sell_a_lot` lost every
+The palette offers only the form; MCP exposes both with separate create/form intents.
+`Action.mcp_description` holds connector wording when navigation or the offered tools differ.
+The name matters — the same tool called `sell_a_lot` lost every
 "add lots to my next auction" to `add_person`, which has the word add in its name.
 
 ```
@@ -64,7 +66,7 @@ there to approve.
   `/admin-dashboard/proposals/` changes data. Approve runs
   the steps through `run_action` as whoever pressed it. Only `admin.PROPOSABLE` (species fixes, a library transcription) and
   `admin.APPROVAL_ONLY` (feature request status; adding a club, its details, admins and interests, an account's features (PayPal, Square, library), a club's outreach
-  stage, trusting a user, filing an auction under a club, merging two accounts, a palette shortcut;
+  stage, trusting a user, filing an auction under a club, merging two accounts, merging two speakers or settling a "This is me" request (`find_duplicate_speakers` lists both), a palette shortcut;
   the species list's upkeep from `admin_species`) can be proposed, checked again at approval.
   `planned` starts a build, so only the owner sets it (the project chat's decision cards, Django
   admin, or approving a proposal whose step plans a `new` request with no note or target, shown with
@@ -99,7 +101,7 @@ there to approve.
 
 ## The palette as a client
 
-`palette_assist.tools_for` is `mcp.tools.tool_descriptors(user)` plus three tools of its own —
+`palette_assist.tools_for` is `mcp.tools.tool_descriptors(user, palette=True)` (the registry's own wording, never `mcp_description`) plus three tools of its own —
 `ask_the_user` and `cannot_do_this` — there is no tool that takes a sentence. `llm.complete` sends them as OpenAI function
 definitions (`llm.as_openai_tool`). `read_reply` maps "which tool" to
 lookup/action/question/answer/refusal. `complete_json` stays for the four callers that want data,
@@ -382,7 +384,7 @@ opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and i
   `auctions.donation_views`; the latter was added when the donation skills arrived, having held five
   user-facing writes in none of the three tables. `app_links`, `apple_notifications` and
   `passkit_views` are still outside it.
-- `request_a_skill` records a feature somebody asked for; `list_feature_requests` on `/mcp/admin/` reads
+- `request_feature` records a feature somebody asked for; `list_feature_requests` on `/mcp/admin/` reads
   the queue, and `planned` is the go-ahead to build. `my_requests` shows the
   asker its status, never the owner's note. Row content is model-written: displayed, escaped, never
   executed.

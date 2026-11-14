@@ -55,6 +55,7 @@ from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
 from django.urls import NoReverseMatch, reverse
 from django.utils import html, timezone
+from django.utils.crypto import constant_time_compare
 from django.utils.functional import cached_property
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
@@ -582,6 +583,32 @@ class Club(CloudflareImageMixin, models.Model):
         ("folded", "Club has folded"),
     )
     stall_reason = models.CharField(max_length=20, choices=STALL_REASON_CHOICES, blank=True, default="")
+    outreach_replied_on = models.DateTimeField(null=True, blank=True)
+    outreach_replied_on.help_text = (
+        "When the club last wrote back to an outreach email, as the owner reported it "
+        "(record_outreach with replied=true). outreach_queue(awaiting_reply=true) lists those that haven't."
+    )
+    OTHER_SOFTWARE_CHOICES = (
+        ("", "Not known"),
+        ("mygroupauctions", "Possibly MyGroupAuctions"),
+        ("own", "Its own software"),
+        ("other", "Something else"),
+    )
+    AUCTION_CADENCE_CHOICES = (
+        ("", "Not asked"),
+        ("monthly", "Runs its monthly auctions here"),
+        ("no_monthly", "Has no monthly auctions"),
+        ("not_interested", "Doesn't want software for its monthly auctions"),
+    )
+    auction_cadence = models.CharField(max_length=20, choices=AUCTION_CADENCE_CHOICES, blank=True, default="")
+    auction_cadence.help_text = (
+        "The club's own answer to the monthly-auction email (auctions/club_emails.py); any answer stops that email."
+    )
+    other_software = models.CharField(max_length=20, choices=OTHER_SOFTWARE_CHOICES, blank=True, default="")
+    other_software.help_text = (
+        "What the club may run its auctions on instead. Picks the outreach email that doesn't ask it to "
+        "switch (admin_reports.outreach_queue); a guess is fine."
+    )
     stall_reason.help_text = (
         "Why this club stopped where it did, in a word that can be counted. Set it when somebody "
         "answers; notes are free text and cannot say which objection is worth fixing."
@@ -3937,6 +3964,15 @@ class Species(models.Model):
             return f"{name} ({self.common_name})"
         return name or self.common_name
 
+    def get_absolute_url(self):
+        """The species' public page, with its name in the URL (``/species/12/betta-splendens/``)."""
+        from django.utils.text import slugify
+
+        slug = slugify(self.full_scientific_name or self.common_name)
+        if slug:
+            return reverse("species_detail_slug", kwargs={"pk": self.pk, "slug": slug})
+        return reverse("species_detail", kwargs={"pk": self.pk})
+
     def __str__(self):
         return self.label
 
@@ -4238,6 +4274,9 @@ class Auction(CachedPropertiesMixin, models.Model):
     followup_email_sent = models.BooleanField(default=False)
     followup_email_due = models.DateTimeField(blank=True, null=True)
     reprint_reminder_sent = models.BooleanField(default=False)
+    # auctions/next_auction.py: "ready for your next one?" to the creator, and the yearly copy prompt.
+    next_auction_email_sent = models.BooleanField(default=False)
+    anniversary_email_sent = models.BooleanField(default=False)
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
@@ -4432,6 +4471,14 @@ class Auction(CachedPropertiesMixin, models.Model):
     enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
     dismissed_square_banner = models.BooleanField(default=False, blank=True)
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
+    dismissed_club_managed_banner = models.BooleanField(
+        default=False,
+        blank=True,
+        help_text=(
+            "Set when an admin chose not to switch a copied auction from copying people to managing them "
+            "through the club. Not cloned: the next copy asks again."
+        ),
+    )
     dismissed_customize_event_banner = models.BooleanField(
         default=False,
         blank=True,
@@ -4916,6 +4963,23 @@ class Auction(CachedPropertiesMixin, models.Model):
     def add_lot_link(self):
         return f"{reverse('new_lot')}?auction={self.slug}"
 
+    @cached_property
+    def next_club_auction(self):
+        """The same club's next promoted auction that hasn't ended, or None: where an ended auction's page
+        and its invoice email point. Never another club's, and never one the club hasn't promoted.
+        """
+        if not self.club_id:
+            return None
+        now = timezone.now()
+        return (
+            Auction.objects.filter(club_id=self.club_id, is_deleted=False, promote_this_auction=True)
+            .exclude(pk=self.pk)
+            .filter(date_start__gt=self.date_start)
+            .filter(Q(is_online=True, date_end__gt=now) | Q(is_online=False, date_start__gt=now))
+            .order_by("date_start")
+            .first()
+        )
+
     @property
     def view_lot_link(self):
         return f"{reverse('allLots')}?auction={self.slug}&status=all"
@@ -4942,6 +5006,32 @@ class Auction(CachedPropertiesMixin, models.Model):
     def use_check_in_mode(self):
         """True when club members are added as they check in."""
         return self.manage_users_through_club == "checkin" and bool(self.club_id)
+
+    @cached_property
+    def offers_club_managed_switch(self):
+        """Whether to offer this auction's admins to manage people through the club instead of copying them:
+        a single-location club auction that copies people and is still as it was copied -- no lots,
+        invoices, joins, or edits to its people. ``services.switch_to_club_managed`` checks it again.
+        """
+        if not (
+            self.pk
+            and self.club_id
+            and self.copy_users_when_copying_this_auction
+            and not self.manage_users_through_club
+            and not self.dismissed_club_managed_banner
+            and not self.is_deleted
+        ):
+            return False
+        if self.multi_location or getattr(settings, "SINGLE_CLUB_MODE", False):
+            return False
+        if Lot.objects.filter(auction=self, is_deleted=False).exists():
+            return False
+        if Invoice.objects.filter(auction=self).exists():
+            return False
+        if AuctionTOS.objects.filter(auction=self, created_by_joining=True).exists():
+            return False
+        # The site's own lines (no user), such as the club admins added on copying, aren't edits.
+        return not AuctionHistory.objects.filter(auction=self, applies_to="USERS", user__isnull=False).exists()
 
     @property
     def scans_club_cards(self):
@@ -6905,6 +6995,13 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True)
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE)
+    pickup_location_confirmed = models.BooleanField(
+        default=True,
+        help_text=(
+            "False on a row the club added to a club-managed auction at its first location: in an auction with "
+            "several locations, the person picks theirs before they bid or sell (needs_pickup_location)."
+        ),
+    )
     createdon = models.DateTimeField(auto_now_add=True, blank=True)
     confirm_email_sent = models.BooleanField(default=False, blank=True)
     second_confirm_email_sent = models.BooleanField(default=False, blank=True)
@@ -7037,7 +7134,7 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
     @property
     def can_sell(self):
         """Allowed to sell, and not holding for the second pickup: a seller has to be there at the first."""
-        return self.selling_allowed and not self.holding_for_second_pickup
+        return self.selling_allowed and not self.holding_for_second_pickup and not self.needs_pickup_location
 
     @property
     def paddle_is_current(self):
@@ -7445,8 +7542,13 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         return self.auction.use_check_in_mode and self.checked_in is None
 
     @property
+    def needs_pickup_location(self):
+        """Added by the club to an auction with several locations, and hasn't picked one yet."""
+        return not self.pickup_location_confirmed and self.auction.multi_location
+
+    @property
     def can_bid_in_auction(self):
-        return self.bidding_allowed and not self.requires_check_in_before_bidding
+        return self.bidding_allowed and not self.requires_check_in_before_bidding and not self.needs_pickup_location
 
     @cached_property
     def invoice_link_html(self):
@@ -7541,110 +7643,118 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if getattr(self, "_newly_linked", False) and kwargs.get("update_fields") is not None:
             # Check-in and the notification cron save a few columns; a link made here has to be one of them.
             kwargs["update_fields"] = {*kwargs["update_fields"], "user"}
-        if not self.bidder_number or self.bidder_number == "None":
-            last_used = None
-            if self.user or self.email:
-                query = Q()
+        # Numbers are taken from the bidders already saved, so the auction row lock serialises two saves
+        # that would otherwise read the same free number. A save that already has a number takes no lock.
+        from contextlib import nullcontext
+
+        lock_numbers = not self.pk or not self.bidder_number or self.bidder_number == "None"
+        with transaction.atomic() if lock_numbers else nullcontext():
+            if lock_numbers:
+                Auction.objects.select_for_update().get(pk=self.auction_id)
+            if not self.bidder_number or self.bidder_number == "None":
+                last_used = None
+                if self.user or self.email:
+                    query = Q()
+                    if self.user:
+                        query |= Q(user=self.user)
+                    if self.email:
+                        query |= Q(email=self.email)
+                    last_obj = (
+                        AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
+                        .exclude(pk=self.pk)
+                        .order_by("-createdon")
+                        .first()
+                    )
+                    if last_obj:
+                        last_used = last_obj.bidder_number
+
+                user_data = None
+                preferred = None
                 if self.user:
-                    query |= Q(user=self.user)
-                if self.email:
-                    query |= Q(email=self.email)
-                last_obj = (
-                    AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
-                    .exclude(pk=self.pk)
+                    user_data = self.user.userdata
+                    preferred = user_data.preferred_bidder_number or None
+
+                # In a club-managed auction the number belongs to the ClubMember and is copied to every
+                # such auction, so one free here alone would displace a member on the next sync.
+                club_for_numbers = self.auction.club if self.auction.is_club_managed else None
+
+                def _taken(candidate):
+                    if (
+                        AuctionTOS.objects.filter(bidder_number=candidate, auction=self.auction)
+                        .exclude(pk=self.pk or 0)
+                        .exists()
+                    ):
+                        return True
+                    if club_for_numbers is None:
+                        return False
+                    members = ClubMember.objects.filter(club=club_for_numbers, bidder_number=candidate)
+                    if self.clubmember_id:
+                        members = members.exclude(pk=self.clubmember_id)
+                    return members.exists()
+
+                self.bidder_number = _generate_unique_bidder_number(
+                    is_taken=_taken,
+                    preferred=preferred,
+                    phone=self.phone_number,
+                    address=self.address,
+                    last_used=last_used,
+                )
+                if (
+                    user_data
+                    and not user_data.preferred_bidder_number
+                    and self.bidder_number
+                    and self.bidder_number != "ERROR"
+                ):
+                    user_data.preferred_bidder_number = self.bidder_number
+                    # Write only this field: the cached UserData may be stale and a full save reverts others.
+                    UserData.objects.filter(pk=user_data.pk).update(preferred_bidder_number=self.bidder_number)
+            if not self.bidder_number:
+                # I don't ever want this to be null
+                self.bidder_number = "ERROR"
+            if str(self.memo) == "None":
+                self.memo = ""
+            if not self.name:
+                self.name = "Unknown"
+            # if this is a known address, update the status
+            if self.email and self.email_address_status == "UNKNOWN":
+                existing_instance = (
+                    AuctionTOS.objects.exclude(email_address_status="UNKNOWN")
+                    .filter(
+                        email=self.email,
+                        auction__created_by=self.auction.created_by,
+                    )
                     .order_by("-createdon")
                     .first()
                 )
-                if last_obj:
-                    last_used = last_obj.bidder_number
+                if existing_instance:
+                    self.email_address_status = existing_instance.email_address_status
 
-            user_data = None
-            preferred = None
-            if self.user:
-                user_data = self.user.userdata
-                preferred = user_data.preferred_bidder_number or None
+            # Check for and remove forward slashes in bidder_number
+            if self.bidder_number and "/" in self.bidder_number:
+                original_bidder_number = self.bidder_number
+                self.bidder_number = self.bidder_number.replace("/", "")
 
-            # In a club-managed auction the number belongs to the ClubMember and is copied to every
-            # such auction, so one free here alone would displace a member on the next sync.
-            club_for_numbers = self.auction.club if self.auction.is_club_managed else None
+                existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+                if self.pk:
+                    existing_tos = existing_tos.exclude(pk=self.pk)
 
-            def _taken(candidate):
-                if (
-                    AuctionTOS.objects.filter(bidder_number=candidate, auction=self.auction)
-                    .exclude(pk=self.pk or 0)
-                    .exists()
-                ):
-                    return True
-                if club_for_numbers is None:
-                    return False
-                members = ClubMember.objects.filter(club=club_for_numbers, bidder_number=candidate)
-                if self.clubmember_id:
-                    members = members.exclude(pk=self.clubmember_id)
-                return members.exists()
+                if existing_tos.exists():
+                    # If there would be a conflict, append a suffix to make it unique
+                    suffix = 1
+                    base_bidder_number = self.bidder_number
+                    while existing_tos.exists() and suffix < 100:
+                        self.bidder_number = f"{base_bidder_number}{suffix}"
+                        existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+                        if self.pk:
+                            existing_tos = existing_tos.exclude(pk=self.pk)
+                        suffix += 1
 
-            self.bidder_number = _generate_unique_bidder_number(
-                is_taken=_taken,
-                preferred=preferred,
-                phone=self.phone_number,
-                address=self.address,
-                last_used=last_used,
-            )
-            if (
-                user_data
-                and not user_data.preferred_bidder_number
-                and self.bidder_number
-                and self.bidder_number != "ERROR"
-            ):
-                user_data.preferred_bidder_number = self.bidder_number
-                # Write only this field: the cached UserData may be stale and a full save reverts others.
-                UserData.objects.filter(pk=user_data.pk).update(preferred_bidder_number=self.bidder_number)
-        if not self.bidder_number:
-            # I don't ever want this to be null
-            self.bidder_number = "ERROR"
-        if str(self.memo) == "None":
-            self.memo = ""
-        if not self.name:
-            self.name = "Unknown"
-        # if this is a known address, update the status
-        if self.email and self.email_address_status == "UNKNOWN":
-            existing_instance = (
-                AuctionTOS.objects.exclude(email_address_status="UNKNOWN")
-                .filter(
-                    email=self.email,
-                    auction__created_by=self.auction.created_by,
-                )
-                .order_by("-createdon")
-                .first()
-            )
-            if existing_instance:
-                self.email_address_status = existing_instance.email_address_status
+                # Create auction history entry after save
+                needs_history = True
+            else:
+                needs_history = False
 
-        # Check for and remove forward slashes in bidder_number
-        if self.bidder_number and "/" in self.bidder_number:
-            original_bidder_number = self.bidder_number
-            self.bidder_number = self.bidder_number.replace("/", "")
-
-            existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
-            if self.pk:
-                existing_tos = existing_tos.exclude(pk=self.pk)
-
-            if existing_tos.exists():
-                # If there would be a conflict, append a suffix to make it unique
-                suffix = 1
-                base_bidder_number = self.bidder_number
-                while existing_tos.exists() and suffix < 100:
-                    self.bidder_number = f"{base_bidder_number}{suffix}"
-                    existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
-                    if self.pk:
-                        existing_tos = existing_tos.exclude(pk=self.pk)
-                    suffix += 1
-
-            # Create auction history entry after save
-            needs_history = True
-        else:
-            needs_history = False
-
-        super().save(*args, **kwargs)
+            super().save(*args, **kwargs)
 
         # Create history entry after save (needs pk to exist)
         if needs_history:
@@ -8375,6 +8485,8 @@ class Lot(CachedPropertiesMixin, models.Model):
     category_checked = models.BooleanField(default=False)
     label_printed = models.BooleanField(default=False)
     label_needs_reprinting = models.BooleanField(default=False)
+    #: When a sold lot of an online auction reached the pickup (``auctions.logistics.check_in_lots``).
+    checked_in = models.DateTimeField(blank=True, null=True, default=None)
     # Kept through reprints; the stats page compares it to ``user`` to split seller from admin printing.
     label_first_printed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     partial_refund_percent = models.IntegerField(
@@ -8871,6 +8983,7 @@ class Lot(CachedPropertiesMixin, models.Model):
         self.seller_invoice = None
         self.buyer_invoice = None
         self.buy_now_used = False
+        self.checked_in = None
         self.save()
 
         # copy shipping locations
@@ -8991,7 +9104,6 @@ class Lot(CachedPropertiesMixin, models.Model):
             return False
 
         # Check for Square payments with available refund amount
-        from decimal import Decimal
 
         from auctions.models import InvoicePayment
 
@@ -9005,15 +9117,12 @@ class Lot(CachedPropertiesMixin, models.Model):
         if not payment:
             return False
 
-        # Check if there's enough available to refund
-        lot_cost = Decimal(str(self.winning_price))
-        return payment.amount_available_to_refund >= lot_cost
+        # Check if there's enough available to refund: the whole lot, tax included
+        return payment.amount_available_to_refund >= self.paypal_refund_amount(100)
 
     def square_refund(self, percent, previous_percent=0):
         """Create a Square refund for ``percent`` of the winning price, less the ``previous_percent``
         already refunded some other way. Error string or None."""
-        from decimal import Decimal
-
         from auctions.models import InvoicePayment
 
         if not self.winning_price or self.winning_price <= 0:
@@ -9022,8 +9131,8 @@ class Lot(CachedPropertiesMixin, models.Model):
         if percent < 0 or percent > 100:
             return "Refund percent must be between 0 and 100"
 
-        # Calculate refund amount
-        refund_amount = (Decimal(str(self.winning_price)) * Decimal(str(percent - previous_percent))) / Decimal(100)
+        # Same amount as PayPal: the share of the price plus its tax, rounded half-up
+        refund_amount = self.paypal_refund_amount(percent, previous_percent)
         if refund_amount <= 0:
             return "Refund amount must be positive"
 
@@ -9054,7 +9163,9 @@ class Lot(CachedPropertiesMixin, models.Model):
 
         # Process refund using SquareSeller method
         reason = f"Lot {self.lot_number_display} - {percent}% refund"
-        error = seller.process_refund(payment, refund_amount, reason)
+        # Retrying the same percent replays Square's stored result; a different percent is a new refund
+        idempotency_key = f"af-lot-{self.pk}-refund-{previous_percent}-{percent}"
+        error = seller.process_refund(payment, refund_amount, reason, idempotency_key)
         if error:
             return error
 
@@ -11056,15 +11167,21 @@ class Invoice(CachedPropertiesMixin, models.Model):
         current settings; only un-paying thaws it. Refunds are unaffected: they're negative payments, and
         ``calculated_total`` never included payments.
         """
-        if self.pk and Invoice.objects.filter(pk=self.pk, status="PAID").exists():
+        if not self.pk:
+            self.invalidate_cached_properties()
+            self.calculated_total = self.rounded_net
+            self.save()
             return
-        # Everything is cached on the instance, and the caller is here because something changed.
-        self.invalidate_cached_properties()
-        self.calculated_total = self.rounded_net
-        # Only this column. The PAID check above is a separate query, so a payment landing in
-        # between used to be undone here: a full-row save writes this instance's stale status and
-        # date_paid back over it, and the invoice silently reads as unpaid again.
-        self.save(update_fields=["calculated_total"] if self.pk else None)
+        # The PAID check and the write share a row lock, so a payment landing in between can't be undone.
+        # Only this column is saved: a full-row save would write this instance's stale status and date_paid.
+        with transaction.atomic():
+            status = Invoice.objects.select_for_update().values_list("status", flat=True).get(pk=self.pk)
+            if status == "PAID":
+                return
+            # Everything is cached on the instance, and the caller is here because something changed.
+            self.invalidate_cached_properties()
+            self.calculated_total = self.rounded_net
+            self.save(update_fields=["calculated_total"])
 
     @cached_property
     def total_adjustment_amount(self):
@@ -12148,11 +12265,16 @@ class PageView(CachedPropertiesMixin, models.Model):
         "email": "From a watched-lots email",
         "outbid": "From an outbid email",
         "notification": "From an invoice email",
+        "invoice_next": "From an invoice email (next auction)",
+        "seller_share": "Shared by the seller",
+        "embed": "From a club's own website",
         "weekly_email": "From the weekly email",
         "admin": "From an admin page",
         "twitter": "Shared on X (Twitter)",
         "facebook": "Shared on Facebook",
         "discord": "Posted on Discord",
+        "calendar": "From a club's calendar",
+        "announcement": "From a club announcement",
         "qr": "Scanned a printed QR code",
         "ar": "From lot scanning in the app",
         "ar_scan": "Scanned a label in the app",
@@ -12456,6 +12578,10 @@ class UserData(CachedPropertiesMixin, models.Model):
     email_me_about_new_in_person_auctions_distance.help_text = (
         "miles, from your address. Also used to filter the auction list when your location is set."
     )
+    email_me_about_new_features = models.BooleanField(
+        default=True, blank=True, verbose_name="Tell me about site features I'm not using yet"
+    )
+    email_me_about_new_features.help_text = "A few times a year at most (auctions.feature_emails)"
     show_nearby_auctions = models.BooleanField(default=True, blank=True, verbose_name="Only show nearby auctions")
     show_nearby_auctions.help_text = (
         "When your location is set, only show auctions near you on the auction list. "
@@ -12495,6 +12621,11 @@ class UserData(CachedPropertiesMixin, models.Model):
         "Another account this user asked to be merged into. That account finishes it; see auctions.account_merge."
     )
     merge_requested_on = models.DateTimeField(null=True, blank=True)
+    merge_suggested_on = models.DateTimeField(null=True, blank=True)
+    merge_suggested_on.help_text = (
+        "When this account was sent the one-time email saying accounts can be merged "
+        "(auctions.duplicate_accounts). Set, it's never sent again."
+    )
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
@@ -13196,6 +13327,7 @@ class UserData(CachedPropertiesMixin, models.Model):
         self.email_me_about_new_chat_replies = False
         self.send_reminder_emails_about_joining_auctions = False
         self.email_me_about_new_in_person_auctions = False
+        self.email_me_about_new_features = False
         self.has_unsubscribed = True
         self.last_activity = timezone.now()
         self.save()
@@ -13731,21 +13863,19 @@ class SquareSeller(models.Model):
                         error_msg = f"Square error: {error_detail}"
             return None, error_msg
 
-    def process_refund(self, payment, refund_amount, reason):
+    def process_refund(self, payment, refund_amount, reason, idempotency_key):
         """Process a Square refund. Error string or None."""
         client = self.get_square_client()
         if not client:
             return "Failed to initialize Square client"
 
         try:
-            from decimal import Decimal
-
-            # Convert amount to cents
-            refund_amount_cents = int(Decimal(str(refund_amount)) * 100)
+            # Convert amount to cents, half-up like PayPal
+            refund_amount_cents = int((Decimal(str(refund_amount)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
             client.refunds.refund_payment(
                 payment_id=payment.external_id,
-                idempotency_key=str(uuid_module.uuid4()),
+                idempotency_key=idempotency_key,
                 amount_money={
                     "amount": refund_amount_cents,
                     "currency": payment.currency,
@@ -14434,7 +14564,8 @@ class MCPCall(models.Model):
 
     The site never sees the conversation an agent is having, only its calls, so this is the evidence for
     whether people get answers: a tool name that doesn't exist, a parameter it refuses, an error, a
-    question back, or an empty find is a turn that went wrong. ``mcp_usage`` on ``/mcp/admin/`` reads it.
+    question back, or an empty find. Empty results and clarification are not necessarily failures.
+    ``mcp_usage`` on ``/mcp/admin/`` reads these signals, not a task-success rate.
     ``/mcp/admin/`` calls are recorded with ``admin`` set: an audit of every privileged read, and what
     each costs in characters. ``mcp_usage`` leaves them out of its report on other people's agents.
     """
@@ -14462,6 +14593,8 @@ class MCPCall(models.Model):
     outcome = models.CharField(max_length=20, blank=True, db_index=True)
     detail = models.CharField(max_length=300, blank=True, help_text="The error, or the question asked back.")
     result_chars = models.PositiveIntegerField(default=0)
+    catalog_version = models.CharField(max_length=16, blank=True)
+    result_metadata = models.JSONField(default=dict, blank=True)
     elapsed_ms = models.PositiveIntegerField(default=0)
     admin = models.BooleanField(default=False, help_text="Made on /mcp/admin/, by a superuser's agent.")
 
@@ -15134,10 +15267,24 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     """Someone who gives talks to aquarium clubs.
 
     Seeded from the NEC WordPress database; anyone with a permission in an NEC club can add more,
-    including people without accounts. `nec_only` keeps a speaker to NEC clubs.
+    including people without accounts, and anyone signed in can add themselves. `visibility` says who
+    may see the page; only public pages are listed for everyone and offered to search engines.
     """
 
     IMAGE_FIELD_NAME = "image"
+
+    VISIBILITY_PUBLIC = "public"
+    VISIBILITY_SIGNED_IN = "signed_in"
+    VISIBILITY_NEC = "nec"
+    VISIBILITY_LINK = "link"
+    VISIBILITY_HIDDEN = "hidden"
+    VISIBILITY_CHOICES = (
+        (VISIBILITY_PUBLIC, "Public"),
+        (VISIBILITY_SIGNED_IN, "Anyone signed in"),
+        (VISIBILITY_NEC, "NEC member clubs only"),
+        (VISIBILITY_LINK, "Only people with the link"),
+        (VISIBILITY_HIDDEN, "Not public"),
+    )
 
     name = models.CharField(max_length=200, db_index=True)
     name.help_text = "The speaker's name, as you'd print it on a meeting flyer."
@@ -15159,7 +15306,7 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     url.help_text = "Or enter a URL to a photo instead of uploading one"
     topics = models.ManyToManyField(SpeakerTopic, blank=True, related_name="speakers")
     email = models.EmailField(max_length=255, blank=True, default="")
-    email.help_text = "Only shown to people who can see the speaker directory."
+    email.help_text = "Only shown to people who are signed in."
     phone = models.CharField(max_length=30, blank=True, default="")
     website = models.URLField(max_length=500, blank=True, default="")
     facebook_page = models.URLField(max_length=500, blank=True, default="")
@@ -15170,14 +15317,24 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     longitude = models.FloatField(blank=True, null=True, db_index=True)
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
 
-    nec_only = models.BooleanField(
-        default=False,
+    visibility = models.CharField(
+        max_length=10,
+        choices=VISIBILITY_CHOICES,
+        default=VISIBILITY_PUBLIC,
         db_index=True,
-        verbose_name="Only show to NEC member clubs",
-        help_text=(
-            "Keeps this speaker out of the directory for clubs that aren't NEC members.  "
-            "Everything imported from the NEC speaker database is set this way."
-        ),
+        verbose_name="Who can see this",
+        help_text="Public profiles can show up in search engines.",
+    )
+    link_key = models.CharField(max_length=32, blank=True, default="", editable=False)
+    link_key.help_text = "The secret in a link-only profile's share link. Filled on save."
+    merged_into = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name="merged_from",
+        help_text="The record this duplicate was merged into; its old URL redirects there.",
     )
     user = models.ForeignKey(
         User,
@@ -15234,8 +15391,77 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
     def __str__(self):
         return str(self.name)
 
+    def save(self, *args, **kwargs):
+        if not self.link_key:
+            self.link_key = secrets.token_urlsafe(12)
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "link_key"}
+        super().save(*args, **kwargs)
+
     def get_absolute_url(self):
         return reverse("speaker_detail", kwargs={"slug": self.slug})
+
+    @property
+    def share_url(self):
+        """The page's address with the key a link-only profile needs; the plain address otherwise."""
+        url = self.get_absolute_url()
+        if self.visibility == self.VISIBILITY_LINK and self.link_key:
+            return f"{url}?key={self.link_key}"
+        return url
+
+    #: Where "Originally from the NEC" points when the import kept no page of its own.
+    NEC_WEBSITE = "https://northeastcouncil.org/"
+
+    @property
+    def nec_url(self):
+        """This speaker's page on the NEC's website, else the NEC's home page."""
+        if (self.source_url or "").startswith(("https://", "http://")):
+            return self.source_url
+        return self.NEC_WEBSITE
+
+    @property
+    def is_indexable(self):
+        """Whether search engines may index this page: only a public profile."""
+        return self.visibility == self.VISIBILITY_PUBLIC and not self.is_deleted
+
+    @classmethod
+    def listed_for(cls, user, nec_member):
+        """Speakers the directory lists for this viewer: public ones, signed-in-only ones for anyone signed
+        in, NEC-only ones for NEC clubs, and everything for a superuser. Link-only and not-public profiles are never listed to anyone else.
+        """
+        speakers = cls.objects.filter(is_deleted=False)
+        if user is not None and user.is_authenticated and user.is_superuser:
+            return speakers
+        allowed = [cls.VISIBILITY_PUBLIC]
+        if user is not None and user.is_authenticated:
+            allowed.append(cls.VISIBILITY_SIGNED_IN)
+        if nec_member:
+            allowed.append(cls.VISIBILITY_NEC)
+        return speakers.filter(visibility__in=allowed)
+
+    def is_owned_by(self, user):
+        """The person this profile is; while it is nobody's account's, whoever typed it in."""
+        if not user or not user.is_authenticated:
+            return False
+        if self.user_id:
+            return self.user_id == user.pk
+        return bool(self.created_by_id and self.created_by_id == user.pk)
+
+    def can_be_viewed_by(self, user, nec_member, key=""):
+        """Whether this viewer may open the page. ``key`` is a share link's secret."""
+        if self.is_deleted:
+            return False
+        if (user is not None and user.is_authenticated and user.is_superuser) or self.is_owned_by(user):
+            return True
+        if self.visibility == self.VISIBILITY_PUBLIC:
+            return True
+        if self.visibility == self.VISIBILITY_SIGNED_IN:
+            return bool(user is not None and user.is_authenticated)
+        if self.visibility == self.VISIBILITY_NEC:
+            return bool(nec_member)
+        if self.visibility == self.VISIBILITY_LINK:
+            return bool(self.link_key and key) and constant_time_compare(str(key), self.link_key)
+        return False
 
     @property
     def display_url(self):
@@ -15301,12 +15527,14 @@ class Speaker(CachedPropertiesMixin, CloudflareImageMixin, models.Model):
         return set(SpeakerTag.objects.filter(speaker=self, user=user).values_list("tag", flat=True))
 
     def can_be_deleted_by(self, user):
-        """Only the creator or a superuser may delete; imported rows only a superuser."""
+        """Only the person, whoever added them, or a superuser may edit or delete; imported rows only a
+        superuser until the person's own profile is merged in.
+        """
         if not user or not user.is_authenticated:
             return False
         if user.is_superuser:
             return True
-        return bool(self.created_by_id and self.created_by_id == user.pk)
+        return self.is_owned_by(user)
 
 
 class SpeakerTag(models.Model):
@@ -15356,7 +15584,14 @@ class SpeakerTag(models.Model):
 
 
 class SpeakerComment(models.Model):
-    """A note one club left about a speaker, shown on the speaker's panel."""
+    """A note a signed-in member left about a speaker, shown under their username on the speaker's panel.
+
+    ``club`` is the one NEC club they were representing, when there was exactly one: a club's note
+    survives its writer's account deletion, anyone else's words go with them.
+    """
+
+    #: How many comments one account may post in an hour, across every speaker.
+    HOURLY_LIMIT = 10
 
     speaker = models.ForeignKey(Speaker, on_delete=models.CASCADE, related_name="comments")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="speaker_comments")
@@ -15372,11 +15607,14 @@ class SpeakerComment(models.Model):
         return f"{self.user} on {self.speaker}"
 
     @property
-    def author_display(self):
-        """Just the person."""
-        if not self.user:
+    def author_username(self):
+        """The writer's username, which is what every reader sees. Never an email address: older accounts
+        could sign up with one as their username.
+        """
+        if not self.user or not self.user.is_active:
             return "Deleted user"
-        return self.user.get_full_name() or self.user.username
+        username = self.user.username
+        return "A member" if "@" in username else username
 
     def can_be_deleted_by(self, user):
         if not user or not user.is_authenticated:
@@ -15384,10 +15622,37 @@ class SpeakerComment(models.Model):
         return bool(user.is_superuser or (self.user_id and self.user_id == user.pk))
 
 
+class SpeakerClaim(models.Model):
+    """Somebody pressing "This is me" on a speaker's page: a request, settled by a person approving an
+    admin connector proposal (``auctions.speaker_duplicates.link_speaker_to_account``), never on its own.
+    """
+
+    STATUS_OPEN = "open"
+    STATUS_APPROVED = "approved"
+    STATUS_DECLINED = "declined"
+    STATUS_CHOICES = (
+        (STATUS_OPEN, "Open"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_DECLINED, "Declined"),
+    )
+
+    speaker = models.ForeignKey(Speaker, on_delete=models.CASCADE, related_name="claims")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="speaker_claims")
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN, db_index=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["speaker", "user"], name="unique_speaker_claim_per_user")]
+        ordering = ["-createdon"]
+
+    def __str__(self):
+        return f"{self.user} claims {self.speaker}"
+
+
 class AssistantSkillRequest(CachedPropertiesMixin, models.Model):
     """A feature somebody asked for through an assistant: a tool it lacked, or something the site can't do.
 
-    Written by ``request_a_skill``, read through the admin MCP's ``list_feature_requests``; the asker follows it
+    Written by ``request_feature``, read through the admin MCP's ``list_feature_requests``; the asker follows it
     with ``my_requests``. ``planned`` is the site owner's go-ahead to build it, in the repository
     ``target`` names. Duplicates are evidence and are counted. Content is model-written: displayed
     escaped, never executed or matched.
@@ -15558,3 +15823,51 @@ class SignInStitch(models.Model):
 
     def __str__(self):
         return f"{self.user} signed in holding {self.session_id[:12]}"
+
+
+class FeatureEmail(models.Model):
+    """One feature email to one person (:mod:`auctions.feature_emails`): each kind goes once ever.
+
+    Claimed by insert before sending, so two overlapping runs can't both send it.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="feature_emails")
+    kind = models.CharField(max_length=40)
+    sent_on = models.DateTimeField(auto_now_add=True, db_index=True)
+    #: The auction or club it was about, for the results report; nothing links back.
+    about = models.CharField(max_length=100, blank=True, default="")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "kind"], name="feature_email_once_per_kind")]
+
+    def __str__(self):
+        return f"{self.kind} to user {self.user_id}"
+
+
+class ClubEmail(models.Model):
+    """One club email (:mod:`auctions.club_emails`) to one club: each kind goes once per club ever.
+
+    Claimed by insert before sending, so two overlapping runs can't both send it. Who it went to is in
+    ``FeatureEmail``, one row per person, which is what the results report and the opt-out watch read.
+    """
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="club_emails")
+    kind = models.CharField(max_length=40)
+    sent_on = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["club", "kind"], name="club_email_once_per_kind")]
+
+    def __str__(self):
+        return f"{self.kind} to club {self.club_id}"
+
+
+class FeatureEmailPause(models.Model):
+    """While any row exists, no feature email goes. The sender adds one when people opt out or mail
+    bounces faster than :data:`auctions.feature_emails.MAX_OPT_OUT_RATE` allows; delete it to resume."""
+
+    created_on = models.DateTimeField(auto_now_add=True)
+    reason = models.CharField(max_length=300)
+
+    def __str__(self):
+        return f"Feature emails paused {self.created_on:%Y-%m-%d}: {self.reason}"

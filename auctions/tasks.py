@@ -1177,6 +1177,42 @@ def send_auction_surveys(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def next_auction_emails(self):
+    """Ask creators to set up their next auction, and copy last year's, when due (auctions/next_auction.py). Hourly."""
+    from auctions import next_auction
+
+    _safely("next auction emails", next_auction.send_next_auction_emails)
+    _safely("anniversary emails", next_auction.send_anniversary_emails)
+
+
+@shared_task(bind=True, ignore_result=True)
+def feature_emails(self):
+    """Today's share of the feature emails (auctions/feature_emails.py). Daily, 10:10am Eastern."""
+    from auctions import feature_emails as emails
+
+    _safely("feature emails", emails.send_feature_emails)
+
+
+@shared_task(bind=True, ignore_result=True)
+def club_emails(self):
+    """The monthly-auction and club-tools emails (auctions/club_emails.py). Daily, 10:40am Eastern."""
+    from auctions import club_emails as emails
+
+    _safely("club emails", emails.send_club_emails)
+
+
+@shared_task(bind=True, ignore_result=True)
+def suggest_account_merges(self):
+    """Tell likely duplicate accounts, once each, that merging exists (auctions/duplicate_accounts.py). Weekly."""
+    from auctions import duplicate_accounts
+
+    _safely(
+        "merge suggestions",
+        lambda: duplicate_accounts.send_merge_suggestions(budget=duplicate_accounts.TIME_BUDGET),
+    )
+
+
+@shared_task(bind=True, ignore_result=True)
 def email_unseen_chats(self):
     """Send notifications about unread chat messages."""
     call_command("email_unseen_chats")

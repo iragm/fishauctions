@@ -2,6 +2,14 @@
 {% load crispy_forms_tags %}
 {% load currency_filters %}
 {% block title %} {{ auction.title }} {% endblock %}
+{% load seo_tags %}
+{% block extra_head %}{% auction_json_ld auction %}{% endblock %}
+{% block open_graph %}
+{% auction_summary auction as og_description %}
+{% absolute_uri auction.get_absolute_url as og_url %}
+{% if auction.club.icon %}{% absolute_uri auction.club.icon_display_url as og_image %}{% endif %}
+{% include "open_graph.html" with og_title=auction.title og_description=og_description og_url=og_url og_image=og_image %}
+{% endblock %}
 {% load static %}
 {% block extra_js %}
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v9.0" nonce="e1MMTYSx"></script>
@@ -160,6 +168,16 @@ function initMap() {
             </div>
             {% endif %}
 
+            {% if offer_sample_data %}
+            <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+              <span><i class="bi bi-magic"></i> Looks like a test auction, do you want to pre-populate with some sample data?</span>
+              <form method="post" action="{% url 'auction_sample_data' slug=auction.slug %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-info">Add sample data</button>
+              </form>
+            </div>
+            {% endif %}
+
             {# Quick Actions Section - Organized and Clean #}
             <div class="card mb-4">
                 <div class="card-body">
@@ -175,9 +193,9 @@ function initMap() {
                         {% endif %}
                         <div class="col-6 col-md-auto">
                             {% if auction.is_online or not auction.allow_bulk_adding_lots %}
-                            <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
+                            <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add a lot</a>
                             {% else %}
-                            <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
+                            <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add lots</a>
                             {% endif %}
                         </div>
                         <div class="col-6 col-md-auto">
@@ -190,7 +208,7 @@ function initMap() {
                         {% endif %}
                         {% if request.user.is_authenticated and user_has_lots %}
                         <div class="col-6 col-md-auto">
-                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
+                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print labels</a>
                         </div>
                         {% endif %}
                     </div>
@@ -340,7 +358,7 @@ function initMap() {
             {% if auction.all_location_count %}
             <a name="join"></a>
             {% if not ended %}
-                <div class="card mb-4">
+                <div class="card mb-4" id="join">
                     <div class="card-header">
                         <h5 class="mb-0"><i class="bi bi-box-arrow-in-right"></i> Join This Auction</h5>
                     </div>
@@ -366,7 +384,7 @@ function initMap() {
                             {% if location.users_must_coordinate_pickup %}
                                 <p>You must schedule your pickup time in advance.</p>
                             {% else %}
-                                <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
+                                <p><strong>{% if auction.is_online %}Pickup{% else %}Time{% endif %}:</strong> {{ location.pickup_time }}</p>
                             {% endif %}
                             <div class="btn-group flex-wrap" role="group">
                                 {%if location.has_coordinates %}
@@ -395,7 +413,7 @@ function initMap() {
                     <div class="modal-dialog modal-dialog-centered">
                         <div class="modal-content">
                             <div class="modal-header">
-                                <h5 class="modal-title" id="leave-auction-title">Leave auction?</h5>
+                                <h5 class="modal-title" id="leave-auction-title">Leave {{ auction.title }}?</h5>
                                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                             </div>
                             {% if leave_problem %}
@@ -416,8 +434,8 @@ function initMap() {
                             {% endif %}
                             <form method="post" action="{% url 'auction_leave' slug=auction.slug %}" class="modal-footer">
                                 {% csrf_token %}
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">No</button>
-                                <button type="submit" class="btn btn-danger">Yes, leave</button>
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Stay</button>
+                                <button type="submit" class="btn btn-danger">Leave</button>
                             </form>
                             {% endif %}
                         </div>
@@ -474,7 +492,7 @@ function initMap() {
                                 {% if location.users_must_coordinate_pickup %}
                                     <p>You must schedule your pickup time in advance.</p>
                                 {% else %}
-                                    <p><strong>Pickup:</strong> {{ location.pickup_time }}</p>
+                                    <p><strong>{% if auction.is_online %}Pickup{% else %}Time{% endif %}:</strong> {{ location.pickup_time }}</p>
                                 {% endif %}
 
                                 <div class="btn-group mb-3 flex-wrap" role="group">

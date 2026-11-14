@@ -27,7 +27,7 @@ from allauth.account.forms import ResetPasswordForm, SignupForm
 from bootstrap_datepicker_plus.widgets import (
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
-from crispy_forms.bootstrap import Div, Field, PrependedAppendedText, PrependedText
+from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete, forward
@@ -869,22 +869,6 @@ class LotFormSetHelper(FormHelper):
         self.form_method = "post"
 
         self.template = "auctions/bulk_add_lots_row.html"
-
-
-class InvoiceAdjustmentFormSetHelper(FormHelper):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.form_method = "post"
-        self.template = "auctions/bulk_add_invoice_adjustments_row.html"
-        self.layout = Layout(
-            Div(
-                Div("adjustment_type", css_class="col-md-4"),
-                # Whole dollars only.
-                Div(PrependedText("amount", "$"), css_class="col-md-4"),
-                Div("notes", css_class="col-md-4"),
-                css_class="row",
-            )
-        )
 
 
 class InvoiceAdjustmentForm(forms.ModelForm):
@@ -1995,21 +1979,43 @@ class AuctionJoin(forms.ModelForm):
             from urllib.parse import quote
 
             self.helper.form_action = f"{self.helper.form_action}?next={quote(next_url, safe='')}"
+        # Joined, the button only goes on to the lots, or saves a newly picked location (the script below).
+        submit = Submit(
+            "submit", "View lots" if joined else "Join auction", css_class="agree_tos btn-success text-dark"
+        )
+        if user and user.is_authenticated and not joined:
+            # Joining would be refused for a missing detail, so link to where it is added instead.
+            link = self._missing_detail_link(user, auction)
+            if link is not None:
+                submit = link
         self.helper.layout = Layout(
             "i_agree",
             "time_spent_reading_rules",
             "pickup_location",
-            Submit("submit", "Join auction", css_class="agree_tos btn-success text-dark"),
+            submit,
         )
         if joined:
-            # The X opens auction.html's leave dialog.
+            # Opens auction.html's leave dialog.
             self.helper.layout.append(
                 HTML(
                     '<button type="button" class="btn btn-outline-danger ms-1" data-bs-toggle="modal" '
-                    'data-bs-target="#leave-auction-modal" title="Leave auction" aria-label="Leave auction">'
-                    '<i class="bi bi-x-lg"></i></button>'
+                    'data-bs-target="#leave-auction-modal"><i class="bi bi-x-lg"></i> Leave</button>'
                 )
             )
+            if auction.multi_location:
+                self.helper.layout.append(
+                    HTML(
+                        "<script>(function () {"
+                        "var select = document.getElementById('id_pickup_location');"
+                        "var button = document.querySelector('#rule-form [name=submit]');"
+                        "if (!select || !button) { return; }"
+                        "var saved = select.value;"
+                        "select.addEventListener('change', function () {"
+                        "button.value = select.value === saved ? 'View lots' : 'Change pickup location';"
+                        "});"
+                        "})();</script>"
+                    )
+                )
         self.fields["pickup_location"].queryset = auction.location_qs
         self.fields["time_spent_reading_rules"].widget = HiddenInput()
         # Offered for the locations with a second pickup time; the script shows it when one is picked.
@@ -2064,13 +2070,35 @@ class AuctionJoin(forms.ModelForm):
         else:
             # single location auction
             self.fields["pickup_location"].widget = HiddenInput()
+            self.fields["i_agree"].initial = True
+            self.fields["i_agree"].widget = HiddenInput()
             if self.auction.all_location_count == 1:  # # number_of_locations excludes the default location
                 location = auction.location_qs[0]
                 self.fields["pickup_location"].initial = location
-                if location.pickup_by_mail:
-                    self.fields["i_agree"].label = "Yes, mail me my lots"
-                else:
-                    self.fields["i_agree"].label = "Yes, I will be at this auction"
+
+    def _missing_detail_link(self, user, auction):
+        """A link to the contact page in place of Join when a missing phone or mailing address would refuse it.
+
+        Phone wins when both are missing. The server checks in ``services`` remain the guard.
+        """
+        userdata = getattr(user, "userdata", None)
+        if userdata is None:
+            return None
+        if auction.require_phone_number and not userdata.phone_number:
+            label = "Add your phone number to join"
+        elif auction.all_location_count == 1 and auction.location_qs[0].pickup_by_mail and not userdata.address:
+            label = "Add your address to join"
+        else:
+            return None
+        auction_url = reverse("auction_main", kwargs={"slug": auction.slug})
+        return HTML(
+            format_html(
+                '<a class="btn btn-success text-dark" href="{}?next={}%23join">{}</a>',
+                reverse("contact_info"),
+                quote(auction_url, safe=""),
+                label,
+            )
+        )
 
     class Meta:
         model = AuctionTOS
@@ -2862,6 +2890,8 @@ class AuctionEditForm(forms.ModelForm):
                     phone_number=club_member.phone_number or "",
                     address=club_member.address or "",
                     manually_added=True,
+                    # At the first location: someone in an auction with several picks theirs on joining.
+                    pickup_location_confirmed=not auction.multi_location,
                 )
 
     def save(self, commit=True):
@@ -3514,6 +3544,8 @@ class CreateLotForm(forms.ModelForm):
                         "auction",
                         "You don't have permission to sell lots in this auction",
                     )
+                elif auctiontos.needs_pickup_location:
+                    self.add_error("auction", "Pick your pickup location on the auction's page before you sell")
             try:
                 UserBan.objects.get(banned_user=self.user.pk, user=auction.created_by.pk)
                 self.add_error("auction", "You've been banned from selling lots in this auction")
@@ -4085,6 +4117,7 @@ class ChangeUserNotificationsForm(forms.ModelForm):
             "email_me_when_people_comment_on_my_lots",
             "email_me_about_new_chat_replies",
             "send_reminder_emails_about_joining_auctions",
+            "email_me_about_new_features",
             "email_me_about_new_auctions",
             "email_me_about_new_auctions_distance",
             "email_me_about_new_in_person_auctions",
@@ -4184,6 +4217,13 @@ class ChangeUserNotificationsForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
+            Div(
+                Div(
+                    "email_me_about_new_features",
+                    css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
             HTML(
                 '<p class="text-muted small mt-3">One message per promoted auction near you. Emails only go'
                 " out if you haven't visited the site in the last 6 days.</p>"
@@ -4214,7 +4254,11 @@ class ChangeUserNotificationsForm(forms.ModelForm):
         )
 
     #: The two auction_promos opt-ins.
-    PROMO_FIELDS = ("email_me_about_new_auctions", "email_me_about_new_in_person_auctions")
+    PROMO_FIELDS = (
+        "email_me_about_new_auctions",
+        "email_me_about_new_in_person_auctions",
+        "email_me_about_new_features",
+    )
 
     def save(self, commit=True):
         # Ticking one of these asks for promotional messages again, which undoes an earlier "stop
@@ -4980,6 +5024,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             "expiring_soon_opening",
             "expiring_soon_closing",
             "expiring_soon_include_auction",
+            "mailing_address",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -5018,7 +5063,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             "send_membership_expiration_reminders",
             "send_membership_renewal_confirmation",
         ]
-        layout_fields.append(Fieldset("Outgoing emails", *outgoing_fields))
+        layout_fields.append(Fieldset("Outgoing emails", "mailing_address", *outgoing_fields))
         self.helper.layout = Layout(*layout_fields)
         if show_email_routing:
             # With SES routing, members route via contact_email_member instead.
@@ -5150,6 +5195,17 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 self.add_error(field_name, "HTML tags are not allowed in email text.")
             elif self._URL_RE.search(value):
                 self.add_error(field_name, "Links (URLs) are not allowed in email text.")
+        sends_email = any(
+            cleaned.get(name)
+            for name in (
+                "send_welcome_email_to_new_members",
+                "send_membership_expiration_reminders_30_days",
+                "send_membership_expiration_reminders",
+                "send_membership_renewal_confirmation",
+            )
+        )
+        if sends_email and not (cleaned.get("mailing_address") or "").strip():
+            self.add_error("mailing_address", "Add a mailing address to send these emails.")
         return cleaned
 
 
@@ -6181,6 +6237,7 @@ class SpeakerForm(forms.ModelForm):
         model = Speaker
         fields = [
             "name",
+            "visibility",
             "image",
             "url",
             "bio",
@@ -6195,6 +6252,7 @@ class SpeakerForm(forms.ModelForm):
         ]
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Jane Aquarist"}),
+            "visibility": forms.RadioSelect(),
             "bio": forms.Textarea(attrs={"rows": 5, "placeholder": "A paragraph about the speaker."}),
             "programs": forms.Textarea(
                 attrs={"rows": 4, "placeholder": "One talk per line, or however they list them."}
@@ -6209,12 +6267,27 @@ class SpeakerForm(forms.ModelForm):
             "programs": "The talks they offer.",
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, self_listing=False, **kwargs):
         super().__init__(*args, **kwargs)
+        self.self_listing = self_listing
+        # Left out means unchanged (a new speaker's default is public).
+        self.fields["visibility"].required = False
         self.fields["topics"].required = False
         self.fields["topics"].queryset = SpeakerTopic.objects.all()
         # A closed vocabulary (auctions/speaker_topics.py).
         self.fields["topics"].help_text = "Pick everything they talk about. Use Other if nothing fits."
+        if self_listing:
+            # Someone adding or editing themselves is "you", not "they".
+            self.fields["name"].help_text = "Your name, as you'd like it on a meeting flyer."
+            self.fields["visibility"].label = "Who can see your profile"
+            self.fields["bio"].help_text = "A paragraph or two about yourself."
+            self.fields["bio"].widget.attrs["placeholder"] = "A paragraph about yourself."
+            self.fields["programs"].help_text = "The talks you offer."
+            self.fields["programs"].widget.attrs["placeholder"] = "One talk per line, or however you list them."
+            self.fields["topics"].help_text = "Pick everything you talk about. Use Other if nothing fits."
+            self.fields[
+                "location"
+            ].help_text = "Roughly where you travel from. Used for the map and the distance filter."
         # Required when adding: no location means no map or distance filter.
         if not (self.instance and self.instance.pk):
             self.fields["location"].required = True
@@ -6227,6 +6300,7 @@ class SpeakerForm(forms.ModelForm):
         self.helper.attrs = {"enctype": "multipart/form-data"}
         self.helper.layout = Layout(
             "name",
+            "visibility",
             Fieldset(
                 "Photo",
                 "image",
@@ -6260,9 +6334,12 @@ class SpeakerForm(forms.ModelForm):
     def clean_name(self):
         name = (self.cleaned_data.get("name") or "").strip()
         if not name:
-            msg = "Please enter the speaker's name"
+            msg = "Please enter your name" if self.self_listing else "Please enter the speaker's name"
             raise forms.ValidationError(msg)
         return name
+
+    def clean_visibility(self):
+        return self.cleaned_data.get("visibility") or self.instance.visibility or Speaker.VISIBILITY_PUBLIC
 
     def clean_url(self):
         """Validate that the URL points to an image. Same check LotImage's form runs."""

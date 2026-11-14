@@ -25,6 +25,7 @@ from django.db.models import (
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
+    HttpResponseBadRequest,
 )
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -53,8 +54,10 @@ from auctions.models import (
     Invoice,
     Lot,
     LotImage,
+    PickupLocation,
     SearchHistory,
     UserData,
+    distance_to,
 )
 from auctions.rate_limit import over_the_limit
 from auctions.tables import (
@@ -62,7 +65,7 @@ from auctions.tables import (
 )
 
 from .auction_pages import AuctionInfo
-from .base import MILES_TO_KM, AuctionViewMixin, HTMxTableView, LocationMixin
+from .base import MILES_TO_KM, AuctionViewMixin, HTMxTableView, LocationMixin, safe_next_url, visitor_location
 from .browse import LotListView
 
 logger = logging.getLogger(__name__)
@@ -163,7 +166,7 @@ class SupportView(FormView):
 class FeatureRequestsView(LoginRequiredMixin, FormView):
     """``/requests/``: report a bug or ask for a feature, and see where your earlier ones stand.
 
-    The web face of ``request_a_skill`` and ``my_requests``: the same queue the site owner marks
+    The web face of ``request_feature`` and ``my_requests``: the same queue the site owner marks
     planned, so a request from here is built exactly like one an assistant filed. GitHub's new-issue
     page sends people here. The owner's note is never shown.
     """
@@ -205,7 +208,7 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
             messages.error(self.request, "That's a lot for one day; send the rest tomorrow.")
             return self.form_invalid(form)
         self.request.assistant_surface = "requests page"
-        result = palette_actions.request_a_skill(
+        result = palette_actions.request_feature(
             self.request, {"skill": form.short_name, "reason": form.cleaned_data["request"]}
         )
         row = AssistantSkillRequest.objects.filter(pk=result.get("request_id")).first()
@@ -232,6 +235,46 @@ def promo_lot_photos() -> list[dict]:
     return photos if len(photos) >= help_stats.PROMO_MIN_PHOTOS else []
 
 
+class AccessRequestView(LoginRequiredMixin, View):
+    """The one-click request for an account the site owner reviews by hand: promoted auctions, or card payments.
+
+    The buttons used to open a mailto with a template body. This sends the same request from the site with the
+    username, the club and the auction it was asked from, so nobody has to type them. The owner replies to the
+    sender's address (Reply-To). Three requests per address per day.
+    """
+
+    SUBJECTS = {
+        "promotion": "Request access to create promoted auctions",
+        "square": "Request access to accept card payments",
+    }
+    REQUESTS_PER_DAY = 3
+
+    def post(self, request):
+        from post_office import mail
+
+        subject = self.SUBJECTS.get(request.POST.get("kind"))
+        if subject is None:
+            return HttpResponseBadRequest()
+        if over_the_limit(request, "access-request", self.REQUESTS_PER_DAY, 86400):
+            messages.error(request, "You've sent several requests today; the owner will reply to those.")
+            return redirect(safe_next_url(request, reverse("account_setup")))
+
+        lines = [f"Username: {request.user.username}", f"Club: {request.user.userdata.club or 'none'}"]
+        slug = request.POST.get("auction")
+        auction = Auction.objects.filter(slug=slug).first() if slug else None
+        if auction:
+            lines.append(f"Auction: {request.build_absolute_uri(auction.get_absolute_url())}")
+        mail.send(
+            settings.ADMINS[0][1],
+            subject=subject,
+            message="\n".join(lines),
+            # Reply-To, not From, for the same reason as SupportView: the From address is the site's sender.
+            headers={"Reply-To": request.user.email},
+        )
+        messages.success(request, "Request sent.")
+        return redirect(safe_next_url(request, reverse("account_setup")))
+
+
 class PromoSite(TemplateView):
     """The marketing page at ``/about/``, where ``/`` sends a signed-out visitor, when ``ENABLE_PROMO_PAGE``
     is on: one address for everyone, so a link copied from it works for whoever it's sent to. Every feature on it links to the help section that explains it, and
@@ -250,6 +293,65 @@ class PromoSite(TemplateView):
         context["photos"] = promo_lot_photos()
         context["site"] = help_stats.site_stats()
         return context
+
+
+class PromoNearby(TemplateView):
+    """The promo page's "near you" strip, fetched by the page's own script after it loads: crawlers that
+    don't run scripts never ask, and the promo page itself stays one page for everyone. Empty when there
+    is nothing close, or no location to go on. Where it measures from is ``visitor_location``, the same
+    answer the auction list uses.
+    """
+
+    template_name = "auctions/partials/promo_nearby.html"
+    MILES = 100
+    LIMIT = 3
+    PER_MINUTE = 20
+
+    def nearby(self):
+        if not settings.ENABLE_PROMO_PAGE or over_the_limit(self.request, "promo-nearby", self.PER_MINUTE, 60):
+            return []
+        latitude, longitude = visitor_location(self.request)
+        if not latitude and not longitude:
+            return []
+        now = timezone.now()
+        # A box first, so the distance sum only runs on rows that could be close: 100 miles is under
+        # 1.5 degrees of latitude anywhere, and of longitude up to about 60 degrees north or south.
+        box = 1.5 if abs(latitude) < 60 else 4
+        locations = (
+            PickupLocation.objects.filter(
+                latitude__range=(latitude - 1.5, latitude + 1.5),
+                longitude__range=(longitude - box, longitude + box),
+                pickup_by_mail=False,
+                auction__isnull=False,
+                auction__is_deleted=False,
+                auction__promote_this_auction=True,
+                auction__date_start__lte=now + timedelta(days=90),
+            )
+            .filter(
+                Q(auction__date_end__gte=now)
+                | Q(auction__date_end__isnull=True, auction__date_start__gte=now - timedelta(hours=12))
+            )
+            .annotate(distance=distance_to(latitude, longitude))
+            .filter(distance__lte=self.MILES)
+            .select_related("auction")
+            .order_by("auction__date_start", "distance")
+        )
+        found = {}
+        for location in locations[:50]:
+            found.setdefault(location.auction_id, (location.auction, location.distance))
+        return list(found.values())[: self.LIMIT]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nearby"] = [{"auction": auction, "miles": miles} for auction, miles in self.nearby()]
+        return context
+
+    def render_to_response(self, context, **response_kwargs):
+        response = super().render_to_response(context, **response_kwargs)
+        # Different for each visitor: never cached by Cloudflare or a browser, never indexed.
+        response["Cache-Control"] = "private, no-store"
+        response["X-Robots-Tag"] = "noindex"
+        return response
 
 
 class UploadTooLarge(TemplateView):
@@ -414,7 +516,10 @@ class AllAuctions(LocationMixin, HTMxTableView):
             date_posted__gte=two_years_ago,
         )
         latitude, longitude = self.get_coordinates()
-        self._user_has_location = bool(latitude and longitude)
+        # A signed-in user measured from their IP is still asked to set a location.
+        self._user_has_location = bool(latitude and longitude) and not (
+            self.request.user.is_authenticated and getattr(self.request, "located_from_ip", False)
+        )
         if latitude and longitude:
             qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
         else:
@@ -441,7 +546,15 @@ class AllAuctions(LocationMixin, HTMxTableView):
         self.nearby_filter_active = False
         userdata = self.request.user.userdata
         self._base_qs = qs  # save pre-filter qs for auto-remove fallback
-        if latitude and longitude and userdata.show_nearby_auctions and self.request.GET.get("nearby") != "false":
+        # Not from an IP guess: hiding auctions needs a location they gave; the guess only orders and measures.
+        located_from_ip = getattr(self.request, "located_from_ip", False)
+        if (
+            latitude
+            and longitude
+            and not located_from_ip
+            and userdata.show_nearby_auctions
+            and self.request.GET.get("nearby") != "false"
+        ):
             online_distance = userdata.email_me_about_new_auctions_distance or 100
             in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
             qs = qs.annotate(
@@ -525,6 +638,16 @@ class Leaderboard(ListView):
 VALID_LOT_ORDERS = frozenset(key for key, label in LotFilter.ORDER)
 
 
+def _club_current_auction_instead(auction):
+    """The club's current auction, when ``auction`` has ended and that one is another that hasn't."""
+    if not (auction.closed or auction.pretty_much_over) or not auction.club_id:
+        return None
+    current = auction.club.current_auction
+    if not current or current.pk == auction.pk or current.is_deleted or current.closed or current.pretty_much_over:
+        return None
+    return current
+
+
 class AllLots(LotListView, AuctionViewMixin):
     """Show all lots"""
 
@@ -580,6 +703,7 @@ class AllLots(LotListView, AuctionViewMixin):
             self.auction = context["auction"]
         if self.auction:
             context["is_auction_admin"] = self.is_auction_admin
+            context["club_current_auction"] = _club_current_auction_instead(self.auction)
             if self.auction.minutes_to_end < 1440 and self.auction.minutes_to_end > 0 and can_show_unloved_tip:
                 context["search_button_tooltip"] = "Try sorting by least popular to find deals!"
         if self.rewrite_url:

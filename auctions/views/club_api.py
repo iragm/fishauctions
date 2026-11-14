@@ -24,6 +24,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
+from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -153,7 +154,7 @@ class ClubAPIViewMixin:
             "can_read_club_member_list",
             "You do not have permission to view members of this club.",
         )
-        qs = ClubMember.objects.filter(club=club, is_deleted=False)
+        qs = ClubMember.objects.filter(club=club, is_deleted=False).select_related("club")
         if club.latitude and club.longitude:
             qs = qs.annotate(
                 distance_to=distance_to(club.latitude, club.longitude, lat_field_name="lat", lng_field_name="lng")
@@ -161,8 +162,17 @@ class ClubAPIViewMixin:
         return qs
 
 
+class ClubMemberPagination(LimitOffsetPagination):
+    """Opt-in: the list is unpaged unless ``?limit=`` is given, so existing club websites keep their shape."""
+
+    default_limit = None
+    max_limit = 500
+
+
 class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
     """List and create club members via REST API"""
+
+    pagination_class = ClubMemberPagination
 
     def get_queryset(self):
         qs = super().get_queryset()

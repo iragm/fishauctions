@@ -17,6 +17,7 @@ def club_sidebar(context):
     # Lazy import: avoids a circular import at module load (views imports heavily).
     from auctions.documents.search import can_use_library
     from auctions.views import check_club_permission
+    from auctions.views.base import can_view_club_members
 
     view = context.get("view")
     request = context.get("request")
@@ -51,6 +52,10 @@ def club_sidebar(context):
     # In managed/check-in mode the auction's participant list is the member list,
     # so "Members" points at the enhanced auction users table (single entry).
     members_through_auction = bool(auction and auction.is_club_managed)
+    # Whoever the member list itself lets in, not only club admins: someone who runs the club's auctions
+    # reaches the sidebar on an auction page, and in a club auction that doesn't manage people through
+    # the club this link is their only way to the members.
+    can_view_members = can_view_club_members(user, club)
 
     active_tab = getattr(view, "active_tab", None)
     setup_tabs = {
@@ -78,9 +83,12 @@ def club_sidebar(context):
         "can_view": True,
         "club": club,
         "auction": auction,
+        # Open on an auction page, collapsed on the club's own pages: the auction block is one click away.
+        "auction_block_open": bool(auction),
         "sidebar_auction": sidebar_auction,
         "members_through_auction": members_through_auction,
         "can_access_admin": can_access_admin,
+        "can_view_members": can_view_members,
         "can_edit_settings": can_edit_settings,
         "can_manage_bap": can_manage_bap,
         "can_manage_money": can_manage_money,
@@ -90,9 +98,5 @@ def club_sidebar(context):
         "bap_url": bap_url,
         "show_donation_tracking": club.enable_donation_tracking and can_manage_donations,
         "show_announcements": can_send_announcements,
-        # The speaker directory is only for NEC member clubs, so the link only exists for them.
-        # Anyone in this sidebar already holds a club permission, which is the access bar.
-        "show_speakers": club.is_nec_club,
-        "speakers_url": reverse("speaker_list") + "?" + urlencode({"club": club.slug}),
         "show_library": can_use_library(user),
     }

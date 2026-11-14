@@ -2191,7 +2191,7 @@ class DriftTests(PaletteAssistTestCase):
         "watch_lot",
         "answer_question",
         "undo_last",
-        "request_a_skill",
+        "request_feature",
         # Which auction and club the rest of it means.
         "set_my_auction",
         "set_my_club",
@@ -2245,6 +2245,8 @@ class DriftTests(PaletteAssistTestCase):
         "cancel_volunteer_request": "request_volunteers",
         "undo_check_in": "check_in",
         "update_donation_vendor": "add_donation_vendor",
+        # The invoice page's adjustment rows delete through InvoiceAdjustmentSave's ``delete`` flag.
+        "remove_invoice_adjustment": "add_invoice_adjustment",
         # The Contact dialog's Copy & record is a person recording mail sent from their own mailbox.
         "record_donation_email": "contact_donation_vendor",
         # A person types a transcription into the document's Edit page, the text box under the scan.

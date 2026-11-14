@@ -15,7 +15,17 @@
       <br><form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="make_creator_club_admin" class="btn btn-info btn-sm mt-2">Make {{ auction.created_by.username }} admin of {{ creator_club }} ({{ creator_club_source }})</button></form>
 {% endif %}
 {% if auction.shows_post_end_banner %}<div hx-get="{% url 'auction_post_end_banner' slug=auction.slug %}" hx-trigger="load" hx-target="this" hx-swap="outerHTML"></div>{% endif %}
-{% if not auction.admin_checklist_completed and not auction.admin_checklist_basics_done or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
+{% if offer_club_managed_switch %}
+{% comment %}In place of the setup checklist, while a copied club auction is still as it was copied: see Auction.offers_club_managed_switch and services.switch_to_club_managed.{% endcomment %}
+<div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Simpler user management</h5>
+  <div>You have copy users turned on.  There's a better way to do this: Manage users through club</div>
+  <small class="text-white-50">Right now, changes to users (such as email addresses) in this auction stay in this auction. If you turn on manage users through club, changes made here will also be made in older auctions.  I don't see any downside to this, and recommend turning it on.</small>
+  <div>
+    <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="switch_to_club_managed" class="btn btn-info btn-sm mt-2">Enable now</button></form>
+    <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_club_managed_banner" class="btn btn-secondary btn-sm mt-2">Don't show again</button></form>
+  </div>
+</div>
+{% elif not auction.admin_checklist_completed and not auction.admin_checklist_basics_done or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
   <ul class="list-unstyled">
     <li><i class="bi bi-check-square-fill text-success"></i> Create your auction</li>
@@ -44,10 +54,7 @@
       {% if auction.created_by.userdata.is_trusted %}
       <a href="{% url 'edit_auction' slug=auction.slug %}" class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
       {% else %}
-        <a href="mailto:{{ auction.promotion_request_mailto_query }}"
-          class="btn btn-info btn-sm mt-2">
-          Contact us and request access
-        </a>
+        <form method="post" action="{% url 'access_request' %}?next={{ request.get_full_path|urlencode }}" class="d-inline">{% csrf_token %}<input type="hidden" name="kind" value="promotion"><input type="hidden" name="auction" value="{{ auction.slug }}"><button type="submit" class="btn btn-info btn-sm mt-2">Contact us and request access</button></form>
       {% endif %}
       <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_promo_banner" class="btn btn-secondary btn-sm mt-2">Don't show again for this auction</button></form>
     </div>
@@ -81,7 +88,7 @@
       {% if request.user.userdata.square_enabled %}
       <a href="{% url 'square_connect' %}" class="btn btn-info btn-sm mt-2">Connect Square account and enable payments</a>
       {% else %}
-      <a href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}" class="btn btn-info btn-sm mt-2">Contact us and request access</a>
+      <form method="post" action="{% url 'access_request' %}?next={{ request.get_full_path|urlencode }}" class="d-inline">{% csrf_token %}<input type="hidden" name="kind" value="square"><input type="hidden" name="auction" value="{{ auction.slug }}"><button type="submit" class="btn btn-info btn-sm mt-2">Contact us and request access</button></form>
       {% endif %}
       <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_square_banner" class="btn btn-secondary btn-sm mt-2">Not this auction</button></form>
       <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="never_show_square_connect" class="btn btn-secondary btn-sm mt-2">Never show this again</button></form>
@@ -127,6 +134,7 @@
       <a class="nav-link {% if active_tab == 'more' %}active{% endif %}" href="{% url 'auction_pages' slug=auction.slug %}"><i class="bi bi-three-dots"></i><span class='d-none d-md-inline'> More</span></a>
     </li>
 </ul>
+{% if palette_assist_enabled and view.is_auction_admin or palette_assist_enabled and is_auction_admin %}<input type="text" class="form-control form-control-sm my-2" data-palette-box data-placeholders='["add Bob Smith, bidder 42","lot 12 sold to 34 for $5","mark Bob&#39;s invoice paid"]' aria-label="Ask">{% endif %}
 {% comment %} Every auction admin page listens for USB HID barcode scanner input (club auctions only). {% endcomment %}
 {% include 'auctions/barcode_scanner.html' %}
 

@@ -1,8 +1,13 @@
 """The speaker directory: who will come and talk to a club, and what about.
 
-Behind ``NECSpeakerAccessMixin``: any club permission in a club flagged ``is_nec_club``.
+The list and each public speaker's page are open to everyone, search engines included; a profile's
+``visibility`` narrows that (``Speaker.listed_for`` / ``Speaker.can_be_viewed_by``). Anyone signed in reads and tags, and comments
+on the pages that show comments (``shows_comments``). Adding somebody else takes admin permission in any
+club (``ClubAdminSpeakerMixin``). Anyone signed in can add themselves.
 """
 
+import datetime
+import json
 import logging
 import re
 from urllib.parse import urlencode
@@ -10,14 +15,21 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
+    HttpResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.defaultfilters import truncatechars
 from django.urls import reverse
+from django.utils import timezone
+from django.utils.functional import cached_property
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, View
 from django.views.generic.edit import (
     CreateView,
@@ -35,49 +47,71 @@ from auctions.helper_functions import static_html
 from auctions.models import (
     ClubMember,
     Speaker,
+    SpeakerClaim,
     SpeakerComment,
     SpeakerTag,
     distance_to,
 )
+from auctions.speaker_duplicates import possible_matches
 from auctions.tables import (
     SpeakerHTMxTable,
 )
 
-from .base import HTMxTableView, check_club_permission, clubs_with_any_permission
+from .base import HTMxTableView, check_club_permission, clubs_user_admins, clubs_with_any_permission
 
 logger = logging.getLogger(__name__)
 
+#: How many merges deep an old speaker URL is followed to the record it ended up in.
+MAX_MERGE_HOPS = 5
 
-class NECSpeakerAccessMixin(LoginRequiredMixin):
-    """Gate the speaker directory to people involved with an NEC member club.
 
-    Renders an explanation rather than a bare 403, since most people reaching it are in clubs that
-    simply aren't NEC members.
+def own_speaker_profile(user):
+    """The signed-in user's own speaker profile, or ``None``."""
+    if not user or not user.is_authenticated:
+        return None
+    return Speaker.objects.filter(user=user, is_deleted=False).order_by("pk").first()
+
+
+class SpeakerAccessMixin:
+    """Who is looking: their NEC clubs and the clubs they admin, if any. Gates nothing itself; each profile's
+    ``visibility`` decides who sees it.
     """
 
-    def dispatch(self, request, *args, **kwargs):
-        self.nec_clubs = []
+    def load_viewer(self, request):
+        if getattr(self, "_viewer_loaded", False):
+            return
+        self._viewer_loaded = True
         self._origin = None
-        if request.user.is_authenticated:
-            self.nec_clubs = list(clubs_with_any_permission(request.user))
-            # A superuser gets in before any club is flagged, or nobody could tick the box.
-            if not self.nec_clubs and not request.user.is_superuser:
-                return render(request, "auctions/speaker_no_access.html", status=403)
+        self.nec_clubs = list(clubs_with_any_permission(request.user)) if request.user.is_authenticated else []
+
+    def dispatch(self, request, *args, **kwargs):
+        self.load_viewer(request)
         return super().dispatch(request, *args, **kwargs)
+
+    @property
+    def is_nec_member(self):
+        """Somebody the NEC-only parts are for: a permission in an NEC club, or a superuser."""
+        user = self.request.user
+        return bool(self.nec_clubs) or bool(user.is_authenticated and user.is_superuser)
+
+    @cached_property
+    def admin_clubs(self):
+        """Clubs this user admins; only the list and adding somebody else ask."""
+        return list(clubs_user_admins(self.request.user))
+
+    @property
+    def can_add_others(self):
+        """Admin permission in any club (or a superuser): who may add a speaker other than themselves."""
+        user = self.request.user
+        return bool(self.admin_clubs) or bool(user.is_authenticated and user.is_superuser)
 
     @property
     def nec_club_ids(self):
         return [club.pk for club in self.nec_clubs]
 
     def visible_speakers(self):
-        """Speakers this user may see: currently all of them, since everyone here is in an NEC club.
-
-        When the directory opens up, only this method changes: ``nec_only`` rows drop out for others.
-        """
-        queryset = Speaker.objects.filter(is_deleted=False)
-        if self.nec_clubs or self.request.user.is_superuser:
-            return queryset
-        return queryset.filter(nec_only=False)
+        """Speakers the directory lists for this viewer (``Speaker.listed_for``)."""
+        return Speaker.listed_for(self.request.user, self.is_nec_member)
 
     def resolve_origin(self):
         """What distances on this page are measured from.
@@ -119,7 +153,18 @@ class NECSpeakerAccessMixin(LoginRequiredMixin):
         return None, None, None, "", reverse("contact_info")
 
 
-class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
+class ClubAdminSpeakerMixin(LoginRequiredMixin, SpeakerAccessMixin):
+    """Gate adding somebody else to the directory: admin permission in any club, or a superuser."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            self.load_viewer(request)
+            if not self.can_add_others:
+                return render(request, "auctions/speaker_no_access.html", status=403)
+        return super().dispatch(request, *args, **kwargs)
+
+
+class SpeakerListView(SpeakerAccessMixin, HTMxTableView):
     """The speaker directory, as a sortable table or a map of the same filtered set.
 
     Subclasses HTMxTableView because the htmx response also carries an out-of-band payload of every
@@ -145,8 +190,15 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         latitude, longitude, *_ = self.resolve_origin()
         if latitude is not None and longitude is not None:
             queryset = queryset.annotate(distance=distance_to(latitude, longitude))
+        # Speakers with a site account sort first. NEC viewers also count any contact detail typed in.
+        reachable = Q(user__isnull=False)
+        if self.is_nec_member:
+            reachable |= ~Q(email="") | ~Q(phone="") | ~Q(website="") | ~Q(facebook_page="")
+        queryset = queryset.annotate(
+            contactable=Case(When(reachable, then=Value(1)), default=Value(0), output_field=IntegerField())
+        )
         # -pk too: the 405 imported speakers share a timestamp, so pagination could repeat one.
-        return queryset.order_by("-createdon", "-pk")
+        return queryset.order_by("-contactable", "-createdon", "-pk")
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
@@ -155,12 +207,15 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         kwargs["longitude"] = longitude
         kwargs["nec_club_ids"] = self.nec_club_ids
         kwargs["user"] = self.request.user
+        kwargs["show_tags"] = self.request.user.is_authenticated
         return kwargs
 
     def get_table_kwargs(self, **kwargs):
         kwargs = super().get_table_kwargs(**kwargs)
         latitude, longitude, *_ = self.resolve_origin()
         kwargs["has_origin"] = latitude is not None and longitude is not None
+        if not self.request.user.is_authenticated:
+            kwargs["exclude"] = ("speaker_tags",)
         return kwargs
 
     def get_filter_placeholder_text(self):
@@ -168,15 +223,17 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         return 'Search speakers, or "within 50 miles"'
 
     def get_possible_filters(self):
+        if not self.request.user.is_authenticated:
+            return []
         # photo / mapped / myclub work as search keywords but aren't how anyone looks for a
         # speaker, and every menu row is one more to read past.
         return [
             ("<small class='text-muted'>Tagged as:</small>", ""),
             ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
-            ("<i class='bi bi-camera-video'></i> Presents remotely", "remote"),
             ("<i class='bi bi-car-front'></i> Willing to travel", "travels"),
             ("<i class='bi bi-box-seam'></i> Brings auction items", "auctionitems"),
             ("<i class='bi bi-tag'></i> Not tagged yet", "untagged"),
+            ("<i class='bi bi-person-lines-fill'></i> Has contact details", "contactable"),
         ]
 
     def speakers_for_map(self, filterset):
@@ -228,6 +285,11 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         context["has_unlisted_members"] = False if self.request.htmx else self.has_unlisted_club_members()
         if filterset and context.get("result_count") == 0:
             context["no_results"] = self._build_no_results_html()
+        context["is_nec_member"] = self.is_nec_member
+        context["can_add_others"] = self.can_add_others
+        context["own_profile"] = own_speaker_profile(self.request.user)
+        # Every filtered or paged copy of the list names the plain one as the page to index.
+        context["canonical_url"] = self.request.build_absolute_uri(reverse("speaker_list"))
         return context
 
     def _build_no_results_html(self):
@@ -246,12 +308,17 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
             "myclub",
             "untagged",
             "needsreview",
+            "contactable",
         }
         if query and re.fullmatch(r"[A-Za-z\s\-'.]{2,60}", query) and query.lower() not in keywords:
             params["name"] = query
         club_slug = (self.request.GET.get("club") or "").strip()
         if club_slug:
             params["club"] = club_slug
+        if not self.can_add_others:
+            # Only club admins add other people; anyone else can only add themselves.
+            create_url = reverse("speaker_add_self")
+            params = {}
         if params:
             create_url += f"?{urlencode(params)}"
         message = (
@@ -261,17 +328,18 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
         )
         return format_html(
             "<div class='text-center py-3'>{}<a class='btn btn-info btn-sm' href='{}'>"
-            "<i class='bi bi-person-plus-fill'></i> Add a speaker</a></div>",
+            "<i class='bi bi-person-plus-fill'></i> {}</a></div>",
             message,
             create_url,
+            "Add a speaker" if self.can_add_others else "Add yourself",
         )
 
     def has_unlisted_club_members(self):
-        """Whether any member of the user's NEC clubs is missing from the directory.
+        """Whether any member of a club this user admins is missing from the directory.
 
         Only ever a yes/no, and matched loosely: a false "already listed" beats nagging a club.
         """
-        if not self.nec_clubs:
+        if not self.admin_clubs:
             return False
         # The NEC import stores "Last, First" and club members are "First Last", so index both.
         existing_names = set()
@@ -279,35 +347,125 @@ class SpeakerListView(NECSpeakerAccessMixin, HTMxTableView):
             existing_names.add(speaker.name.casefold())
             existing_names.add(speaker.display_name.casefold())
         member_names = (
-            ClubMember.objects.filter(club__in=self.nec_clubs, is_deleted=False)
+            ClubMember.objects.filter(club__in=self.admin_clubs, is_deleted=False)
             .exclude(name="")
             .values_list("name", flat=True)
         )
         return any(name.casefold() not in existing_names for name in member_names)
 
 
-class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
+class SignInToView(Exception):
+    """Raised while looking a page up: the viewer would see it once signed in. ``get`` turns it into a redirect."""
+
+    def __init__(self, next_url):
+        super().__init__(next_url)
+        self.next_url = next_url
+
+
+class SpeakerPanelView(SpeakerAccessMixin, DetailView):
     """The speaker card beside the list: an htmx fragment, and a whole page for a shared link (see
     SpeakerDetailView).
+
+    Anyone may open a public profile; ``Speaker.can_be_viewed_by`` decides the rest, and a profile they
+    can't open is a 404 so its existence isn't confirmed, except that a signed-out visitor to a whole page for
+    anyone signed in is sent to sign in. A merged duplicate's address redirects to the
+    record it was merged into.
     """
 
     model = Speaker
     template_name = "auctions/partials/speaker_panel.html"
     context_object_name = "speaker"
 
+    def get(self, request, *args, **kwargs):
+        try:
+            return self._get(request, *args, **kwargs)
+        except SignInToView as needs_sign_in:
+            return redirect_to_login(needs_sign_in.next_url)
+
+    def _get(self, request, *args, **kwargs):
+        merged_into = self._merged_into(kwargs.get("slug"))
+        if merged_into is not None:
+            if self.template_name == SpeakerPanelView.template_name:
+                return redirect("speaker_panel", slug=merged_into.slug)
+            # Permanent only for a public page, so search engines move the old address's ranking across;
+            # anything else depends on who is asking, and a browser would cache a 301 for good.
+            return redirect(merged_into.get_absolute_url(), permanent=merged_into.is_indexable)
+        response = super().get(request, *args, **kwargs)
+        if self.template_name == SpeakerPanelView.template_name:
+            # A fragment of a page, never a page of its own.
+            response["X-Robots-Tag"] = "noindex"
+        return response
+
+    def _merged_into(self, slug):
+        """The live record a merged duplicate's slug now points at, if this viewer may open it."""
+        speaker = Speaker.objects.filter(slug=slug, is_deleted=True, merged_into__isnull=False).first()
+        for _hop in range(MAX_MERGE_HOPS):
+            if speaker is None or speaker.merged_into_id is None:
+                return None
+            speaker = speaker.merged_into
+            if not speaker.is_deleted:
+                if speaker.can_be_viewed_by(self.request.user, self.is_nec_member):
+                    return speaker
+                self._sign_in_to_view(speaker)
+                return None
+        return None
+
+    def _sign_in_to_view(self, speaker):
+        """A signed-out visitor to a page for anyone signed in is asked to sign in. Anyone can sign up, so this
+        confirms nothing a free account wouldn't. Whole pages only: the panel is a fragment, and stays a 404.
+        """
+        if (
+            self.template_name != SpeakerPanelView.template_name
+            and speaker.visibility == Speaker.VISIBILITY_SIGNED_IN
+            and not self.request.user.is_authenticated
+        ):
+            raise SignInToView(speaker.get_absolute_url())
+
     def get_queryset(self):
-        return self.visible_speakers().prefetch_related("topics")
+        return Speaker.objects.filter(is_deleted=False).prefetch_related("topics")
+
+    def get_object(self, queryset=None):
+        speaker = super().get_object(queryset)
+        if not speaker.can_be_viewed_by(self.request.user, self.is_nec_member, self.request.GET.get("key", "")):
+            self._sign_in_to_view(speaker)
+            raise Http404
+        if not speaker.is_indexable:
+            # Keeps it out of search engines, analytics and other sites' referrers (PrivatePageMiddleware).
+            self.request.is_private_page = True
+        return speaker
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         speaker = self.object
-        context["tag_counts"] = speaker.tag_counts()
-        context["my_tags"] = speaker.tags_by_user(self.request.user)
-        context["tag_groups"] = SpeakerTag.grouped_definitions()
-        context["comments"] = speaker.comments.filter(is_deleted=False).select_related("user", "club")
-        context["comment_form"] = SpeakerCommentForm()
-        context["can_delete"] = speaker.can_be_deleted_by(self.request.user)
-        context["can_edit"] = speaker.can_be_deleted_by(self.request.user)
+        user = self.request.user
+        context["is_nec_member"] = self.is_nec_member
+        # Not where a scraper can harvest it. Somebody who listed themselves chose to be reached; contact
+        # details a club officer typed in for somebody else stay with NEC clubs, as before the list opened.
+        context["show_contact_details"] = user.is_authenticated and bool(
+            speaker.user_id or self.is_nec_member or speaker.is_owned_by(user)
+        )
+        # Tags and comments: read by anyone signed in, left by NEC clubs, and only on pages those clubs can
+        # list (SpeakerTagView looks the speaker up the same way), not on link-only or hidden ones.
+        context["show_club_notes"] = user.is_authenticated and shows_comments(speaker, self.is_nec_member)
+        context["tags_read_only"] = False
+        if context["show_club_notes"]:
+            context["tag_counts"] = speaker.tag_counts()
+            context["my_tags"] = speaker.tags_by_user(user)
+            context["tag_groups"] = SpeakerTag.grouped_definitions()
+            context["comments"] = speaker.comments.filter(is_deleted=False).select_related("user", "club")
+            context["comment_form"] = SpeakerCommentForm()
+        context["can_delete"] = speaker.can_be_deleted_by(user)
+        context["can_edit"] = speaker.can_be_deleted_by(user)
+        # "This is me" while nobody's account owns the page yet.
+        context["can_claim"] = not speaker.user_id
+        context["claim_pending"] = bool(
+            context["can_claim"]
+            and user.is_authenticated
+            and SpeakerClaim.objects.filter(speaker=speaker, user=user, status=SpeakerClaim.STATUS_OPEN).exists()
+        )
+        context["page_key"] = self.request.GET.get("key", "")
+        if context["can_edit"] and speaker.visibility == Speaker.VISIBILITY_LINK:
+            context["share_url"] = self.request.build_absolute_uri(speaker.share_url)
         latitude, longitude, _club, _label, _change_url = self.resolve_origin()
         if latitude is not None and speaker.has_coordinates:
             context["distance"] = int(
@@ -320,19 +478,63 @@ class SpeakerPanelView(NECSpeakerAccessMixin, DetailView):
         return context
 
 
+def speaker_meta_description(speaker):
+    """What a search result says under the name: the bio's start, else the topics."""
+    text = " ".join((speaker.bio or "").split())
+    if not text:
+        topics = ", ".join(topic.name for topic in speaker.topics.all())
+        text = f"{speaker.display_name} gives talks to aquarium clubs" + (f" on {topics}." if topics else ".")
+    return truncatechars(text, 155)
+
+
+def speaker_structured_data(speaker, page_url, image_url):
+    """schema.org Person for a public profile, safe to put inside a script tag."""
+    data = {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": speaker.display_name,
+        "url": page_url,
+        "jobTitle": "Aquarium club speaker",
+    }
+    if speaker.bio:
+        data["description"] = truncatechars(" ".join(speaker.bio.split()), 500)
+    if image_url:
+        data["image"] = image_url
+    if speaker.location:
+        data["homeLocation"] = {"@type": "Place", "name": speaker.location}
+    topics = [topic.name for topic in speaker.topics.all()]
+    if topics:
+        data["knowsAbout"] = topics
+    same_as = [url for url in (speaker.website, speaker.facebook_page) if url]
+    if same_as:
+        data["sameAs"] = same_as
+    text = json.dumps(data).translate({ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u0026"})
+    return mark_safe(text)  # noqa: S308 -- json with the three HTML-significant characters escaped
+
+
 class SpeakerDetailView(SpeakerPanelView):
-    """A speaker's own page, for when someone shares the URL the panel pushed."""
+    """A speaker's own page, for when someone shares the URL the panel pushed, and what search engines index."""
 
     template_name = "auctions/speaker_detail.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        speaker = self.object
         context["standalone"] = True
+        context["meta_description"] = speaker_meta_description(speaker)
+        if speaker.is_indexable:
+            page_url = self.request.build_absolute_uri(speaker.get_absolute_url())
+            image_url = speaker.display_url
+            if image_url and image_url.startswith("/"):
+                image_url = self.request.build_absolute_uri(image_url)
+            context["canonical_url"] = page_url
+            context["og_image"] = image_url or ""
+            context["structured_data"] = speaker_structured_data(speaker, page_url, image_url)
         return context
 
 
-class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
-    """Add a speaker.  Anyone who can see the directory can add to it."""
+class SpeakerCreateView(ClubAdminSpeakerMixin, CreateView):
+    """Add somebody else to the directory. Club admins only (``ClubAdminSpeakerMixin``)."""
 
     model = Speaker
     form_class = SpeakerForm
@@ -350,15 +552,14 @@ class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
     def club_being_represented(self):
         """The club to record as the source of this entry, without asking.
 
-        ``?club=`` is the club they came in from; failing that, somebody in exactly one NEC club can only
-        be representing that one. Somebody in several records no club. Same rule as SpeakerCommentView.
+        ``?club=`` is the club they came in from; failing that, somebody who admins exactly one club can only
+        be representing that one. Somebody admin of several records no club.
         """
         club_slug = (self.request.GET.get("club") or "").strip()
         if club_slug:
-            club = next((c for c in self.nec_clubs if c.slug == club_slug), None)
-            if club:
-                return club
-        return self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
+            # A club they don't admin is not one they can be representing, and guessing another is worse.
+            return next((c for c in self.admin_clubs if c.slug == club_slug), None)
+        return self.admin_clubs[0] if len(self.admin_clubs) == 1 else None
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
@@ -376,21 +577,106 @@ class SpeakerCreateView(NECSpeakerAccessMixin, CreateView):
         return context
 
 
-class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
-    """Edit a speaker; restricted to whoever added them (imported rows: superusers only)."""
+class SpeakerSelfCreateView(LoginRequiredMixin, SpeakerAccessMixin, CreateView):
+    """Add yourself to the directory. Anyone signed in; somebody who already has a profile edits it."""
+
+    model = Speaker
+    form_class = SpeakerForm
+    template_name = "auctions/speaker_form.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        existing = own_speaker_profile(request.user)
+        if existing is not None:
+            return redirect("speaker_edit", slug=existing.slug)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["self_listing"] = True
+        return kwargs
+
+    def get_initial(self):
+        initial = super().get_initial()
+        user = self.request.user
+        initial["name"] = user.get_full_name()
+        initial["email"] = user.email
+        userdata = getattr(user, "userdata", None)
+        if userdata is not None and getattr(userdata, "phone_number", ""):
+            initial["phone"] = userdata.phone_number
+        return initial
+
+    def form_valid(self, form):
+        form.instance.user = self.request.user
+        form.instance.created_by = self.request.user
+        response = super().form_valid(form)
+        messages.success(self.request, "You're in the speaker directory.")
+        return response
+
+    def get_success_url(self):
+        return reverse("speaker_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = "Add yourself as a speaker"
+        form = context.get("form")
+        name = (form.data.get("name") if form is not None and form.is_bound else None) or self.get_initial().get("name")
+        # Already listed under this name (most likely from the NEC import): claim it rather than add a second.
+        context["possible_matches"] = [
+            speaker
+            for speaker in possible_matches(name or "")
+            if speaker.can_be_viewed_by(self.request.user, self.is_nec_member) and not speaker.user_id
+        ][:5]
+        return context
+
+
+class SpeakerClaimView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """ "This is me": ask for a speaker's page to become your profile. Only a request: a person approves it
+    through the admin connector (``find_duplicate_speakers`` lists it, ``link_speaker_to_account`` settles it).
+    """
+
+    def get(self, request, slug):
+        # Where signing in lands; claiming is the button on the page, never a GET.
+        return redirect("speaker_detail", slug=slug)
+
+    def post(self, request, slug):
+        speaker = get_object_or_404(Speaker.objects.filter(is_deleted=False), slug=slug)
+        if not speaker.can_be_viewed_by(request.user, self.is_nec_member, request.POST.get("key", "")):
+            raise Http404
+        if speaker.user_id:
+            messages.info(request, "This page already belongs to an account.")
+        else:
+            # Once per person: a declined request is not put back in the queue by pressing again.
+            SpeakerClaim.objects.get_or_create(speaker=speaker, user=request.user)
+            messages.success(request, "Thanks, we'll check it and link this page to your account.")
+        url = speaker.get_absolute_url()
+        key = request.POST.get("key", "")
+        return redirect(f"{url}?{urlencode({'key': key})}" if key else url)
+
+
+class SpeakerUpdateView(LoginRequiredMixin, SpeakerAccessMixin, UpdateView):
+    """Edit a speaker: the person themselves, whoever added them, or a superuser (imported rows: superusers
+    only, until the person's own profile is merged in).
+    """
 
     model = Speaker
     form_class = SpeakerForm
     template_name = "auctions/speaker_form.html"
 
     def get_queryset(self):
-        return self.visible_speakers()
+        return Speaker.objects.filter(is_deleted=False)
 
     def get_object(self, queryset=None):
         speaker = super().get_object(queryset)
         if not speaker.can_be_deleted_by(self.request.user):
+            if not speaker.can_be_viewed_by(self.request.user, self.is_nec_member):
+                raise Http404
             raise PermissionDenied()
         return speaker
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["self_listing"] = self.object.user_id == self.request.user.pk
+        return kwargs
 
     def get_success_url(self):
         return reverse("speaker_detail", kwargs={"slug": self.object.slug})
@@ -401,23 +687,31 @@ class SpeakerUpdateView(NECSpeakerAccessMixin, UpdateView):
         return context
 
 
-class SpeakerDeleteView(NECSpeakerAccessMixin, View):
-    """Soft-delete a speaker you added, keeping other clubs' tags and comments in case it's a mistake."""
+class SpeakerDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Soft-delete yourself or a speaker you added, keeping other clubs' tags and comments in case it's a
+    mistake.
+    """
 
     def post(self, request, slug):
-        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        speaker = get_object_or_404(Speaker.objects.filter(is_deleted=False), slug=slug)
         if not speaker.can_be_deleted_by(request.user):
+            if not speaker.can_be_viewed_by(request.user, self.is_nec_member):
+                raise Http404
             raise PermissionDenied()
         Speaker.objects.filter(pk=speaker.pk).update(is_deleted=True)
         messages.success(request, f"{speaker.display_name} has been removed from the speaker directory.")
         return redirect("speaker_list")
 
 
-class SpeakerTagView(NECSpeakerAccessMixin, View):
-    """Toggle one of the current user's tags on a speaker and re-render the tag block."""
+class SpeakerTagView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Toggle one of the current user's tags on a speaker and re-render the tag block. Anyone signed in, on the
+    pages that show comments (``shows_comments``), including their own profile.
+    """
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        if not shows_comments(speaker, self.is_nec_member):
+            raise Http404
         tag = (request.POST.get("tag") or "").strip()
         if tag not in SpeakerTag.TAG_LABELS:
             raise Http404
@@ -434,22 +728,46 @@ class SpeakerTagView(NECSpeakerAccessMixin, View):
                 "tag_counts": speaker.tag_counts(),
                 "my_tags": speaker.tags_by_user(request.user),
                 "tag_groups": SpeakerTag.grouped_definitions(),
+                "tags_read_only": False,
             },
         )
 
 
-class SpeakerCommentView(NECSpeakerAccessMixin, View):
-    """Add a comment to a speaker, and re-render the comment list."""
+def shows_comments(speaker, is_nec_member):
+    """Whether a page shows comments (and takes them): public and signed-in-only ones, and NEC-only ones for
+    NEC clubs. A signed-in-only page is only ever open to someone signed in, and so is commenting.
+    """
+    return speaker.visibility in (Speaker.VISIBILITY_PUBLIC, Speaker.VISIBILITY_SIGNED_IN) or (
+        speaker.visibility == Speaker.VISIBILITY_NEC and is_nec_member
+    )
+
+
+class SpeakerCommentView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Add a comment to a speaker, and re-render the comment list. Anyone signed in, on the pages that show
+    comments, except the speaker on their own page; at most ``SpeakerComment.HOURLY_LIMIT`` an hour.
+    """
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        if not shows_comments(speaker, self.is_nec_member):
+            raise Http404
         form = SpeakerCommentForm(request.POST)
+        if speaker.user_id == request.user.pk:
+            form.add_error(None, "Comments are for other people's notes about you.")
+        elif (
+            SpeakerComment.objects.filter(
+                user=request.user, createdon__gte=timezone.now() - datetime.timedelta(hours=1)
+            ).count()
+            >= SpeakerComment.HOURLY_LIMIT
+        ):
+            form.add_error(None, "That's a lot of comments for one hour; try again later.")
         if form.is_valid():
             comment = form.save(commit=False)
             comment.speaker = speaker
             comment.user = request.user
-            # Recorded for the admin only, and only when there's one club to attach.
-            comment.club = self.nec_clubs[0] if len(self.nec_clubs) == 1 else None
+            # Recorded for the admin only, and only when there's one real club to attach.
+            if len(self.nec_clubs) == 1 and not request.user.is_superuser:
+                comment.club = self.nec_clubs[0]
             comment.save()
             form = SpeakerCommentForm()
         return render(
@@ -463,15 +781,21 @@ class SpeakerCommentView(NECSpeakerAccessMixin, View):
         )
 
 
-class SpeakerCommentDeleteView(NECSpeakerAccessMixin, View):
-    """Remove your own comment (or, for a superuser, anyone's)."""
+class SpeakerCommentDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Remove your own comment (or, for a superuser, anyone's), even on a page you can no longer open:
+    it carries your username. The list it re-renders is only for a page that shows you comments.
+    """
 
     def post(self, request, slug, pk):
-        speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        speaker = get_object_or_404(Speaker.objects.filter(is_deleted=False), slug=slug)
         comment = get_object_or_404(SpeakerComment, pk=pk, speaker=speaker)
         if not comment.can_be_deleted_by(request.user):
             raise PermissionDenied()
         SpeakerComment.objects.filter(pk=comment.pk).update(is_deleted=True)
+        if not (
+            speaker.can_be_viewed_by(request.user, self.is_nec_member) and shows_comments(speaker, self.is_nec_member)
+        ):
+            return HttpResponse("")
         return render(
             request,
             "auctions/partials/speaker_comments.html",

@@ -124,6 +124,25 @@ def input_schema(action: palette_actions.Action) -> dict[str, Any]:
         schema["required"] = required
     # run_action refuses unadvertised parameters, so say so up front.
     schema["additionalProperties"] = False
+    if action.name == "add_lots":
+        single = input_schema(palette_actions.ACTIONS["add_lot"])
+        count = {"type": "integer", "minimum": 1, "maximum": palette_actions.MAX_LOTS_PER_BATCH}
+        item_properties = {key: single["properties"][key] for key in palette_actions._PER_LOT_KEYS}
+        properties["lots"].update(
+            minItems=1,
+            maxItems=palette_actions.MAX_LOTS_PER_BATCH,
+            items={
+                "anyOf": [
+                    {"type": "string", "minLength": 1},
+                    {
+                        "type": "object",
+                        "properties": {**item_properties, "count": count},
+                        "required": ["name"],
+                    },
+                ]
+            },
+        )
+        properties["count"].update(count)
     return schema
 
 
@@ -144,8 +163,14 @@ def title_for(action: palette_actions.Action) -> str:
     return action.name.replace("_", " ").capitalize()
 
 
-def describe(action: palette_actions.Action) -> str:
-    """The tool description: what the registry says, plus the examples it carries."""
+def describe(action: palette_actions.Action, *, palette: bool = False) -> str:
+    """The tool description: what the registry says, plus the examples it carries.
+
+    ``palette`` keeps the website's own wording: the palette navigates by itself and offers the lot
+    form instead of ``add_lot``, so ``Action.mcp_description`` would tell its model the opposite.
+    """
+    if action.mcp_description and not palette:
+        return action.mcp_description.strip()
     description = action.description.strip()
     if action.examples:
         # Phrased as data, never as an instruction to the model.
@@ -153,7 +178,7 @@ def describe(action: palette_actions.Action) -> str:
     return description
 
 
-def descriptor(action: palette_actions.Action) -> dict[str, Any]:
+def descriptor(action: palette_actions.Action, *, palette: bool = False) -> dict[str, Any]:
     """One MCP tool descriptor.
 
     ``tools/list`` is paid for in context every session, so keys that restate the spec's default are
@@ -174,7 +199,7 @@ def descriptor(action: palette_actions.Action) -> dict[str, Any]:
     built = {
         "name": action.name,
         "title": title_for(action),
-        "description": describe(action),
+        "description": describe(action, palette=palette),
         "inputSchema": input_schema(action),
         "annotations": annotations,
         # A URL, not inline SVG; see auctions.mcp.icons.
@@ -243,16 +268,19 @@ def wanted(action: palette_actions.Action, areas: set[str]) -> bool:
     return area_of(action) in (areas | {AREA_GENERAL})
 
 
-def tool_descriptors(user=None, *, writes: bool = True, areas: set[str] | None = None) -> list[dict[str, Any]]:
+def tool_descriptors(
+    user=None, *, writes: bool = True, areas: set[str] | None = None, palette: bool = False
+) -> list[dict[str, Any]]:
     """The catalogue for one caller.
 
     ``user=None`` means every action (for the audit test). ``actions_for`` filters for relevance, not
     security. ``writes=False`` drops write tools from the list as well as the call. ``areas`` is the
-    ``?tools=`` filter, since the protocol has no way to ask for a subset.
+    ``?tools=`` filter, since the protocol has no way to ask for a subset. ``palette`` is the command
+    palette asking, which gets the website wording (see :func:`describe`).
     """
     areas = areas or set()
     return [
-        descriptor(action)
+        descriptor(action, palette=palette)
         for action in palette_actions.actions_for(user)
         if (writes or read_only(action)) and wanted(action, areas)
     ]
@@ -288,7 +316,7 @@ def _absolute(value: Any, base) -> Any:
     return value
 
 
-def _text(payload: Any) -> str:
+def _text(payload: Any, *, operation_completed: bool = False) -> str:
     """Serialise a result, replacing (never slicing) one over budget, so it stays valid JSON.
 
     Compact and unescaped: indenting and ``\\u00ab`` for every fence mark were a fifth of a list's
@@ -303,10 +331,16 @@ def _text(payload: Any) -> str:
         summary = summary[:SUMMARY_CHARS] + "…"
     return json.dumps(
         {
+            "status": "error",
+            "error_code": "result_too_large",
             "error": "That result was too big to send.",
             "summary": summary,
+            "operation_completed": operation_completed,
+            "retryable": False,
             "what_to_do": (
-                "Ask for less of it: most list tools take limit and offset, and the search tools "
+                "The operation completed. Do not repeat the write; inspect the result with a read tool."
+                if operation_completed
+                else "Ask for less of it: most list tools take limit and offset, and the search tools "
                 f"take a narrower query. The ceiling is {MAX_RESULT_CHARS} characters."
             ),
         },
@@ -323,6 +357,8 @@ def _result(
     No ``outputSchema``: one loose enough to fit every result validates nothing.
     """
     result: dict[str, Any] = {"content": [{"type": "text", "text": text}], "isError": is_error}
+    if is_error and structured is None:
+        structured = {"status": "error", "error_code": "execution_error", "error": text}
     if links:
         result["content"].extend(links)
     if isinstance(structured, dict):
@@ -382,7 +418,8 @@ def call_tool(request, name: str, arguments: Any, *, writes: bool = True) -> dic
             cache.delete(repeat_key)
         raise
     if repeat_key:
-        if result.get("isError") or (result.get("structuredContent") or {}).get("nothing_was_changed"):
+        payload = result.get("structuredContent") or {}
+        if (result.get("isError") and not payload.get("operation_completed")) or payload.get("nothing_was_changed"):
             # Nothing happened, so the same call again is a retry, not a duplicate.
             cache.delete(repeat_key)
         else:
@@ -457,10 +494,27 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
         {"type": "image", "data": base64.b64encode(picture).decode(), "mimeType": "image/jpeg"}
         for picture in result.get(palette_actions.KEY_IMAGES) or []
     ]
-    body = _text(_absolute(_payload(result), request.build_absolute_uri))
+    payload = _absolute(_payload(result), request.build_absolute_uri)
+    if action.danger == palette_actions.DANGER_NAVIGATE and payload.get("url"):
+        # The palette performs navigation; MCP only resolves the destination for its host.
+        # Its own summary still says which page was found ("the bulk page, nothing filled in").
+        found = payload.get("summary") if isinstance(payload.get("summary"), str) else ""
+        payload.update(
+            status="destination_resolved",
+            navigation_performed=False,
+            summary=f"Not opened yet; give the user the link. {found}".strip(),
+        )
+    body = _text(payload, operation_completed=not read_only(action))
     # Parsed back from the text so both say the same thing and the structure is JSON-safe (Decimals).
     structured = json.loads(body)
     if auth.reads_structured_content(credential) and isinstance(structured.get("summary"), str):
         # ChatGPT hands its model structuredContent *and* the text, so the JSON went in twice.
         body = structured["summary"]
-    return _result(body, structured=structured, links=links)
+        if structured.get("status") == "destination_resolved":
+            body += f"\n[Open page]({structured['url']})"
+        elif structured.get("error_code") == "result_too_large":
+            body = f"{structured['error']} {structured['what_to_do']}"
+    # A write that went through is not a failure because its receipt was too long to send: a host
+    # shown an error says so to the user, who then does it again.
+    failed = structured.get("status") == "error" and not structured.get("operation_completed")
+    return _result(body, is_error=failed, structured=structured, links=links)

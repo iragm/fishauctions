@@ -4,6 +4,12 @@
 {% load webpush_notifications %}
 {% load currency_filters %}
 {% load species_tags %}
+{% load seo_tags %}
+{% block open_graph %}
+{% absolute_uri lot.get_absolute_url as og_url %}
+{% if lot.thumbnail and lot.thumbnail.display_url %}{% absolute_uri lot.thumbnail.display_url as og_image %}{% elif lot.auction.club.icon %}{% absolute_uri lot.auction.club.icon_display_url as og_image %}{% endif %}
+{% if lot.auction %}{% include "open_graph.html" with og_title=lot.lot_name og_description="Lot in "|add:lot.auction.title og_url=og_url og_image=og_image %}{% else %}{% include "open_graph.html" with og_title=lot.lot_name og_url=og_url og_image=og_image %}{% endif %}
+{% endblock %}
 {% block extra_head %}
     {% comment %}
     webpush.js dereferences the subscribe button on load, so only load it when the button is
@@ -440,7 +446,8 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                 <h3 class="mb-1">{{ lot.lot_name }}</h3>
                 {% comment %}The scientific name the seller picked.  Italics because that is how a binomial is set, and a cultivar is shown as Genus species 'Strain' -- see Species.full_scientific_name.  The "?" is where FishBase's attribution lives: it is asked for wherever their data is used, and this is the one page where a reader is actually reading the name, so it is here rather than under every lot form on the site.{% endcomment %}
                 {% comment %}Which of the two names goes underneath depends on which one the seller typed up there -- see Lot.scientific_name_line and Lot.common_name_line.  A lot called "Labidochromis caeruleus" gets "Yellow lab" here, not the same two words in italics.{% endcomment %}
-                {% if lot.scientific_name_line %}<div class="text-muted"><i>{{ lot.scientific_name_line }}</i> <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>
+                {% comment %}Species pages are unlinked while they are new: only a superuser gets the link.{% endcomment %}
+                {% if lot.scientific_name_line %}<div class="text-muted">{% if request.user.is_superuser and lot.species_id %}<a class="text-muted" href="{{ lot.species.get_absolute_url }}"><i>{{ lot.scientific_name_line }}</i></a>{% else %}<i>{{ lot.scientific_name_line }}</i>{% endif %} <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>
                 {% elif lot.common_name_line %}<div class="text-muted">{{ lot.common_name_line }} <a class="text-muted small" data-bs-toggle="collapse" href="#fishbase-citation" role="button" aria-expanded="false" aria-controls="fishbase-citation" aria-label="Where does this name come from?" title="Where does this name come from?"><i class="bi bi-question-circle"></i></a></div>{% endif %}
                 {% if lot.scientific_name_line or lot.common_name_line %}<div class="collapse" id="fishbase-citation">{% fishbase_citation %}</div>{% endif %}
                 <div class="text-muted small mb-2">{{ lot.species_category }}, lot number {{ lot.lot_number_display }}</div>
@@ -619,9 +626,9 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                         $('#bid_amount').removeClass('is-invalid');
                                         $('#confirmBid').modal('show');
                                         {% if force_buy_now %}
-                                        var dialogText = "Buy {{ lot.lot_name|force_escape|escapejs }} now for $" + bid + "?<br><br><small>All sales are final</small>";
+                                        var dialogText = "Buy {{ lot.lot_name|force_escape|escapejs }} now for {{ lot.currency_symbol|escapejs }}" + bid + "?<br><br><small>All sales are final</small>";
                                         {% else %}
-                                        var dialogText = "Bid $" + bid + " on {{ lot.lot_name|force_escape|escapejs }}<br><br><small>{% if not lot.auction.allow_deleting_bids %}All bids are final{% endif %}</small>";
+                                        var dialogText = "Bid {{ lot.currency_symbol|escapejs }}" + bid + " on {{ lot.lot_name|force_escape|escapejs }}<br><br><small>{% if not lot.auction.allow_deleting_bids %}All bids are final{% endif %}</small>";
                                         {% endif %}
                                         {% if not lot.auction %}
                                             dialogText += "<br><div>This lot is sold directly by {{ lot.user|force_escape|escapejs }}.  Make sure to check the user's feedback.</div>";
@@ -635,11 +642,28 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                             // Place the bid over plain HTTP so it is saved even if the
                                             // websocket is down. The live price / high-bidder update still
                                             // arrives via the websocket broadcast, so the UI behaves the same.
+                                            var finalizeButton = document.querySelector('#finalize-bid');
+                                            if (finalizeButton.disabled) { return; }
+                                            finalizeButton.disabled = true;
                                             $.post({
                                                 url: "{% url 'lot_bid' pk=lot.pk %}",
                                                 data: { 'bid': bid },
                                                 beforeSend: function (request) {
                                                     request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                                                },
+                                                success: function(result) {
+                                                    if (result.type === 'ERROR') {
+                                                        $.toast({ title: result.message, type: 'danger', delay: 8000 });
+                                                        return;
+                                                    }
+                                                    var your_bid = Number($('#your_bid_price').html());
+                                                    var price = Number($('#price').html());
+                                                    if (bid > your_bid) {
+                                                        $('#your_bid').html('Your max bid is {{ lot.currency_symbol|escapejs }}<span id="your_bid_price">' + bid + "</span>");
+                                                    }
+                                                    if (bid > price) {
+                                                        $('#bid_amount').val(next_bid(price));
+                                                    }
                                                 },
                                                 error: function() {
                                                     $.toast({
@@ -647,16 +671,11 @@ Nothing has been dropped -- see the git history of this file if a fact looks mis
                                                         type: 'danger',
                                                         delay: 8000
                                                     });
+                                                },
+                                                complete: function() {
+                                                    finalizeButton.disabled = false;
                                                 }
                                             });
-                                            var your_bid = Number($('#your_bid_price').html());
-                                            var price = Number($('#price').html());
-                                            if (bid > your_bid) {
-                                                $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
-                                            }
-                                            if (bid > price) {
-                                                $('#bid_amount').val(next_bid(price));
-                                            }
                                             $('#confirmBid').modal('hide');
                                             $('#confirmDialogText').html("Enter an amount");
                                         }
@@ -933,7 +952,7 @@ side. They are closed after the recommended-lots strip at the bottom of the page
             <div class="modal-footer">
                 {% comment %}One button, not two. The body is already one sentence with a sign-in link in it, and the sign-in page offers creating an account -- so a second primary button here said the same thing a third time.{% endcomment %}
                 {% if not user.is_authenticated %}
-                    <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
+                    <a href="{% url 'account_login' %}?next={{ lot.lot_link }}" rel="nofollow" role="button" class="btn btn-primary">Sign in</a>
                 {% comment %}The auction test is not redundant: a standalone lot has no auction, and
                 user_tos is falsy for it too, so this used to reverse auction_main with an empty slug
                 and raise NoReverseMatch -- a 500 on any standalone lot a signed-in user opened.{% endcomment %}
@@ -1185,10 +1204,9 @@ grey box with a drop shadow. It is a card now, like every other panel on the pag
         document.querySelector('#chat_send').onclick = function(e) {
             const messageInputDom = document.querySelector('#chat_input');
             const message = messageInputDom.value;
-            if (message) {
-                lotWebSocketSend({ 'message': message });
+            if (message && lotWebSocketSend({message: message})) {
+                messageInputDom.value = '';
             }
-            messageInputDom.value = '';
             {% if show_chat_subscriptions_checkbox %}
             if (autocheck_chat_subscriptions) {
                 document.querySelector('#chat_subscribe_checkbox').checked = true;

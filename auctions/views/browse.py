@@ -8,6 +8,7 @@ import logging
 import re
 from decimal import Decimal
 from random import choice, uniform
+from urllib.parse import urlencode
 
 from dal import autocomplete
 from django.conf import settings
@@ -193,6 +194,12 @@ class LotListView(AjaxListView):
             regardingAuction=self.auction,
         )
         context["embed"] = "all_lots"
+        # Drawn only under "No lots found", which is always the first page, so the pages fetched while
+        # scrolling never pay for it.
+        if not self.request.GET.get("page"):
+            from auctions import ai_page
+
+            context["ask_ai_url"] = ai_page.ask_url(self.request.user, self.request.GET.get("q", ""))
         if self.request.user.is_authenticated:
             context["lotsAreHidden"] = UserIgnoreCategory.objects.filter(user=self.request.user).count()
         else:
@@ -532,6 +539,9 @@ class MyLots(HTMxTableView):
         context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
         context["filter_bap"] = self.request.GET.get("query", "").strip().lower() == "bap"
+        if not self.request.htmx:
+            context["add_lot_auction"] = _last_joined_auction_taking_lots(self.request.user)
+            context["share_lots_url"] = _share_my_lots_url(self.request)
         return context
 
     def get(self, *args, **kwargs):
@@ -571,13 +581,44 @@ def _recent_auctions(user, limit=10):
     return auctions[:limit]
 
 
+def _share_my_lots_url(request):
+    """A link to the seller's own lots in their latest auction that hasn't ended, for them to post, or None."""
+    lot = (
+        Lot.objects.filter(
+            user=request.user,
+            is_deleted=False,
+            banned=False,
+            auction__isnull=False,
+            auction__is_deleted=False,
+        )
+        .select_related("auction")
+        .order_by("-auction__date_start", "-pk")
+        .first()
+    )
+    if not lot or lot.auction.closed or lot.auction.pretty_much_over:
+        return None
+    query = urlencode({"user": request.user.username, "auction": lot.auction.slug, "src": "seller_share"})
+    return request.build_absolute_uri(f"{reverse('user_lots')}?{query}")
+
+
+def _last_joined_auction_taking_lots(user):
+    """The auction ``user`` joined most recently of those they can add a lot to now, or None."""
+    tos = (
+        AuctionTOS.objects.filter(user=user, auction__in=user.userdata.available_auctions_to_submit_lots)
+        .select_related("auction")
+        .order_by("-createdon", "-pk")
+        .first()
+    )
+    return tos.auction if tos else None
+
+
 #: ``?auction=`` for the buying dashboard across every auction, and lots not in one.
 ALL_AUCTIONS = "all"
 
 
 class BuyingDashboard(HTMxTableView):
     """Buying dashboard: the lots you watched, bid on or won in one auction, ``?auction=<slug>`` or the last
-    one you used. ``?auction=all`` is every auction at once.
+    one you joined. ``?auction=all`` is every auction at once.
     """
 
     model = Lot
@@ -598,11 +639,15 @@ class BuyingDashboard(HTMxTableView):
             auction = Auction.objects.filter(slug=slug, is_deleted=False).first()
             if auction:
                 return auction
+        # The auction you joined last, rather than the last one you looked at: that may be one you never
+        # joined, with nothing of yours in it.
+        recent = _recent_auctions(self.request.user, limit=1)
+        if recent:
+            return recent[0]
         last = self.request.user.userdata.last_auction_used
         if last and not last.is_deleted:
             return last
-        recent = _recent_auctions(self.request.user, limit=1)
-        return recent[0] if recent else None
+        return None
 
     def get_lots(self):
         if self.all_auctions:
@@ -851,6 +896,8 @@ class NoLotAuctions(APIView):
                 if tos:
                     if not tos.selling_allowed:
                         result = f"You don't have permission to add lots to {auction}"
+                    elif tos.needs_pickup_location:
+                        result = f"Pick your pickup location on the page for {auction} before you sell"
                     elif not tos.can_sell:
                         result = f"You're holding your lots for the second pickup, so you can't sell in {auction}"
             if not result:
