@@ -1,5 +1,8 @@
 """``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance."""
 
+import json
+from unittest import mock
+
 from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
@@ -42,6 +45,71 @@ class AIPageTests(StandardTestCase):
 
     def ask(self, question, conversation="c1"):
         return self.client.post(reverse("ai_ask"), {"q": question, "conversation": conversation})
+
+    def test_the_page_they_came_from_is_what_this_auction_means(self):
+        """Asked "mark him paid in this auction" with no page, the model went looking in the club."""
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(reverse("ai"), {"q": "who has not paid in this auction?", "from": path})
+        self.assertContains(response, f'name="from" value="{path}"')
+        self.provider.replies = [answer("Nobody.")]
+        self.client.post(
+            reverse("ai_ask"), {"q": "who has not paid in this auction?", "conversation": "c1", "from": path}
+        )
+        facts = self.provider.calls[-1]["messages"][0]["content"]
+        self.assertIn("looking_at_right_now", facts)
+        self.assertIn(self.online_auction.slug, facts)
+        # A title is a member's words, and the path is the visitor's to choose.
+        self.assertIn(
+            "\u00ab" + self.online_auction.title + "\u00bb",
+            json.loads(facts.split("\n", 1)[1])["looking_at_right_now"]["auction_title"],
+        )
+
+    def test_the_tools_default_to_the_page_they_came_from(self):
+        """``_call_tool`` clears the page for agents, which have none; here it has to survive."""
+        from auctions import palette_actions
+
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        seen = []
+        real = palette_actions.run_action
+
+        def spy(request, name, params):
+            seen.append(dict(getattr(request, "palette_page", None) or {}))
+            return real(request, name, params)
+
+        self.provider.replies = [lookup("describe_auction"), answer("It starts soon.")]
+        with mock.patch.object(palette_actions, "run_action", spy):
+            self.client.post(
+                reverse("ai_ask"), {"q": "when does this auction start?", "conversation": "c1", "from": path}
+            )
+        self.assertEqual(seen[0].get("auction"), self.online_auction.slug)
+
+    def test_with_no_page_nothing_is_being_looked_at(self):
+        self.provider.replies = [answer("Nobody.")]
+        self.ask("who has not paid?")
+        self.assertNotIn("looking_at_right_now", self.provider.calls[-1]["messages"][0]["content"])
+
+    def test_only_this_sites_own_paths_are_a_page_to_come_from(self):
+        for bad in (
+            "https://example.com/auctions/x/",
+            "//example.com/",
+            "auctions/x/",
+            "",
+            None,
+            "/" + "a" * 600,
+            reverse("ai"),
+        ):
+            self.assertEqual(ai_page.came_from(bad), "", bad)
+        self.assertEqual(ai_page.came_from("/auctions/x/?a=1#b"), "/auctions/x/")
+
+    def test_the_palettes_ask_ai_link_carries_the_page(self):
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        groups = command_palette.with_ask_ai([], "who has not paid", self.user, path)
+        self.assertIn("from=", groups[-1]["items"][0]["url"])
+        self.assertNotIn("from=", command_palette.with_ask_ai([], "who has not paid", self.user)[-1]["items"][0]["url"])
+
+    def test_it_is_told_it_cannot_change_anything(self):
+        self.assertIn("never", ai_page.SYSTEM_PROMPT)
+        self.assertIn("cannot change anything", ai_page.SYSTEM_PROMPT)
 
     def test_signed_out_is_sent_to_sign_in(self):
         self.client.logout()

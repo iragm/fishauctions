@@ -62,6 +62,9 @@
     var navigatedByClick = false; // suppress the abandon-on-close beacon after a click
     var finalized = false; // has the current query already been finalized (abandoned/bounce)?
     var pendingPrefill = null; // text handed over by an AI box; the palette opens holding it and submits it
+    // Opened by an AI box on an admin page. The palette on its own only opens pages; a box is where a
+    // command is typed, so the server is told and offers the tools that change things. Until it closes.
+    var fromBox = false;
     var logChain = Promise.resolve(); // serialize log writes so refinements share one row
     var items = []; // flat list of rendered result elements for keyboard nav
     var activeIndex = -1;
@@ -700,6 +703,7 @@
           action: response.action,
           params: response.params,
           path: window.location.pathname,
+          box: fromBox,
         }),
       })
         .then(function (resp) {
@@ -851,7 +855,7 @@
         credentials: "same-origin",
         // `path` lets the server work out which auction/club/lot we're looking at. It resolves the
         // path through its own URLconf and re-checks every object, so this is a hint, not a claim.
-        body: JSON.stringify({ q: query, context: loadContext(), path: window.location.pathname }),
+        body: JSON.stringify({ q: query, context: loadContext(), path: window.location.pathname, box: fromBox }),
         signal: assistAbort ? assistAbort.signal : undefined,
       })
         .then(function (resp) {
@@ -1311,6 +1315,7 @@
       cancelPendingNavigation();
       abortAssist();
       flushFinal();
+      fromBox = false;
     });
 
     // Leaving the page (normal link, back button, tab close) does not fire the modal's hidden
@@ -1318,7 +1323,7 @@
     window.addEventListener("pagehide", flushFinal);
 
     // The AI boxes on the club and auction ribbons. Enter hands their text to the palette, which opens already
-    // holding it and submits it, the same as Enter inside the palette.
+    // holding it and submits it, the same as Enter inside the palette -- except that it may change things.
     document.querySelectorAll("[data-palette-box]").forEach(function (box) {
       var placeholders = [];
       try {
@@ -1336,6 +1341,7 @@
         }
         event.preventDefault();
         pendingPrefill = text;
+        fromBox = true;
         box.value = "";
         open();
       });

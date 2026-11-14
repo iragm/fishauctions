@@ -49,7 +49,7 @@ this only quotes its opening sentence.
 - **`ads_admin.py`** (122 lines)
   The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
-- **`ai_page.py`** (344 lines)
+- **`ai_page.py`** (384 lines)
   ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
 - **`announcements.py`** (414 lines)
   Club announcements: one message, sent to the places a club's members look.
@@ -120,13 +120,13 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1659 lines)
+- **`command_palette.py`** (1667 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `page_verb_items`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (377 lines)
+- **`context_processors.py`** (385 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -201,7 +201,7 @@ this only quotes its opening sentence.
   `sanitize_summernote_html`, `remove_html_color_tags`
 - **`lifecycle.py`** (547 lines)
   Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
-- **`llm.py`** (422 lines)
+- **`llm.py`** (763 lines)
   Provider abstraction for everything on this site that talks to a language model.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
@@ -238,7 +238,7 @@ this only quotes its opening sentence.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
 - **`palette_actions.py`** (17111 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (2201 lines)
+- **`palette_assist.py`** (2259 lines)
   Natural-language orchestration for the command palette.
 - **`palette_routes.py`** (2063 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
@@ -341,7 +341,7 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
-- **`test_ai_page.py`** (336 lines)
+- **`test_ai_page.py`** (404 lines)
   ``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance.
   `answer`, `lookup`, `AIPageTests`, `AIPageLinkTests`, `LibraryAllowanceTests`, `AskWhereSearchFailsTests`
 - **`test_android_testers.py`** (135 lines)
@@ -546,6 +546,9 @@ this only quotes its opening sentence.
 - **`test_lifecycle.py`** (404 lines)
   Tests for phase 9: milestones, lapsing definition, session replay and cohorts.
   `ClubHistoryFixture`, `LapsingTests`, `CohortTests`, `SignInStitchTests`, `SessionTimelineTests`, `MedianMemberTests`, `UnreachedShareTests`, `MilestoneReachTests`, `SessionReplayPageTests`
+- **`test_llm_anthropic.py`** (342 lines)
+  Claude as the site's model: what :class:`auctions.llm.AnthropicProvider` sends and how it reads replies.
+  `reply`, `tool_use`, `AnthropicProviderTests`, `ProviderChoiceTests`
 - **`test_location_check.py`** (174 lines)
   The far-from-pickup location check, its "yes, my location is accurate" box, and the setup box for experienced creators.
   `LocationCheckTests`, `ConfirmBoxTests`, `SetupBoxTests`
@@ -661,7 +664,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (891 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5314 lines)
+- **`test_palette_assist.py`** (5450 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -704,7 +707,7 @@ this only quotes its opening sentence.
 - **`test_reverify_email.py`** (255 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`, `TrustedBounceTopicTests`
-- **`test_review_fixes_club_tools.py`** (142 lines)
+- **`test_review_fixes_club_tools.py`** (160 lines)
   Club management, access requests and the AI box: the review fixes that save an admin a trip.
   `AccessRequestTests`, `ClubSidebarAuctionBlockTests`, `ClubSetupListTests`, `NewClubMembersPageTests`, `AIBoxTests`
 - **`test_review_fixes_emails.py`** (178 lines)
@@ -1155,7 +1158,7 @@ Every view on the site, split by the part of it the view belongs to.
 
 - **`account.py`** (708 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
-- **`admin_checklist.py`** (1049 lines)
+- **`admin_checklist.py`** (1053 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
 - **`ajax.py`** (843 lines)
@@ -1233,7 +1236,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (572 lines)
+- **`palette.py`** (577 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
 - **`payments.py`** (1187 lines)
   Connecting PayPal and Square accounts and taking payments through them.
@@ -1286,7 +1289,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1311 lines)
+- **`settings.py`** (1318 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

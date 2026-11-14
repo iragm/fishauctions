@@ -132,6 +132,55 @@ def navigate_only(user) -> bool:
     return bool(userdata and userdata.palette_navigate_only)
 
 
+def box_enabled(user) -> bool:
+    """Whether this user gets the AI boxes on the auction and club admin pages, which may write.
+
+    The palette is navigate-only for everybody by default, and the boxes hand their text to it, so
+    every example a box showed ("add Bob Smith, bidder 42") reached a model with no write tool and
+    failed. A box is the one place a command is the point: it sits on the page of the auction or club
+    being run. ``ASSISTANT_BOX_WRITES`` is its own kill switch.
+    """
+    from django.conf import settings
+
+    if not getattr(settings, "ASSISTANT_BOX_WRITES", True):
+        return False
+    return assist_enabled_for(user)
+
+
+def from_a_box(user, claimed: Any, page: dict[str, Any] | None) -> bool:
+    """Whether a request that says it came from an AI box (*claimed*) is treated as one.
+
+    The page sends the flag, so it is a claim. It is believed only from somebody who runs what the
+    page is about -- the auction or club the box sits on -- or, on a page that names neither, who runs
+    anything at all: the same people the boxes are drawn for. An ordinary member posting ``box: true``
+    gets the navigate-only palette everybody else has.
+    """
+    if claimed is not True or not box_enabled(user) or not getattr(user, "is_authenticated", False):
+        return False
+    from .models import Auction
+    from .views.base import clubs_with_any_permission
+
+    page = page or {}
+    if page.get("auction"):
+        auction = Auction.objects.filter(slug=page["auction"], is_deleted=False).first()
+        return bool(auction and auction.permission_check(user))
+    clubs = clubs_with_any_permission(user, nec_only=False)
+    if page.get("club"):
+        return clubs.filter(slug=page["club"]).exists()
+    return bool(command_palette._admin_auction_ids(user)) or clubs.exists()
+
+
+def writes_locked(user, box: bool = False) -> bool:
+    """:func:`navigate_only`, unless the command came from an AI box (*box*, :func:`from_a_box`'s answer).
+
+    Not a permission either way: every write still goes through ``run_action``, which checks who is
+    asking.
+    """
+    if box and box_enabled(user):
+        return False
+    return navigate_only(user)
+
+
 #: Which slice of the catalogue a turn was handed. Recorded on every row, because a turn that quietly
 #: lost its write tools is otherwise indistinguishable from an ordinary navigation on the analytics
 #: page -- and "it stopped adding people" is exactly the report that looks like one.
@@ -141,9 +190,9 @@ TOOLS_PAGES = "pages"
 TOOLS_LOCKED = "locked"
 
 
-def tools_tier(user, query: str = "") -> str:
+def tools_tier(user, query: str = "", box: bool = False) -> str:
     """Which of :data:`TOOLS_ALL` and friends this user and query get. See :func:`tools_for`."""
-    if navigate_only(user):
+    if writes_locked(user, box):
         return TOOLS_LOCKED
     if query and asks_for_something_removed(query) and not asks_a_question(query):
         return TOOLS_PAGES
@@ -152,7 +201,7 @@ def tools_tier(user, query: str = "") -> str:
     return TOOLS_READS
 
 
-def tools_for(user, query: str = "") -> list[dict[str, Any]]:
+def tools_for(user, query: str = "", box: bool = False) -> list[dict[str, Any]]:
     """Every tool this user's palette may call: the shared catalogue, plus the three above.
 
     ``Action.mcp_only`` actions are dropped: ``read_source`` and ``club_api`` return pages of text,
@@ -160,7 +209,8 @@ def tools_for(user, query: str = "") -> list[dict[str, Any]]:
 
     A *query* asks for the tiered list. The writes come last and are dropped for a question, so the
     shorter list is a byte-exact **prefix** of the longer one and both share one cached prompt —
-    tiering by suffix rather than by set. No query means the whole catalogue.
+    tiering by suffix rather than by set. No query means the whole catalogue. *box* is
+    :func:`writes_locked`'s.
     """
     from .mcp import tools as mcp_tools
 
@@ -170,7 +220,7 @@ def tools_for(user, query: str = "") -> list[dict[str, Any]]:
         if not getattr(palette_actions.get_action(tool["name"]), "mcp_only", False)
     ]
     reads = [tool for tool in shared if not _is_a_write(tool)]
-    tier = tools_tier(user, query)
+    tier = tools_tier(user, query, box)
     if tier == TOOLS_PAGES:
         # They asked for something this box no longer does. The page still does it, so leave the
         # tools that reach a page and the ones that aim it at the right lot or person — and nothing
@@ -699,7 +749,7 @@ def navigation_shortcut(request, query: str):
             break
     else:
         # A palette that only opens pages reads "bap rules" as the page it names, opener or not.
-        if not navigate_only(request.user) or asks_a_question(query):
+        if not writes_locked(request.user, getattr(request, "palette_box", False)) or asks_a_question(query):
             return None
         target = query.strip(" .")
     if not target:
@@ -1844,12 +1894,16 @@ def _let_go_of_the_database() -> None:
         logger.debug("Could not release the database connection before waiting")
 
 
-def assist_stream(request, query: str, context: Any = None, path: str = ""):
-    """Answer one palette command, yielding ``progress`` dicts then exactly one final response. Never raises."""
+def assist_stream(request, query: str, context: Any = None, path: str = "", box: bool = False):
+    """Answer one palette command, yielding ``progress`` dicts then exactly one final response. Never raises.
+
+    *box* is true for a command typed into an AI box on an admin page. See :func:`writes_locked`.
+    """
     user = request.user
     query = (query or "").strip()[:MAX_QUERY_LENGTH]
     # Parsed once and hung on the request for every resolver.
     request.palette_page = palette_routes.page_context_from_path(user, path) if path else {}
+    request.palette_box = from_a_box(user, box, request.palette_page)
     # What they actually said, for the resolvers: the model drops a named auction often enough that
     # the sentence is worth reading when the parameter is missing.
     request.palette_query = query
@@ -1916,8 +1970,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     provider = get_provider()
     system = build_system_prompt(user, request.palette_page, command_palette.app_destinations_for_prompt(request))
     # Built once per request: two queries, unchanged mid-loop.
-    tier = tools_tier(user, query)
-    tools = tools_for(user, query)
+    tier = tools_tier(user, query, request.palette_box)
+    tools = tools_for(user, query, request.palette_box)
     messages = build_messages(user, query, entries, request.palette_page)
     # Every object a lookup touched, so the answer can be clicked. See :func:`about_groups`.
     abouts: list[dict[str, Any]] = []
@@ -1981,7 +2035,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
             except LLMError as error:
                 settle_tokens(reservation, 0)
                 logger.warning("Assist still rate limited: %s", error)
-                note_provider_failure()
+                if not isinstance(error, llm.Declined):
+                    note_provider_failure()
                 usage_id = record(None, FAIL_BUSY, success=False)
                 log_assist(user, query, KIND_ERROR)
                 yield _give_up(request, query, "Everyone's using this at once. Here's what I found:", usage_id)
@@ -1989,7 +2044,10 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
         except LLMError as error:
             settle_tokens(reservation, 0)
             logger.warning("Assist provider error: %s", error)
-            note_provider_failure()
+            if not isinstance(error, llm.Declined):
+                # A model declining one request is not the provider being down, and four of them
+                # must not rest the assistant for everybody.
+                note_provider_failure()
             usage_id = record(None, FAIL_PROVIDER, success=False)
             log_assist(user, query, KIND_ERROR)
             yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
@@ -2154,14 +2212,14 @@ def assist_stream(request, query: str, context: Any = None, path: str = ""):
     yield _give_up(request, query, "I couldn't work out how to do that.", usage_id)
 
 
-def assist(request, query: str, context: Any = None, path: str = "") -> dict[str, Any]:
+def assist(request, query: str, context: Any = None, path: str = "", box: bool = False) -> dict[str, Any]:
     """Answer one palette command and return just the answer (non-streaming :func:`assist_stream`).
 
     Progress events are dropped, but their waits are not: this path has no client to pace it, so
     skipping them would let ``?stream=false`` walk past the queue everyone else is standing in.
     """
     response: dict[str, Any] = {"kind": KIND_ERROR, "message": "I couldn't work out how to do that."}
-    for event in assist_stream(request, query, context, path):
+    for event in assist_stream(request, query, context, path, box):
         if event.get("kind") == KIND_PROGRESS:
             held = wait_between_events(event)
             if held:
@@ -2171,17 +2229,17 @@ def assist(request, query: str, context: Any = None, path: str = "") -> dict[str
     return response
 
 
-def execute(request, name: str, params: Any, path: str = "") -> dict[str, Any]:
+def execute(request, name: str, params: Any, path: str = "", box: bool = False) -> dict[str, Any]:
     """Run a confirm-tier action after the countdown. The server is the gate: this re-resolves the page,
     re-checks permissions and re-validates everything.
     """
     # A countdown started before assist was turned off must not still run.
     if not assist_enabled_for(request.user):
         return {"kind": KIND_ERROR, "message": "I don't know how to do that."}
-    if navigate_only(request.user):
+    request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
+    if writes_locked(request.user, from_a_box(request.user, box, request.palette_page)):
         # Same for a card that was on screen when the switch went the other way.
         return {"kind": KIND_ERROR, "message": "I can only take you to the right page. That one's done there."}
-    request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
     action = palette_actions.get_action(name)
     if action is None:
         return {"kind": KIND_ERROR, "message": "I don't know how to do that."}

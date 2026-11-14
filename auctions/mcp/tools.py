@@ -477,8 +477,8 @@ def _call_tool(request, action: palette_actions.Action, arguments: dict[str, Any
             "/ai/connect/.",
             is_error=True,
         )
-    # Agents have no page to infer an auction from.
-    request.palette_page = {}
+    # Agents have no page to infer an auction from. /ai/ has the one its visitor came from.
+    request.palette_page = dict(getattr(request, "assistant_page", None) or {})
     result = palette_actions.run_action(request, action.name, arguments)
     if "error" in result:
         return _result(str(result["error"]), is_error=True)

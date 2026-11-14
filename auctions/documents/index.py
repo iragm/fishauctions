@@ -35,7 +35,7 @@ from auctions.documents.extract import (
     parser_version,
     server_reads_pictures,
 )
-from auctions.llm import LLMError, get_provider
+from auctions.llm import LLMError, get_embedding_provider, get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ def _split(text: str, start: int, end: int, heading: str, page: int | None) -> l
 def _unit_vectors(texts: list[str], timeout: float = 60.0) -> list[bytes]:
     """One batch of unit-length float32 vectors as bytes. Raises :class:`LLMError`, including when off."""
     model = settings.LLM_EMBEDDING_MODEL
-    provider = get_provider(timeout=timeout)
+    provider = get_embedding_provider(timeout=timeout)
     if not model or not provider.is_configured():
         msg = "Embeddings are turned off"
         raise LLMError(msg)

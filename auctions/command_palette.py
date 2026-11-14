@@ -1617,8 +1617,11 @@ def search(request, q, *, app_deep_links=True, path=""):
     return groups
 
 
-def with_ask_ai(groups, q, user):
+def with_ask_ai(groups, q, user, path=""):
     """``groups`` with the typed search offered as a question on ``/ai/``, filled in but not sent.
+
+    ``path`` is the page the palette is open on, carried along as ``from`` so "this auction" still
+    means something once they are on ``/ai/`` (:func:`auctions.ai_page.came_from`).
 
     Only the web palette's search-as-you-type adds it: inside :func:`search` it would match every
     query, so the assist's "obvious match" and fallbacks would always find something, and the app
@@ -1629,7 +1632,12 @@ def with_ask_ai(groups, q, user):
     q = (q or "").strip()
     if not q or not assist_enabled_for(user):
         return groups
-    url = reverse("ai") + "?" + urlencode({"q": q})
+    from .ai_page import came_from
+
+    asked = {"q": q}
+    if came_from(path):
+        asked["from"] = came_from(path)
+    url = reverse("ai") + "?" + urlencode(asked)
     return [*groups, {"label": "Ask AI", "items": [_item("ai", q, url, "bi-robot", "Ask the site's AI")]}]
 
 

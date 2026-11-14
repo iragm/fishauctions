@@ -53,6 +53,7 @@ class AIPageView(LoginRequiredMixin, TemplateView):
 
         context = super().get_context_data(**kwargs)
         context["prefill"] = self.request.GET.get("q", "")[: ai_page.MAX_QUESTION_CHARS]
+        context["came_from"] = ai_page.came_from(self.request.GET.get("from", ""))
         context["conversation"] = ai_page.new_conversation()
         context["usage"] = ai_page.usage(self.request.user)
         context["enabled"] = ai_page.enabled(self.request.user)
@@ -66,7 +67,7 @@ class AIAskView(LoginRequiredMixin, View):
         from auctions import ai_page
 
         question = request.POST.get("q", "").strip()[: ai_page.MAX_QUESTION_CHARS]
-        outcome = ai_page.ask(request, request.POST.get("conversation", ""), question)
+        outcome = ai_page.ask(request, request.POST.get("conversation", ""), question, request.POST.get("from", ""))
         context = {
             "question": question,
             "reply": ai_page.answer_html(outcome["reply"], request, outcome["links"]) if "reply" in outcome else "",
@@ -144,7 +145,7 @@ class CommandPaletteView(View):
 
         q = request.GET.get("q", "")
         path = request.GET.get("path", "")
-        groups = command_palette.with_ask_ai(command_palette.search(request, q, path=path), q, request.user)
+        groups = command_palette.with_ask_ai(command_palette.search(request, q, path=path), q, request.user, path)
         response = JsonResponse({"groups": groups})
         response["Cache-Control"] = "private, no-store"
         response["Pragma"] = "no-cache"
@@ -211,7 +212,7 @@ def next_or_done(iterator):
 class CommandPaletteAssistView(CommandPaletteAssistBase):
     """Turn a natural-language palette query into results, a navigation, or an action.
 
-    POST JSON ``{"q": "...", "context": [...], "path": "..."}``. Streams NDJSON: progress objects,
+    POST JSON ``{"q": "...", "context": [...], "path": "...", "box": false}``. Streams NDJSON: progress objects,
     then one final response. NDJSON over fetch because this is a POST with a CSRF token.
 
     The body must be an async generator, or ASGI buffers the whole stream. ``assist_stream`` is sync,
@@ -234,11 +235,13 @@ class CommandPaletteAssistView(CommandPaletteAssistBase):
         query = data.get("q", "")
         context = data.get("context")
         path = data.get("path", "")
+        # Typed into an AI box on an admin page, not the palette: see palette_assist.writes_locked.
+        box = data.get("box") is True
 
         if not data.get("stream", True):
-            return JsonResponse(palette_assist.assist(request, query, context, path))
+            return JsonResponse(palette_assist.assist(request, query, context, path, box))
 
-        events = palette_assist.assist_stream(request, query, context, path)
+        events = palette_assist.assist_stream(request, query, context, path, box)
 
         async def lines():
             while True:
@@ -278,7 +281,9 @@ class CommandPaletteExecuteView(CommandPaletteAssistBase):
         if throttled:
             return throttled
         data = self.load_json(request)
-        response = palette_assist.execute(request, data.get("action", ""), data.get("params"), data.get("path", ""))
+        response = palette_assist.execute(
+            request, data.get("action", ""), data.get("params"), data.get("path", ""), data.get("box") is True
+        )
         return JsonResponse(response)
 
 
