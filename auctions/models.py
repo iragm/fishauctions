@@ -15871,3 +15871,47 @@ class FeatureEmailPause(models.Model):
 
     def __str__(self):
         return f"Feature emails paused {self.created_on:%Y-%m-%d}: {self.reason}"
+
+
+class BlockedEmailDomain(models.Model):
+    """An email domain the contact form ignores when typed in (signed out): the sender sees the usual thanks and
+    nothing is sent. A domain also covers its subdomains. Edited in the admin."""
+
+    domain = models.CharField(max_length=253, unique=True)
+    domain.help_text = "Like example.com; also blocks its subdomains."
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["domain"]
+
+    def __str__(self):
+        return self.domain
+
+    def clean(self):
+        self.domain = self.normalize(self.domain)
+        if "." not in self.domain or any(c in self.domain for c in "@/:* "):
+            raise ValidationError({"domain": "Enter a domain like example.com."})
+
+    def save(self, *args, **kwargs):
+        self.domain = self.normalize(self.domain)
+        super().save(*args, **kwargs)
+
+    @staticmethod
+    def normalize(domain: str) -> str:
+        """Lowercase ASCII, so a Unicode spelling that resolves to the same domain matches it."""
+        domain = (domain or "").strip().lstrip("@").rstrip(".")
+        try:
+            domain = domain.encode("idna").decode("ascii")
+        except UnicodeError:
+            pass
+        return domain.lower()
+
+    @classmethod
+    def blocks(cls, email: str) -> bool:
+        """Whether ``email``'s domain, or any domain it is a subdomain of, is on the list."""
+        domain = cls.normalize(email.rpartition("@")[2])
+        if not domain:
+            return False
+        parts = domain.split(".")
+        candidates = [".".join(parts[i:]) for i in range(len(parts))]
+        return cls.objects.filter(domain__in=candidates).exists()
