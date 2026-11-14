@@ -138,24 +138,43 @@ def box_enabled(user) -> bool:
     The palette is navigate-only for everybody by default, and the boxes hand their text to it, so
     every example a box showed ("add Bob Smith, bidder 42") reached a model with no write tool and
     failed. A box is the one place a command is the point: it sits on the page of the auction or club
-    being run. ``ASSISTANT_BOX_WRITES`` is its own kill switch, and somebody who chose a palette that
-    only opens pages gets no box rather than one that can't do what it offers.
+    being run. ``ASSISTANT_BOX_WRITES`` is its own kill switch.
     """
     from django.conf import settings
 
     if not getattr(settings, "ASSISTANT_BOX_WRITES", True):
         return False
-    userdata = getattr(user, "userdata", None)
-    if userdata and userdata.palette_navigate_only:
-        return False
     return assist_enabled_for(user)
 
 
-def writes_locked(user, box: bool = False) -> bool:
-    """:func:`navigate_only`, unless the command came from an AI box this user is allowed (*box*).
+def from_a_box(user, claimed: Any, page: dict[str, Any] | None) -> bool:
+    """Whether a request that says it came from an AI box (*claimed*) is treated as one.
 
-    *box* is the page saying which of its two inputs was typed into, not a permission: every write
-    still goes through ``run_action``, which checks who is asking.
+    The page sends the flag, so it is a claim. It is believed only from somebody who runs what the
+    page is about -- the auction or club the box sits on -- or, on a page that names neither, who runs
+    anything at all: the same people the boxes are drawn for. An ordinary member posting ``box: true``
+    gets the navigate-only palette everybody else has.
+    """
+    if claimed is not True or not box_enabled(user) or not getattr(user, "is_authenticated", False):
+        return False
+    from .models import Auction
+    from .views.base import clubs_with_any_permission
+
+    page = page or {}
+    if page.get("auction"):
+        auction = Auction.objects.filter(slug=page["auction"], is_deleted=False).first()
+        return bool(auction and auction.permission_check(user))
+    clubs = clubs_with_any_permission(user, nec_only=False)
+    if page.get("club"):
+        return clubs.filter(slug=page["club"]).exists()
+    return bool(command_palette._admin_auction_ids(user)) or clubs.exists()
+
+
+def writes_locked(user, box: bool = False) -> bool:
+    """:func:`navigate_only`, unless the command came from an AI box (*box*, :func:`from_a_box`'s answer).
+
+    Not a permission either way: every write still goes through ``run_action``, which checks who is
+    asking.
     """
     if box and box_enabled(user):
         return False
@@ -1881,10 +1900,10 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
     *box* is true for a command typed into an AI box on an admin page. See :func:`writes_locked`.
     """
     user = request.user
-    request.palette_box = box is True
     query = (query or "").strip()[:MAX_QUERY_LENGTH]
     # Parsed once and hung on the request for every resolver.
     request.palette_page = palette_routes.page_context_from_path(user, path) if path else {}
+    request.palette_box = from_a_box(user, box, request.palette_page)
     # What they actually said, for the resolvers: the model drops a named auction often enough that
     # the sentence is worth reading when the parameter is missing.
     request.palette_query = query
@@ -2016,7 +2035,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
             except LLMError as error:
                 settle_tokens(reservation, 0)
                 logger.warning("Assist still rate limited: %s", error)
-                note_provider_failure()
+                if not isinstance(error, llm.Declined):
+                    note_provider_failure()
                 usage_id = record(None, FAIL_BUSY, success=False)
                 log_assist(user, query, KIND_ERROR)
                 yield _give_up(request, query, "Everyone's using this at once. Here's what I found:", usage_id)
@@ -2024,7 +2044,10 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
         except LLMError as error:
             settle_tokens(reservation, 0)
             logger.warning("Assist provider error: %s", error)
-            note_provider_failure()
+            if not isinstance(error, llm.Declined):
+                # A model declining one request is not the provider being down, and four of them
+                # must not rest the assistant for everybody.
+                note_provider_failure()
             usage_id = record(None, FAIL_PROVIDER, success=False)
             log_assist(user, query, KIND_ERROR)
             yield _give_up(request, query, "I couldn't reach the assistant just now.", usage_id)
@@ -2213,10 +2236,10 @@ def execute(request, name: str, params: Any, path: str = "", box: bool = False) 
     # A countdown started before assist was turned off must not still run.
     if not assist_enabled_for(request.user):
         return {"kind": KIND_ERROR, "message": "I don't know how to do that."}
-    if writes_locked(request.user, box is True):
+    request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
+    if writes_locked(request.user, from_a_box(request.user, box, request.palette_page)):
         # Same for a card that was on screen when the switch went the other way.
         return {"kind": KIND_ERROR, "message": "I can only take you to the right page. That one's done there."}
-    request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
     action = palette_actions.get_action(name)
     if action is None:
         return {"kind": KIND_ERROR, "message": "I don't know how to do that."}

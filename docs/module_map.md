@@ -49,7 +49,7 @@ this only quotes its opening sentence.
 - **`ads_admin.py`** (122 lines)
   The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
-- **`ai_page.py`** (360 lines)
+- **`ai_page.py`** (384 lines)
   ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
 - **`announcements.py`** (414 lines)
   Club announcements: one message, sent to the places a club's members look.
@@ -201,7 +201,7 @@ this only quotes its opening sentence.
   `sanitize_summernote_html`, `remove_html_color_tags`
 - **`lifecycle.py`** (547 lines)
   Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
-- **`llm.py`** (722 lines)
+- **`llm.py`** (763 lines)
   Provider abstraction for everything on this site that talks to a language model.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
@@ -238,7 +238,7 @@ this only quotes its opening sentence.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
 - **`palette_actions.py`** (17111 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (2236 lines)
+- **`palette_assist.py`** (2259 lines)
   Natural-language orchestration for the command palette.
 - **`palette_routes.py`** (2063 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
@@ -341,7 +341,7 @@ this only quotes its opening sentence.
 - **`test_admin_performance.py`** (342 lines)
   The admin's own query counts: no dropdown over an unbounded table, and no query per inline row.
   `NoDropdownOverAnUnboundedTableTests`, `AdminChangePageGrowthTests`
-- **`test_ai_page.py`** (377 lines)
+- **`test_ai_page.py`** (404 lines)
   ``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance.
   `answer`, `lookup`, `AIPageTests`, `AIPageLinkTests`, `LibraryAllowanceTests`, `AskWhereSearchFailsTests`
 - **`test_android_testers.py`** (135 lines)
@@ -546,7 +546,7 @@ this only quotes its opening sentence.
 - **`test_lifecycle.py`** (404 lines)
   Tests for phase 9: milestones, lapsing definition, session replay and cohorts.
   `ClubHistoryFixture`, `LapsingTests`, `CohortTests`, `SignInStitchTests`, `SessionTimelineTests`, `MedianMemberTests`, `UnreachedShareTests`, `MilestoneReachTests`, `SessionReplayPageTests`
-- **`test_llm_anthropic.py`** (297 lines)
+- **`test_llm_anthropic.py`** (342 lines)
   Claude as the site's model: what :class:`auctions.llm.AnthropicProvider` sends and how it reads replies.
   `reply`, `tool_use`, `AnthropicProviderTests`, `ProviderChoiceTests`
 - **`test_location_check.py`** (174 lines)
@@ -664,7 +664,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (891 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5420 lines)
+- **`test_palette_assist.py`** (5450 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.

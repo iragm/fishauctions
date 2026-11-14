@@ -63,6 +63,10 @@ class RateLimited(LLMError):
         self.retry_after = retry_after
 
 
+class Declined(LLMError):
+    """The model answered that it won't. The provider is up, so this is no reason to stop calling it."""
+
+
 class UnsupportedParameter(Exception):
     def __init__(self, name: str) -> None:
         super().__init__(name)
@@ -389,11 +393,18 @@ class AnthropicProvider(LLMProvider):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._turns: dict[str, list[Any]] = {}
+        #: Learned from a 400: this model won't be forced to call a tool, or takes no effort level.
+        self._no_forced_tool = False
+        self._no_effort = False
         #: An ``httpx2`` client for the SDK to use instead of its own. Tests answer through it.
         self.http_client: Any = None
 
     def _client(self):
-        import anthropic
+        try:
+            import anthropic
+        except ImportError as error:  # an image built before the requirement was added
+            msg = "The anthropic package is not installed"
+            raise LLMError(msg) from error
 
         if not self.is_configured():
             msg = "No API key configured for the Anthropic provider"
@@ -508,20 +519,37 @@ class AnthropicProvider(LLMProvider):
             **extra,
         }
         effort = self._effort()
-        if effort:
+        if effort and not self._no_effort:
             request["output_config"] = {"effort": effort}
+        if self._no_forced_tool and "tool_choice" in request:
+            request["tool_choice"] = {**request["tool_choice"], "type": "auto"}
         client = self._client()
         try:
-            try:
-                response = client.messages.create(**request)
-            except anthropic.BadRequestError as error:
-                # Claude's larger models refuse a forced tool call. Asking again without forcing one
-                # leaves the palette's own "that reply was not a tool" round to deal with any prose.
-                if "tool_choice" not in request or "tool_choice" not in str(error):
-                    raise
-                logger.info("%s does not accept a forced tool call; retrying without it", self.model)
-                request["tool_choice"] = {"type": "auto"}
-                response = client.messages.create(**request)
+            # At most the two retries below: one per thing a model may refuse.
+            for _attempt in range(3):
+                try:
+                    response = client.messages.create(**request)
+                    break
+                except anthropic.BadRequestError as error:
+                    said = str(error)
+                    forced = (request.get("tool_choice") or {}).get("type") == "any"
+                    if forced and "tool_choice" in said:
+                        # Claude's larger models refuse a forced tool call. Asking again without
+                        # forcing one leaves the palette's own "that reply was not a tool" round to
+                        # deal with any prose. Still one call at a time, and remembered for the
+                        # rest of this request's rounds.
+                        logger.info("%s does not accept a forced tool call; retrying without it", self.model)
+                        self._no_forced_tool = True
+                        request["tool_choice"] = {**request["tool_choice"], "type": "auto"}
+                    elif "output_config" in request and ("effort" in said or "output_config" in said):
+                        logger.info("%s does not accept an effort level; retrying without it", self.model)
+                        self._no_effort = True
+                        del request["output_config"]
+                    else:
+                        raise
+            else:
+                msg = "Language model rejected every form of the request"
+                raise LLMError(msg)
         except anthropic.RateLimitError as error:
             try:
                 retry_after = float(error.response.headers.get("retry-after", "") or 0)
@@ -537,9 +565,17 @@ class AnthropicProvider(LLMProvider):
         except anthropic.APIConnectionError as error:
             msg = f"Could not reach the language model: {error}"
             raise LLMError(msg) from error
+        except anthropic.AnthropicError as error:
+            # Anything else of the SDK's: a body that is not a Messages reply, say, behind a gateway.
+            msg = f"Language model call failed: {error}"
+            raise LLMError(msg) from error
+        if not isinstance(response, anthropic.types.Message):
+            # A gateway's HTML error page with a 200 comes back from the SDK as a plain string.
+            msg = "Language model returned something that was not a reply"
+            raise LLMError(msg)
         if response.stop_reason == "refusal":
             msg = "Language model declined to answer"
-            raise LLMError(msg)
+            raise Declined(msg)
         return response
 
     def _result(self, response, **fields: Any) -> LLMResult:
@@ -613,6 +649,9 @@ class AnthropicProvider(LLMProvider):
         ]
         text = self._text(response)
         if not calls and not text:
+            raise self._empty(response)
+        if calls and response.stop_reason == "max_tokens":
+            # Cut off inside a tool call: its arguments are whatever had been written so far.
             raise self._empty(response)
         if calls:
             self._turns[calls[0].id] = list(response.content)
@@ -693,7 +732,9 @@ def _build(provider_class: type[LLMProvider], model: str = "", timeout: float | 
     return provider_class(
         model=model or getattr(settings, "LLM_MODEL", "") or provider_class.default_model,
         api_key=getattr(settings, provider_class.api_key_setting, "") or "",
-        base_url=getattr(settings, "LLM_BASE_URL", "") or "",
+        # LLM_BASE_URL is an OpenAI-compatible endpoint. Handing it to another provider would send
+        # that provider's key and wire format to the wrong host.
+        base_url=(getattr(settings, "LLM_BASE_URL", "") or "") if provider_class is OpenAIProvider else "",
         timeout=timeout,
         # Unset means the default; empty means don't send it.
         reasoning_effort=DEFAULT_REASONING_EFFORT if effort is None else effort,

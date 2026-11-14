@@ -232,8 +232,43 @@ class AnthropicProviderTests(SimpleTestCase):
         self.assertEqual(result.tool_calls[0].name, "check_in")
         self.assertEqual(
             [sent["tool_choice"] for sent in self.sent],
-            [{"type": "any", "disable_parallel_tool_use": True}, {"type": "auto"}],
+            [{"type": "any", "disable_parallel_tool_use": True}, {"type": "auto", "disable_parallel_tool_use": True}],
         )
+        # Remembered: the next round of the same request does not pay for the 400 again.
+        self.sent.clear()
+        provider.http_client = anthropic.DefaultHttpxClient(
+            transport=httpx2.MockTransport(
+                lambda request: (
+                    self.sent.append(json.loads(request.content))
+                    or httpx2.Response(200, json=reply([tool_use()], "tool_use"))
+                )
+            )
+        )
+        provider.complete("system", [{"role": "user", "content": "check in 556"}], [TOOL], tool_choice="required")
+        self.assertEqual([sent["tool_choice"]["type"] for sent in self.sent], ["auto"])
+
+    def test_a_model_that_takes_no_effort_level_is_asked_again_without_one(self):
+        refused = httpx2.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "output_config.effort: not supported"},
+            },
+        )
+        provider = self.provider(refused, reply([{"type": "text", "text": "hello"}]))
+        self.assertEqual(provider.complete("system", [{"role": "user", "content": "hi"}]).text, "hello")
+        self.assertIn("output_config", self.sent[0])
+        self.assertNotIn("output_config", self.sent[1])
+
+    def test_a_tool_call_cut_off_by_the_token_limit_is_not_run(self):
+        provider = self.provider(reply([tool_use(arguments={"person": "5"})], "max_tokens"))
+        with self.assertRaisesMessage(llm.LLMError, "whole completion budget"):
+            provider.complete("system", [{"role": "user", "content": "check in 555"}], [TOOL])
+
+    def test_a_body_that_is_not_a_reply_is_an_llm_error(self):
+        provider = self.provider(httpx2.Response(200, text="<html>gateway</html>"))
+        with self.assertRaises(llm.LLMError):
+            provider.complete("system", [{"role": "user", "content": "hi"}])
 
     def test_another_bad_request_is_not_retried(self):
         bad = httpx2.Response(
@@ -246,7 +281,7 @@ class AnthropicProviderTests(SimpleTestCase):
 
     def test_a_refusal_is_an_error_not_an_empty_answer(self):
         provider = self.provider(reply([], "refusal"))
-        with self.assertRaises(llm.LLMError):
+        with self.assertRaises(llm.Declined):
             provider.complete("system", [{"role": "user", "content": "hi"}])
 
     def test_running_out_of_tokens_says_so(self):
@@ -291,6 +326,16 @@ class ProviderChoiceTests(SimpleTestCase):
     def test_without_an_openai_key_there_are_no_vectors(self):
         with self.assertRaises(llm.LLMError):
             llm.get_embedding_provider().embed(["a"], "text-embedding-3-small")
+
+    @override_settings(
+        LLM_PROVIDER="anthropic",
+        ANTHROPIC_API_KEY="sk-ant-test",
+        OPENAI_API_KEY="sk-test",
+        LLM_BASE_URL="https://proxy.example/v1",
+    )
+    def test_an_openai_compatible_base_url_is_never_handed_to_anthropic(self):
+        self.assertEqual(llm.get_provider().base_url, "")
+        self.assertEqual(llm.get_embedding_provider().base_url, "https://proxy.example/v1")
 
     @override_settings(LLM_PROVIDER="openai", OPENAI_API_KEY="sk-test")
     def test_openai_embeds_for_itself(self):

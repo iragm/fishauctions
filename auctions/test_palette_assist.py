@@ -4701,12 +4701,42 @@ class BoxWritesTests(PaletteAssistTestCase):
         self.assertEqual(self._writes("check in bidder 555", box=True), set())
         self.assertEqual(self._execute("check_in", {"person": "555"}, box=True).json()["kind"], "error")
 
-    def test_somebody_who_chose_a_palette_that_only_opens_pages_gets_no_box(self):
-        self.user.userdata.palette_navigate_only = True
-        self.user.userdata.save()
-        self.user.userdata.refresh_from_db()
-        self.assertFalse(palette_assist.box_enabled(self.user))
-        self.assertEqual(self._writes("check in bidder 555", box=True), set())
+    def test_a_member_who_runs_nothing_cannot_claim_to_be_a_box(self):
+        """The flag is the page's claim. Somebody the boxes are never drawn for is not believed."""
+        self.assertFalse(self.in_person_auction.permission_check(self.member))
+        self.assertFalse(palette_assist.from_a_box(self.member, True, {}))
+        self.assertFalse(palette_assist.from_a_box(self.member, True, {"auction": self.in_person_auction.slug}))
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("watch lot 1", user=self.member, box=True)
+        offered = {tool["name"] for tool in self.provider.calls[-1]["tools"]}
+        self.assertNotIn("watch_lot", offered)
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_LOCKED)
+
+    def test_a_box_is_believed_on_what_they_run_and_not_on_somebody_elses(self):
+        path = reverse("auction_main", kwargs={"slug": self.in_person_auction.slug})
+        page = palette_routes.page_context_from_path(self.user, path)
+        self.assertTrue(palette_assist.from_a_box(self.user, True, page))
+        self.assertTrue(palette_assist.from_a_box(self.user, True, {}))
+        theirs = Auction.objects.create(
+            created_by=self.userB, title="Somebody else's auction", date_start=timezone.now(), is_online=True
+        )
+        self.assertFalse(palette_assist.from_a_box(self.user, True, {"auction": theirs.slug}))
+        other_club = Club.objects.create(name="Somebody Else's Club", abbreviation="SEC")
+        self.assertFalse(palette_assist.from_a_box(self.user, True, {"club": other_club.slug}))
+        ClubMember.objects.create(club=other_club, user=self.user, permission_view=True)
+        self.assertTrue(palette_assist.from_a_box(self.user, True, {"club": other_club.slug}))
+
+    def test_a_refusal_does_not_rest_the_assistant_for_everybody(self):
+        class Declines(FakeProvider):
+            def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
+                msg = "Language model declined to answer"
+                raise llm.Declined(msg)
+
+        cache.delete(palette_assist._BREAKER_KEY)
+        llm.set_provider_override(Declines())
+        for _ in range(palette_assist.BREAKER_FAILURES + 1):
+            self._assist("check in bidder 555", box=True)
+        self.assertFalse(palette_assist.provider_is_resting())
 
     def test_no_box_without_the_assistant(self):
         UserData.objects.filter(user=self.user).update(use_llm_search=False)

@@ -1,5 +1,8 @@
 """``/ai/`` (auctions/ai_page.py): the question box, the reads-only tool loop, the daily allowance."""
 
+import json
+from unittest import mock
+
 from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
@@ -55,6 +58,30 @@ class AIPageTests(StandardTestCase):
         facts = self.provider.calls[-1]["messages"][0]["content"]
         self.assertIn("looking_at_right_now", facts)
         self.assertIn(self.online_auction.slug, facts)
+        # A title is a member's words, and the path is the visitor's to choose.
+        self.assertIn(
+            "\u00ab" + self.online_auction.title + "\u00bb",
+            json.loads(facts.split("\n", 1)[1])["looking_at_right_now"]["auction_title"],
+        )
+
+    def test_the_tools_default_to_the_page_they_came_from(self):
+        """``_call_tool`` clears the page for agents, which have none; here it has to survive."""
+        from auctions import palette_actions
+
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        seen = []
+        real = palette_actions.run_action
+
+        def spy(request, name, params):
+            seen.append(dict(getattr(request, "palette_page", None) or {}))
+            return real(request, name, params)
+
+        self.provider.replies = [lookup("describe_auction"), answer("It starts soon.")]
+        with mock.patch.object(palette_actions, "run_action", spy):
+            self.client.post(
+                reverse("ai_ask"), {"q": "when does this auction start?", "conversation": "c1", "from": path}
+            )
+        self.assertEqual(seen[0].get("auction"), self.online_auction.slug)
 
     def test_with_no_page_nothing_is_being_looked_at(self):
         self.provider.replies = [answer("Nobody.")]

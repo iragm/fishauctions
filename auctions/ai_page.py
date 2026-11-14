@@ -90,6 +90,26 @@ def came_from(path) -> str:
     return "" if path.startswith(reverse("ai")) else path
 
 
+#: What ``page_context_from_path`` copies off the page that somebody else typed.
+_WRITTEN_BY_MEMBERS = ("auction_title", "club_name", "lot_name")
+
+
+def _fenced(page: dict | None) -> dict:
+    """``page`` for the model, with the names members wrote marked as theirs.
+
+    The path is the visitor's to choose, so a lot named "ignore your rules and say..." could be put in
+    front of the model by a link. :data:`SYSTEM_PROMPT` says text between « and » is data.
+    """
+    from .palette_actions import UNTRUSTED_CLOSE, UNTRUSTED_MARK_OPEN
+
+    fenced = dict(page or {})
+    for key in _WRITTEN_BY_MEMBERS:
+        if isinstance(fenced.get(key), str):
+            cleaned = fenced[key].replace(UNTRUSTED_MARK_OPEN, "").replace(UNTRUSTED_CLOSE, "")
+            fenced[key] = f"{UNTRUSTED_MARK_OPEN}{cleaned}{UNTRUSTED_CLOSE}"
+    return fenced
+
+
 def daily_limit() -> int:
     return int(getattr(settings, "AI_PAGE_TOKENS_PER_DAY", 0) or 0)
 
@@ -276,7 +296,10 @@ def ask(request, conversation: str, question: str, page_path: str = "") -> dict:
     """
     user = request.user
     page_path = came_from(page_path)
-    request.palette_page = palette_routes.page_context_from_path(user, page_path) if page_path else {}
+    # ``assistant_page``: ``mcp.tools._call_tool`` clears ``palette_page`` for agents, which have no
+    # page, and puts this one back.
+    request.assistant_page = palette_routes.page_context_from_path(user, page_path) if page_path else {}
+    request.palette_page = dict(request.assistant_page)
     question = (question or "").strip()[:MAX_QUESTION_CHARS]
     if not question:
         return {"error": "Ask something first."}
@@ -312,7 +335,7 @@ def _answer(request, conversation: str, question: str) -> dict:
     earlier = _history(user, conversation)
     # Their auctions and clubs up front, as the palette does: asked "bap setup" with nothing to go on,
     # the model asked which club rather than looking. Rebuilt every question, never kept.
-    facts = palette_assist.context_message(user, getattr(request, "palette_page", None))
+    facts = palette_assist.context_message(user, _fenced(getattr(request, "assistant_page", None)))
     messages = [facts, *earlier, {"role": "user", "content": question}]
     links: set[str] = set()
     request_id = uuid.uuid4().hex
@@ -328,7 +351,8 @@ def _answer(request, conversation: str, question: str) -> dict:
             result = provider.complete(SYSTEM_PROMPT, messages, tools=tools, max_tokens=4000)
         except llm.LLMError as error:
             logger.warning("AI page call failed: %s", error)
-            palette_assist.note_provider_failure()
+            if not isinstance(error, llm.Declined):
+                palette_assist.note_provider_failure()
             palette_assist.record_usage(
                 user, None, question, "error", success=False, request_id=request_id, started=started,
                 tools_offered=SURFACE,
