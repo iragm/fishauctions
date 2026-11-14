@@ -1,5 +1,6 @@
 {# Club page header. Navigation now lives in the club sidebar (club_sidebar.html). #}
 {# In single club mode the single club's name is the navbar brand, so don't repeat it here. #}
+{% if palette_assist_enabled %}<input type="text" class="form-control form-control-sm my-2" data-palette-box data-placeholders='["renew Jane Doe","add a meeting March 3 at 7pm"]' aria-label="Ask">{% endif %}
 {% if not single_club_mode or club.name != navbar_brand %}
 <h3 class="d-flex align-items-center gap-2">
   {% if club.icon %}

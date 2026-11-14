@@ -490,6 +490,10 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, HTMxTableView):
         context["can_export"] = self.user_has_club_permission("permission_export")
         context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         context["can_edit_bap"] = self.user_has_club_permission("permission_manage_bap")
+        # A brand-new club has no members but its creator: point at the import instead of an empty table.
+        context["show_import_members"] = context["can_add_edit"] and not (
+            ClubMember.objects.filter(club=self.club, is_deleted=False).exclude(user=self.request.user).exists()
+        )
         query = (self.request.GET.get("query") or "").strip()
         filterset = context.get("filter")
         filtered_empty = filterset is not None and query and not filterset.qs.exists()
@@ -650,6 +654,7 @@ class ClubCadenceAnswerView(TemplateView):
 
         answer = request.POST.get("answer", "")
         if not club_emails.record_answer(self.club, self.answerer, answer):
+            messages.error(request, "Only this club's staff can answer.")
             return self.get(request, *args, **kwargs)
         if answer == "monthly":
             auction = self.emailed_auction

@@ -432,6 +432,8 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
+        if not self.is_auction_admin:
+            return HttpResponseForbidden()
         options = list(
             self.option_model.objects.filter(auction=self.auction)
             .order_by("createdon")

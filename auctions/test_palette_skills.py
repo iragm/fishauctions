@@ -2402,7 +2402,6 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
         "AuctionTOSDelete": "remove_person",
         "ClubMemberDeleteView": "set_member_active",
         "ClubMemberReactivateView": "set_member_active",
-        "InvoiceView": "remove_invoice_adjustment",
         "LotQueueView": "queue_lot",
         "ClubBapGenusOverrideSaveView": "set_point_rule",
         "ClubBapCategoryOverrideSaveView": "set_point_rule",

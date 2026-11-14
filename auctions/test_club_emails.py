@@ -19,6 +19,7 @@ from auctions.models import (
     Club,
     ClubEmail,
     ClubHistory,
+    ClubMember,
     FeatureEmail,
     PickupLocation,
     UserData,
@@ -40,6 +41,9 @@ class Helpers(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.club = Club.objects.create(name="Cichlid society")
+        # Club staff only get club emails (club_emails._send_to_club), so the fixtures are members.
+        ClubMember.objects.create(club=self.club, user=self.creator, name="Ce Creator", permission_admin=True)
+        ClubMember.objects.create(club=self.club, user=self.helper, name="Ce Helper", permission_edit_club=True)
 
     def auction(self, title="Spring auction", ended_days_ago=30, posted_days_ago=None, creator=None):
         now = timezone.now()

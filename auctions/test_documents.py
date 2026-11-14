@@ -1276,7 +1276,11 @@ class ListTests(LibraryTestCase):
         response = self.client.get(reverse("library"))
         self.assertContains(response, club_one.display_title)
         self.assertContains(response, mine.display_title)
-        self.assertNotContains(response, elsewhere.display_title)
+        # Public documents by others are listed by default; "Mine" narrows to yours and your clubs'.
+        self.assertContains(response, elsewhere.display_title)
+        mine_only = self.client.get(reverse("library"), {"mine": "1"})
+        self.assertContains(mine_only, club_one.display_title)
+        self.assertNotContains(mine_only, elsewhere.display_title)
         self.assertContains(response, reverse("library_add"))
         self.assertContains(response, reverse("library_search"))
 

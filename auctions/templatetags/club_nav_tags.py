@@ -83,6 +83,8 @@ def club_sidebar(context):
         "can_view": True,
         "club": club,
         "auction": auction,
+        # Open on an auction page, collapsed on the club's own pages: the auction block is one click away.
+        "auction_block_open": bool(auction),
         "sidebar_auction": sidebar_auction,
         "members_through_auction": members_through_auction,
         "can_access_admin": can_access_admin,

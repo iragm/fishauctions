@@ -54,10 +54,7 @@
       {% if auction.created_by.userdata.is_trusted %}
       <a href="{% url 'edit_auction' slug=auction.slug %}" class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
       {% else %}
-        <a href="mailto:{{ auction.promotion_request_mailto_query }}"
-          class="btn btn-info btn-sm mt-2">
-          Contact us and request access
-        </a>
+        <form method="post" action="{% url 'access_request' %}?next={{ request.get_full_path|urlencode }}" class="d-inline">{% csrf_token %}<input type="hidden" name="kind" value="promotion"><input type="hidden" name="auction" value="{{ auction.slug }}"><button type="submit" class="btn btn-info btn-sm mt-2">Contact us and request access</button></form>
       {% endif %}
       <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_promo_banner" class="btn btn-secondary btn-sm mt-2">Don't show again for this auction</button></form>
     </div>
@@ -91,7 +88,7 @@
       {% if request.user.userdata.square_enabled %}
       <a href="{% url 'square_connect' %}" class="btn btn-info btn-sm mt-2">Connect Square account and enable payments</a>
       {% else %}
-      <a href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}" class="btn btn-info btn-sm mt-2">Contact us and request access</a>
+      <form method="post" action="{% url 'access_request' %}?next={{ request.get_full_path|urlencode }}" class="d-inline">{% csrf_token %}<input type="hidden" name="kind" value="square"><input type="hidden" name="auction" value="{{ auction.slug }}"><button type="submit" class="btn btn-info btn-sm mt-2">Contact us and request access</button></form>
       {% endif %}
       <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_square_banner" class="btn btn-secondary btn-sm mt-2">Not this auction</button></form>
       <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="never_show_square_connect" class="btn btn-secondary btn-sm mt-2">Never show this again</button></form>
@@ -137,6 +134,7 @@
       <a class="nav-link {% if active_tab == 'more' %}active{% endif %}" href="{% url 'auction_pages' slug=auction.slug %}"><i class="bi bi-three-dots"></i><span class='d-none d-md-inline'> More</span></a>
     </li>
 </ul>
+{% if palette_assist_enabled and view.is_auction_admin or palette_assist_enabled and is_auction_admin %}<input type="text" class="form-control form-control-sm my-2" data-palette-box data-placeholders='["add Bob Smith, bidder 42","lot 12 sold to 34 for $5","mark Bob&#39;s invoice paid"]' aria-label="Ask">{% endif %}
 {% comment %} Every auction admin page listens for USB HID barcode scanner input (club auctions only). {% endcomment %}
 {% include 'auctions/barcode_scanner.html' %}
 

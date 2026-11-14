@@ -2,19 +2,23 @@
 
 ``InvoiceView`` is the page a buyer or seller is sent to after an auction. ``InvoiceNoLoginView`` is
 the same page reached by a signed link, which is how someone who never made an account pays.
+``InvoiceAdjustmentSave`` saves one adjustment row from that page as the admin edits it.
 """
 
 import logging
+import re
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
+from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models.base import Model as Model
-from django.forms import modelformset_factory
 from django.http import (
     Http404,
     HttpResponse,
+    HttpResponseBadRequest,
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -31,7 +35,6 @@ from auctions.filters import (
 )
 from auctions.forms import (
     InvoiceAdjustmentForm,
-    InvoiceAdjustmentFormSetHelper,
 )
 from auctions.models import (
     Auction,
@@ -49,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 #: Whole dollars. InvoiceAdjustmentForm has no ceiling, and past the column's range the save 500s.
 MAX_ADJUSTMENT_AMOUNT = 99999
+
+#: The row key the invoice page gives each adjustment form: "r<pk>" for saved rows, "n<time>" for new ones.
+ADJUSTMENT_ROW_KEY = re.compile(r"[a-z0-9]{1,24}")
 
 
 class Invoices(LoginRequiredMixin, HTMxTableView):
@@ -151,6 +157,98 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
         return redirect(invoice.get_absolute_url())
 
 
+def _can_adjust_invoice(user, invoice):
+    """The admin test InvoiceView.dispatch applies before it marks a viewer as an admin of the invoice."""
+    auction = invoice.auction or (invoice.auctiontos_user.auction if invoice.auctiontos_user else None)
+    if auction:
+        return bool(auction.permission_check(user))
+    if invoice.club and user.is_authenticated:
+        return bool(check_club_permission(user, invoice.club, "permission_add_edit"))
+    return False
+
+
+class InvoiceAdjustmentSave(LoginRequiredMixin, View):
+    """Save, change or delete one adjustment row as the admin edits it on a draft invoice.
+
+    Each row posts on its own, so the total is recalculated and the page never reloads. The response
+    carries the saved row's pk back to the page and an ``adjustmentSaved`` event for the totals.
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        invoice = get_object_or_404(Invoice, pk=pk)
+        if not _can_adjust_invoice(request.user, invoice):
+            raise PermissionDenied()
+        row = request.POST.get("row", "")
+        if not ADJUSTMENT_ROW_KEY.fullmatch(row):
+            return HttpResponseBadRequest("Bad row")
+        # The status check and the write share the invoice's row lock, so a status change (or a Square
+        # webhook marking it paid) can't land between them.
+        with transaction.atomic():
+            status = Invoice.objects.select_for_update().values_list("status", flat=True).get(pk=invoice.pk)
+            if status != "DRAFT":
+                return HttpResponseBadRequest("Only a draft invoice can be adjusted")
+            return self._save_locked(request, invoice, row)
+
+    def _save_locked(self, request, invoice, row):
+        auction = invoice.auction or (invoice.auctiontos_user.auction if invoice.auctiontos_user else None)
+        name = invoice.auctiontos_user.name if invoice.auctiontos_user else str(invoice)
+
+        adjustment_id = request.POST.get("adjustment", "")
+        if adjustment_id and not adjustment_id.isdigit():
+            return HttpResponseBadRequest("Bad adjustment")
+        existing = (
+            InvoiceAdjustment.objects.filter(pk=adjustment_id, invoice=invoice).first() if adjustment_id else None
+        )
+        if adjustment_id and existing is None:
+            return HttpResponseBadRequest("Bad adjustment")
+
+        if request.POST.get("delete"):
+            if existing is not None:
+                existing.delete()
+                if auction:
+                    auction.create_history(
+                        applies_to="INVOICES",
+                        action=f"Removed an adjustment from invoice for {name}",
+                        user=request.user,
+                    )
+            invoice.recalculate()
+            response = HttpResponse("")
+            response["HX-Trigger"] = "adjustmentSaved"
+            return response
+
+        form = InvoiceAdjustmentForm(request.POST, instance=existing, invoice=invoice)
+        form.fields["notes"].required = False
+        if not form.is_valid():
+            if not existing and not request.POST.get("amount"):
+                # A new row with no amount yet: nothing to save, and nothing to report.
+                return HttpResponse(status=204)
+            errors = [error for errors in form.errors.values() for error in errors]
+            return HttpResponse(errors[0] if errors else "That did not save.", status=422)
+
+        adjustment = form.save(commit=False)
+        adjustment.invoice = invoice
+        adjustment.user = request.user
+        adjustment.save()
+        if auction:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"Adjusted invoice for {name}",
+                user=request.user,
+            )
+        invoice.recalculate()
+        response = HttpResponse(
+            format_html(
+                '<input type="hidden" name="adjustment" id="adj-pk-{}" value="{}" hx-swap-oob="true">',
+                row,
+                adjustment.pk,
+            )
+        )
+        response["HX-Trigger"] = "adjustmentSaved"
+        return response
+
+
 class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     """Show a single invoice"""
 
@@ -234,10 +332,6 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             # The one column: a full save here wrote a copy loaded before Square's webhook marked the
             # invoice paid back over PAID, on the page Square's success redirect lands on.
             invoice.save(update_fields=[self.form_view])
-        self.InvoiceAdjustmentFormSet = modelformset_factory(
-            InvoiceAdjustment, extra=1, can_delete=True, form=InvoiceAdjustmentForm
-        )
-        self.queryset = invoice.adjustments
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -257,6 +351,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             context["base_template_name"] = "base.html"
             context["show_links"] = True
         context["location"] = invoice.location
+        context["adjustments"] = invoice.adjustments
         context["print_label_link"] = None
         if (
             invoice.auction
@@ -305,40 +400,6 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     def get_success_url(self):
         return self.request.path
 
-    def post(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        adjustment_formset = self.InvoiceAdjustmentFormSet(
-            self.request.POST,
-            form_kwargs={"invoice": self.get_object()},
-            queryset=self.queryset,
-        )
-        if adjustment_formset.is_valid():
-            for form in adjustment_formset.forms:
-                if (form.cleaned_data.get("amount") or 0) > MAX_ADJUSTMENT_AMOUNT:
-                    form.add_error("amount", f"Adjustments can be at most ${MAX_ADJUSTMENT_AMOUNT:,}")
-        if adjustment_formset.is_valid() and self.is_admin:
-            adjustments = adjustment_formset.save(commit=False)
-            for adjustment in adjustments:
-                adjustment.invoice = self.get_object()
-                adjustment.user = request.user
-                adjustment.save()
-            if adjustments:
-                messages.success(self.request, "Invoice adjusted")
-                if self.auction:
-                    self.auction.create_history(
-                        applies_to="INVOICES",
-                        action=f"Adjusted invoice for {self.get_object().auctiontos_user.name if self.get_object().auctiontos_user else self.get_object()}",
-                        user=request.user,
-                    )
-            for form in adjustment_formset.deleted_forms:
-                if form.instance.pk:
-                    form.instance.delete()
-            return redirect(reverse("invoice_by_pk", kwargs={"pk": self.get_object().pk}))
-        context = self.get_context_data(**kwargs)
-        context["formset"] = adjustment_formset
-        context["helper"] = InvoiceAdjustmentFormSetHelper()
-        return self.render_to_response(context)
-
     def get(self, request, *args, **kwargs):
         if self.get_object().unsold_lot_warning and self.auction and self.is_auction_admin:
             messages.info(
@@ -350,13 +411,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             if hint:
                 messages.info(self.request, hint)
         self.object = self.get_object()
-        invoice_adjustment_formset = self.InvoiceAdjustmentFormSet(
-            form_kwargs={"invoice": self.get_object()}, queryset=self.queryset
-        )
-        helper = InvoiceAdjustmentFormSetHelper()
         context = self.get_context_data(object=self.object)
-        context["formset"] = invoice_adjustment_formset
-        context["helper"] = helper
         # Recalculating slows this down; it may not belong here.
         self.object.recalculate()
         return self.render_to_response(context)

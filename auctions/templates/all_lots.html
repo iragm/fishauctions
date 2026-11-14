@@ -74,9 +74,9 @@ Your lots{% else %}
                   <small class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</small>
                 {% else %}
                   {% if not request.user.is_authenticated %}
-                    <a href="{% url 'account_login' %}?next={% url 'auction_main' slug=auction.slug %}">Login and join this auction</a>
+                    <a href="{% url 'account_login' %}?next={% url 'auction_main' slug=auction.slug %}%23join">Sign in and join this auction</a>
                   {% else %}
-                  Join this auction <a href="{% url 'auction_main' slug=auction.slug %}">at the bottom of this page</a> to participate
+                  Join this auction <a href="{% url 'auction_main' slug=auction.slug %}#join">at the bottom of this page</a> to participate
                   {%endif%}
                 {%endif%}
               {% else %}

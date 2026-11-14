@@ -1277,7 +1277,10 @@ EXCLUDED: dict[str, str] = {
     "mcp_admin": "The superusers' read-only MCP endpoint; the same answer as mcp.",
     # django-oauth-toolkit's URLs are namespaced and excused like allauth's; an entry would show up
     # as stale in the audit.
+    # Account access requests: a POST from the account's own pages; the pages are in the catalog.
+    "access_request": _ACTION_ONLY,
     # Speaker directory
+    "invoice_adjustment_save": _API,
     "speaker_panel": _API,
     "speaker_tag": _API,
     "speaker_claim": "POST-only request made from a speaker's page; the page itself is the destination.",

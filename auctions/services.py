@@ -198,10 +198,12 @@ def find_or_create_club_member(
     added_by=_KEEP,
     bidding_allowed=_KEEP,
     selling_allowed=_KEEP,
+    send_welcome_email=_KEEP,
 ):
     """:func:`ensure_club_member` for *club*, whether or not *auction* is club-managed yet: *auction* is only
-    where the person came from (the source, the welcome letter, the approved-sellers rules). ``added_by`` and
-    the two permissions, when given, are set on a new member in its one save.
+    where the person came from (the source, the approved-sellers rules). ``added_by``, the two permissions and
+    ``send_welcome_email``, when given, are set on a new member in its one save; the last overrides the
+    auction's ``send_club_welcome_letter``.
     """
     member = None
     if user is not None:
@@ -224,7 +226,7 @@ def find_or_create_club_member(
             added_by=user if added_by is _KEEP else added_by,
             admin_edited=admin_edited,
             # Held back from a participant until they first pay (ClubMember.welcome_after_first_payment).
-            send_welcome_email=auction.send_club_welcome_letter,
+            send_welcome_email=auction.send_club_welcome_letter if send_welcome_email is _KEEP else send_welcome_email,
         )
         # A vetted auction must not grant selling through the back door.
         if auction.only_approved_sellers:
@@ -350,93 +352,100 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
     if pickup_location is not None and pickup_location.pickup_by_mail and not userdata.address:
         return None, False, "address"
 
-    find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first() if user.email else None
-    is_new_join = False
-    if find_by_email:
-        # Added by email before signing in and also joined by user id: keep the oldest, fold the other.
-        existing_by_user = AuctionTOS.objects.filter(user=user, auction=auction).exclude(pk=find_by_email.pk).first()
-        if existing_by_user:
-            if (
-                find_by_email.createdon
-                and existing_by_user.createdon
-                and find_by_email.createdon < existing_by_user.createdon
-            ):
-                canonical, duplicate = find_by_email, existing_by_user
+    from django.db import transaction
+
+    # One join at a time per auction: the row lock stops two joins from both creating the row or the number.
+    with transaction.atomic():
+        Auction.objects.select_for_update().get(pk=auction.pk)
+        find_by_email = AuctionTOS.objects.filter(email=user.email, auction=auction).first() if user.email else None
+        is_new_join = False
+        if find_by_email:
+            # Added by email before signing in and also joined by user id: keep the oldest, fold the other.
+            existing_by_user = (
+                AuctionTOS.objects.filter(user=user, auction=auction).exclude(pk=find_by_email.pk).first()
+            )
+            if existing_by_user:
+                if (
+                    find_by_email.createdon
+                    and existing_by_user.createdon
+                    and find_by_email.createdon < existing_by_user.createdon
+                ):
+                    canonical, duplicate = find_by_email, existing_by_user
+                else:
+                    canonical, duplicate = existing_by_user, find_by_email
+                # An organizer's row in the pair means it isn't theirs alone to leave.
+                joined_both = canonical.created_by_joining and duplicate.created_by_joining
+                canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
+                obj = canonical
+                obj.created_by_joining = joined_both
             else:
-                canonical, duplicate = existing_by_user, find_by_email
-            # An organizer's row in the pair means it isn't theirs alone to leave.
-            joined_both = canonical.created_by_joining and duplicate.created_by_joining
-            canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
-            obj = canonical
-            obj.created_by_joining = joined_both
+                obj = find_by_email
+                obj.user = user
         else:
-            obj = find_by_email
-            obj.user = user
-    else:
-        obj, is_new_join = AuctionTOS.objects.get_or_create(
-            user=user,
-            auction=auction,
-            defaults={
-                "pickup_location": pickup_location,
-                # Seed the email so save()'s email-change guard doesn't unlink the user. ``None``,
-                # not "", keeps the email__isnull admin filter working.
-                "email": user.email or None,
-                "created_by_joining": True,
-            },
-        )
-    if pickup_location is not None:
-        obj.pickup_location = pickup_location
-        obj.pickup_location_confirmed = True
-    if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
-        return None, False, "address"
-    if hold_for_second_pickup is not None:
-        obj.hold_for_second_pickup = bool(
-            hold_for_second_pickup
-            and obj.can_hold_for_second_pickup
-            and (obj.hold_for_second_pickup or not obj.lots_qs.exists())
-        )
-    elif obj.hold_for_second_pickup and not obj.can_hold_for_second_pickup:
-        obj.hold_for_second_pickup = False
-    obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
-    # Joining means not manually added, whoever created the row.
-    obj.manually_added = False
-    if obj.email_address_status == "UNKNOWN":
-        obj.email_address_status = "VALID"
-    if not obj.name or obj.name == "Unknown":
-        obj.name = f"{user.first_name} {user.last_name}".strip()
-    if not obj.email:
-        obj.email = user.email
-    if not obj.phone_number:
-        obj.phone_number = userdata.phone_number
-    if not obj.address:
-        obj.address = userdata.address
-    if auction.is_club_managed:
-        # The club owns the number and permissions; shared with the app's proximity join.
-        club_member, member_created = ensure_club_member(
-            auction,
-            user=user,
-            name=obj.name,
-            email=obj.email,
-            phone_number=obj.phone_number or "",
-            address=obj.address or "",
-            admin_edited=False,
-        )
-        apply_club_member_to_tos(auction, obj, club_member)
-        if member_created and is_new_join:
-            obj.joined_into_club = True
-    obj.save()
-    userdata.last_auction_used = auction
-    userdata.last_activity = django_timezone.now()
-    userdata.save()
-    if auction.is_club_managed and obj.clubmember_id:
-        obj.clubmember.update_last_club_activity()
-    if is_new_join:
-        auction.create_history(
-            applies_to="USERS",
-            action=f"{obj.name} has joined this auction",
-            user=user,
-        )
-    return obj, is_new_join, ""
+            obj, is_new_join = AuctionTOS.objects.get_or_create(
+                user=user,
+                auction=auction,
+                defaults={
+                    "pickup_location": pickup_location,
+                    # Seed the email so save()'s email-change guard doesn't unlink the user. ``None``,
+                    # not "", keeps the email__isnull admin filter working.
+                    "email": user.email or None,
+                    "created_by_joining": True,
+                },
+            )
+        if pickup_location is not None:
+            obj.pickup_location = pickup_location
+            obj.pickup_location_confirmed = True
+        if obj.pickup_location and obj.pickup_location.pickup_by_mail and not userdata.address:
+            return None, False, "address"
+        if hold_for_second_pickup is not None:
+            obj.hold_for_second_pickup = bool(
+                hold_for_second_pickup
+                and obj.can_hold_for_second_pickup
+                and (obj.hold_for_second_pickup or not obj.lots_qs.exists())
+            )
+        elif obj.hold_for_second_pickup and not obj.can_hold_for_second_pickup:
+            obj.hold_for_second_pickup = False
+        obj.time_spent_reading_rules = max(obj.time_spent_reading_rules or 0, time_spent_reading_rules or 0)
+        # Joining means not manually added, whoever created the row.
+        obj.manually_added = False
+        if obj.email_address_status == "UNKNOWN":
+            obj.email_address_status = "VALID"
+        if not obj.name or obj.name == "Unknown":
+            obj.name = f"{user.first_name} {user.last_name}".strip()
+        if not obj.email:
+            obj.email = user.email
+        if not obj.phone_number:
+            obj.phone_number = userdata.phone_number
+        if not obj.address:
+            obj.address = userdata.address
+        if auction.is_club_managed:
+            # The club owns the number and permissions; shared with the app's proximity join.
+            club_member, member_created = ensure_club_member(
+                auction,
+                user=user,
+                name=obj.name,
+                email=obj.email,
+                phone_number=obj.phone_number or "",
+                address=obj.address or "",
+                admin_edited=False,
+            )
+            apply_club_member_to_tos(auction, obj, club_member)
+            if member_created and is_new_join:
+                obj.joined_into_club = True
+        obj.save()
+        userdata.last_auction_used = auction
+        userdata.last_activity = django_timezone.now()
+        userdata.save()
+        if auction.is_club_managed and obj.clubmember_id:
+            obj.clubmember.update_last_club_activity()
+        if is_new_join:
+            auction.create_history(
+                applies_to="USERS",
+                action=f"{obj.name} has joined this auction",
+                user=user,
+            )
+        return obj, is_new_join, ""
 
 
 LEAVE_REFUSALS = {
@@ -1378,6 +1387,8 @@ def switch_to_club_managed(auction, acting_user):
                     added_by=acting_user,
                     bidding_allowed=tos.bidding_allowed,
                     selling_allowed=tos.selling_allowed,
+                    # Switching isn't a new join, so no welcome letter.
+                    send_welcome_email=False,
                 )
                 added += int(created)
                 if tos.is_admin:

@@ -565,7 +565,7 @@ class SignedInReadersTests(TestCase):
         User.objects.filter(pk=self.officer.pk).update(is_active=False)
         self.assertContains(self.page_for(self.reader), "Deleted user &middot;")
 
-    def test_anyone_signed_in_can_comment_but_not_tag(self):
+    def test_anyone_signed_in_can_comment_and_tag(self):
         client = Client()
         client.force_login(self.reader)
         response = client.post(
@@ -574,7 +574,7 @@ class SignedInReadersTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(SpeakerComment.objects.filter(user=self.reader, body="Saw him in May").exists())
         response = client.post(reverse("speaker_tag", kwargs={"slug": self.speaker.slug}), {"tag": "funny"})
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
 
     def test_nobody_comments_on_a_page_that_hides_comments(self):
         Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_LINK)

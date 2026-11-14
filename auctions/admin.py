@@ -1130,9 +1130,11 @@ class BoughtLotInline(FlatInline, admin.TabularInline):
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice
     ordering = ("-pk",)  # # ordered for autocomplete pagination
+    # What __str__ reads, so the changelist doesn't query per row.
+    list_select_related = ("auctiontos_user__auction", "auction", "buyer", "club")
     list_display = (
         "__str__",
-        "rounded_net",
+        "calculated_total",
         "status",
     )
     list_filter = (

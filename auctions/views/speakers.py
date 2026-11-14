@@ -1,10 +1,9 @@
 """The speaker directory: who will come and talk to a club, and what about.
 
 The list and each public speaker's page are open to everyone, search engines included; a profile's
-``visibility`` narrows that (``Speaker.listed_for`` / ``Speaker.can_be_viewed_by``). Anyone signed in reads
-tags and comments and may comment; tagging needs a club permission in a club flagged ``is_nec_club``
-(``NECSpeakerAccessMixin``). Adding somebody else takes admin permission in any club
-(``ClubAdminSpeakerMixin``). Anyone signed in can add themselves.
+``visibility`` narrows that (``Speaker.listed_for`` / ``Speaker.can_be_viewed_by``). Anyone signed in reads and tags, and comments
+on the pages that show comments (``shows_comments``). Adding somebody else takes admin permission in any
+club (``ClubAdminSpeakerMixin``). Anyone signed in can add themselves.
 """
 
 import datetime
@@ -18,6 +17,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
@@ -153,22 +153,6 @@ class SpeakerAccessMixin:
         return None, None, None, "", reverse("contact_info")
 
 
-class NECSpeakerAccessMixin(LoginRequiredMixin, SpeakerAccessMixin):
-    """Gate a page to people involved with an NEC member club: tagging speakers.
-
-    Renders an explanation rather than a bare 403, since most people reaching it are in clubs that
-    simply aren't NEC members.
-    """
-
-    def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated:
-            self.load_viewer(request)
-            # A superuser gets in before any club is flagged, or nobody could tick the box.
-            if not self.nec_clubs and not request.user.is_superuser:
-                return render(request, "auctions/speaker_no_access.html", status=403)
-        return super().dispatch(request, *args, **kwargs)
-
-
 class ClubAdminSpeakerMixin(LoginRequiredMixin, SpeakerAccessMixin):
     """Gate adding somebody else to the directory: admin permission in any club, or a superuser."""
 
@@ -206,8 +190,15 @@ class SpeakerListView(SpeakerAccessMixin, HTMxTableView):
         latitude, longitude, *_ = self.resolve_origin()
         if latitude is not None and longitude is not None:
             queryset = queryset.annotate(distance=distance_to(latitude, longitude))
+        # Speakers with a site account sort first. NEC viewers also count any contact detail typed in.
+        reachable = Q(user__isnull=False)
+        if self.is_nec_member:
+            reachable |= ~Q(email="") | ~Q(phone="") | ~Q(website="") | ~Q(facebook_page="")
+        queryset = queryset.annotate(
+            contactable=Case(When(reachable, then=Value(1)), default=Value(0), output_field=IntegerField())
+        )
         # -pk too: the 405 imported speakers share a timestamp, so pagination could repeat one.
-        return queryset.order_by("-createdon", "-pk")
+        return queryset.order_by("-contactable", "-createdon", "-pk")
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
@@ -239,10 +230,10 @@ class SpeakerListView(SpeakerAccessMixin, HTMxTableView):
         return [
             ("<small class='text-muted'>Tagged as:</small>", ""),
             ("<i class='bi bi-hand-thumbs-up'></i> Would book again", "recommended"),
-            ("<i class='bi bi-camera-video'></i> Presents remotely", "remote"),
             ("<i class='bi bi-car-front'></i> Willing to travel", "travels"),
             ("<i class='bi bi-box-seam'></i> Brings auction items", "auctionitems"),
             ("<i class='bi bi-tag'></i> Not tagged yet", "untagged"),
+            ("<i class='bi bi-person-lines-fill'></i> Has contact details", "contactable"),
         ]
 
     def speakers_for_map(self, filterset):
@@ -317,6 +308,7 @@ class SpeakerListView(SpeakerAccessMixin, HTMxTableView):
             "myclub",
             "untagged",
             "needsreview",
+            "contactable",
         }
         if query and re.fullmatch(r"[A-Za-z\s\-'.]{2,60}", query) and query.lower() not in keywords:
             params["name"] = query
@@ -455,7 +447,7 @@ class SpeakerPanelView(SpeakerAccessMixin, DetailView):
         # Tags and comments: read by anyone signed in, left by NEC clubs, and only on pages those clubs can
         # list (SpeakerTagView looks the speaker up the same way), not on link-only or hidden ones.
         context["show_club_notes"] = user.is_authenticated and shows_comments(speaker, self.is_nec_member)
-        context["tags_read_only"] = not self.is_nec_member
+        context["tags_read_only"] = False
         if context["show_club_notes"]:
             context["tag_counts"] = speaker.tag_counts()
             context["my_tags"] = speaker.tags_by_user(user)
@@ -711,11 +703,15 @@ class SpeakerDeleteView(LoginRequiredMixin, SpeakerAccessMixin, View):
         return redirect("speaker_list")
 
 
-class SpeakerTagView(NECSpeakerAccessMixin, View):
-    """Toggle one of the current user's tags on a speaker and re-render the tag block."""
+class SpeakerTagView(LoginRequiredMixin, SpeakerAccessMixin, View):
+    """Toggle one of the current user's tags on a speaker and re-render the tag block. Anyone signed in, on the
+    pages that show comments (``shows_comments``), including their own profile.
+    """
 
     def post(self, request, slug):
         speaker = get_object_or_404(self.visible_speakers(), slug=slug)
+        if not shows_comments(speaker, self.is_nec_member):
+            raise Http404
         tag = (request.POST.get("tag") or "").strip()
         if tag not in SpeakerTag.TAG_LABELS:
             raise Http404

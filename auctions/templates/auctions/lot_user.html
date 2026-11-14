@@ -28,9 +28,11 @@
           var label = button.html();
           button.html('<i class="bi bi-check"></i> Link copied');
           setTimeout(function () { button.html(label); }, 2000);
+        }).catch(function () {
+          $.toast({title: 'Copy failed', type: 'danger'});
         });
       } else {
-        window.prompt('Copy this link', url);
+        $.toast({title: 'Copy failed', type: 'danger'});
       }
     });
   </script>

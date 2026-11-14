@@ -193,9 +193,9 @@ function initMap() {
                         {% endif %}
                         <div class="col-6 col-md-auto">
                             {% if auction.is_online or not auction.allow_bulk_adding_lots %}
-                            <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
+                            <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add a lot</a>
                             {% else %}
-                            <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
+                            <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add lots</a>
                             {% endif %}
                         </div>
                         <div class="col-6 col-md-auto">
@@ -208,7 +208,7 @@ function initMap() {
                         {% endif %}
                         {% if request.user.is_authenticated and user_has_lots %}
                         <div class="col-6 col-md-auto">
-                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
+                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print labels</a>
                         </div>
                         {% endif %}
                     </div>
@@ -358,7 +358,7 @@ function initMap() {
             {% if auction.all_location_count %}
             <a name="join"></a>
             {% if not ended %}
-                <div class="card mb-4">
+                <div class="card mb-4" id="join">
                     <div class="card-header">
                         <h5 class="mb-0"><i class="bi bi-box-arrow-in-right"></i> Join This Auction</h5>
                     </div>

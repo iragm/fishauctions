@@ -1750,6 +1750,7 @@ class SpeakerFilter(django_filters.FilterSet):
         require_my_club = False
         require_untagged = False
         require_review = False
+        require_contactable = False
         remaining = []
         for token in tokens:
             if not self.show_tags and (
@@ -1768,6 +1769,8 @@ class SpeakerFilter(django_filters.FilterSet):
                 require_untagged = True
             elif token in ("needsreview", "needs_review"):
                 require_review = True
+            elif token == "contactable":
+                require_contactable = True
             else:
                 remaining.append(token)
 
@@ -1783,6 +1786,9 @@ class SpeakerFilter(django_filters.FilterSet):
         if require_review:
             # The retired-topic worklist (auctions/speaker_topics.py); deliberately not a chip.
             queryset = queryset.filter(topics_need_review=True)
+        if require_contactable:
+            # The annotation SpeakerListView adds: a site account, or for NEC viewers any contact detail.
+            queryset = queryset.filter(contactable=1)
         for tag_value in wanted_tags:
             queryset = queryset.filter(tags__tag=tag_value)
         if wanted_tags:
@@ -2013,9 +2019,12 @@ class DocumentFilter(django_filters.FilterSet):
             )
         ),
     )
-    # Rendered by the header's menu as radios, and real query parameters for links.
+    # Rendered by the header's menus as radios, and real query parameters for links.
     visibility = django_filters.CharFilter(method="filter_by_visibility", widget=HiddenInput())
     club = django_filters.CharFilter(method="filter_by_club", widget=HiddenInput())
+    topic = django_filters.CharFilter(method="filter_by_topic", widget=HiddenInput())
+    species = django_filters.CharFilter(method="filter_by_species", widget=HiddenInput())
+    year = django_filters.CharFilter(method="filter_by_year", widget=HiddenInput())
 
     class Meta:
         model = Document
@@ -2034,6 +2043,17 @@ class DocumentFilter(django_filters.FilterSet):
 
     def filter_by_club(self, queryset, name, value):
         return queryset.filter(club__slug=value) if value else queryset
+
+    def filter_by_topic(self, queryset, name, value):
+        from .documents.models import TOPIC_LABELS
+
+        return queryset.filter(topics__contains=[value]) if value in TOPIC_LABELS else queryset
+
+    def filter_by_species(self, queryset, name, value):
+        return queryset.filter(species__pk=int(value)) if (value or "").isdigit() else queryset
+
+    def filter_by_year(self, queryset, name, value):
+        return queryset.filter(year=int(value)) if (value or "").isdigit() else queryset
 
     def document_search(self, queryset, name, value):
         for word in (value or "").split()[:8]:

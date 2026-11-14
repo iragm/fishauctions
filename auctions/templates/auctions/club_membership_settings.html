@@ -106,9 +106,9 @@
     <p class="small text-muted mb-2">
       Card payments are reviewed before they're switched on, usually the same day.
     </p>
-    <a class="btn btn-primary btn-sm" href="mailto:{{ request.user.userdata.square_access_request_mailto_query }}">
+    <form method="post" action="{% url 'access_request' %}?next={{ request.get_full_path|urlencode }}" class="d-inline">{% csrf_token %}<input type="hidden" name="kind" value="square"><button type="submit" class="btn btn-primary btn-sm">
       <i class="bi bi-credit-card"></i> Contact us and request access
-    </a>
+    </button></form>
   {% endif %}
 </div>
 
