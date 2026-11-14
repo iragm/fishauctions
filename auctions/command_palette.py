@@ -1449,7 +1449,9 @@ def page_verb_items(request, path):
             or invoice.status == "PAID"
             or not invoice.auction.permission_check(user)
             or not palette_assist.assist_enabled_for(user)
-            or palette_assist.navigate_only(user)
+            or palette_assist.writes_locked(
+                user, palette_assist.may_write_here(user, False, {"auction": invoice.auction.slug})
+            )
         ):
             return []
         # Named by bidder number, the way the desk says it; the page context supplies the auction.

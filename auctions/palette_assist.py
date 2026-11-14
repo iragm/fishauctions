@@ -122,7 +122,8 @@ def navigate_only(user) -> bool:
     """Whether this user's palette opens pages and never writes.
 
     Theirs to choose on the preferences page, and ``ASSISTANT_NAVIGATE_ONLY`` turns it on for
-    everybody — the kill switch for a write that misfires in the middle of somebody's auction.
+    everybody, which is the default. Pages somebody runs are the exception (:func:`may_write_here`);
+    ``ASSISTANT_BOX_WRITES`` is the switch that stops a write misfiring in the middle of an auction.
     """
     from django.conf import settings
 
@@ -170,6 +171,10 @@ def runs_this_page(user, page: dict[str, Any] | None) -> bool:
 
     ``page`` comes from ``palette_routes.page_context_from_path``, which resolves the path through the
     URLconf, so this is the same object the page itself is about.
+
+    A superuser may change every auction, which is not the same as running it: on somebody else's
+    auction their palette opens pages like anybody's. What counts for them is what would count for
+    them without the flag.
     """
     if not getattr(user, "is_authenticated", False):
         return False
@@ -178,11 +183,24 @@ def runs_this_page(user, page: dict[str, Any] | None) -> bool:
         from .models import Auction
 
         auction = Auction.objects.filter(slug=page["auction"], is_deleted=False).first()
-        return bool(auction and auction.permission_check(user))
+        if not auction:
+            return False
+        if user.is_superuser:
+            return auction.pk in command_palette._admin_auction_ids(user)
+        return bool(auction.permission_check(user))
     if page.get("club"):
-        from .views.base import clubs_with_any_permission
+        from .models import Club
+        from .views.base import CLUB_PERMISSION_FIELDS
 
-        return clubs_with_any_permission(user, nec_only=False).filter(slug=page["club"]).exists()
+        any_permission = Q()
+        for field in CLUB_PERMISSION_FIELDS:
+            any_permission |= Q(**{f"members__{field}": True})
+        # Written out rather than ``clubs_with_any_permission``, which gives a superuser every club.
+        return (
+            Club.objects.filter(slug=page["club"], members__user=user, members__is_deleted=False)
+            .filter(any_permission)
+            .exists()
+        )
     return False
 
 
@@ -783,7 +801,9 @@ def navigation_shortcut(request, query: str):
             break
     else:
         # A palette that only opens pages reads "bap rules" as the page it names, opener or not.
-        if not writes_locked(request.user, getattr(request, "palette_box", False)) or asks_a_question(query):
+        # The palette's own mode, not this turn's tools: on a page they run, "set lot winners" is still
+        # that page, and is free. A command doesn't get here, because every word has to name the page.
+        if not navigate_only(request.user) or asks_a_question(query):
             return None
         target = query.strip(" .")
     if not target:
@@ -1937,7 +1957,6 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
     query = (query or "").strip()[:MAX_QUERY_LENGTH]
     # Parsed once and hung on the request for every resolver.
     request.palette_page = palette_routes.page_context_from_path(user, path) if path else {}
-    request.palette_box = may_write_here(user, box, request.palette_page)
     # What they actually said, for the resolvers: the model drops a named auction often enough that
     # the sentence is worth reading when the parameter is missing.
     request.palette_query = query
@@ -1977,6 +1996,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
         return
 
     yield _progress(opening_line(query))
+    # Only here, past every answer that needs no model: it costs a few queries.
+    request.palette_box = may_write_here(user, box, request.palette_page)
 
     # One id for every round of this one thing they typed, and one clock for what they waited.
     request_id = uuid.uuid4().hex

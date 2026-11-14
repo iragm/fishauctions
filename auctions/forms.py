@@ -4049,9 +4049,8 @@ class ChangeUserPreferencesForm(forms.ModelForm):
     def __init__(self, user, *args, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
-        if getattr(settings, "ASSISTANT_NAVIGATE_ONLY", False):
-            # The whole site's palette only opens pages, so the choice would do nothing.
-            self.fields["palette_navigate_only"].widget = forms.HiddenInput()
+        # Shown even with ASSISTANT_NAVIGATE_ONLY on: the palette still does things on the auction and
+        # club pages its owner runs (palette_assist.may_write_here), and this is how to stop it.
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"

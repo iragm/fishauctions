@@ -120,7 +120,7 @@ this only quotes its opening sentence.
 - **`club_onboarding.py`** (137 lines)
   Putting a club on the site: the checks an admin's ``add_club`` proposal and a member's own "add your
   `web_address`, `club_fields`, `waiting_for`, `add_my_club`
-- **`command_palette.py`** (1667 lines)
+- **`command_palette.py`** (1669 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `page_verb_items`, `default_items`, `search`, `with_ask_ai`, `log_search`
 - **`consumers.py`** (506 lines)
@@ -170,7 +170,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6750 lines)
+- **`forms.py`** (6749 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -238,9 +238,9 @@ this only quotes its opening sentence.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
 - **`palette_actions.py`** (17111 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (2293 lines)
+- **`palette_assist.py`** (2314 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2063 lines)
+- **`palette_routes.py`** (2082 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -586,7 +586,7 @@ this only quotes its opening sentence.
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (1931 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_admin_reports.py`** (580 lines)
+- **`test_mcp_admin_reports.py`** (584 lines)
   The growth reports on ``/mcp/admin/`` (:mod:`auctions.mcp.admin_reports`), the 404 page's title they
   `Helpers`, `ShapeTests`, `FunnelTests`, `ClubTests`, `DeadEndTests`, `PageVerbTests`, `ShortcutCandidateTests`, `FeedbackTests`, `AcquisitionTests`, `ClubFunnelTests`
 - **`test_mcp_permissions.py`** (724 lines)
@@ -664,7 +664,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (891 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5504 lines)
+- **`test_palette_assist.py`** (5561 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.

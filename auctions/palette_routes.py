@@ -1996,6 +1996,13 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
 # --- where the user currently is ---------------------------------------------
 
 
+#: Pages whose ``slug`` is the lot's or the species' own, not an auction's. Read as an auction, a lot
+#: slugged "guppies" named whichever auction was slugged "guppies" instead of its own.
+_SLUG_IS_NOT_AN_AUCTION = frozenset({"lot_by_pk_and_slug", "species_detail_slug"})
+#: A lot's pages whose names don't start with "lot".
+_LOT_PAGES = frozenset({"edit_lot", "delete_lot", "single_lot_label"})
+
+
 def page_context_from_path(user, path: str) -> dict[str, Any]:
     """What the user is looking at, from their URL, resolved through the URLconf. This makes "add a lot"
     mean this auction.
@@ -2013,11 +2020,23 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
     if route:
         data["page_label"] = route.label
     slug = match.kwargs.get("slug")
+    url_name = match.url_name or ""
 
     from . import command_palette
     from .models import Auction, Club, Lot
 
-    if slug:
+    if slug and url_name.startswith("club"):
+        # A club's own pages, which take its number and abbreviation as well as its slug, never an
+        # auction that happens to share the word.
+        from .views.base import club_from_url
+
+        club = club_from_url(slug)
+        if club:
+            data["club"] = club.slug
+            data["club_name"] = club.name
+    elif slug and url_name in _SLUG_IS_NOT_AN_AUCTION:
+        pass
+    elif slug:
         # Any auction by slug, joined or not: the auction page is public to anyone with the slug, so
         # a forged path reveals nothing, and non-members asking about it need context. This widens
         # context, not permission: resolve_auction still re-scopes through _joined_auctions.
@@ -2034,7 +2053,7 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
                 data["club_name"] = club.name
 
     pk = match.kwargs.get("pk")
-    if pk and (match.url_name or "").startswith("lot"):
+    if pk and (url_name.startswith("lot") or url_name in _LOT_PAGES):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if lot:
             data["lot_id"] = lot.pk
