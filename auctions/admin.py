@@ -26,6 +26,7 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
+    BlockedEmailDomain,
     Category,
     ChunkedJobState,
     Club,
@@ -1601,6 +1602,14 @@ class AssistantSkillRequestAdmin(admin.ModelAdmin):
     search_fields = ("skill", "reason", "params", "user__username")
     readonly_fields = ("createdon", "updatedon")
     list_select_related = ("user",)
+
+
+@admin.register(BlockedEmailDomain)
+class BlockedEmailDomainAdmin(admin.ModelAdmin):
+    """Domains the contact form silently ignores from signed-out visitors."""
+
+    list_display = ("domain", "createdon")
+    search_fields = ("domain",)
 
 
 # Imported to register their pages: moderation queue and advertising.

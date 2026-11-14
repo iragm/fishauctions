@@ -51,6 +51,7 @@ from auctions.models import (
     AssistantSkillRequest,
     Auction,
     AuctionTOS,
+    BlockedEmailDomain,
     Invoice,
     Lot,
     LotImage,
@@ -125,8 +126,14 @@ class SupportView(FormView):
     def form_valid(self, form):
         from post_office import mail
 
-        if form.cleaned_data.get("website"):
-            # The honeypot: a bot gets the same answer as a person, so it has nothing to learn.
+        honeypot = bool(form.cleaned_data.get("website"))
+        # Only a typed address is checked: one read off a signed-in account is the site's own.
+        blocked = not honeypot and not form.sender_is_known and BlockedEmailDomain.blocks(form.sender_email)
+        if blocked:
+            logger.info("Contact form: dropped a message from a blocked email domain")
+        if honeypot or blocked:
+            # The honeypot, or a blocked domain: a bot gets the same answer as a person, so it has nothing
+            # to learn.
             messages.success(
                 self.request,
                 f"Thanks - your message is on its way. We'll reply to {form.sender_email}.",
