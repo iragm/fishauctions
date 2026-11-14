@@ -35,8 +35,13 @@ class Helpers(StandardTestCase):
     def make(self, title, *, days_ago=0, posted_days_ago=None, creator=None):
         now = timezone.now()
         start = now - datetime.timedelta(days=days_ago)
+        # An online auction with no end never winds down, so it would never get its email: give it one a day long.
         auction = Auction.objects.create(
-            title=title, created_by=creator or self.organizer, club=self.club, date_start=start
+            title=title,
+            created_by=creator or self.organizer,
+            club=self.club,
+            date_start=start,
+            date_end=start + DAY,
         )
         posted = now - datetime.timedelta(days=days_ago if posted_days_ago is None else posted_days_ago)
         Auction.objects.filter(pk=auction.pk).update(date_posted=posted)
@@ -69,11 +74,12 @@ class NextAuctionEmailTests(Helpers):
     def test_next_auction_email_blocks_feature_email_for_spacing(self):
         self.make("Fall club auction", days_ago=12)
         _seen(self.organizer, 200)
-        with patch(NEXT_SEND) as next_send, patch(FEATURE_SEND) as feature_send, STARTED:
+        # Both kinds of email go through post_office's mail.send, so one patch sees them both.
+        with patch(NEXT_SEND) as send, STARTED:
             self.assertEqual(next_auction.send_next_auction_emails(), 1)
             feature_emails.send_feature_emails()
-        self.assertEqual(self.sent_to(next_send, self.organizer.email)[0].kwargs["template"], "next_auction")
-        self.assertEqual(self.sent_to(feature_send, self.organizer.email), [])
+        sent = [call.kwargs["template"] for call in self.sent_to(send, self.organizer.email)]
+        self.assertEqual(sent, ["next_auction"])
         kinds = list(FeatureEmail.objects.filter(user=self.organizer).values_list("kind", flat=True))
         self.assertEqual(kinds, ["next_auction"])
 

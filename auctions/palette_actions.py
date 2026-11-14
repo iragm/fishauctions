@@ -16614,9 +16614,9 @@ SKILLS: dict[str, str] = {
     "AuctionTOSDelete": "remove_person",
     "ClubMemberDeleteView": "set_member_active",
     "ClubMemberReactivateView": "set_member_active",
-    # The invoice page's adjustment rows save and delete one at a time through this endpoint.
+    # The invoice page's adjustment rows save and delete one at a time through this endpoint; a
+    # delete is its ``delete`` flag, so remove_invoice_adjustment has no view of its own.
     "InvoiceAdjustmentSave": "add_invoice_adjustment",
-    "InvoiceView": "remove_invoice_adjustment",
     # Add, remove, move and Next/Back are queue_lot, unqueue_lot, move_queued_lot and step_queue.
     "LotQueueView": "queue_lot",
     "ClubBapGenusOverrideSaveView": "set_point_rule",
@@ -17035,12 +17035,10 @@ NOT_A_SKILL: dict[str, str] = {
     "MailchimpWebhookView": _WEBHOOK,
     "PayPalSubscriptionWebhookView": _WEBHOOK,
     "PayPalWebhookView": _WEBHOOK,
-    "SquarePaymentSuccessView": _WEBHOOK,
     "SquareWebhookView": _WEBHOOK,
     "ClubMemberSelfServiceView": _TOKEN,
     "ClubCadenceAnswerView": _TOKEN,
     "SelfServeContactLinkView": _TOKEN,
-    "InvoiceNoLoginView": _TOKEN,
     # Other programs
     "ClubMemberBapAwardAPIView": _EXTERNAL_API,
     "ClubMemberListCreateAPIView": _EXTERNAL_API,

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import User
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -104,6 +104,7 @@ class SquareRefundWebhookTests(StandardTestCase):
         )
         _square_seller(self.admin_user, "MERCHANT_RF")
 
+    @override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY="", DEBUG=True)
     def test_refund_webhook_redelivery_subtracts_once(self):
         refund = {
             "id": "REFUND_RF",
@@ -203,7 +204,13 @@ class SwitchToClubManagedWelcomeTests(StandardTestCase):
             copy_users_when_copying_this_auction=True,
             send_club_welcome_letter=True,
         )
-        AuctionTOS.objects.create(auction=auction, name="Jane Doe", email="jane@example.com", bidder_number="701")
+        AuctionTOS.objects.create(
+            auction=auction,
+            name="Jane Doe",
+            email="jane@example.com",
+            bidder_number="701",
+            pickup_location=self.location,
+        )
         with (
             patch("auctions.views.base.check_club_permission", return_value=True),
             patch.object(AuctionEditForm, "_rebuild_auctiontos_from_club"),

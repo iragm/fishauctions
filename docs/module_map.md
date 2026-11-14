@@ -236,7 +236,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17113 lines)
+- **`palette_actions.py`** (17111 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2201 lines)
   Natural-language orchestration for the command palette.
@@ -531,7 +531,7 @@ this only quotes its opening sentence.
 - **`test_history_tools.py`** (108 lines)
   ``recent_changes`` and ``club_history``: the filters, and a superuser reading every auction or club.
   `HistoryToolTests`
-- **`test_invoice_adjustments.py`** (97 lines)
+- **`test_invoice_adjustments.py`** (101 lines)
   Adjustments on the invoice page save one row at a time: a new row, a change, a delete, a blank row,
   `InvoiceAdjustmentSaveTests`, `InvoicePageAdjustmentTests`
 - **`test_invoice_models.py`** (254 lines)
@@ -610,7 +610,7 @@ this only quotes its opening sentence.
 - **`test_merges.py`** (416 lines)
   What a merge carries over: everything that points at the participant, club member or account it closes.
   `relations_to`, `MergeCoverageTests`, `ParticipantMergeTests`, `MemberMergeTests`
-- **`test_mobile_features.py`** (2727 lines)
+- **`test_mobile_features.py`** (2729 lines)
   Tests for the mobile-app web-side features.
 - **`test_mobile_last_used.py`** (156 lines)
   Tests for GET /api/mobile/auctions/last-used/ — the command palette's AR-gating lookup.
@@ -672,7 +672,7 @@ this only quotes its opening sentence.
 - **`test_palette_routes.py`** (164 lines)
   Tests for the palette's page catalog.
   `RouteAuditTests`, `RouteMatchingTests`, `PageContextTests`
-- **`test_palette_skills.py`** (3304 lines)
+- **`test_palette_skills.py`** (3303 lines)
   Tests for what the command palette assistant can *do*.
 - **`test_palette_sweep_fixes.py`** (457 lines)
   Regression tests for one sweep over ``palette_actions``' writes.
@@ -707,19 +707,19 @@ this only quotes its opening sentence.
 - **`test_review_fixes_club_tools.py`** (142 lines)
   Club management, access requests and the AI box: the review fixes that save an admin a trip.
   `AccessRequestTests`, `ClubSidebarAuctionBlockTests`, `ClubSetupListTests`, `NewClubMembersPageTests`, `AIBoxTests`
-- **`test_review_fixes_emails.py`** (172 lines)
+- **`test_review_fixes_emails.py`** (178 lines)
   Automatic emails, review fixes: bounced creators, feature-email spacing for the next-auction email, club
   `Helpers`, `NextAuctionEmailTests`, `ClubEmailRecipientTests`, `QuietSpellTests`, `MergeSuggestionCapTests`
-- **`test_review_fixes_frontend.py`** (51 lines)
+- **`test_review_fixes_frontend.py`** (65 lines)
   Frontend fixes from the review: one management form on bulk add, a join anchor on the lot list,
   `BulkAddUsersFrontendTests`, `LotListFrontendTests`
 - **`test_review_fixes_library_speakers.py`** (135 lines)
   Review fixes for the library list and the speaker directory: the library's default list, its Mine,
   `make_document`, `LibraryListFixesTests`, `SpeakerDirectoryFixesTests`
-- **`test_review_fixes_money.py`** (213 lines)
+- **`test_review_fixes_money.py`** (220 lines)
   WP2 regression tests: Square refund amounts and keys, refund webhook redelivery, the PAID total freeze,
   `SquareRefundAmountTests`, `SquareRefundWebhookTests`, `InvoiceRecalculateFreezeTests`, `JoinAuctionOnceTests`, `ClubMemberListPagingTests`, `SwitchToClubManagedWelcomeTests`
-- **`test_review_fixes_onboarding.py`** (81 lines)
+- **`test_review_fixes_onboarding.py`** (95 lines)
   Getting started, sellers and bidders: the create bounce, the join form, the email settings mailing address.
   `OnboardingTests`
 - **`test_review_fixes_sanitizer.py`** (44 lines)

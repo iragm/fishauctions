@@ -70,10 +70,13 @@ class InvoiceAdjustmentSaveTests(StandardTestCase):
 
     def test_total_changes_after_save(self):
         self.client.force_login(self.admin_user)
+        # The fixture never totals the invoice, so total it first to have a baseline.
+        Invoice.objects.get(pk=self.invoice.pk).recalculate()
         before = Invoice.objects.get(pk=self.invoice.pk).calculated_total
         self.client.post(self.url, self.row(amount="50"))
         after = Invoice.objects.get(pk=self.invoice.pk).calculated_total
-        self.assertGreater(after, before)
+        # A charge lowers the net (negative means the buyer owes), so the total moves by exactly the amount.
+        self.assertEqual(after, before - 50)
 
 
 class InvoicePageAdjustmentTests(StandardTestCase):
@@ -93,5 +96,6 @@ class InvoicePageAdjustmentTests(StandardTestCase):
     def test_status_buttons_render_without_dirty_warning(self):
         self.client.force_login(self.admin_user)
         response = self.client.get(self.url)
-        self.assertContains(response, f'id="invoice-buttons-{self.invoice.pk}"')
+        # invoice_buttons.html quotes its id with single quotes.
+        self.assertContains(response, f"id='invoice-buttons-{self.invoice.pk}'")
         self.assertNotContains(response, "form_dirty_warning")

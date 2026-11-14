@@ -1345,7 +1345,7 @@ class SpeakerHTMxTable(tables.Table):
             record.display_name,
         )
         if record.user_id:
-            link = format_html("{} <i class='bi bi-patch-check-fill text-info' title='Claimed'></i>", link)
+            link = format_html('{} <i class="bi bi-patch-check-fill text-info" title="Claimed"></i>', link)
         if not record.is_recently_added:
             return link
         # bg-success needs dark text for contrast; see style_reference.md.

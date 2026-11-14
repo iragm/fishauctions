@@ -693,7 +693,7 @@ class NotifyUserTests(TestCase):
     @override_settings(FIREBASE_CREDENTIALS_JSON=FAKE_FIREBASE)
     def test_pushes_when_user_prefers_push(self):
         sent = []
-        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+        with patch("auctions.tasks.send_push_to_user.delay") as delay, self.captureOnCommitCallbacks(execute=True):
             pushed = notifications.notify_user(
                 self.user, category="watched", title="t", body="b", url="u", send_email=lambda: sent.append(1)
             )
@@ -1931,6 +1931,8 @@ class RunningTotalNotificationTests(StandardTestCase):
         view = DynamicSetLotWinner()
         view.request = type("R", (), {"user": self.admin_user})()
         view.auction = self.in_person_auction
+        # setUp sold this lot already, and a lot is sold once: unsell it so this is a fresh sale.
+        Lot.objects.filter(pk=self.in_person_lot.pk).update(auctiontos_winner=None, winning_price=None)
         with patch("auctions.sales.notify_running_total") as notify, self.captureOnCommitCallbacks(execute=True):
             view.set_winner(self.in_person_lot, self.in_person_buyer, 12)
         notify.assert_called_once_with(self.in_person_lot)
