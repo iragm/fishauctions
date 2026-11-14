@@ -134,7 +134,9 @@ all, when one route is clearly ahead of the next. `navigate_only` — a preferen
 refuses a countdown card that was already on screen. The AI boxes on the auction and club admin pages
 (`data-palette-box`) are the exception: they open the palette with `box: true`, `from_a_box` believes
 that only from somebody who runs the page's auction or club, and `writes_locked` then gives those
-turns the writes. `ASSISTANT_BOX_WRITES` is their own switch.
+turns the writes. The palette itself gets them too on a page whose auction or club the person runs
+(`runs_this_page`, gathered with the box in `may_write_here`), unless they chose the navigate-only
+preference. `ASSISTANT_BOX_WRITES` is the switch for both.
 
 The links come from `palette_actions.KEY_ABOUT`, the same block `/mcp/` turns into `resource_link`s:
 `assist_stream` collects it off every lookup and `about_groups` turns it into rows. It used to be

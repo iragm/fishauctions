@@ -122,7 +122,8 @@ def navigate_only(user) -> bool:
     """Whether this user's palette opens pages and never writes.
 
     Theirs to choose on the preferences page, and ``ASSISTANT_NAVIGATE_ONLY`` turns it on for
-    everybody — the kill switch for a write that misfires in the middle of somebody's auction.
+    everybody, which is the default. Pages somebody runs are the exception (:func:`may_write_here`);
+    ``ASSISTANT_BOX_WRITES`` is the switch that stops a write misfiring in the middle of an auction.
     """
     from django.conf import settings
 
@@ -157,17 +158,68 @@ def from_a_box(user, claimed: Any, page: dict[str, Any] | None) -> bool:
     """
     if claimed is not True or not box_enabled(user) or not getattr(user, "is_authenticated", False):
         return False
-    from .models import Auction
+    page = page or {}
+    if page.get("auction") or page.get("club"):
+        return runs_this_page(user, page)
     from .views.base import clubs_with_any_permission
 
+    return bool(command_palette._admin_auction_ids(user)) or clubs_with_any_permission(user, nec_only=False).exists()
+
+
+def runs_this_page(user, page: dict[str, Any] | None) -> bool:
+    """Whether the page names an auction or club that ``user`` runs. A page that names neither: no.
+
+    ``page`` comes from ``palette_routes.page_context_from_path``, which resolves the path through the
+    URLconf, so this is the same object the page itself is about.
+
+    A superuser may change every auction, which is not the same as running it: on somebody else's
+    auction their palette opens pages like anybody's. What counts for them is what would count for
+    them without the flag.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
     page = page or {}
     if page.get("auction"):
+        from .models import Auction
+
         auction = Auction.objects.filter(slug=page["auction"], is_deleted=False).first()
-        return bool(auction and auction.permission_check(user))
-    clubs = clubs_with_any_permission(user, nec_only=False)
+        if not auction:
+            return False
+        if user.is_superuser:
+            return auction.pk in command_palette._admin_auction_ids(user)
+        return bool(auction.permission_check(user))
     if page.get("club"):
-        return clubs.filter(slug=page["club"]).exists()
-    return bool(command_palette._admin_auction_ids(user)) or clubs.exists()
+        from .models import Club
+        from .views.base import CLUB_PERMISSION_FIELDS
+
+        any_permission = Q()
+        for field in CLUB_PERMISSION_FIELDS:
+            any_permission |= Q(**{f"members__{field}": True})
+        # Written out rather than ``clubs_with_any_permission``, which gives a superuser every club.
+        return (
+            Club.objects.filter(slug=page["club"], members__user=user, members__is_deleted=False)
+            .filter(any_permission)
+            .exists()
+        )
+    return False
+
+
+def may_write_here(user, claimed_box: Any, page: dict[str, Any] | None) -> bool:
+    """Whether this turn gets the write tools though the palette only opens pages.
+
+    Two ways (Ira, 2026-11-14): typed into an AI box (:func:`from_a_box`), or typed into the palette
+    while on an auction or club page they run (:func:`runs_this_page`). Somebody who chose a palette
+    that only opens pages keeps it on the second: the box is a separate thing they type into on
+    purpose, the palette is the one they asked to keep quiet. ``ASSISTANT_BOX_WRITES`` turns off both.
+    """
+    if from_a_box(user, claimed_box, page):
+        return True
+    if not box_enabled(user):
+        return False
+    userdata = getattr(user, "userdata", None)
+    if userdata and userdata.palette_navigate_only:
+        return False
+    return runs_this_page(user, page)
 
 
 def writes_locked(user, box: bool = False) -> bool:
@@ -749,7 +801,9 @@ def navigation_shortcut(request, query: str):
             break
     else:
         # A palette that only opens pages reads "bap rules" as the page it names, opener or not.
-        if not writes_locked(request.user, getattr(request, "palette_box", False)) or asks_a_question(query):
+        # The palette's own mode, not this turn's tools: on a page they run, "set lot winners" is still
+        # that page, and is free. A command doesn't get here, because every word has to name the page.
+        if not navigate_only(request.user) or asks_a_question(query):
             return None
         target = query.strip(" .")
     if not target:
@@ -1903,7 +1957,6 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
     query = (query or "").strip()[:MAX_QUERY_LENGTH]
     # Parsed once and hung on the request for every resolver.
     request.palette_page = palette_routes.page_context_from_path(user, path) if path else {}
-    request.palette_box = from_a_box(user, box, request.palette_page)
     # What they actually said, for the resolvers: the model drops a named auction often enough that
     # the sentence is worth reading when the parameter is missing.
     request.palette_query = query
@@ -1943,6 +1996,8 @@ def assist_stream(request, query: str, context: Any = None, path: str = "", box:
         return
 
     yield _progress(opening_line(query))
+    # Only here, past every answer that needs no model: it costs a few queries.
+    request.palette_box = may_write_here(user, box, request.palette_page)
 
     # One id for every round of this one thing they typed, and one clock for what they waited.
     request_id = uuid.uuid4().hex
@@ -2237,7 +2292,7 @@ def execute(request, name: str, params: Any, path: str = "", box: bool = False) 
     if not assist_enabled_for(request.user):
         return {"kind": KIND_ERROR, "message": "I don't know how to do that."}
     request.palette_page = palette_routes.page_context_from_path(request.user, path) if path else {}
-    if writes_locked(request.user, from_a_box(request.user, box, request.palette_page)):
+    if writes_locked(request.user, may_write_here(request.user, box, request.palette_page)):
         # Same for a card that was on screen when the switch went the other way.
         return {"kind": KIND_ERROR, "message": "I can only take you to the right page. That one's done there."}
     action = palette_actions.get_action(name)

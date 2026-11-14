@@ -6,7 +6,7 @@ import json
 from unittest import mock
 
 from django.contrib.auth.models import User
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.utils import timezone
 
 from auctions import command_palette, palette_routes
@@ -318,7 +318,11 @@ class PageVerbTests(Helpers):
                 palette_routes.page_context_from_path(self.user, path)["auction"], self.online_auction.slug
             )
             self.assertNotIn("auction", palette_routes.page_context_from_path(self.user_who_does_not_join, path))
+            # The site-wide navigate-only palette still offers it on the auction's own invoice, since
+            # it can do it there; only the switch that stops those writes takes it away.
             with mock.patch("auctions.palette_assist.navigate_only", return_value=True):
+                self.assertTrue(command_palette.page_verb_items(self.request_for(self.user), path))
+            with override_settings(ASSISTANT_BOX_WRITES=False, ASSISTANT_NAVIGATE_ONLY=True):
                 self.assertEqual(command_palette.page_verb_items(self.request_for(self.user), path), [])
             self.assertEqual(command_palette.page_verb_items(self.request_for(self.user_who_does_not_join), path), [])
             Invoice.objects.filter(pk=invoice.pk).update(status="PAID")

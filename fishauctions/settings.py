@@ -741,8 +741,9 @@ ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_F
 # The kill switch for a write that misfires during somebody's auction, read on every request.
 # Default on since 2026-10: answering moved to /ai/, and the palette only opens pages.
 ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=True)
-# The AI boxes on the auction and club admin pages do things ("lot 12 sold to 34 for $5"), each behind
-# a countdown, whatever the switch above says. Off: no boxes. Their own kill switch.
+# The AI boxes on the auction and club admin pages, and the palette on any auction or club page the
+# person runs, do things ("lot 12 sold to 34 for $5"), each behind a countdown, whatever the switch
+# above says. Off: no boxes, and the palette opens pages everywhere. Their own kill switch.
 ASSISTANT_BOX_WRITES = parse_bool_env(os.environ.get("ASSISTANT_BOX_WRITES") or None, default=True)
 # /ai/ (auctions/ai_page.py): the model it runs on, and what one person may spend on it in a day, in
 # tokens with cached prompt tokens counted at a tenth. About twenty ordinary questions; connecting your
