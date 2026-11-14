@@ -4686,6 +4686,60 @@ class BoxWritesTests(PaletteAssistTestCase):
     def test_a_countdown_from_the_palette_still_cannot(self):
         self.assertEqual(self._execute("check_in", {"person": "555"}).json()["kind"], "error")
 
+    def _auction_page(self, auction=None):
+        return reverse("auction_main", kwargs={"slug": (auction or self.in_person_auction).slug})
+
+    def test_the_palette_does_it_on_a_page_of_an_auction_they_run(self):
+        """Ira, 2026-11-14: commands in the palette too, on the pages you run."""
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        data = self._assist("check in bidder 555", path=self._auction_page()).json()
+        self.assertEqual(data["kind"], "done", data)
+        self.assertIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+        self.assertEqual(self._execute("check_in", {"person": "555"}, path=self._auction_page()).json()["kind"], "done")
+
+    def test_the_palette_does_it_on_a_club_page_they_run(self):
+        club = self.in_person_auction.club
+        ClubMember.objects.update_or_create(club=club, user=self.user, defaults={"permission_admin": True})
+        path = reverse("club_admin", kwargs={"slug": club.slug})
+        page = palette_routes.page_context_from_path(self.user, path)
+        self.assertTrue(palette_assist.may_write_here(self.user, False, page))
+
+    def test_the_palette_opens_pages_on_an_auction_they_do_not_run(self):
+        theirs = Auction.objects.create(
+            created_by=self.userB, title="Somebody else's auction", date_start=timezone.now(), is_online=True
+        )
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("check in bidder 555", path=self._auction_page(theirs))
+        self.assertNotIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+        self.assertEqual(
+            self._execute("check_in", {"person": "555"}, path=self._auction_page(theirs)).json()["kind"], "error"
+        )
+
+    def test_a_member_on_the_auction_page_still_only_gets_pages(self):
+        self.assertFalse(palette_assist.may_write_here(self.member, False, {"auction": self.in_person_auction.slug}))
+        response = self._execute("check_in", {"person": "555"}, user=self.member, path=self._auction_page())
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_a_page_about_nothing_they_run_is_not_enough(self):
+        """The box may run anywhere for somebody who runs something; the palette needs the page."""
+        self.assertFalse(palette_assist.may_write_here(self.user, False, {}))
+        self.assertFalse(palette_assist.may_write_here(self.user, False, {"page": "watched"}))
+
+    def test_the_navigate_only_preference_keeps_the_palette_quiet_but_not_the_box(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        page = {"auction": self.in_person_auction.slug}
+        self.assertFalse(palette_assist.may_write_here(self.user, False, page))
+        self.assertTrue(palette_assist.may_write_here(self.user, True, page))
+
+    @override_settings(ASSISTANT_BOX_WRITES=False)
+    def test_the_switch_turns_the_palette_off_on_their_pages_too(self):
+        self.assertFalse(palette_assist.may_write_here(self.user, False, {"auction": self.in_person_auction.slug}))
+        self.assertEqual(
+            self._execute("check_in", {"person": "555"}, path=self._auction_page()).json()["kind"], "error"
+        )
+
     def test_a_box_still_checks_who_is_asking(self):
         """The flag says which input was typed into. It is not a permission."""
         response = self._execute("check_in", {"person": "555"}, user=self.member, box=True)
