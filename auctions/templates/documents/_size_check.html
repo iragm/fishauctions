@@ -8,7 +8,7 @@ document.querySelectorAll("form[data-max-bytes]").forEach(function (form) {
     });
     if (total > Number(form.dataset.maxBytes)) {
       event.preventDefault();
-      alert("That's more than " + Math.floor(form.dataset.maxBytes / 1000000) + " MB in one go. Send them in a few smaller uploads.");
+      $.toast({title: "That's more than " + Math.floor(form.dataset.maxBytes / 1000000) + " MB in one go. Send them in a few smaller uploads.", type: 'danger'});
       return;
     }
     form.querySelectorAll("button[type=submit]").forEach(function (button) { button.disabled = true; });

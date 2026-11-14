@@ -492,13 +492,17 @@ class SpeakerAccessTests(TestCase):
         self.assertContains(outsider_page, "Brought great fish")
         self.assertContains(outsider_page, "Funny")
         self.assertContains(outsider_page, "Post comment")
-        self.assertNotContains(outsider_page, "Tag this speaker")
+        self.assertContains(outsider_page, "Tag this speaker")
         self.assertNotContains(Client().get(url), "Brought great fish")
         officer_page = self.get(self.officer, url)
         self.assertContains(officer_page, "Post comment")
         self.assertContains(officer_page, "Tag this speaker")
-        response = self.get(self.outsider, reverse("speaker_tag", kwargs={"slug": self.speaker.slug}))
-        self.assertEqual(response.status_code, 403)
+        # Tagging is open to anyone signed in, NEC club or not.
+        client = Client()
+        client.force_login(self.outsider)
+        response = client.post(reverse("speaker_tag", kwargs={"slug": self.speaker.slug}), {"tag": "funny"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(SpeakerTag.objects.filter(speaker=self.speaker, user=self.outsider, tag="funny").exists())
 
     def test_an_nec_only_speaker_is_hidden_from_everyone_else(self):
         Speaker.objects.filter(pk=self.speaker.pk).update(visibility=Speaker.VISIBILITY_NEC)

@@ -11,7 +11,8 @@ Each :class:`Kind` is one email: who it's for, the one sentence and button, and 
 * **Re-engagement** goes to people who have gone quiet: last seen between :data:`QUIET_AFTER` and
   :data:`QUIET_LIMIT` ago, by the latest of their last sign-in or activity, auction joined and bid. The
   speaker directory (club staff), the library and the command palette (everyone), and "does your club run
-  an auction?" (members of a club with people here but no auctions).
+  an auction?" (members of a club with people here but no auctions). Those quiet kinds go once per quiet
+  spell: not again while the person stays quiet after one of them.
 * **Announcements**: once ``APP_STORE_URL`` is set, the iPhone app, to everyone who joined an in-person
   auction in the past year, quiet or not. Its button goes straight to the App Store, so its clicks
   aren't counted.
@@ -39,7 +40,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.db import IntegrityError, transaction
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.urls import reverse
 from django.utils import timezone
 from post_office import mail
@@ -80,6 +81,8 @@ class Kind:
     moment: bool = True
     #: False when the button leaves the site, so no ``PageView`` can count the click.
     tracked: bool = True
+    #: Re-engagement kinds: one per quiet spell (see :func:`send_feature_emails`).
+    quiet: bool = False
 
 
 def add_src(url: str, src: str) -> str:
@@ -257,6 +260,7 @@ def _quiet_people(now):
     for user in people.select_related("userdata"):
         seen = max(when for when in (user.userdata.last_activity, user.last_joined, user.last_bid) if when)
         if oldest <= seen <= recent:
+            user.last_seen = seen
             yield user
 
 
@@ -270,9 +274,9 @@ def _speakers(now, run):
 
 
 def _library(now, run):
-    # Every account has the library (documents.search.can_use_library).
+    # Every account has the library (documents.search.can_use_library). The button searches it.
     for user in quiet_people(now, run):
-        yield user, "", reverse("library")
+        yield user, "", reverse("library_search")
 
 
 def _palette(now, run):
@@ -367,6 +371,7 @@ KINDS = (
         "See how it works",
         _aware_clubs,
         moment=False,
+        quiet=True,
     ),
     Kind(
         "speakers",
@@ -375,6 +380,7 @@ KINDS = (
         "Find a speaker",
         _speakers,
         moment=False,
+        quiet=True,
     ),
     Kind(
         "library",
@@ -383,6 +389,7 @@ KINDS = (
         "Search the library",
         _library,
         moment=False,
+        quiet=True,
     ),
     Kind(
         "palette",
@@ -391,9 +398,11 @@ KINDS = (
         "Try it",
         _palette,
         moment=False,
+        quiet=True,
     ),
 )
 BY_KEY = {kind.key: kind for kind in KINDS}
+QUIET_KEYS = [kind.key for kind in KINDS if kind.quiet]
 
 
 def paused() -> bool:
@@ -462,6 +471,7 @@ def send_feature_emails(now=None) -> int:
     cap -= FeatureEmail.objects.filter(sent_on__gte=today).count()
     recently = set(FeatureEmail.objects.filter(sent_on__gte=now - SPACING).values_list("user_id", flat=True))
     had = set(FeatureEmail.objects.values_list("user_id", "kind"))
+    last_quiet = dict(FeatureEmail.objects.filter(kind__in=QUIET_KEYS).values_list("user_id").annotate(Max("sent_on")))
     sent = 0
     run: dict = {}
     began = time.monotonic()
@@ -470,6 +480,10 @@ def send_feature_emails(now=None) -> int:
             if sent >= cap or time.monotonic() - began > RUN_SECONDS:
                 return sent
             if (user.pk, kind.key) in had or not _eligible(user, now, recently):
+                continue
+            # A quiet kind once per quiet spell: skip if one went since this person last showed up.
+            last_seen = getattr(user, "last_seen", None)
+            if kind.quiet and last_seen and last_quiet.get(user.pk) and last_quiet[user.pk] >= last_seen:
                 continue
             try:
                 with transaction.atomic():
@@ -488,5 +502,7 @@ def send_feature_emails(now=None) -> int:
                 logger.exception("feature email %s failed for user %s", kind.key, user.pk)
                 continue
             recently.add(user.pk)
+            if kind.quiet:
+                last_quiet[user.pk] = now
             sent += 1
     return sent

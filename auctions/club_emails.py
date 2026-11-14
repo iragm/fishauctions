@@ -24,7 +24,10 @@ Links carry ``?src=email_<kind>``. Nobody gets one who opted out of emails about
 bounced or has no usable address; a person who already had that kind for another club, or any feature
 email in the last :data:`RECENT`, is skipped. A club nobody could be sent to today isn't claimed.
 Nothing goes before ``CLUB_EMAILS_START`` (blank means no wait), while feature emails are paused, or
-past :data:`PER_RUN` clubs in a day.
+past :data:`PER_RUN` clubs in a day. Only club staff get one: someone who has left the club (or holds no
+club permission) is dropped from the recipients, and a club nobody is left to send to isn't claimed.
+``club_tools`` goes only to people who can edit the club. A "monthly" answer is only recorded from someone
+with the club's ``permission_view``.
 """
 
 from __future__ import annotations
@@ -208,8 +211,9 @@ def club_tools_due(now=None):
 
 
 def club_tools_recipients(auction) -> list:
-    """The auction's creator, then its admins, once each."""
+    """The auction's creator, then its admins, once each, keeping only those who can edit the club."""
     from auctions.models import AuctionTOS
+    from auctions.views.base import check_club_permission
 
     people = [auction.created_by] if auction.created_by else []
     admins = AuctionTOS.objects.filter(auction=auction, is_admin=True, user__isnull=False).select_related(
@@ -218,7 +222,7 @@ def club_tools_recipients(auction) -> list:
     for tos in admins:
         if tos.user not in people:
             people.append(tos.user)
-    return people
+    return [person for person in people if check_club_permission(person, auction.club, "permission_edit_club")]
 
 
 def _url(domain, path, kind):
@@ -293,8 +297,22 @@ KINDS = {
 def _send_to_club(kind, club, auction, people, build, now) -> int | None:
     """Claim the club, then send to each eligible person. Returns how many went, or None when nobody
     could get it today (the club is left unclaimed, to try again tomorrow)."""
-    from auctions.models import ClubEmail, FeatureEmail
+    from django.db.models import Q
 
+    from auctions.models import ClubEmail, ClubMember, FeatureEmail
+    from auctions.views.base import CLUB_PERMISSION_FIELDS
+
+    any_permission = Q()
+    for field in CLUB_PERMISSION_FIELDS:
+        any_permission |= Q(**{field: True})
+    staff = set(
+        ClubMember.objects.filter(club=club, user__in=people, is_deleted=False)
+        .filter(any_permission)
+        .values_list("user_id", flat=True)
+    )
+    people = [person for person in people if person.pk in staff]
+    if not people:
+        return None
     already = set(FeatureEmail.objects.filter(kind=kind, user__in=people).values_list("user_id", flat=True))
     recently = set(
         FeatureEmail.objects.filter(user__in=people, sent_on__gte=now - RECENT).values_list("user_id", flat=True)
@@ -360,8 +378,9 @@ def send_club_emails(now=None) -> int:
 def record_answer(club, user, answer: str) -> bool:
     """Store the club's answer to the monthly-auction email. False for an answer that isn't one."""
     from auctions.models import ClubHistory
+    from auctions.views.base import check_club_permission
 
-    if answer not in ANSWERS:
+    if answer not in ANSWERS or not check_club_permission(user, club, "permission_view"):
         return False
     if club.auction_cadence != answer:
         club.auction_cadence = answer

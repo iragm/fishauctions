@@ -61,13 +61,79 @@
     }
   }
 
+  var FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
   function HtmxModalController(modalRoot) {
+    var self = this;
     this.modalRoot = modalRoot;
+    this.previouslyFocused = document.activeElement;
     if (this.modalRoot && this.modalRoot.parentNode !== document.body) {
       document.body.appendChild(this.modalRoot);
     }
     this.bindCloseButtons();
+    this.bindAccessibility();
+    this.onKeydown = function (event) {
+      if (!self.modalRoot || !self.modalRoot.isConnected) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        self.close({ action: "none" });
+      } else if (event.key === "Tab") {
+        // Keep focus inside the dialog: wrap from the last focusable element to the first.
+        var items = Array.prototype.filter.call(self.modalRoot.querySelectorAll(FOCUSABLE), function (el) {
+          return el.offsetParent !== null;
+        });
+        if (!items.length) {
+          return;
+        }
+        var first = items[0];
+        var last = items[items.length - 1];
+        var inside = self.modalRoot.contains(document.activeElement);
+        if (event.shiftKey && (!inside || document.activeElement === first)) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (!inside || document.activeElement === last)) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", this.onKeydown, true);
+    this.focusFirst();
   }
+
+  HtmxModalController.prototype.dialogElement = function () {
+    if (!this.modalRoot) {
+      return null;
+    }
+    return this.modalRoot.classList.contains("modal") ? this.modalRoot : this.modalRoot.querySelector(".modal");
+  };
+
+  HtmxModalController.prototype.bindAccessibility = function () {
+    var dialog = this.dialogElement();
+    if (!dialog) {
+      return;
+    }
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    var title = dialog.querySelector(".modal-title[id]");
+    if (title) {
+      dialog.setAttribute("aria-labelledby", title.id);
+    }
+  };
+
+  HtmxModalController.prototype.focusFirst = function () {
+    var dialog = this.dialogElement();
+    if (!dialog) {
+      return;
+    }
+    var first = dialog.querySelector(FOCUSABLE);
+    if (first) {
+      first.focus();
+    }
+  };
 
   HtmxModalController.prototype.bindCloseButtons = function () {
     var self = this;
@@ -83,7 +149,11 @@
 
   HtmxModalController.prototype.close = function (detail) {
     detail = detail || {};
+    document.removeEventListener("keydown", this.onKeydown, true);
     removeModalRoot(this.modalRoot);
+    if (this.previouslyFocused && this.previouslyFocused.isConnected && this.previouslyFocused.focus) {
+      this.previouslyFocused.focus();
+    }
 
     triggerEvents(detail.eventName);
 

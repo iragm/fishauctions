@@ -25,6 +25,7 @@ from django.db.models import (
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
+    HttpResponseBadRequest,
 )
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -64,7 +65,7 @@ from auctions.tables import (
 )
 
 from .auction_pages import AuctionInfo
-from .base import MILES_TO_KM, AuctionViewMixin, HTMxTableView, LocationMixin, visitor_location
+from .base import MILES_TO_KM, AuctionViewMixin, HTMxTableView, LocationMixin, safe_next_url, visitor_location
 from .browse import LotListView
 
 logger = logging.getLogger(__name__)
@@ -232,6 +233,46 @@ def promo_lot_photos() -> list[dict]:
     )
     photos = [photo for photo in photos if photo["image"] in still_up]
     return photos if len(photos) >= help_stats.PROMO_MIN_PHOTOS else []
+
+
+class AccessRequestView(LoginRequiredMixin, View):
+    """The one-click request for an account the site owner reviews by hand: promoted auctions, or card payments.
+
+    The buttons used to open a mailto with a template body. This sends the same request from the site with the
+    username, the club and the auction it was asked from, so nobody has to type them. The owner replies to the
+    sender's address (Reply-To). Three requests per address per day.
+    """
+
+    SUBJECTS = {
+        "promotion": "Request access to create promoted auctions",
+        "square": "Request access to accept card payments",
+    }
+    REQUESTS_PER_DAY = 3
+
+    def post(self, request):
+        from post_office import mail
+
+        subject = self.SUBJECTS.get(request.POST.get("kind"))
+        if subject is None:
+            return HttpResponseBadRequest()
+        if over_the_limit(request, "access-request", self.REQUESTS_PER_DAY, 86400):
+            messages.error(request, "You've sent several requests today; the owner will reply to those.")
+            return redirect(safe_next_url(request, reverse("account_setup")))
+
+        lines = [f"Username: {request.user.username}", f"Club: {request.user.userdata.club or 'none'}"]
+        slug = request.POST.get("auction")
+        auction = Auction.objects.filter(slug=slug).first() if slug else None
+        if auction:
+            lines.append(f"Auction: {request.build_absolute_uri(auction.get_absolute_url())}")
+        mail.send(
+            settings.ADMINS[0][1],
+            subject=subject,
+            message="\n".join(lines),
+            # Reply-To, not From, for the same reason as SupportView: the From address is the site's sender.
+            headers={"Reply-To": request.user.email},
+        )
+        messages.success(request, "Request sent.")
+        return redirect(safe_next_url(request, reverse("account_setup")))
 
 
 class PromoSite(TemplateView):

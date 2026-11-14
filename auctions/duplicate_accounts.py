@@ -47,6 +47,8 @@ MAX_SAME_NAME_GROUP = 6
 
 #: Seconds a weekly run spends finding pairs before it sends; the task's soft limit is 300.
 TIME_BUDGET = 150
+#: Emails one run sends at most; the rest wait for the next week's run.
+MAX_PER_RUN = 100
 
 TEMPLATE = "account_merge_suggestion"
 
@@ -247,6 +249,8 @@ def send_merge_suggestions(now=None, budget=None) -> int:
     domain = Site.objects.get_current().domain
     sent = 0
     for user in accounts_to_email(likely_duplicate_pairs(now=now, deadline=deadline)):
+        if sent >= MAX_PER_RUN:
+            break
         # Claimed first, so overlapping runs can't both send; given back if the send fails.
         if not UserData.objects.filter(user=user, merge_suggested_on__isnull=True).update(merge_suggested_on=now):
             continue

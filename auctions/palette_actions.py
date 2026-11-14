@@ -16614,7 +16614,8 @@ SKILLS: dict[str, str] = {
     "AuctionTOSDelete": "remove_person",
     "ClubMemberDeleteView": "set_member_active",
     "ClubMemberReactivateView": "set_member_active",
-    # The adjustment formset's delete half.
+    # The invoice page's adjustment rows save and delete one at a time through this endpoint.
+    "InvoiceAdjustmentSave": "add_invoice_adjustment",
     "InvoiceView": "remove_invoice_adjustment",
     # Add, remove, move and Next/Back are queue_lot, unqueue_lot, move_queued_lot and step_queue.
     "LotQueueView": "queue_lot",
@@ -16828,6 +16829,9 @@ NOT_A_SKILL: dict[str, str] = {
         "Issuing a key for another program to act as you is a decision to make while looking at "
         "the page that explains what the key can do, and the secret is shown once and never again. "
         "go_to_page opens it."
+    ),
+    "AccessRequestView": (
+        "Asks the site owner to review an account for promoted auctions or card payments; the owner decides by hand."
     ),
     "SupportView": (
         "The help page's POST is its message form: it emails the site owner a paragraph somebody "

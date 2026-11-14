@@ -1705,6 +1705,7 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         with (
             patch_views("send_push_to_user.delay") as app_push,
             patch_views("send_user_notification") as web_push,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             notify_watchers_lot_selling_soon(self.in_person_lot, **kwargs)
         return app_push, web_push
@@ -1766,6 +1767,7 @@ class WatchedLotPushRoutingTests(StandardTestCase):
         with (
             patch_views("send_push_to_user.delay") as app_push,
             patch_views("send_user_notification") as web_push,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             response = self.client.post(reverse("lot_push_test", kwargs={"pk": self.in_person_lot.pk}))
         self.assertEqual(response.status_code, 200)
@@ -1929,7 +1931,7 @@ class RunningTotalNotificationTests(StandardTestCase):
         view = DynamicSetLotWinner()
         view.request = type("R", (), {"user": self.admin_user})()
         view.auction = self.in_person_auction
-        with patch_views("notify_running_total") as notify:
+        with patch("auctions.sales.notify_running_total") as notify, self.captureOnCommitCallbacks(execute=True):
             view.set_winner(self.in_person_lot, self.in_person_buyer, 12)
         notify.assert_called_once_with(self.in_person_lot)
 
@@ -2002,7 +2004,7 @@ class PushExemptCategoryTests(TestCase):
 
     def _notify(self, category):
         sent = []
-        with patch("auctions.tasks.send_push_to_user.delay") as delay:
+        with patch("auctions.tasks.send_push_to_user.delay") as delay, self.captureOnCommitCallbacks(execute=True):
             pushed = notifications.notify_user(
                 self.user, category=category, title="t", body="b", url="u", send_email=lambda: sent.append(1)
             )
@@ -2070,6 +2072,7 @@ class JoinReminderPushTests(TestCase):
         with (
             patch("auctions.tasks.send_push_to_user.delay") as delay,
             patch("auctions.management.commands.auctiontos_notifications.mail.send") as send,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             call_command("auctiontos_notifications")
         delay.assert_called_once()

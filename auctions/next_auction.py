@@ -22,7 +22,8 @@ Sending one marks both flags, so an auction never gets the two emails; deciding 
 its own. A flag is claimed with a conditional update before sending, so two overlapping runs can't both
 send. Of a club's auctions within :data:`CLUSTER` of each other, only the earliest gets an anniversary
 email. Nobody is emailed who has
-unsubscribed or has no usable address; their flag is set anyway.
+unsubscribed, bounced or has no usable address; their flag is set anyway. Each email also records a
+``FeatureEmail`` row of its kind, so feature emails keep their spacing from it.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from django.utils import timezone
 from post_office import mail
 
 from auctions.club_health import is_test_auction, median_gap
-from auctions.models import Auction
+from auctions.models import Auction, FeatureEmail
 from auctions.notifications import notify_user
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def should_skip(auction) -> bool:
 
 
 def _deliverable(user) -> bool:
-    if not user or not user.is_active or user.userdata.has_unsubscribed:
+    if not user or not user.is_active or user.userdata.has_unsubscribed or user.userdata.email_bounced_on:
         return False
     try:
         validate_email((user.email or "").strip())
@@ -145,7 +146,9 @@ def _sent(auction):
     Auction.objects.filter(pk=auction.pk).update(next_auction_email_sent=True, anniversary_email_sent=True)
 
 
-def _send(auction, template: str, title: str, context: dict):
+def _send(auction, kind: str, title: str, context: dict):
+    """Ask the creator. ``kind`` is also the template name, and the ``FeatureEmail`` row that spaces out
+    feature emails (one row per person and kind, so a second such email updates it)."""
     domain = Site.objects.get_current().domain
     user = auction.created_by
     context = {
@@ -160,9 +163,12 @@ def _send(auction, template: str, title: str, context: dict):
         title=title,
         body=f"Tap to copy {auction}.",
         url=f"https://{domain}/auctions/new/?copy={auction.slug}",
-        send_email=lambda: mail.send(user.email, template=template, context=context),
+        send_email=lambda: mail.send(user.email, template=kind, context=context),
         auction_pk=auction.pk,
     )
+    row, created = FeatureEmail.objects.get_or_create(user=user, kind=kind, defaults={"about": auction.slug[:100]})
+    if not created:
+        FeatureEmail.objects.filter(pk=row.pk).update(sent_on=timezone.now(), about=auction.slug[:100])
 
 
 def next_auction_candidates(now=None):

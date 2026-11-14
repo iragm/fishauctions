@@ -227,4 +227,4 @@ class ClubAddView(LoginRequiredMixin, FormView):
             form.add_error(None, problem)
             return self.form_invalid(form)
         messages.info(self.request, "Your club will appear on the map once it's approved.")
-        return redirect(reverse("club_setup", kwargs={"slug": club.slug}))
+        return redirect(reverse("club_admin", kwargs={"slug": club.slug}))

@@ -244,7 +244,7 @@ class ClubAddTests(TestCase):
     def test_an_added_club_is_off_the_finder_and_its_adder_runs_it(self):
         response = self.add()
         club = Club.objects.get(name="Harbor Aquarium Society")
-        self.assertRedirects(response, reverse("club_setup", kwargs={"slug": club.slug}), fetch_redirect_response=False)
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": club.slug}), fetch_redirect_response=False)
         self.assertEqual(club.outreach_stage, Club.PROSPECT)
         self.assertAlmostEqual(club.latitude, 42.36)
         self.assertEqual(club.homepage, "https://harboraquarium.example.org")

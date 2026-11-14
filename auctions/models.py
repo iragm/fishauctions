@@ -7643,110 +7643,118 @@ class AuctionTOS(InvalidatesRelatedCache, CachedPropertiesMixin, models.Model):
         if getattr(self, "_newly_linked", False) and kwargs.get("update_fields") is not None:
             # Check-in and the notification cron save a few columns; a link made here has to be one of them.
             kwargs["update_fields"] = {*kwargs["update_fields"], "user"}
-        if not self.bidder_number or self.bidder_number == "None":
-            last_used = None
-            if self.user or self.email:
-                query = Q()
+        # Numbers are taken from the bidders already saved, so the auction row lock serialises two saves
+        # that would otherwise read the same free number. A save that already has a number takes no lock.
+        from contextlib import nullcontext
+
+        lock_numbers = not self.pk or not self.bidder_number or self.bidder_number == "None"
+        with transaction.atomic() if lock_numbers else nullcontext():
+            if lock_numbers:
+                Auction.objects.select_for_update().get(pk=self.auction_id)
+            if not self.bidder_number or self.bidder_number == "None":
+                last_used = None
+                if self.user or self.email:
+                    query = Q()
+                    if self.user:
+                        query |= Q(user=self.user)
+                    if self.email:
+                        query |= Q(email=self.email)
+                    last_obj = (
+                        AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
+                        .exclude(pk=self.pk)
+                        .order_by("-createdon")
+                        .first()
+                    )
+                    if last_obj:
+                        last_used = last_obj.bidder_number
+
+                user_data = None
+                preferred = None
                 if self.user:
-                    query |= Q(user=self.user)
-                if self.email:
-                    query |= Q(email=self.email)
-                last_obj = (
-                    AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
-                    .exclude(pk=self.pk)
+                    user_data = self.user.userdata
+                    preferred = user_data.preferred_bidder_number or None
+
+                # In a club-managed auction the number belongs to the ClubMember and is copied to every
+                # such auction, so one free here alone would displace a member on the next sync.
+                club_for_numbers = self.auction.club if self.auction.is_club_managed else None
+
+                def _taken(candidate):
+                    if (
+                        AuctionTOS.objects.filter(bidder_number=candidate, auction=self.auction)
+                        .exclude(pk=self.pk or 0)
+                        .exists()
+                    ):
+                        return True
+                    if club_for_numbers is None:
+                        return False
+                    members = ClubMember.objects.filter(club=club_for_numbers, bidder_number=candidate)
+                    if self.clubmember_id:
+                        members = members.exclude(pk=self.clubmember_id)
+                    return members.exists()
+
+                self.bidder_number = _generate_unique_bidder_number(
+                    is_taken=_taken,
+                    preferred=preferred,
+                    phone=self.phone_number,
+                    address=self.address,
+                    last_used=last_used,
+                )
+                if (
+                    user_data
+                    and not user_data.preferred_bidder_number
+                    and self.bidder_number
+                    and self.bidder_number != "ERROR"
+                ):
+                    user_data.preferred_bidder_number = self.bidder_number
+                    # Write only this field: the cached UserData may be stale and a full save reverts others.
+                    UserData.objects.filter(pk=user_data.pk).update(preferred_bidder_number=self.bidder_number)
+            if not self.bidder_number:
+                # I don't ever want this to be null
+                self.bidder_number = "ERROR"
+            if str(self.memo) == "None":
+                self.memo = ""
+            if not self.name:
+                self.name = "Unknown"
+            # if this is a known address, update the status
+            if self.email and self.email_address_status == "UNKNOWN":
+                existing_instance = (
+                    AuctionTOS.objects.exclude(email_address_status="UNKNOWN")
+                    .filter(
+                        email=self.email,
+                        auction__created_by=self.auction.created_by,
+                    )
                     .order_by("-createdon")
                     .first()
                 )
-                if last_obj:
-                    last_used = last_obj.bidder_number
+                if existing_instance:
+                    self.email_address_status = existing_instance.email_address_status
 
-            user_data = None
-            preferred = None
-            if self.user:
-                user_data = self.user.userdata
-                preferred = user_data.preferred_bidder_number or None
+            # Check for and remove forward slashes in bidder_number
+            if self.bidder_number and "/" in self.bidder_number:
+                original_bidder_number = self.bidder_number
+                self.bidder_number = self.bidder_number.replace("/", "")
 
-            # In a club-managed auction the number belongs to the ClubMember and is copied to every
-            # such auction, so one free here alone would displace a member on the next sync.
-            club_for_numbers = self.auction.club if self.auction.is_club_managed else None
+                existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+                if self.pk:
+                    existing_tos = existing_tos.exclude(pk=self.pk)
 
-            def _taken(candidate):
-                if (
-                    AuctionTOS.objects.filter(bidder_number=candidate, auction=self.auction)
-                    .exclude(pk=self.pk or 0)
-                    .exists()
-                ):
-                    return True
-                if club_for_numbers is None:
-                    return False
-                members = ClubMember.objects.filter(club=club_for_numbers, bidder_number=candidate)
-                if self.clubmember_id:
-                    members = members.exclude(pk=self.clubmember_id)
-                return members.exists()
+                if existing_tos.exists():
+                    # If there would be a conflict, append a suffix to make it unique
+                    suffix = 1
+                    base_bidder_number = self.bidder_number
+                    while existing_tos.exists() and suffix < 100:
+                        self.bidder_number = f"{base_bidder_number}{suffix}"
+                        existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+                        if self.pk:
+                            existing_tos = existing_tos.exclude(pk=self.pk)
+                        suffix += 1
 
-            self.bidder_number = _generate_unique_bidder_number(
-                is_taken=_taken,
-                preferred=preferred,
-                phone=self.phone_number,
-                address=self.address,
-                last_used=last_used,
-            )
-            if (
-                user_data
-                and not user_data.preferred_bidder_number
-                and self.bidder_number
-                and self.bidder_number != "ERROR"
-            ):
-                user_data.preferred_bidder_number = self.bidder_number
-                # Write only this field: the cached UserData may be stale and a full save reverts others.
-                UserData.objects.filter(pk=user_data.pk).update(preferred_bidder_number=self.bidder_number)
-        if not self.bidder_number:
-            # I don't ever want this to be null
-            self.bidder_number = "ERROR"
-        if str(self.memo) == "None":
-            self.memo = ""
-        if not self.name:
-            self.name = "Unknown"
-        # if this is a known address, update the status
-        if self.email and self.email_address_status == "UNKNOWN":
-            existing_instance = (
-                AuctionTOS.objects.exclude(email_address_status="UNKNOWN")
-                .filter(
-                    email=self.email,
-                    auction__created_by=self.auction.created_by,
-                )
-                .order_by("-createdon")
-                .first()
-            )
-            if existing_instance:
-                self.email_address_status = existing_instance.email_address_status
+                # Create auction history entry after save
+                needs_history = True
+            else:
+                needs_history = False
 
-        # Check for and remove forward slashes in bidder_number
-        if self.bidder_number and "/" in self.bidder_number:
-            original_bidder_number = self.bidder_number
-            self.bidder_number = self.bidder_number.replace("/", "")
-
-            existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
-            if self.pk:
-                existing_tos = existing_tos.exclude(pk=self.pk)
-
-            if existing_tos.exists():
-                # If there would be a conflict, append a suffix to make it unique
-                suffix = 1
-                base_bidder_number = self.bidder_number
-                while existing_tos.exists() and suffix < 100:
-                    self.bidder_number = f"{base_bidder_number}{suffix}"
-                    existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
-                    if self.pk:
-                        existing_tos = existing_tos.exclude(pk=self.pk)
-                    suffix += 1
-
-            # Create auction history entry after save
-            needs_history = True
-        else:
-            needs_history = False
-
-        super().save(*args, **kwargs)
+            super().save(*args, **kwargs)
 
         # Create history entry after save (needs pk to exist)
         if needs_history:
@@ -9096,7 +9104,6 @@ class Lot(CachedPropertiesMixin, models.Model):
             return False
 
         # Check for Square payments with available refund amount
-        from decimal import Decimal
 
         from auctions.models import InvoicePayment
 
@@ -9110,15 +9117,12 @@ class Lot(CachedPropertiesMixin, models.Model):
         if not payment:
             return False
 
-        # Check if there's enough available to refund
-        lot_cost = Decimal(str(self.winning_price))
-        return payment.amount_available_to_refund >= lot_cost
+        # Check if there's enough available to refund: the whole lot, tax included
+        return payment.amount_available_to_refund >= self.paypal_refund_amount(100)
 
     def square_refund(self, percent, previous_percent=0):
         """Create a Square refund for ``percent`` of the winning price, less the ``previous_percent``
         already refunded some other way. Error string or None."""
-        from decimal import Decimal
-
         from auctions.models import InvoicePayment
 
         if not self.winning_price or self.winning_price <= 0:
@@ -9127,8 +9131,8 @@ class Lot(CachedPropertiesMixin, models.Model):
         if percent < 0 or percent > 100:
             return "Refund percent must be between 0 and 100"
 
-        # Calculate refund amount
-        refund_amount = (Decimal(str(self.winning_price)) * Decimal(str(percent - previous_percent))) / Decimal(100)
+        # Same amount as PayPal: the share of the price plus its tax, rounded half-up
+        refund_amount = self.paypal_refund_amount(percent, previous_percent)
         if refund_amount <= 0:
             return "Refund amount must be positive"
 
@@ -9159,7 +9163,9 @@ class Lot(CachedPropertiesMixin, models.Model):
 
         # Process refund using SquareSeller method
         reason = f"Lot {self.lot_number_display} - {percent}% refund"
-        error = seller.process_refund(payment, refund_amount, reason)
+        # Retrying the same percent replays Square's stored result; a different percent is a new refund
+        idempotency_key = f"af-lot-{self.pk}-refund-{previous_percent}-{percent}"
+        error = seller.process_refund(payment, refund_amount, reason, idempotency_key)
         if error:
             return error
 
@@ -11161,15 +11167,21 @@ class Invoice(CachedPropertiesMixin, models.Model):
         current settings; only un-paying thaws it. Refunds are unaffected: they're negative payments, and
         ``calculated_total`` never included payments.
         """
-        if self.pk and Invoice.objects.filter(pk=self.pk, status="PAID").exists():
+        if not self.pk:
+            self.invalidate_cached_properties()
+            self.calculated_total = self.rounded_net
+            self.save()
             return
-        # Everything is cached on the instance, and the caller is here because something changed.
-        self.invalidate_cached_properties()
-        self.calculated_total = self.rounded_net
-        # Only this column. The PAID check above is a separate query, so a payment landing in
-        # between used to be undone here: a full-row save writes this instance's stale status and
-        # date_paid back over it, and the invoice silently reads as unpaid again.
-        self.save(update_fields=["calculated_total"] if self.pk else None)
+        # The PAID check and the write share a row lock, so a payment landing in between can't be undone.
+        # Only this column is saved: a full-row save would write this instance's stale status and date_paid.
+        with transaction.atomic():
+            status = Invoice.objects.select_for_update().values_list("status", flat=True).get(pk=self.pk)
+            if status == "PAID":
+                return
+            # Everything is cached on the instance, and the caller is here because something changed.
+            self.invalidate_cached_properties()
+            self.calculated_total = self.rounded_net
+            self.save(update_fields=["calculated_total"])
 
     @cached_property
     def total_adjustment_amount(self):
@@ -13851,21 +13863,21 @@ class SquareSeller(models.Model):
                         error_msg = f"Square error: {error_detail}"
             return None, error_msg
 
-    def process_refund(self, payment, refund_amount, reason):
+    def process_refund(self, payment, refund_amount, reason, idempotency_key):
         """Process a Square refund. Error string or None."""
         client = self.get_square_client()
         if not client:
             return "Failed to initialize Square client"
 
         try:
-            from decimal import Decimal
-
-            # Convert amount to cents
-            refund_amount_cents = int(Decimal(str(refund_amount)) * 100)
+            # Convert amount to cents, half-up like PayPal
+            refund_amount_cents = int(
+                (Decimal(str(refund_amount)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP)
+            )
 
             client.refunds.refund_payment(
                 payment_id=payment.external_id,
-                idempotency_key=str(uuid_module.uuid4()),
+                idempotency_key=idempotency_key,
                 amount_money={
                     "amount": refund_amount_cents,
                     "currency": payment.currency,

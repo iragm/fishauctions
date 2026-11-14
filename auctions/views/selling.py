@@ -33,7 +33,7 @@ from pywebpush import WebPushException
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
-from auctions import voice
+from auctions import sales, voice
 from auctions.bidding import MAX_BID
 from auctions.forms import (
     VolunteerJobForm,
@@ -52,7 +52,7 @@ from auctions.models import (
     VolunteerSignup,
     Watch,
 )
-from auctions.notifications import CATEGORY_LOT_SELLING, notify_running_total, user_has_app_push
+from auctions.notifications import CATEGORY_LOT_SELLING, user_has_app_push
 from auctions.tasks import (
     send_push_to_user,
 )
@@ -130,7 +130,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         ):
             if action != "force_save":
                 error = "The seller's invoice is not open"
-        if result_lot and result_lot.auctiontos_winner and result_lot.winning_price and action != "force_save":
+        if result_lot and sales.is_sold(result_lot) and action != "force_save":
             error = "This lot has already been sold"
         return result_lot, error
 
@@ -187,51 +187,37 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         """Mark lot unsold"""
         return lot.end_unsold(self.request.user)
 
-    def set_winner(self, lot, winning_tos, winning_price):
-        # A force_save over an earlier sale takes the lot off the old winner's invoice.
-        stale_invoices = _lot_invoices(lot)
-        lot.auctiontos_winner = winning_tos
-        lot.winning_price = winning_price
-        lot.date_end = timezone.now()
-        lot.active = False
-        lot.save()
-        if (
-            lot.auction
-            and lot.auction.use_check_in_mode
-            and lot.auctiontos_seller
-            and not lot.auctiontos_seller.checked_in
-        ):
-            seller = lot.auctiontos_seller
-            seller.checked_in = timezone.now()
-            update_fields = ["checked_in"]
-            if not seller.bidding_allowed:
-                seller.bidding_allowed = True
-                update_fields.append("bidding_allowed")
-            seller.save(update_fields=update_fields)
-            lot.auction.create_history(
-                applies_to="USERS",
-                action=f"Checked in {seller.name} (lot sold)",
-                user=self.request.user,
-            )
-        try:
-            lot.add_winner_message(self.request.user, winning_tos, winning_price)
-        except Exception:
-            logger.exception("add_winner_message failed for lot %s", lot.pk)
-        try:
-            _recalculate_invoices(stale_invoices)
-        except Exception:
-            logger.exception("Recalculating the previous invoices failed for lot %s", lot.pk)
-        # After add_winner_message, which creates the invoice this total reads.
-        try:
-            notify_running_total(lot)
-        except Exception:
-            logger.exception("notify_running_total failed for lot %s", lot.pk)
-        if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
-            try:
-                lot.auto_award_bap_points()
-            except Exception:
-                logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
+    def set_winner(self, lot, winning_tos, winning_price, action="save"):
+        """Record the sale; raises :class:`~auctions.sales.AlreadySold` when someone else recorded it first."""
+        sales.record_sale(lot, winning_tos, winning_price, self.request.user, force=(action == "force_save"))
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
+
+    def sold_banner(self, lot, result):
+        """Fill ``result`` with the banner for a lot already sold, and where the queue goes next."""
+        next_lot = queue_next_to_record(self.auction, after_lot=lot, include_recorded=True)
+        result.update(
+            banner="error",
+            last_sold_lot_number=lot.lot_number_display,
+            success_message=f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
+            next_queued_lot_number=next_lot.lot_number_display if next_lot else None,
+        )
+        return result
+
+    def already_sold(self, lot, winner, price, result):
+        """Two people recorded the same lot. The same winner and price is a double check, and good; anything
+        else gets the banner. Fills ``result``.
+        """
+        if winner == lot.auctiontos_winner and price == lot.winning_price:
+            # Lot has been double checked -- mark it as good
+            lot.admin_validated = True
+            lot.save()
+            result["success_message"] = "This lot has been double checked"
+            result["last_sold_lot_number"] = lot.lot_number_display
+            self.advance_queue_and_set_next(lot, result, double_check=True)
+            return result
+        # A double check that didn't match: the banner and its undo carry the problem, and the form moves on
+        # as a matching check would, so this person keeps their place in the queue.
+        return self.sold_banner(lot, result)
 
     def cross_check_price_and_winner(self, lot, price, winner, action, lot_error, price_error, winner_error):
         """Price and winner checks needing both resolved. Shared with the palette's ``set_lot_winner``.
@@ -257,18 +243,14 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
 
     def commit_winner(self, lot, winner, price, action, result):
         """Record the sale: winner, check-in on force_save, history, queue advance. Shared with the palette."""
-        result["success_message"] = self.set_winner(lot, winner, price)
+        try:
+            result["success_message"] = self.set_winner(lot, winner, price, action)
+        except sales.AlreadySold as exc:
+            # Someone recorded it between the checks and the lock: the same outcome as a double check.
+            return self.already_sold(exc.lot, winner, price, result)
         if action == "force_save" and lot.auction and lot.auction.use_check_in_mode and not winner.checked_in:
-            winner.checked_in = timezone.now()
-            update_fields = ["checked_in"]
-            if not winner.bidding_allowed:
-                winner.bidding_allowed = True
-                update_fields.append("bidding_allowed")
-            winner.save(update_fields=update_fields)
-            lot.auction.create_history(
-                applies_to="USERS",
-                action=f"Checked in {winner.name} (ignored errors, lot sold)",
-                user=self.request.user,
+            sales.check_in_winner(
+                winner, lot.auction, self.request.user, f"Checked in {winner.name} (ignored errors, lot sold)"
             )
         try:
             lot.auction.create_history(
@@ -307,36 +289,44 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
-            result["success_message"] = lot.sell_to_online_high_bidder()
-            result["last_sold_lot_number"] = lot.lot_number_display
-            try:
-                lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
-            except Exception:
-                logger.exception("add_winner_message failed for lot %s", lot.pk)
-            try:
-                lot.auction.create_history(
-                    applies_to="LOTS",
-                    action=f"Sold lot {lot.lot_number_display} to online high bidder",
-                    user=self.request.user,
-                )
-            except Exception:
-                logger.exception("create_history failed for lot %s", lot.pk)
-            self.advance_queue_and_set_next(lot, result)
+            with transaction.atomic():
+                current = sales.locked_lot(lot)
+                if sales.is_sold(current):
+                    return JsonResponse(self.sold_banner(current, result))
+                result["success_message"] = lot.sell_to_online_high_bidder()
+                result["last_sold_lot_number"] = lot.lot_number_display
+                try:
+                    lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+                except Exception:
+                    logger.exception("add_winner_message failed for lot %s", lot.pk)
+                try:
+                    lot.auction.create_history(
+                        applies_to="LOTS",
+                        action=f"Sold lot {lot.lot_number_display} to online high bidder",
+                        user=self.request.user,
+                    )
+                except Exception:
+                    logger.exception("create_history failed for lot %s", lot.pk)
+                self.advance_queue_and_set_next(lot, result)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
         if lot and not lot_error and action == "end_unsold":
-            result["success_message"] = self.end_unsold(lot)
-            result["last_sold_lot_number"] = lot.lot_number_display
-            try:
-                lot.auction.create_history(
-                    applies_to="LOTS",
-                    action=f"Marked lot {lot.lot_number_display} as ended without being sold",
-                    user=self.request.user,
-                )
-            except Exception:
-                logger.exception("create_history failed for lot %s", lot.pk)
-            self.advance_queue_and_set_next(lot, result)
+            with transaction.atomic():
+                current = sales.locked_lot(lot)
+                if sales.is_sold(current):
+                    return JsonResponse(self.sold_banner(current, result))
+                result["success_message"] = self.end_unsold(lot)
+                result["last_sold_lot_number"] = lot.lot_number_display
+                try:
+                    lot.auction.create_history(
+                        applies_to="LOTS",
+                        action=f"Marked lot {lot.lot_number_display} as ended without being sold",
+                        user=self.request.user,
+                    )
+                except Exception:
+                    logger.exception("create_history failed for lot %s", lot.pk)
+                self.advance_queue_and_set_next(lot, result)
             return JsonResponse(result)
         price_error, winner_error = self.cross_check_price_and_winner(
             lot, price, winner, action, lot_error, price_error, winner_error
@@ -356,23 +346,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             and lot_error == "This lot has already been sold"
             and (action == "force_save" or action == "save")
         ):
-            if winner == lot.auctiontos_winner and price == lot.winning_price:
-                # Lot has been double checked -- mark it as good
-                lot.admin_validated = True
-                lot.save()
-                result["success_message"] = "This lot has been double checked"
-                result["last_sold_lot_number"] = lot.lot_number_display
-                self.advance_queue_and_set_next(lot, result, double_check=True)
-            else:
-                result = {
-                    "banner": "error",
-                    "last_sold_lot_number": lot.lot_number_display,
-                    "success_message": f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
-                }
-                # A double check that didn't match: the banner and its undo carry the problem, and the
-                # form moves on as a matching check would, so this person keeps their place in the queue.
-                next_lot = queue_next_to_record(self.auction, after_lot=lot, include_recorded=True)
-                result["next_queued_lot_number"] = next_lot.lot_number_display if next_lot else None
+            self.already_sold(lot, winner, price, result)
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
             result["online_high_bidder_message"] = (
                 f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
@@ -559,14 +533,16 @@ def notify_watchers_lot_selling_soon(lot, request_user=None, position=None):
     tag = f"lot_sell_notification_{lot.pk}"
     for watch in watchers:
         if user_has_app_push(watch.user):
-            send_push_to_user.delay(
-                watch.user.pk,
-                title=head,
-                body=body,
-                url=lot_url,
-                category=CATEGORY_LOT_SELLING,
-                collapse_key=tag,
-                auction_pk=lot.auction.pk,
+            transaction.on_commit(
+                lambda watcher_pk=watch.user.pk: send_push_to_user.delay(
+                    watcher_pk,
+                    title=head,
+                    body=body,
+                    url=lot_url,
+                    category=CATEGORY_LOT_SELLING,
+                    collapse_key=tag,
+                    auction_pk=lot.auction.pk,
+                )
             )
             continue
         # does the user actually have a subscription?
@@ -1034,14 +1010,16 @@ def notify_volunteers_of_job(job):
         if user.pk in seen:
             continue
         seen.add(user.pk)
-        send_push_to_user.delay(
-            user.pk,
-            title=title,
-            body=body,
-            url=url,
-            category=CATEGORY_VOLUNTEER,
-            collapse_key=collapse_key,
-            auction_pk=job.auction.pk,
+        transaction.on_commit(
+            lambda helper_pk=user.pk: send_push_to_user.delay(
+                helper_pk,
+                title=title,
+                body=body,
+                url=url,
+                category=CATEGORY_VOLUNTEER,
+                collapse_key=collapse_key,
+                auction_pk=job.auction.pk,
+            )
         )
 
 

@@ -12,6 +12,7 @@ from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -463,11 +464,14 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         cutoff = timezone.now() - timedelta(days=30)
         recent = [r for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
         for announcement in recent:
-            try:
-                refresh_announcement_opens.delay(announcement.pk)
-            except Exception:
-                logger.warning("Could not queue an open-count refresh for announcement %s", announcement.pk)
-                break
+
+            def _enqueue(pk=announcement.pk):
+                try:
+                    refresh_announcement_opens.delay(pk)
+                except Exception:
+                    logger.warning("Could not queue an open-count refresh for announcement %s", pk)
+
+            transaction.on_commit(_enqueue)
 
     def post(self, request, *args, **kwargs):
         form = self.get_form(request.POST)

@@ -17,6 +17,7 @@ import datetime
 import logging
 
 from django.contrib.sites.models import Site
+from django.db import transaction
 from django.db.models import F
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -127,11 +128,14 @@ def deliver(announcement):
         # Out of the request: a campaign send is several round trips to a third-party API.
         from auctions.tasks import send_announcement_emails
 
-        try:
-            send_announcement_emails.delay(announcement.pk)
-        except Exception:
-            logger.exception("Could not enqueue announcement emails for %s", announcement.pk)
-            _record_email_error(announcement, "Couldn't queue the email. Nothing was sent.")
+        def _enqueue_emails(pk=announcement.pk):
+            try:
+                send_announcement_emails.delay(pk)
+            except Exception:
+                logger.exception("Could not enqueue announcement emails for %s", pk)
+                _record_email_error(announcement, "Couldn't queue the email. Nothing was sent.")
+
+        transaction.on_commit(_enqueue_emails)
     return announcement
 
 
@@ -251,19 +255,22 @@ def _send_pushes(announcement):
     url = add_src(club_url(announcement.club), "announcement")
     sent = 0
     for member in reachable_members(announcement.club).select_related("user"):
-        try:
-            send_push_to_user.delay(
-                member.user_id,
-                title=announcement.club.name,
-                body=announcement.text.strip(),
-                url=url,
-                category=CATEGORY_CLUB_ANNOUNCEMENT,
-                # One announcement, one notification: a phone off all day shows only the latest.
-                collapse_key=f"club_announcement_{announcement.club_id}",
-            )
-        except Exception:
-            logger.exception("Could not enqueue announcement push for member %s", member.pk)
-            continue
+
+        def _enqueue(user_pk=member.user_id, member_pk=member.pk):
+            try:
+                send_push_to_user.delay(
+                    user_pk,
+                    title=announcement.club.name,
+                    body=announcement.text.strip(),
+                    url=url,
+                    category=CATEGORY_CLUB_ANNOUNCEMENT,
+                    # One announcement, one notification: a phone off all day shows only the latest.
+                    collapse_key=f"club_announcement_{announcement.club_id}",
+                )
+            except Exception:
+                logger.exception("Could not enqueue announcement push for member %s", member_pk)
+
+        transaction.on_commit(_enqueue)
         sent += 1
     return sent
 

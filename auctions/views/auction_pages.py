@@ -662,7 +662,8 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
         if self.request.user.is_superuser:
             auction_creation_allowed = True
         if not auction_creation_allowed:
-            return redirect(reverse("home"))
+            messages.error(request, "Your account can't create auctions yet; send us a message to get access.")
+            return redirect(reverse("support"))
         missing = missing_contact_info(request.user, require_phone=True)
         if missing:
             # Session flag so the page asks for the phone; see services.CONTACT_GATE_NEEDS_PHONE.

@@ -1996,11 +1996,19 @@ class AuctionJoin(forms.ModelForm):
 
             self.helper.form_action = f"{self.helper.form_action}?next={quote(next_url, safe='')}"
         # Joined, the button only goes on to the lots, or saves a newly picked location (the script below).
+        submit = Submit(
+            "submit", "View lots" if joined else "Join auction", css_class="agree_tos btn-success text-dark"
+        )
+        if user and user.is_authenticated and not joined:
+            # Joining would be refused for a missing detail, so link to where it is added instead.
+            link = self._missing_detail_link(user, auction)
+            if link is not None:
+                submit = link
         self.helper.layout = Layout(
             "i_agree",
             "time_spent_reading_rules",
             "pickup_location",
-            Submit("submit", "View lots" if joined else "Join auction", css_class="agree_tos btn-success text-dark"),
+            submit,
         )
         if joined:
             # Opens auction.html's leave dialog.
@@ -2078,13 +2086,35 @@ class AuctionJoin(forms.ModelForm):
         else:
             # single location auction
             self.fields["pickup_location"].widget = HiddenInput()
+            self.fields["i_agree"].initial = True
+            self.fields["i_agree"].widget = HiddenInput()
             if self.auction.all_location_count == 1:  # # number_of_locations excludes the default location
                 location = auction.location_qs[0]
                 self.fields["pickup_location"].initial = location
-                if location.pickup_by_mail:
-                    self.fields["i_agree"].label = "Yes, mail me my lots"
-                else:
-                    self.fields["i_agree"].label = "Yes, I will be at this auction"
+
+    def _missing_detail_link(self, user, auction):
+        """A link to the contact page in place of Join when a missing phone or mailing address would refuse it.
+
+        Phone wins when both are missing. The server checks in ``services`` remain the guard.
+        """
+        userdata = getattr(user, "userdata", None)
+        if userdata is None:
+            return None
+        if auction.require_phone_number and not userdata.phone_number:
+            label = "Add your phone number to join"
+        elif auction.all_location_count == 1 and auction.location_qs[0].pickup_by_mail and not userdata.address:
+            label = "Add your address to join"
+        else:
+            return None
+        auction_url = reverse("auction_main", kwargs={"slug": auction.slug})
+        return HTML(
+            format_html(
+                '<a class="btn btn-success text-dark" href="{}?next={}%23join">{}</a>',
+                reverse("contact_info"),
+                quote(auction_url, safe=""),
+                label,
+            )
+        )
 
     class Meta:
         model = AuctionTOS
@@ -5010,6 +5040,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             "expiring_soon_opening",
             "expiring_soon_closing",
             "expiring_soon_include_auction",
+            "mailing_address",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -5048,7 +5079,7 @@ class ClubEmailSettingsForm(forms.ModelForm):
             "send_membership_expiration_reminders",
             "send_membership_renewal_confirmation",
         ]
-        layout_fields.append(Fieldset("Outgoing emails", *outgoing_fields))
+        layout_fields.append(Fieldset("Outgoing emails", "mailing_address", *outgoing_fields))
         self.helper.layout = Layout(*layout_fields)
         if show_email_routing:
             # With SES routing, members route via contact_email_member instead.
@@ -5180,6 +5211,17 @@ class ClubEmailSettingsForm(forms.ModelForm):
                 self.add_error(field_name, "HTML tags are not allowed in email text.")
             elif self._URL_RE.search(value):
                 self.add_error(field_name, "Links (URLs) are not allowed in email text.")
+        sends_email = any(
+            cleaned.get(name)
+            for name in (
+                "send_welcome_email_to_new_members",
+                "send_membership_expiration_reminders_30_days",
+                "send_membership_expiration_reminders",
+                "send_membership_renewal_confirmation",
+            )
+        )
+        if sends_email and not (cleaned.get("mailing_address") or "").strip():
+            self.add_error("mailing_address", "Add a mailing address to send these emails.")
         return cleaned
 
 

@@ -61,7 +61,7 @@
     if (new Blob([text.value]).size > {{ max_text_bytes }}) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      alert("That's too much text for one paste. Save it as a file and drop that in instead.");
+      $.toast({title: "That's too much text for one paste. Save it as a file and drop that in instead.", type: 'danger'});
     }
   }, true);
   ["dragenter", "dragover"].forEach(function (name) {

@@ -34,7 +34,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, TemplateView, View
 from django.views.generic.edit import (
     CreateView,
@@ -874,14 +873,9 @@ class LotValidation(LoginRequiredMixin):
                     self.request, "We couldn't process the pasted image.  Try adding it again from the lot page."
                 )
         if is_new:
-            # After the images, so "add an image" is only suggested to a lot that really has none.
-            msg = mark_safe("Created lot! ")
-            if not LotImage.objects.filter(lot_number=lot).exists():
-                msg += format_html(
-                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
-                    lot.lot_number,
-                )
-            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
+            msg = format_html(
+                "Lot created. <a class='btn btn-sm btn-success text-dark ms-2' href='/lots/new'>Add another</a>"
+            )
             messages.success(
                 self.request,
                 msg,

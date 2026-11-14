@@ -14,7 +14,7 @@ partial must stand alone — it's both part of the panel and the htmx response t
 <p class="text-muted small mb-2">No tags yet.</p>
 {% endif %}
 
-{% comment %}tags_read_only: signed in but not in an NEC club, so reading, not tagging (SpeakerPanelView).{% endcomment %}
+{% comment %}tags_read_only is always False for a signed-in viewer: anyone signed in tags (SpeakerPanelView).{% endcomment %}
 {% if not tags_read_only %}
 <div class="accordion accordion-flush mb-3" id="speaker-tag-accordion">
   <div class="accordion-item">

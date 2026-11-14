@@ -15,6 +15,7 @@ from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -691,14 +692,16 @@ class UpdateLotPushNotificationsView(APIPostView):
 def _send_test_push(user, *, title, body, url, tag, icon=None, auction_pk=None):
     """A test push by the channel the real one will use: the app, else this account's browsers. False if neither."""
     if user_has_app_push(user):
-        send_push_to_user.delay(
-            user.pk,
-            title=title,
-            body=body,
-            url=url,
-            category=CATEGORY_LOT_SELLING,
-            collapse_key=tag,
-            auction_pk=auction_pk,
+        transaction.on_commit(
+            lambda: send_push_to_user.delay(
+                user.pk,
+                title=title,
+                body=body,
+                url=url,
+                category=CATEGORY_LOT_SELLING,
+                collapse_key=tag,
+                auction_pk=auction_pk,
+            )
         )
         return True
     if not PushInformation.objects.filter(user=user).exists():

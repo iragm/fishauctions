@@ -1,0 +1,23 @@
+{% comment %}One adjustment on the invoice page. Each row saves itself on change; see InvoiceAdjustmentSave.{% endcomment %}
+<form class="row g-1 mb-1 adjustment-row" hx-post="{% url 'invoice_adjustment_save' pk=invoice.pk %}" hx-trigger="change, submit" hx-swap="none" hx-sync="this:queue all">
+  <input type="hidden" name="row" value="r{{ row }}">
+  <input type="hidden" name="adjustment" id="adj-pk-r{{ row }}" value="{{ adjustment.pk|default:'' }}">
+  <div class="col-md-4">
+    <select class="form-select form-select-sm" name="adjustment_type" aria-label="Adjustment type">
+      <option value="ADD"{% if adjustment.adjustment_type != "DISCOUNT" %} selected{% endif %}>Charge extra</option>
+      <option value="DISCOUNT"{% if adjustment.adjustment_type == "DISCOUNT" %} selected{% endif %}>Discount</option>
+    </select>
+  </div>
+  <div class="col-md-3">
+    <div class="input-group input-group-sm">
+      <span class="input-group-text">{{ invoice.currency_symbol }}</span>
+      <input type="number" class="form-control" name="amount" aria-label="Amount" min="0" max="99999" step="1" value="{{ adjustment.amount|default_if_none:'' }}">
+    </div>
+  </div>
+  <div class="col">
+    <input type="text" class="form-control form-control-sm" name="notes" aria-label="Notes" maxlength="150" placeholder="ex: membership fee" value="{{ adjustment.notes|default:'' }}">
+  </div>
+  <div class="col-auto">
+    <button type="button" class="btn btn-danger btn-sm" aria-label="Delete" hx-post="{% url 'invoice_adjustment_save' pk=invoice.pk %}" hx-vals='{"delete": "1"}' hx-include="closest form" hx-target="closest form" hx-swap="delete"><i class="bi bi-trash"></i></button>
+  </div>
+</form>
