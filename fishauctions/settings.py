@@ -739,8 +739,11 @@ PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USE
 ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=True)
 # On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
 # The kill switch for a write that misfires during somebody's auction, read on every request.
-# Default on since 2026-10: answering and doing things moved to /ai/, and the palette only opens pages.
+# Default on since 2026-10: answering moved to /ai/, and the palette only opens pages.
 ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=True)
+# The AI boxes on the auction and club admin pages do things ("lot 12 sold to 34 for $5"), each behind
+# a countdown, whatever the switch above says. Off: no boxes. Their own kill switch.
+ASSISTANT_BOX_WRITES = parse_bool_env(os.environ.get("ASSISTANT_BOX_WRITES") or None, default=True)
 # /ai/ (auctions/ai_page.py): the model it runs on, and what one person may spend on it in a day, in
 # tokens with cached prompt tokens counted at a tenth. About twenty ordinary questions; connecting your
 # own agent at /ai/connect/ has no limit here.
@@ -795,9 +798,11 @@ CARES_PARTNER_KEY = os.environ.get("CARES_PARTNER_KEY", "")
 CARES_API_URL = os.environ.get("CARES_API_URL", "https://aquaristspecies.net/api/partner/cares-species/")
 
 # Command palette assist (auctions/llm.py). Enabled only with an API key.
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
-LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano")
+# LLM_PROVIDER is "openai" or "anthropic" (Claude); each reads its own key and has its own default model.
+LLM_PROVIDER = (os.environ.get("LLM_PROVIDER") or "openai").lower()
+LLM_MODEL = os.environ.get("LLM_MODEL") or ("claude-haiku-5-5" if LLM_PROVIDER == "anthropic" else "gpt-5-nano")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Optional: point at any OpenAI-compatible endpoint (proxy, local model) instead of OpenAI.
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 # minimal / low / medium / high, or blank to omit. See llm.DEFAULT_REASONING_EFFORT.
@@ -811,7 +816,9 @@ LLM_EMBEDDING_MODEL = os.environ.get("LLM_EMBEDDING_MODEL", "" if LLM_BASE_URL e
 # articles, files them, and writes the answers on /library/. Cheaper than the palette's job is hard; this
 # is the one place a better model is worth paying for. Defaults to LLM_MODEL behind an LLM_BASE_URL,
 # which won't know OpenAI's model names.
-DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (LLM_MODEL if LLM_BASE_URL else "gpt-5-mini")
+DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (
+    LLM_MODEL if LLM_BASE_URL or LLM_PROVIDER != "openai" else "gpt-5-mini"
+)
 # Whether DOCUMENT_MODEL transcribes pictures and scanned pages. Off: they wait for a member's own AI
 # agent to transcribe them over /mcp/ (auctions/documents/transcribe.py), so the site's key pays for none.
 DOCUMENT_SERVER_OCR = parse_bool_env(os.environ.get("DOCUMENT_SERVER_OCR") or None, default=False)

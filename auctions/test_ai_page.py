@@ -43,6 +43,47 @@ class AIPageTests(StandardTestCase):
     def ask(self, question, conversation="c1"):
         return self.client.post(reverse("ai_ask"), {"q": question, "conversation": conversation})
 
+    def test_the_page_they_came_from_is_what_this_auction_means(self):
+        """Asked "mark him paid in this auction" with no page, the model went looking in the club."""
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(reverse("ai"), {"q": "who has not paid in this auction?", "from": path})
+        self.assertContains(response, f'name="from" value="{path}"')
+        self.provider.replies = [answer("Nobody.")]
+        self.client.post(
+            reverse("ai_ask"), {"q": "who has not paid in this auction?", "conversation": "c1", "from": path}
+        )
+        facts = self.provider.calls[-1]["messages"][0]["content"]
+        self.assertIn("looking_at_right_now", facts)
+        self.assertIn(self.online_auction.slug, facts)
+
+    def test_with_no_page_nothing_is_being_looked_at(self):
+        self.provider.replies = [answer("Nobody.")]
+        self.ask("who has not paid?")
+        self.assertNotIn("looking_at_right_now", self.provider.calls[-1]["messages"][0]["content"])
+
+    def test_only_this_sites_own_paths_are_a_page_to_come_from(self):
+        for bad in (
+            "https://example.com/auctions/x/",
+            "//example.com/",
+            "auctions/x/",
+            "",
+            None,
+            "/" + "a" * 600,
+            reverse("ai"),
+        ):
+            self.assertEqual(ai_page.came_from(bad), "", bad)
+        self.assertEqual(ai_page.came_from("/auctions/x/?a=1#b"), "/auctions/x/")
+
+    def test_the_palettes_ask_ai_link_carries_the_page(self):
+        path = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        groups = command_palette.with_ask_ai([], "who has not paid", self.user, path)
+        self.assertIn("from=", groups[-1]["items"][0]["url"])
+        self.assertNotIn("from=", command_palette.with_ask_ai([], "who has not paid", self.user)[-1]["items"][0]["url"])
+
+    def test_it_is_told_it_cannot_change_anything(self):
+        self.assertIn("never", ai_page.SYSTEM_PROMPT)
+        self.assertIn("cannot change anything", ai_page.SYSTEM_PROMPT)
+
     def test_signed_out_is_sent_to_sign_in(self):
         self.client.logout()
         self.assertEqual(self.client.get(reverse("ai")).status_code, 302)

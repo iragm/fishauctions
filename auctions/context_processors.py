@@ -247,6 +247,8 @@ def site_config(request):
         "single_club_mode": getattr(settings, "SINGLE_CLUB_MODE", False),
         # False (no LLM, or not opted in) means the palette renders as it did before the feature.
         "palette_assist_enabled": _palette_assist_enabled(request),
+        # The AI boxes on the auction and club admin pages, which can change things.
+        "palette_box_enabled": _palette_box_enabled(request),
     }
 
 
@@ -255,6 +257,12 @@ def _palette_assist_enabled(request):
     from auctions.palette_assist import assist_enabled_for
 
     return assist_enabled_for(getattr(request, "user", None))
+
+
+def _palette_box_enabled(request):
+    from auctions.palette_assist import box_enabled
+
+    return box_enabled(getattr(request, "user", None))
 
 
 @once_per_request

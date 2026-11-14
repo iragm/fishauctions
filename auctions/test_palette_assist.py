@@ -210,7 +210,7 @@ class PaletteAssistTestCase(StandardTestCase):
         self.provider.replies = list(replies)
         self.provider.calls = []
 
-    def _assist(self, query, context=None, user=None, skip_throttle_reset=False, path=""):
+    def _assist(self, query, context=None, user=None, skip_throttle_reset=False, path="", box=False):
         """POST to the assist endpoint as ``user`` (default self.user); returns an :class:`AssistResponse`."""
         user = user or self.user
         if not skip_throttle_reset:
@@ -219,18 +219,18 @@ class PaletteAssistTestCase(StandardTestCase):
         return AssistResponse(
             self.client.post(
                 reverse("command_palette_assist"),
-                data=json.dumps({"q": query, "context": context or [], "path": path}),
+                data=json.dumps({"q": query, "context": context or [], "path": path, "box": box}),
                 content_type="application/json",
             )
         )
 
-    def _execute(self, action, params, user=None, path=""):
+    def _execute(self, action, params, user=None, path="", box=False):
         user = user or self.user
         cache.delete(f"palette_assist_cooldown_{user.pk}")
         self.client.force_login(user)
         return self.client.post(
             reverse("command_palette_execute"),
-            data=json.dumps({"action": action, "params": params, "path": path}),
+            data=json.dumps({"action": action, "params": params, "path": path, "box": box}),
             content_type="application/json",
         )
 
@@ -4622,6 +4622,112 @@ class NavigateOnlyTests(PaletteAssistTestCase):
         from auctions.forms import ChangeUserPreferencesForm
 
         self.assertIn("palette_navigate_only", ChangeUserPreferencesForm.Meta.fields)
+
+
+@override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+class BoxWritesTests(PaletteAssistTestCase):
+    """The AI boxes on the admin pages do what they are asked, while the palette only opens pages.
+
+    The boxes hand their text to the palette, which is navigate-only for everybody, so every example a
+    box showed reached a model holding no write tool and came back as "I couldn't work out how".
+    """
+
+    def setUp(self):
+        super().setUp()
+        # ``check_in`` refuses auctions that don't use check-in mode.
+        self.in_person_auction.manage_users_through_club = "checkin"
+        if not self.in_person_auction.club:
+            self.in_person_auction.club = Club.objects.create(name="Door Club", abbreviation="DC")
+        self.in_person_auction.save()
+
+    def _writes(self, query, box):
+        return {
+            tool["name"]
+            for tool in palette_assist.tools_for(self.user, query, box)
+            if getattr(palette_actions.get_action(tool["name"]), "danger", None) == palette_actions.DANGER_CONFIRM
+        }
+
+    def test_the_palette_is_offered_no_write(self):
+        self.assertEqual(self._writes("check in bidder 555", box=False), set())
+        self.assertEqual(palette_assist.tools_tier(self.user, "check in bidder 555"), palette_assist.TOOLS_LOCKED)
+
+    def test_a_box_is_offered_the_writes(self):
+        self.assertIn("check_in", self._writes("check in bidder 555", box=True))
+        self.assertEqual(
+            palette_assist.tools_tier(self.user, "check in bidder 555", box=True), palette_assist.TOOLS_ALL
+        )
+
+    def test_a_question_in_a_box_still_gets_only_the_reads(self):
+        self.assertEqual(self._writes("what time is check in?", box=True), set())
+
+    def test_a_command_from_a_box_is_done(self):
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        data = self._assist("check in bidder 555", box=True).json()
+        self.assertEqual(data["kind"], "done", data)
+        self.in_person_buyer.refresh_from_db()
+        self.assertIsNotNone(self.in_person_buyer.checked_in)
+        self.assertIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_ALL)
+
+    def test_a_write_that_asks_first_comes_back_from_a_box_as_a_countdown(self):
+        self._script({"action": "no_sale", "params": {"lot": "1"}, "summary": "No sale on lot 1"})
+        data = self._assist("no sale on lot 1", box=True).json()
+        self.assertEqual(data["kind"], "countdown", data)
+
+    def test_the_same_command_in_the_palette_is_sent_no_write(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("check in bidder 555")
+        self.assertNotIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+
+    def test_a_countdown_from_a_box_runs(self):
+        response = self._execute("check_in", {"person": "555"}, box=True)
+        self.assertEqual(response.json()["kind"], "done", response.json())
+
+    def test_a_countdown_from_the_palette_still_cannot(self):
+        self.assertEqual(self._execute("check_in", {"person": "555"}).json()["kind"], "error")
+
+    def test_a_box_still_checks_who_is_asking(self):
+        """The flag says which input was typed into. It is not a permission."""
+        response = self._execute("check_in", {"person": "555"}, user=self.member, box=True)
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_anything_but_true_is_not_a_box(self):
+        for claimed in ("true", 1, [True], {"box": True}):
+            self.assertEqual(self._execute("check_in", {"person": "555"}, box=claimed).json()["kind"], "error")
+
+    @override_settings(ASSISTANT_BOX_WRITES=False)
+    def test_the_boxes_have_their_own_kill_switch(self):
+        self.assertFalse(palette_assist.box_enabled(self.user))
+        self.assertEqual(self._writes("check in bidder 555", box=True), set())
+        self.assertEqual(self._execute("check_in", {"person": "555"}, box=True).json()["kind"], "error")
+
+    def test_somebody_who_chose_a_palette_that_only_opens_pages_gets_no_box(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(palette_assist.box_enabled(self.user))
+        self.assertEqual(self._writes("check in bidder 555", box=True), set())
+
+    def test_no_box_without_the_assistant(self):
+        UserData.objects.filter(user=self.user).update(use_llm_search=False)
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(palette_assist.box_enabled(self.user))
+
+    def test_every_example_a_box_shows_names_a_write_the_palette_has(self):
+        """ "add a meeting March 3 at 7pm" was shown on every club page, for a tool that is on /mcp/ only."""
+        import html
+        import re
+        from pathlib import Path
+
+        templates = Path(palette_assist.__file__).parent / "templates"
+        examples = []
+        for name in ("auction_ribbon.html", "club_ribbon.html"):
+            found = re.search(r"data-placeholders='([^']*)'", (templates / name).read_text())
+            self.assertIsNotNone(found, name)
+            examples += json.loads(html.unescape(found.group(1)))
+        self.assertTrue(examples)
+        for example in examples:
+            self.assertEqual(palette_assist.tools_tier(self.user, example, box=True), palette_assist.TOOLS_ALL, example)
 
 
 class SiteLoadTests(PaletteAssistTestCase):

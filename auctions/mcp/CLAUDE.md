@@ -131,7 +131,9 @@ is an endless list and it would cost tokens every round.
 `navigation_shortcut` answers "take me to my invoices" from the route catalog with no model call at
 all, when one route is clearly ahead of the next. `navigate_only` — a preference, and
 `ASSISTANT_NAVIGATE_ONLY` for everybody — keeps the writes off permanently; the site-wide one also
-refuses a countdown card that was already on screen.
+refuses a countdown card that was already on screen. The AI boxes on the auction and club admin pages
+(`data-palette-box`) are the exception: they open the palette with `box: true`, and `writes_locked`
+gives those turns the writes. `ASSISTANT_BOX_WRITES` is their own switch.
 
 The links come from `palette_actions.KEY_ABOUT`, the same block `/mcp/` turns into `resource_link`s:
 `assist_stream` collects it off every lookup and `about_groups` turns it into rows. It used to be

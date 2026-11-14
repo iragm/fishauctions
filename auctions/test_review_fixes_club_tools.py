@@ -7,6 +7,7 @@ hands its text to the command palette.
 
 from unittest import mock
 
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -134,6 +135,23 @@ class AIBoxTests(StandardTestCase):
         UserData.objects.filter(user=self.user).update(use_llm_search=False)
         response = self.client.get(self.auction_url)
         self.assertNotContains(response, "data-palette-box")
+
+    def test_ai_box_goes_with_its_kill_switch(self):
+        self.client.login(username="my_lot", password="testpassword")
+        UserData.objects.filter(user=self.user).update(use_llm_search=True)
+        with override_settings(ASSISTANT_BOX_WRITES=False):
+            self.assertNotContains(self.client.get(self.auction_url), "data-palette-box")
+
+    def test_ai_box_on_a_club_page_is_for_the_people_who_run_the_club(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", active=True)
+        ClubMember.objects.create(club=club, user=self.user, permission_admin=True)
+        ClubMember.objects.create(club=club, user=self.user_with_no_lots)
+        UserData.objects.update(use_llm_search=True)
+        url = reverse("club_detail", kwargs={"slug": club.slug})
+        self.client.login(username="my_lot", password="testpassword")
+        self.assertContains(self.client.get(url), "data-palette-box")
+        self.client.login(username="no_lots", password="testpassword")
+        self.assertNotContains(self.client.get(url), "data-palette-box")
 
     def test_ai_box_not_shown_to_a_non_admin(self):
         UserData.objects.filter(user=self.user_with_no_lots).update(use_llm_search=True)
