@@ -322,6 +322,7 @@ class ClubSettingsViewTests(TestCase):
             {
                 "auction_email_member": str(self.auction_member.pk),
                 "contact_email_member": str(editor_member.pk),
+                "mailing_address": "PO Box 123\nCity, State 12345",
                 "send_welcome_email_to_new_members": "on",
                 "send_membership_expiration_reminders_30_days": "on",
                 "send_membership_expiration_reminders": "on",

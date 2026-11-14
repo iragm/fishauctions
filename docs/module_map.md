@@ -457,7 +457,7 @@ this only quotes its opening sentence.
 - **`test_club_permissions.py`** (960 lines)
   Club permissions in the awkward cases: wildcards, dialogs, Discord admin, view-only.
   `ClubPermissionWildcardTests`, `ClubPermissionsDialogTests`, `ClubMemberDiscordAdminViewTests`, `ClubMemberManagementViewTests`, `ClubViewOnlyAccessTests`, `ClubMembershipInvoiceTests`, `ClubMembershipSettingsFormFieldsTests`, `PaymentSellerClubLinkTests`
-- **`test_club_settings.py`** (690 lines)
+- **`test_club_settings.py`** (691 lines)
   A club's own settings pages: BAP, general settings and email routing.
   `ClubBapSettingsViewTests`, `ClubSettingsViewTests`, `ClubEmailRoutingTests`, `RoutedSenderDisplayNameTests`, `SesSendsTheMessagesOwnFromAddressTests`, `InboundEmailRoutingAPITests`, `AuctionSlugSanitizationTests`, `AuctionEmailSenderTests`, `ClubEmailSettingsFormTests`
 - **`test_club_users.py`** (1488 lines)
@@ -659,9 +659,9 @@ this only quotes its opening sentence.
 - **`test_page_view_url.py`** (116 lines)
   The shape of ``PageView.url``: a site-relative path, on the way in and on the rows already there.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
-- **`test_palette_account.py`** (878 lines)
+- **`test_palette_account.py`** (891 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5312 lines)
+- **`test_palette_assist.py`** (5314 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -722,6 +722,9 @@ this only quotes its opening sentence.
 - **`test_review_fixes_onboarding.py`** (95 lines)
   Getting started, sellers and bidders: the create bounce, the join form, the email settings mailing address.
   `OnboardingTests`
+- **`test_review_fixes_round2.py`** (85 lines)
+  Round 2 review fixes: an invoice adjustment is refused once the invoice is no longer open, under the
+  `InvoiceAdjustmentLockTests`, `MarkPaidFreezesAdjustedTotalTests`, `SoldBannerAccountWinnerTests`, `CadenceAnswerRefusedTests`
 - **`test_review_fixes_sanitizer.py`** (44 lines)
   Review fixes for the Summernote sanitizer and the custom-dropdown options API.
   `SummernoteSanitizerReviewTests`, `AuctionDropdownOptionsGetReviewTests`
@@ -1155,7 +1158,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`admin_checklist.py`** (1049 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (836 lines)
+- **`ajax.py`** (843 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1292 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
@@ -1195,7 +1198,7 @@ Every view on the site, split by the part of it the view belongs to.
   The outside accounts a club connects: Mailchimp, Brevo, Google Calendar, Square links.
 - **`club_members.py`** (1108 lines)
   The club's list of people: joining, renewing, permissions, cards.
-- **`club_pages.py`** (663 lines)
+- **`club_pages.py`** (664 lines)
   A club's public page, the two links that identify a member on it, and the answer link in a club email.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`, `ClubCadenceAnswerView`
 - **`club_reports.py`** (830 lines)
@@ -1206,14 +1209,14 @@ Every view on the site, split by the part of it the view belongs to.
   `InboundEmailRoutingView`, `verify_discord_signature`, `assign_discord_role`, `DiscordInteractionsView`, `LotBapPointsView`, `ClubDiscordConfigView`, `ClubDiscordFetchRolesView`, `ClubDiscordEditRoleView`, `ClubDiscordSetDefaultRoleView`, `ClubDiscordSendJoinMessageView`
 - **`documents.py`** (647 lines)
   The library: the list of your own and your clubs' documents (``/library/``), adding them
-- **`embeds.py`** (658 lines)
+- **`embeds.py`** (663 lines)
   The snippets a club puts on its own website, and the pages behind them.
 - **`exports.py`** (978 lines)
   Taking data back out: the CSV exports, the reports, and the mailing list.
 - **`help.py`** (138 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (459 lines)
+- **`invoices.py`** (467 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceAdjustmentSave`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`logistics.py`** (95 lines)

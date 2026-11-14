@@ -654,6 +654,7 @@ class ClubCadenceAnswerView(TemplateView):
 
         answer = request.POST.get("answer", "")
         if not club_emails.record_answer(self.club, self.answerer, answer):
+            messages.error(request, "Only this club's staff can answer.")
             return self.get(request, *args, **kwargs)
         if answer == "monthly":
             auction = self.emailed_auction

@@ -51,6 +51,12 @@ document.body.addEventListener('renewalToggled', function() {
   window.location.reload();
 });
 
+// Adjustment rows swap nothing, so a refused save would otherwise look like it worked.
+document.body.addEventListener('htmx:responseError', function(e) {
+  var row = e.detail.elt && e.detail.elt.closest && e.detail.elt.closest('.adjustment-row');
+  if (row) { $.toast({title: e.detail.xhr.responseText || 'That did not save.', type: 'danger'}); }
+});
+
 </script>
 {% endif %}
 {% if print_label_link and not invoice.printed and not is_admin %}

@@ -78,6 +78,17 @@
         return;
       }
       if (event.key === "Escape") {
+        // A widget open inside this modal, or a dialog stacked on top of it, takes the Escape itself.
+        var stackedDialog = Array.prototype.some.call(document.querySelectorAll(".modal.show"), function (m) {
+          return !self.modalRoot.contains(m);
+        });
+        var openWidget = Array.prototype.some.call(
+          document.querySelectorAll(".select2-container--open, .bootstrap-datetimepicker-widget"),
+          function (el) { return el.offsetParent !== null; }
+        );
+        if (stackedDialog || openWidget) {
+          return;
+        }
         event.preventDefault();
         self.close({ action: "none" });
       } else if (event.key === "Tab") {

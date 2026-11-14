@@ -462,16 +462,21 @@ class ClubAnnouncementsView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         from auctions.tasks import refresh_announcement_opens
 
         cutoff = timezone.now() - timedelta(days=30)
-        recent = [r for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
-        for announcement in recent:
+        pks = [r.pk for r in rows if r.sent_by_email and not r.is_deleted and r.created_at >= cutoff][:5]
+        if not pks:
+            return
 
-            def _enqueue(pk=announcement.pk):
+        def _enqueue(pks=pks):
+            # One callback for all of them: with the broker down, the first failure stops the rest, so the
+            # page doesn't wait on a connection timeout per announcement.
+            for pk in pks:
                 try:
                     refresh_announcement_opens.delay(pk)
                 except Exception:
                     logger.warning("Could not queue an open-count refresh for announcement %s", pk)
+                    break
 
-            transaction.on_commit(_enqueue)
+        transaction.on_commit(_enqueue)
 
     def post(self, request, *args, **kwargs):
         form = self.get_form(request.POST)

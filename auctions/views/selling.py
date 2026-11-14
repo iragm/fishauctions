@@ -198,7 +198,7 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         result.update(
             banner="error",
             last_sold_lot_number=lot.lot_number_display,
-            success_message=f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
+            success_message=f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number if lot.auctiontos_winner else '?'}.  If this is not correct, you can undo this sale",
             next_queued_lot_number=next_lot.lot_number_display if next_lot else None,
         )
         return result

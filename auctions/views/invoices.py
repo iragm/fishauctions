@@ -13,6 +13,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
@@ -182,8 +183,15 @@ class InvoiceAdjustmentSave(LoginRequiredMixin, View):
         row = request.POST.get("row", "")
         if not ADJUSTMENT_ROW_KEY.fullmatch(row):
             return HttpResponseBadRequest("Bad row")
-        if invoice.status != "DRAFT":
-            return HttpResponseBadRequest("Only a draft invoice can be adjusted")
+        # The status check and the write share the invoice's row lock, so a status change (or a Square
+        # webhook marking it paid) can't land between them.
+        with transaction.atomic():
+            status = Invoice.objects.select_for_update().values_list("status", flat=True).get(pk=invoice.pk)
+            if status != "DRAFT":
+                return HttpResponseBadRequest("Only a draft invoice can be adjusted")
+            return self._save_locked(request, invoice, row)
+
+    def _save_locked(self, request, invoice, row):
         auction = invoice.auction or (invoice.auctiontos_user.auction if invoice.auctiontos_user else None)
         name = invoice.auctiontos_user.name if invoice.auctiontos_user else str(invoice)
 

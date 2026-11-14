@@ -51,7 +51,7 @@ from auctions.forms import (
     EditLot,
     validate_image_url,
 )
-from auctions.helper_functions import cookie_coordinates
+from auctions.helper_functions import cookie_coordinates, static_html
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -873,7 +873,7 @@ class LotValidation(LoginRequiredMixin):
                     self.request, "We couldn't process the pasted image.  Try adding it again from the lot page."
                 )
         if is_new:
-            msg = format_html(
+            msg = static_html(
                 "Lot created. <a class='btn btn-sm btn-success text-dark ms-2' href='/lots/new'>Add another</a>"
             )
             messages.success(

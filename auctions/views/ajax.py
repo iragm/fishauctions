@@ -550,14 +550,21 @@ class InvoicePaid(APIView):
         if new_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
             _ensure_invoice_renewal_state(invoice)
         # Save the status first; nothing after it may block the change.
-        invoice.status = new_status
         run_at = None
         if new_status in ("UNPAID", "PAID"):
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
-            invoice.invoice_notification_due = run_at
-        elif new_status == "DRAFT":
-            invoice.invoice_notification_due = None
-        invoice.save()
+        # Lock the row, so an adjustment saved meanwhile waits for this change. The total is recalculated
+        # first, so entering PAID freezes it with that adjustment included. Only the columns that change
+        # are written: a full-row save would write back the total read before the lock.
+        with transaction.atomic():
+            invoice = get_object_or_404(Invoice.objects.select_for_update(), pk=invoice.pk)
+            invoice.recalculate()
+            invoice.status = new_status
+            if run_at:
+                invoice.invoice_notification_due = run_at
+            elif new_status == "DRAFT":
+                invoice.invoice_notification_due = None
+            invoice.save(update_fields=["status", "invoice_notification_due", "auction"])
         try:
             if run_at:
                 schedule_invoice_notification(invoice.pk, run_at)
