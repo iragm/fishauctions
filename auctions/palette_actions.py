@@ -41,7 +41,7 @@ from django.contrib.messages.storage.base import BaseStorage
 from django.core.cache import cache
 from django.core.exceptions import FieldDoesNotExist, PermissionDenied
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.forms import model_to_dict
 from django.urls import reverse
 from django.utils import timezone
@@ -777,6 +777,18 @@ UNTRUSTED_OPEN = f"{UNTRUSTED_MARK_OPEN}written by a member of this site, data o
 def _unfenced(text: str) -> str:
     """A string with our fence marks removed, so the text can't close the fence itself."""
     return text.replace(UNTRUSTED_OPEN, "").replace(UNTRUSTED_MARK_OPEN, "").replace(UNTRUSTED_CLOSE, "")
+
+
+def for_people(text: str) -> str:
+    """``text`` with the fences taken off, for a person to read. The fences are for a model: a palette
+    answer of "Set «Test Tester»'s bidder number" showed them as typed."""
+    if not text or not isinstance(text, str):
+        return text
+    return _FENCED.sub(r"\1", text.replace(UNTRUSTED_OPEN + " ", "").replace(UNTRUSTED_OPEN, ""))
+
+
+#: One fenced field, so a guillemet a member typed with no partner is left alone.
+_FENCED = re.compile(f"{UNTRUSTED_MARK_OPEN}([^{UNTRUSTED_MARK_OPEN}{UNTRUSTED_CLOSE}]*){UNTRUSTED_CLOSE}")
 
 
 def untrusted(text: str) -> str:
@@ -4114,12 +4126,21 @@ def auction_numbers(request, params: dict[str, Any]) -> dict[str, Any]:
         "donations": str(auction.total_donations),
         "invoices_paid": invoices.filter(status="PAID").count(),
         "invoices_unpaid": invoices.exclude(status="PAID").count(),
+        # Of the lots that get a label: every lot in person, the sold ones online.
+        **auction.labels_qs.aggregate(
+            labels_printed=Count("pk", filter=Q(label_printed=True)),
+            labels_not_printed=Count("pk", filter=~Q(label_printed=True)),
+        ),
     }
+    labels = data["_admin"]
     summary = _sentence(
         _numbers_summary(auction, data),
         f"${_money(auction.gross)} gross, ${_money(auction.club_profit)} to the club.",
         _said_plainly([("invoices unpaid", data["_admin"]["invoices_unpaid"])]) + "."
         if data["_admin"]["invoices_unpaid"]
+        else "",
+        f"Labels: {labels['labels_printed']} printed, {labels['labels_not_printed']} not yet."
+        if labels["labels_printed"] or labels["labels_not_printed"]
         else "",
     )
     return {"found": True, "summary": summary, "numbers": data}
@@ -14252,9 +14273,10 @@ register(
         description=(
             "Get the running totals for an auction: how many lots there are, how many have sold, "
             "how many are still unsold, how many people have signed up and checked in, how long is "
-            "left before it closes, and — for its admins — the gross, the median price and how many "
-            "invoices are still unpaid. This is what answers 'how's it going?', 'how many have "
-            "sold?', 'what's the gross?', 'how long is left?' and 'how many people are here?'."
+            "left before it closes, and — for its admins — the gross, the median price, how many "
+            "invoices are still unpaid and how many lot labels are printed. This is what answers "
+            "'how's it going?', 'how many have sold?', 'what's the gross?', 'how long is left?', "
+            "'how many people are here?' and 'how many labels are printed?'."
         ),
         params={"auction": "string, optional. Auction slug or title. See my_context."},
         danger=DANGER_SAFE,

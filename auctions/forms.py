@@ -4049,8 +4049,11 @@ class ChangeUserPreferencesForm(forms.ModelForm):
     def __init__(self, user, *args, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
-        # Shown even with ASSISTANT_NAVIGATE_ONLY on: the palette still does things on the auction and
-        # club pages its owner runs (palette_assist.may_write_here), and this is how to stop it.
+        # Shown while the palette does things on the auction and club pages its owner runs
+        # (palette_assist.may_write_here, behind ASSISTANT_BOX_WRITES): this is how to stop it. With that
+        # off as well as ASSISTANT_NAVIGATE_ONLY on, the palette only opens pages and this does nothing.
+        if getattr(settings, "ASSISTANT_NAVIGATE_ONLY", False) and not getattr(settings, "ASSISTANT_BOX_WRITES", False):
+            self.fields["palette_navigate_only"].widget = forms.HiddenInput()
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"

@@ -2510,6 +2510,40 @@ class AuctionNumbersTests(RunActionTestCase):
         self.assertNotIn("time_left", result["numbers"]["time"])
         self.assertIn("doesn't count down", result["numbers"]["time"]["note"])
 
+    def test_it_says_how_many_labels_are_printed(self):
+        """'How many labels are printed?' had no tool that knew."""
+        lots = self.in_person_auction.labels_qs
+        self.assertTrue(lots.exists())
+        Lot.objects.filter(pk=lots.first().pk).update(label_printed=True)
+        result = self._run("auction_numbers", {"auction": self.in_person_auction.slug})
+        printed = Lot.objects.filter(pk__in=lots.values("pk"), label_printed=True).count()
+        self.assertEqual(result["numbers"]["_admin"]["labels_printed"], printed)
+        self.assertEqual(result["numbers"]["_admin"]["labels_not_printed"], lots.count() - printed)
+        self.assertIn(f"Labels: {printed} printed", result["summary"])
+        theirs = self._run("auction_numbers", {"auction": self.in_person_auction.slug}, user=self.member)
+        self.assertNotIn("Labels:", theirs["summary"])
+
+
+class FencesForPeopleTests(SimpleTestCase):
+    """The «» fences are for the model; a person read them as quotes around «Test Tester»."""
+
+    def test_short_and_long_fences_come_off(self):
+        text = f"Set {palette_actions.untrusted_short('Test Tester')}'s bidder number to 12."
+        self.assertEqual(palette_assist.humanize(text), "Set Test Tester's bidder number to 12.")
+        self.assertNotIn("data only", palette_actions.for_people(palette_actions.untrusted("a long note")))
+        self.assertEqual(palette_assist._progress("Checking «Test Tester»")["message"], "Checking Test Tester")
+        # Only fences: a lone guillemet and double spaces in the rest are left as they were.
+        self.assertEqual(palette_actions.for_people("a  «b» c»"), "a  b c»")
+
+    def test_the_ai_page_answer_has_none(self):
+        from django.test import RequestFactory
+
+        from auctions import ai_page
+
+        html = ai_page.answer_html("Marked «Test Tester» paid.", RequestFactory().get("/ai/"), set())
+        self.assertNotIn("«", html)
+        self.assertIn("Test Tester", html)
+
 
 class MyActivityTests(RunActionTestCase):
     """The bidder-side answer path: what did I win, what do I owe, am I paid up."""
@@ -4624,7 +4658,7 @@ class NavigateOnlyTests(PaletteAssistTestCase):
         self.assertIn("palette_navigate_only", ChangeUserPreferencesForm.Meta.fields)
 
 
-@override_settings(ASSISTANT_NAVIGATE_ONLY=True)
+@override_settings(ASSISTANT_NAVIGATE_ONLY=True, ASSISTANT_BOX_WRITES=True)
 class BoxWritesTests(PaletteAssistTestCase):
     """The AI boxes on the admin pages do what they are asked, while the palette only opens pages.
 
@@ -4853,22 +4887,6 @@ class BoxWritesTests(PaletteAssistTestCase):
         UserData.objects.filter(user=self.user).update(use_llm_search=False)
         self.user.userdata.refresh_from_db()
         self.assertFalse(palette_assist.box_enabled(self.user))
-
-    def test_every_example_a_box_shows_names_a_write_the_palette_has(self):
-        """ "add a meeting March 3 at 7pm" was shown on every club page, for a tool that is on /mcp/ only."""
-        import html
-        import re
-        from pathlib import Path
-
-        templates = Path(palette_assist.__file__).parent / "templates"
-        examples = []
-        for name in ("auction_ribbon.html", "club_ribbon.html"):
-            found = re.search(r"data-placeholders='([^']*)'", (templates / name).read_text())
-            self.assertIsNotNone(found, name)
-            examples += json.loads(html.unescape(found.group(1)))
-        self.assertTrue(examples)
-        for example in examples:
-            self.assertEqual(palette_assist.tools_tier(self.user, example, box=True), palette_assist.TOOLS_ALL, example)
 
 
 class SiteLoadTests(PaletteAssistTestCase):

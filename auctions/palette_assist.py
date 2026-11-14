@@ -143,7 +143,7 @@ def box_enabled(user) -> bool:
     """
     from django.conf import settings
 
-    if not getattr(settings, "ASSISTANT_BOX_WRITES", True):
+    if not getattr(settings, "ASSISTANT_BOX_WRITES", False):
         return False
     return assist_enabled_for(user)
 
@@ -1251,11 +1251,16 @@ def _names_for_slugs(slugs: set[str], user=None) -> dict[str, str]:
 
 
 def humanize(text: str, user=None) -> str:
-    """Replace slugs and route keys in a user-facing string with their names; leave anything else alone.
-    *user* scopes the slug lookup (:func:`_names_for_slugs`).
+    """Replace slugs and route keys in a user-facing string with their names, and take the «» fences
+    off; leave anything else alone. *user* scopes the slug lookup (:func:`_names_for_slugs`).
     """
     if not text or not isinstance(text, str):
         return text or ""
+    return palette_actions.for_people(_named(text, user))
+
+
+def _named(text: str, user=None) -> str:
+    """:func:`humanize` before the fences come off, so a slug a member typed inside one is left as typed."""
     try:
         candidates = set(_IDENTIFIER.findall(text))
         if not candidates or len(candidates) > _MAX_IDENTIFIERS:
@@ -1906,7 +1911,7 @@ def _progress(text: str, wait: float = 0.0) -> dict[str, Any]:
     exactly the load the wait exists to manage. :class:`~auctions.views.palette.CommandPaletteAssistView`
     sends the line, then awaits, then asks for the next event.
     """
-    event: dict[str, Any] = {"kind": KIND_PROGRESS, "message": text}
+    event: dict[str, Any] = {"kind": KIND_PROGRESS, "message": palette_actions.for_people(text)}
     if wait > 0:
         event["wait_seconds"] = round(float(wait), 1)
     return event

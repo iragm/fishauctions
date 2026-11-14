@@ -264,8 +264,9 @@ def answer_html(reply: str, request, links: set[str]):
     from django.utils.safestring import mark_safe
 
     from .documents.render import to_html
+    from .palette_actions import for_people
 
-    soup = BeautifulSoup(str(to_html(link_bare_addresses(reply, request, links), [])), "html.parser")
+    soup = BeautifulSoup(str(to_html(link_bare_addresses(for_people(reply), request, links), [])), "html.parser")
     for anchor in soup.find_all("a"):
         href = anchor.get("href") or ""
         if href not in links and not is_a_page(href, request):

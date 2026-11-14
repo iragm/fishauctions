@@ -49,7 +49,7 @@ this only quotes its opening sentence.
 - **`ads_admin.py`** (122 lines)
   The advertising admin: campaign groups, the campaigns in one, and what they cost to show.
   `AdCampaignResponseInline`, `AdCampaignInline`, `AdCampaignAdmin`, `AdCampaignGroupAdmin`
-- **`ai_page.py`** (384 lines)
+- **`ai_page.py`** (385 lines)
   ``/ai/``: ask the site anything, answered by its cheapest model with the tools ``/mcp/`` serves.
 - **`announcements.py`** (414 lines)
   Club announcements: one message, sent to the places a club's members look.
@@ -126,7 +126,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (506 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (385 lines)
+- **`context_processors.py`** (377 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (16 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -170,7 +170,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6749 lines)
+- **`forms.py`** (6752 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -186,7 +186,7 @@ this only quotes its opening sentence.
 - **`google_wallet.py`** (302 lines)
   Helpers for the Google Wallet REST API.
   `is_configured`, `get_access_token`, `member_text_modules`, `update_generic_object_for_member`, `expire_generic_object_for_member`, `create_generic_class`
-- **`help_guides.py`** (1010 lines)
+- **`help_guides.py`** (1002 lines)
   The help guides at /help/: which guides exist, how they're grouped, and what each one has to cover.
 - **`help_stats.py`** (1079 lines)
   The numbers the help guides quote: facts from every auction on the site, and from the reader's own.
@@ -236,9 +236,9 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17111 lines)
+- **`palette_actions.py`** (17133 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
-- **`palette_assist.py`** (2314 lines)
+- **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
 - **`palette_routes.py`** (2082 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
@@ -586,7 +586,7 @@ this only quotes its opening sentence.
   Tests for the MCP tool catalogue.
 - **`test_mcp_admin.py`** (1931 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
-- **`test_mcp_admin_reports.py`** (584 lines)
+- **`test_mcp_admin_reports.py`** (585 lines)
   The growth reports on ``/mcp/admin/`` (:mod:`auctions.mcp.admin_reports`), the 404 page's title they
   `Helpers`, `ShapeTests`, `FunnelTests`, `ClubTests`, `DeadEndTests`, `PageVerbTests`, `ShortcutCandidateTests`, `FeedbackTests`, `AcquisitionTests`, `ClubFunnelTests`
 - **`test_mcp_permissions.py`** (724 lines)
@@ -664,7 +664,7 @@ this only quotes its opening sentence.
   `PageViewPathTests`, `MigrationHostListTests`, `PageViewCreateStoresAPathTests`
 - **`test_palette_account.py`** (891 lines)
   The rest of the account, and the auction and club setup pages behind it.
-- **`test_palette_assist.py`** (5561 lines)
+- **`test_palette_assist.py`** (5579 lines)
   Tests for the command palette's natural-language assist.
 - **`test_palette_core.py`** (1301 lines)
   The command palette itself, and the mobile surfaces that call into it.
@@ -707,9 +707,9 @@ this only quotes its opening sentence.
 - **`test_reverify_email.py`** (255 lines)
   A recent bounce holds back joining until the address is verified again.
   `ReverifyEmailTests`, `MobileJoinBounceTests`, `TrustedBounceTopicTests`
-- **`test_review_fixes_club_tools.py`** (160 lines)
-  Club management, access requests and the AI box: the review fixes that save an admin a trip.
-  `AccessRequestTests`, `ClubSidebarAuctionBlockTests`, `ClubSetupListTests`, `NewClubMembersPageTests`, `AIBoxTests`
+- **`test_review_fixes_club_tools.py`** (166 lines)
+  Club management, access requests and the AI agent banner: the review fixes that save an admin a trip.
+  `AccessRequestTests`, `ClubSidebarAuctionBlockTests`, `ClubSetupListTests`, `NewClubMembersPageTests`, `AIAgentBannerTests`
 - **`test_review_fixes_emails.py`** (178 lines)
   Automatic emails, review fixes: bounced creators, feature-email spacing for the next-auction email, club
   `Helpers`, `NextAuctionEmailTests`, `ClubEmailRecipientTests`, `QuietSpellTests`, `MergeSuggestionCapTests`
@@ -1024,7 +1024,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
 - **`admin_species.py`** (1012 lines)
   The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
-- **`auth.py`** (385 lines)
+- **`auth.py`** (410 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
   Client ID Metadata Document handling for the clients that actually turn up.
@@ -1130,8 +1130,8 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 ## `auctions/templatetags/`
 
-- **`auction_nav_tags.py`** (11 lines)
-  `auction_nav_groups`
+- **`auction_nav_tags.py`** (26 lines)
+  `auction_nav_groups`, `ai_agent_banner`
 - **`bap_filters.py`** (9 lines)
   `get_attr`
 - **`club_nav_tags.py`** (102 lines)
@@ -1289,7 +1289,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1319 lines)
+- **`settings.py`** (1320 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

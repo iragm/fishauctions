@@ -743,8 +743,9 @@ ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_F
 ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=True)
 # The AI boxes on the auction and club admin pages, and the palette on any auction or club page the
 # person runs, do things ("lot 12 sold to 34 for $5"), each behind a countdown, whatever the switch
-# above says. Off: no boxes, and the palette opens pages everywhere. Their own kill switch.
-ASSISTANT_BOX_WRITES = parse_bool_env(os.environ.get("ASSISTANT_BOX_WRITES") or None, default=True)
+# above says. Off: the palette opens pages everywhere (the boxes' inputs are off the pages for now). Their own kill switch. Off by
+# default since 2026-11-14: on staging it misread too many commands, and the boxes are off the pages.
+ASSISTANT_BOX_WRITES = parse_bool_env(os.environ.get("ASSISTANT_BOX_WRITES") or None, default=False)
 # /ai/ (auctions/ai_page.py): the model it runs on, and what one person may spend on it in a day, in
 # tokens with cached prompt tokens counted at a tenth. About twenty ordinary questions; connecting your
 # own agent at /ai/connect/ has no limit here.

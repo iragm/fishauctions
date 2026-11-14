@@ -1,19 +1,17 @@
-"""Club management, access requests and the AI box: the review fixes that save an admin a trip.
+"""Club management, access requests and the AI agent banner: the review fixes that save an admin a trip.
 
 Covers the one-click access request that replaced the mailto buttons, the club sidebar's collapsible auction
-block, the setup list's connected marks, the import prompt on a club's members page, and the AI box that
-hands its text to the command palette.
+block, the setup list's connected marks, the import prompt on a club's members page, and the banner pointing
+admins with no AI agent at ChatGPT and Claude.
 """
 
+import datetime
 from unittest import mock
 
-from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from auctions import llm
-from auctions.models import Club, ClubMember, UserData
-from auctions.test_palette_assist import FakeProvider
+from auctions.models import Club, ClubMember, UserAPIKey, UserData
 from auctions.tests import StandardTestCase
 
 
@@ -117,44 +115,52 @@ class NewClubMembersPageTests(StandardTestCase):
         self.assertNotContains(response, self.import_href)
 
 
-class AIBoxTests(StandardTestCase):
+class AIAgentBannerTests(StandardTestCase):
+    """The banner that stands where the AI box was, while the box is off."""
+
     def setUp(self):
         super().setUp()
-        provider = FakeProvider()
-        llm.set_provider_override(provider)
-        self.addCleanup(llm.set_provider_override, None)
         self.auction_url = reverse("auction_main", kwargs={"slug": self.online_auction.slug})
 
-    def test_ai_box_only_when_assist_enabled(self):
-        self.client.login(username="my_lot", password="testpassword")
-
+    def test_an_admin_with_no_agent_sees_the_banner_and_no_box(self):
         UserData.objects.filter(user=self.user).update(use_llm_search=True)
+        self.client.login(username="my_lot", password="testpassword")
         response = self.client.get(self.auction_url)
-        self.assertContains(response, "data-palette-box")
-
-        UserData.objects.filter(user=self.user).update(use_llm_search=False)
-        response = self.client.get(self.auction_url)
+        self.assertContains(response, "data-ai-agent-banner")
+        self.assertContains(response, reverse("help_guide", kwargs={"slug": "ai-agents"}))
         self.assertNotContains(response, "data-palette-box")
 
-    def test_ai_box_goes_with_its_kill_switch(self):
+    def test_an_admin_with_an_agent_connected_sees_neither(self):
+        UserAPIKey.objects.create(user=self.user, name="mine", prefix="ak_banner", key_hash="x")
         self.client.login(username="my_lot", password="testpassword")
-        UserData.objects.filter(user=self.user).update(use_llm_search=True)
-        with override_settings(ASSISTANT_BOX_WRITES=False):
-            self.assertNotContains(self.client.get(self.auction_url), "data-palette-box")
+        response = self.client.get(self.auction_url)
+        self.assertNotContains(response, "data-ai-agent-banner")
+        self.assertNotContains(response, "data-palette-box")
 
-    def test_ai_box_on_a_club_page_is_for_the_people_who_run_the_club(self):
+    def test_an_expired_key_is_no_agent(self):
+        UserAPIKey.objects.create(
+            user=self.user,
+            name="old",
+            prefix="ak_old",
+            key_hash="x",
+            expires_at=timezone.now() - datetime.timedelta(days=1),
+        )
+        self.client.login(username="my_lot", password="testpassword")
+        self.assertContains(self.client.get(self.auction_url), "data-ai-agent-banner")
+
+    def test_not_shown_to_a_non_admin(self):
+        self.client.login(username="no_lots", password="testpassword")
+        self.assertNotContains(self.client.get(self.auction_url), "data-ai-agent-banner")
+
+    def test_on_a_club_page_it_is_for_the_people_who_run_the_club(self):
         club = Club.objects.create(name="Harbor Aquarium Society", active=True)
         ClubMember.objects.create(club=club, user=self.user, permission_admin=True)
         ClubMember.objects.create(club=club, user=self.user_with_no_lots)
-        UserData.objects.update(use_llm_search=True)
         url = reverse("club_detail", kwargs={"slug": club.slug})
         self.client.login(username="my_lot", password="testpassword")
-        self.assertContains(self.client.get(url), "data-palette-box")
-        self.client.login(username="no_lots", password="testpassword")
-        self.assertNotContains(self.client.get(url), "data-palette-box")
-
-    def test_ai_box_not_shown_to_a_non_admin(self):
-        UserData.objects.filter(user=self.user_with_no_lots).update(use_llm_search=True)
-        self.client.login(username="no_lots", password="testpassword")
-        response = self.client.get(self.auction_url)
+        response = self.client.get(url)
+        self.assertContains(response, "data-ai-agent-banner")
+        self.assertContains(response, "run your club")
         self.assertNotContains(response, "data-palette-box")
+        self.client.login(username="no_lots", password="testpassword")
+        self.assertNotContains(self.client.get(url), "data-ai-agent-banner")

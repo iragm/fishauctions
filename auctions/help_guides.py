@@ -502,17 +502,9 @@ class HelpContext:
         """Whether the reader has connected an AI agent: a live key, or a sign-in from one."""
         if not self.signed_in:
             return False
-        from auctions.models import UserAPIKey
-
-        if UserAPIKey.objects.filter(user=self.user, is_active=True).exists():
-            return True
         from auctions.mcp import auth as mcp_auth
 
-        if not mcp_auth.oauth_enabled():
-            return False
-        from oauth2_provider.models import get_refresh_token_model
-
-        return get_refresh_token_model().objects.filter(user=self.user, revoked__isnull=True).exists()
+        return mcp_auth.has_ai_agent(self.user)
 
     @cached_property
     def ai_duplicates(self) -> list[dict]:
