@@ -1,6 +1,7 @@
 """Creating a lot, and the invoice lists a seller and buyer see afterwards."""
 
 import datetime
+import re
 
 from django.urls import reverse
 from django.utils import timezone
@@ -470,8 +471,9 @@ class InvoiceViewTests(StandardTestCase):
         url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         assert response.status_code == 200
-        amount_value = response.context["formset"].forms[0]["amount"].value()
-        assert amount_value in ["", None]
+        # The blank row is a <template>; the page has no formset, and its amount input has no 0 in it.
+        assert "adjustment-row-template" in response.content.decode()
+        assert not re.search(r'name="amount"[^>]*value="0"', response.content.decode())
 
 
 class MyInvoicesListTests(StandardTestCase):

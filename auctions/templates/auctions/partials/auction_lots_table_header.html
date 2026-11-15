@@ -1,5 +1,4 @@
 {% if not auction.is_online %}<div class="help-note"><i class="bi bi-lightbulb-fill"></i><div>Add lots from the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a>.</div></div>{% endif %}
-{% if auction.use_seller_dash_lot_numbering and not auction.admin_checklist_lots_added %}<div class="alert alert-warning text-dark py-2">Uncheck <b>Use seller dash lot numbering</b> in the <a href="{% url 'edit_auction' slug=auction.slug %}">rules</a> for simpler lot numbers.</div>{% endif %}
 {% comment %}One wrapping row rather than five loose buttons with their own margins: on a phone they used to wrap into an uneven staircase.{% endcomment %}
 <div class="d-flex flex-wrap gap-2 mt-2 mb-2">
 {% include "auctions/partials/htmx_table_filters.html" %}

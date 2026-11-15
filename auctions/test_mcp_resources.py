@@ -301,7 +301,7 @@ class PromptEndpointTests(StandardTestCase):
         text = rendered["messages"][0]["content"]["text"]
         self.assertIn("post our lots", text)
         # The three tools the recipe is built out of, named in it rather than left to be guessed.
-        for tool in ("club_api", "club_website_snippets", "request_a_skill"):
+        for tool in ("club_api", "club_website_snippets", "request_feature"):
             self.assertIn(tool, text)
 
     def test_getting_one_returns_a_user_message(self):

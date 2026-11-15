@@ -37,10 +37,10 @@
     {% if can_manage %}
       <a class="btn btn-sm btn-secondary" href="{% url 'document_edit' document.pk %}"><i class="bi bi-pencil"></i> Edit</a>
       <a class="btn btn-sm btn-secondary" href="{{ pictures_link }}"><i class="bi bi-image"></i> Pictures</a>
-      <form method="post" action="{% url 'document_reindex' document.pk %}"{% if document.text_edited %} onsubmit="return confirm('Reading it again replaces your corrections to the text.');"{% endif %}>
+      <form method="post" action="{% url 'document_reindex' document.pk %}"{% if document.text_edited %} data-confirm="Reading it again replaces your corrections to the text." data-confirm-variant="danger"{% endif %}>
         {% csrf_token %}<button type="submit" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-repeat"></i> Read it again</button>
       </form>
-      <form method="post" action="{% url 'document_delete' document.pk %}" onsubmit="return confirm('Delete this document for everyone?');">
+      <form method="post" action="{% url 'document_delete' document.pk %}" data-confirm="Delete this document for everyone?" data-confirm-variant="danger">
         {% csrf_token %}<button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-trash"></i> Delete</button>
       </form>
     {% endif %}

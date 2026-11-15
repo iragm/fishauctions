@@ -73,7 +73,7 @@ On a no-club auction the ribbon renders nothing, so we wire it up here.
 </script>
 <script src="{% static 'js/barcode_scanner.js' %}"></script>
 <script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
-{% if show_camera_scanner %}<script src="{% static 'js/camera_scanner.js' %}"></script>{% endif %}
+{% if show_camera_scanner %}{% include "auctions/camera_scanner.html" %}{% endif %}
 <script>
   var QUEUE_URL = "{% url 'auction_lot_queue' slug=auction.slug %}";
   var CSRF_TOKEN = "{{ csrf_token }}";

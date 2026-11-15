@@ -1,14 +1,14 @@
 """Interactive views this server publishes as MCP-app widgets.
 
 A host with the apps surface renders a tool's answer as a page: it reads a ``ui://`` resource,
-mounts it in a sandboxed iframe, and pipes the tool's own ``structuredContent`` into it -- four
-widgets (lot, rules, invoice, card), each attached to the tool that already answers that question.
+mounts it in a sandboxed iframe, and pipes the tool's own ``structuredContent`` into it. Each
+widget is attached to the tool that already answers that question.
 A host without the apps surface ignores ``_meta`` and shows the same JSON as always.
 
 Two hosts read this: Claude, and ChatGPT, whose plugin directory is the reason
 :data:`OPENAI_OUTPUT_TEMPLATE_META_KEY` rides along beside the MCP Apps field it aliases.
 
-One template (``auctions/templates/auctions/mcp/widget.html``) renders all four; ``view`` selects
+One template (``auctions/templates/auctions/mcp/widget.html``) renders each view; ``view`` selects
 which. The ext-apps runtime is vendored and inlined (see ``vendor/README.md``); :func:`_bundle`
 rewrites its trailing ``export{...}`` into a ``globalThis`` assignment because an inline
 ``<script type="module">`` cannot export -- ``test_mcp_widgets`` guards that rewrite.
@@ -57,6 +57,12 @@ def _widget(view: str, title: str, description: str, tools: tuple[str, ...]) -> 
 
 #: The catalogue. ``tools`` lists which registered actions render as this widget.
 WIDGETS: dict[str, dict[str, Any]] = {
+    "ui://auction.fish/navigation": _widget(
+        "navigation",
+        "Open auction.fish",
+        "A destination on auction.fish, with a link the user can open in their browser.",
+        ("go_to_page", "open_lot_search", "add_a_lot_via_webform", "print_labels"),
+    ),
     "ui://auction.fish/lot": _widget(
         "lot",
         "Lot",

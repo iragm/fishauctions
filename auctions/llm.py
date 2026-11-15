@@ -2,7 +2,12 @@
 
 * ``LLMProvider``: the interface
 * ``OpenAIProvider``: chat-completions over ``httpx``
+* ``AnthropicProvider``: Claude through the ``anthropic`` SDK, built for Haiku
 * ``get_provider()``: factory reading ``settings.LLM_PROVIDER`` / ``LLM_MODEL``
+* ``get_embedding_provider()``: the one with embeddings, whichever answers the chat
+
+Callers write messages in the chat-completions shape whatever the provider (``tool_call_message``,
+``tool_result_message``, ``image_url`` parts); a provider with another wire format translates.
 
 ``complete_json(system, messages)`` returns one JSON object, for data answers (species names,
 donation emails, talk lists). ``complete(system, messages, tools)`` lets the model call a tool
@@ -12,8 +17,8 @@ it, and the library sends it pictures to read. Both return an :class:`LLMResult`
 :class:`LLMError` and the library falls back to keyword search.
 
 To add a provider, subclass ``LLMProvider``, implement ``complete_json``, ``complete`` and
-``is_configured`` (and ``embed`` if it has embeddings), add it to ``_PROVIDERS``, and set
-``LLM_PROVIDER``.
+``is_configured`` (and ``embed`` if it has embeddings), name its key in ``api_key_setting`` and its
+``default_model``, add it to ``_PROVIDERS``, and set ``LLM_PROVIDER``.
 """
 
 from __future__ import annotations
@@ -56,6 +61,10 @@ class RateLimited(LLMError):
     def __init__(self, message: str, retry_after: float = 0.0) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class Declined(LLMError):
+    """The model answered that it won't. The provider is up, so this is no reason to stop calling it."""
 
 
 class UnsupportedParameter(Exception):
@@ -105,6 +114,9 @@ class LLMProvider:
     """Base class for chat providers that can be asked to return a JSON object."""
 
     name = "base"
+    #: The setting holding this provider's key, and the model used when ``LLM_MODEL`` is unset.
+    api_key_setting = ""
+    default_model = ""
 
     def __init__(
         self,
@@ -161,6 +173,8 @@ class OpenAIProvider(LLMProvider):
     """OpenAI or any compatible endpoint (``LLM_BASE_URL``) via chat-completions, on ``httpx``."""
 
     name = "openai"
+    api_key_setting = "OPENAI_API_KEY"
+    default_model = "gpt-5-nano"
     default_base_url = "https://api.openai.com/v1"
 
     def _endpoint(self, path: str = "chat/completions") -> str:
@@ -345,6 +359,314 @@ class OpenAIProvider(LLMProvider):
         )
 
 
+#: What ``LLM_REASONING_EFFORT`` may say to Claude. OpenAI's "minimal" has no namesake there.
+ANTHROPIC_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+MIN_ANTHROPIC_MAX_TOKENS = 4096
+
+_JSON_ONLY = "\n\nReply with one JSON object and nothing else: no prose around it, no code fence."
+
+
+class AnthropicProvider(LLMProvider):
+    """Claude through the official ``anthropic`` SDK. Built for Haiku, the model in the palette's price range.
+
+    Three things differ from chat-completions, all handled here so no caller knows which provider it has:
+
+    * **Messages.** Tool calls are ``tool_use`` blocks in an assistant turn and their results are
+      ``tool_result`` blocks in a user turn; a picture is a base64 ``image`` block. :meth:`_messages`
+      translates the chat-completions shape every caller writes.
+    * **Thinking.** Claude thinks before it answers and a tool-use turn has to go back with its thinking
+      blocks exactly as sent, which the shared ``tool_call_message`` knows nothing about. The provider
+      keeps each turn's own blocks by tool-call id (:attr:`_turns`) and replays them. One provider
+      object lives as long as one request's loop, which is as long as they are needed.
+    * **JSON.** There is no ``json_object`` mode without a schema, and no prefill, so ``complete_json``
+      asks in the system prompt and reads the object out of the reply.
+
+    The system prompt carries the cache breakpoint: tools render before it, so one breakpoint covers
+    the tool list and the page catalog, which are the same bytes for everybody in a permission tier.
+    """
+
+    name = "anthropic"
+    api_key_setting = "ANTHROPIC_API_KEY"
+    default_model = "claude-haiku-5-5"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._turns: dict[str, list[Any]] = {}
+        #: Learned from a 400: this model won't be forced to call a tool, or takes no effort level.
+        self._no_forced_tool = False
+        self._no_effort = False
+        #: An ``httpx2`` client for the SDK to use instead of its own. Tests answer through it.
+        self.http_client: Any = None
+
+    def _client(self):
+        try:
+            import anthropic
+        except ImportError as error:  # an image built before the requirement was added
+            msg = "The anthropic package is not installed"
+            raise LLMError(msg) from error
+
+        if not self.is_configured():
+            msg = "No API key configured for the Anthropic provider"
+            raise LLMError(msg)
+        options: dict[str, Any] = {"api_key": self.api_key, "timeout": self.timeout, "max_retries": 0}
+        if self.base_url:
+            options["base_url"] = self.base_url
+        if self.http_client is not None:
+            options["http_client"] = self.http_client
+        # No retries of the SDK's own: the palette has one clock for the whole request and waits out
+        # a rate limit itself, with the wait on screen.
+        return anthropic.Anthropic(**options)
+
+    def _effort(self) -> str:
+        effort = (self.reasoning_effort or "").lower()
+        if effort in ANTHROPIC_EFFORTS:
+            return effort
+        # "minimal" (the default, tuned for gpt-5-nano) and anything unknown: as little as there is.
+        return "low" if effort else ""
+
+    @staticmethod
+    def _part(part: Any) -> dict[str, Any] | None:
+        """One chat-completions content part as a Claude content block."""
+        if isinstance(part, str):
+            return {"type": "text", "text": part} if part else None
+        if not isinstance(part, dict):
+            return None
+        if part.get("type") == "text":
+            return {"type": "text", "text": part["text"]} if part.get("text") else None
+        if part.get("type") == "image_url":
+            url = str((part.get("image_url") or {}).get("url") or "")
+            if url.startswith("data:") and ";base64," in url:
+                media_type, data = url[len("data:") :].split(";base64,", 1)
+                return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+            return {"type": "image", "source": {"type": "url", "url": url}} if url else None
+        return part
+
+    def _blocks(self, content: Any) -> list[dict[str, Any]]:
+        parts = content if isinstance(content, list) else [content]
+        return [block for block in (self._part(part) for part in parts) if block]
+
+    def _messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """``messages`` in Claude's shape. Consecutive tool results share one user turn, as required."""
+        built: list[dict[str, Any]] = []
+
+        def add(role: str, blocks: list[Any]) -> None:
+            if not blocks:
+                return
+            if built and built[-1]["role"] == role and role == "user":
+                built[-1]["content"].extend(blocks)
+            else:
+                built.append({"role": role, "content": list(blocks)})
+
+        for message in messages:
+            role = message.get("role")
+            if role == "tool":
+                add(
+                    "user",
+                    [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": message.get("tool_call_id"),
+                            "content": str(message.get("content") or ""),
+                        }
+                    ],
+                )
+            elif role == "assistant" and message.get("tool_calls"):
+                add("assistant", self._tool_turn(message["tool_calls"]))
+            elif role == "assistant":
+                add("assistant", self._blocks(message.get("content")))
+            else:
+                add("user", self._blocks(message.get("content")))
+        return built
+
+    def _tool_turn(self, calls: list[dict[str, Any]]) -> list[Any]:
+        """An assistant turn of tool calls: the model's own blocks when this provider saw them made.
+
+        The palette answers only the first of several calls, and every ``tool_use`` sent needs a
+        result, so calls the caller left out are left out here too.
+        """
+        wanted = [str(call.get("id")) for call in calls]
+        kept = self._turns.get(wanted[0]) if wanted else None
+        if kept:
+            return [block for block in kept if getattr(block, "type", "") != "tool_use" or block.id in wanted]
+        turn = []
+        for call in calls:
+            function = call.get("function") or {}
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except ValueError:
+                arguments = {}
+            turn.append(
+                {
+                    "type": "tool_use",
+                    "id": str(call.get("id")),
+                    "name": function.get("name"),
+                    "input": arguments if isinstance(arguments, dict) else {},
+                }
+            )
+        return turn
+
+    def _create(self, system: str, messages: list[dict[str, Any]], max_tokens: int, **extra: Any):
+        import anthropic
+
+        request: dict[str, Any] = {
+            "model": self.model,
+            # A ceiling, not a cost, and it has to hold the thinking as well as the answer: the
+            # callers' numbers were sized for a model that was told not to think.
+            "max_tokens": max(max_tokens, MIN_ANTHROPIC_MAX_TOKENS),
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            "messages": self._messages(messages),
+            **extra,
+        }
+        effort = self._effort()
+        if effort and not self._no_effort:
+            request["output_config"] = {"effort": effort}
+        if self._no_forced_tool and "tool_choice" in request:
+            request["tool_choice"] = {**request["tool_choice"], "type": "auto"}
+        client = self._client()
+        try:
+            # At most the two retries below: one per thing a model may refuse.
+            for _attempt in range(3):
+                try:
+                    response = client.messages.create(**request)
+                    break
+                except anthropic.BadRequestError as error:
+                    said = str(error)
+                    forced = (request.get("tool_choice") or {}).get("type") == "any"
+                    if forced and "tool_choice" in said:
+                        # Claude's larger models refuse a forced tool call. Asking again without
+                        # forcing one leaves the palette's own "that reply was not a tool" round to
+                        # deal with any prose. Still one call at a time, and remembered for the
+                        # rest of this request's rounds.
+                        logger.info("%s does not accept a forced tool call; retrying without it", self.model)
+                        self._no_forced_tool = True
+                        request["tool_choice"] = {**request["tool_choice"], "type": "auto"}
+                    elif "output_config" in request and ("effort" in said or "output_config" in said):
+                        logger.info("%s does not accept an effort level; retrying without it", self.model)
+                        self._no_effort = True
+                        del request["output_config"]
+                    else:
+                        raise
+            else:
+                msg = "Language model rejected every form of the request"
+                raise LLMError(msg)
+        except anthropic.RateLimitError as error:
+            try:
+                retry_after = float(error.response.headers.get("retry-after", "") or 0)
+            except ValueError:
+                retry_after = 0.0
+            logger.info("Anthropic is rate limiting us: %s", str(error)[:200])
+            msg = "Language model is rate limiting this site"
+            raise RateLimited(msg, retry_after=retry_after) from error
+        except anthropic.APIStatusError as error:
+            logger.warning("Anthropic returned %s: %s", error.status_code, str(error)[:500])
+            msg = f"Language model returned HTTP {error.status_code}"
+            raise LLMError(msg) from error
+        except anthropic.APIConnectionError as error:
+            msg = f"Could not reach the language model: {error}"
+            raise LLMError(msg) from error
+        except anthropic.AnthropicError as error:
+            # Anything else of the SDK's: a body that is not a Messages reply, say, behind a gateway.
+            msg = f"Language model call failed: {error}"
+            raise LLMError(msg) from error
+        if not isinstance(response, anthropic.types.Message):
+            # A gateway's HTML error page with a 200 comes back from the SDK as a plain string.
+            msg = "Language model returned something that was not a reply"
+            raise LLMError(msg)
+        if response.stop_reason == "refusal":
+            msg = "Language model declined to answer"
+            raise Declined(msg)
+        return response
+
+    def _result(self, response, **fields: Any) -> LLMResult:
+        usage = response.usage
+        read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        written = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        return LLMResult(
+            model=str(response.model or self.model),
+            # ``input_tokens`` is only what was neither read from the cache nor written to it.
+            prompt_tokens=int(usage.input_tokens or 0) + read + written,
+            cached_prompt_tokens=read,
+            completion_tokens=int(usage.output_tokens or 0),
+            **fields,
+        )
+
+    @staticmethod
+    def _text(response) -> str:
+        return "".join(block.text for block in response.content if block.type == "text").strip()
+
+    def _empty(self, response) -> LLMError:
+        if response.stop_reason == "max_tokens":
+            return LLMError("Language model used its whole completion budget before answering")
+        return LLMError("Language model returned an empty reply")
+
+    def complete_json(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> LLMResult:
+        response = self._create(system + _JSON_ONLY, messages, max_tokens)
+        text = self._text(response)
+        if not text:
+            raise self._empty(response)
+        # Told not to, it still fences now and then; the object is what is between the outer braces.
+        start, end = text.find("{"), text.rfind("}")
+        try:
+            data = json.loads(text[start : end + 1]) if start != -1 and end > start else None
+        except ValueError as error:
+            msg = "Language model did not return valid JSON"
+            raise LLMError(msg) from error
+        if not isinstance(data, dict):
+            msg = "Language model returned JSON that was not an object"
+            raise LLMError(msg)
+        return self._result(response, data=data)
+
+    def complete(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        tool_choice: str = "",
+    ) -> LLMResult:
+        extra: dict[str, Any] = {}
+        if tools:
+            extra["tools"] = [as_anthropic_tool(tool) for tool in tools]
+            # "any" is "required": it must call one. Haiku then skips thinking, which is the speed
+            # the palette's single call wants.
+            # One call at a time when one is required: the palette runs only the first.
+            extra["tool_choice"] = (
+                {"type": "any", "disable_parallel_tool_use": True} if tool_choice == "required" else {"type": "auto"}
+            )
+        response = self._create(system, messages, max_tokens, **extra)
+        calls = [
+            ToolCall(
+                id=str(block.id), name=str(block.name), arguments=block.input if isinstance(block.input, dict) else {}
+            )
+            for block in response.content
+            if block.type == "tool_use"
+        ]
+        text = self._text(response)
+        if not calls and not text:
+            raise self._empty(response)
+        if calls and response.stop_reason == "max_tokens":
+            # Cut off inside a tool call: its arguments are whatever had been written so far.
+            raise self._empty(response)
+        if calls:
+            self._turns[calls[0].id] = list(response.content)
+        return self._result(response, text=text, tool_calls=calls)
+
+
+def as_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    """One MCP tool descriptor as a Claude tool definition: the same three fields under other names."""
+    return {
+        "name": tool["name"],
+        "description": tool.get("description", ""),
+        "input_schema": tool.get("inputSchema") or {"type": "object", "properties": {}},
+    }
+
+
 def as_openai_tool(tool: dict[str, Any]) -> dict[str, Any]:
     """One MCP tool descriptor as an OpenAI function definition, so ``auctions/mcp/tools.py`` stays the single catalogue."""
     return {
@@ -380,6 +702,7 @@ def tool_result_message(call: ToolCall, content: str) -> dict[str, Any]:
 
 _PROVIDERS: dict[str, type[LLMProvider]] = {
     OpenAIProvider.name: OpenAIProvider,
+    AnthropicProvider.name: AnthropicProvider,
 }
 
 # Set by tests to use a fake provider.
@@ -401,16 +724,34 @@ def get_provider(model: str = "", timeout: float | None = None) -> LLMProvider:
     if _provider_override is not None:
         return _provider_override
     name = (getattr(settings, "LLM_PROVIDER", "") or OpenAIProvider.name).lower()
-    provider_class = _PROVIDERS.get(name, OpenAIProvider)
+    return _build(_PROVIDERS.get(name, OpenAIProvider), model, timeout)
+
+
+def _build(provider_class: type[LLMProvider], model: str = "", timeout: float | None = None) -> LLMProvider:
     effort = getattr(settings, "LLM_REASONING_EFFORT", None)
     return provider_class(
-        model=model or getattr(settings, "LLM_MODEL", "") or "gpt-5-nano",
-        api_key=getattr(settings, "OPENAI_API_KEY", "") or "",
-        base_url=getattr(settings, "LLM_BASE_URL", "") or "",
+        model=model or getattr(settings, "LLM_MODEL", "") or provider_class.default_model,
+        api_key=getattr(settings, provider_class.api_key_setting, "") or "",
+        # LLM_BASE_URL is an OpenAI-compatible endpoint. Handing it to another provider would send
+        # that provider's key and wire format to the wrong host.
+        base_url=(getattr(settings, "LLM_BASE_URL", "") or "") if provider_class is OpenAIProvider else "",
         timeout=timeout,
         # Unset means the default; empty means don't send it.
         reasoning_effort=DEFAULT_REASONING_EFFORT if effort is None else effort,
     )
+
+
+def get_embedding_provider(timeout: float | None = None) -> LLMProvider:
+    """The provider the library's vectors come from: the configured one, or OpenAI when that one has
+    no embeddings (Claude) and there is an OpenAI key. Changing where vectors come from is a re-index,
+    so switching the chat model must not do it by accident.
+    """
+    provider = get_provider(timeout=timeout)
+    if _provider_override is None and type(provider).embed is LLMProvider.embed:
+        fallback = _build(OpenAIProvider, timeout=timeout)
+        if fallback.is_configured():
+            return fallback
+    return provider
 
 
 def assist_enabled() -> bool:

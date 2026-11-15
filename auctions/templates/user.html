@@ -28,7 +28,7 @@
                   </tr>
                   {% else %}
                   {% comment %}In a cell, not loose between rows: the HTML parser hoists a bare <a> out of a <table> and drew it above the heading.{% endcomment %}
-                  <tr><td colspan="2"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}">Sign in to see this user's info</a></td></tr>
+                  <tr><td colspan="2"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" rel="nofollow">Sign in to see this user's info</a></td></tr>
                   {% endif %}
                   <tr>
                     <td>Lots sold:<br>Feedback:</td>

@@ -79,7 +79,7 @@ GROUPS = (
                 "run-an-online-auction",
                 "Running an online auction",
                 "bi-laptop",
-                "Set up an online auction for your club, from the first lot to the last invoice.",
+                "Free club auction software: set up an online auction, from the first lot to the last invoice.",
                 audience=ADMIN,
                 kind=ONLINE,
             ),
@@ -87,7 +87,7 @@ GROUPS = (
                 "run-an-in-person-auction",
                 "Running an in-person auction",
                 "bi-megaphone",
-                "Run an in-person club auction: check-in, lots, the auctioneer's table and checkout.",
+                "Run an in-person club auction with free auction software: check-in, lots, the auctioneer's table and checkout.",
                 audience=ADMIN,
                 kind=IN_PERSON,
             ),
@@ -153,13 +153,13 @@ GROUPS = (
                 "clubs",
                 "Clubs",
                 "bi-house-heart",
-                "Finding a club, setting yours up, who can do what, and the club's auctions.",
+                "Club auction software: finding a club, setting yours up, who can do what, and the club's auctions.",
             ),
             Guide(
                 "club-membership",
                 "Members and dues",
                 "bi-person-vcard",
-                "The member list, wallet membership cards, dues by card or cash, and automatic renewals.",
+                "Club membership dues software: the member list, wallet cards, dues by card or cash, and automatic renewals.",
             ),
             Guide(
                 "club-email",
@@ -177,7 +177,7 @@ GROUPS = (
                 "breeder-award-programs",
                 "Breeder award programs",
                 "bi-award",
-                "BAP, HAP and CAP points: earning them, the rules that award them, and approving them.",
+                "Breeder award program tracking: BAP, HAP and CAP points, the rules that award them, and approving them.",
             ),
             Guide(
                 "club-donations",
@@ -502,17 +502,9 @@ class HelpContext:
         """Whether the reader has connected an AI agent: a live key, or a sign-in from one."""
         if not self.signed_in:
             return False
-        from auctions.models import UserAPIKey
-
-        if UserAPIKey.objects.filter(user=self.user, is_active=True).exists():
-            return True
         from auctions.mcp import auth as mcp_auth
 
-        if not mcp_auth.oauth_enabled():
-            return False
-        from oauth2_provider.models import get_refresh_token_model
-
-        return get_refresh_token_model().objects.filter(user=self.user, revoked__isnull=True).exists()
+        return mcp_auth.has_ai_agent(self.user)
 
     @cached_property
     def ai_duplicates(self) -> list[dict]:

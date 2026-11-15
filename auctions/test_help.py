@@ -878,3 +878,94 @@ class HelpKnowsYourAiAgentsTests(StandardTestCase):
         panel = html[html.index('id="api-key-panel"') :]
         self.assertIn("Authorization: Bearer ak_your_key_here", panel)
         self.assertNotIn("Authorization: Bearer ak_your_key_here", html[: html.index('id="api-key-panel"')])
+
+
+@override_settings(ALLOW_SEARCH_INDEXING=True)
+class SitemapListsWhatSearchShouldFindTests(StandardTestCase):
+    """The sitemap names listed clubs and recently promoted auctions, and nothing a member could own."""
+
+    def make_auction(self, title, days_ago=0, **kwargs):
+        start = timezone.now() - datetime.timedelta(days=days_ago)
+        return Auction.objects.create(
+            created_by=self.user,
+            title=title,
+            is_online=True,
+            date_start=start,
+            date_end=start + datetime.timedelta(days=7),
+            **kwargs,
+        )
+
+    def sitemap(self):
+        return self.client.get("/sitemap.xml").content.decode()
+
+    def test_the_fixed_pages_are_listed(self):
+        body = self.sitemap()
+        for name in ("clubs", "auctions"):
+            self.assertIn(reverse(name), body)
+
+    def test_a_listed_club_and_a_recent_promoted_auction_are_listed(self):
+        club = Club.objects.create(name="Sitemap Listed Club", outreach_stage=Club.LISTED, active=True)
+        recent = self.make_auction("Sitemap recent auction", days_ago=30, promote_this_auction=True)
+        upcoming = self.make_auction("Sitemap upcoming auction", days_ago=-30, promote_this_auction=True)
+        body = self.sitemap()
+        self.assertIn(reverse("club_detail", kwargs={"slug": club.slug}), body)
+        self.assertIn(recent.get_absolute_url(), body)
+        self.assertIn(upcoming.get_absolute_url(), body)
+
+    def test_what_is_not_public_is_left_out(self):
+        unlisted = Club.objects.create(name="Sitemap Unlisted Club", outreach_stage=Club.PROSPECT, active=True)
+        unpromoted = self.make_auction("Sitemap unpromoted", promote_this_auction=False)
+        deleted = self.make_auction("Sitemap deleted", promote_this_auction=True, is_deleted=True)
+        old = self.make_auction("Sitemap old", days_ago=400, promote_this_auction=True)
+        body = self.sitemap()
+        self.assertNotIn(reverse("club_detail", kwargs={"slug": unlisted.slug}), body)
+        for auction in (unpromoted, deleted, old):
+            with self.subTest(auction=auction.title):
+                self.assertNotIn(auction.get_absolute_url(), body)
+        for private in ("/invoices/", "/users/", "/members/"):
+            self.assertNotIn(private, body)
+
+    def test_nothing_listed_is_disallowed_by_robots(self):
+        robots = self.client.get("/robots.txt").content.decode()
+        disallowed = [line.split(": ", 1)[1] for line in robots.splitlines() if line.startswith("Disallow: ")]
+        for url in self.sitemap().split("<loc>")[1:]:
+            path = "/" + url.split("</loc>")[0].split("/", 3)[3]
+            self.assertFalse(any(path.startswith(prefix) for prefix in disallowed), path)
+
+
+class LinkPreviewAndEventDataTests(StandardTestCase):
+    """The Event JSON-LD and Open Graph tags: only for promoted auctions, escaped, absolute."""
+
+    def test_a_promoted_auction_has_one_escaped_event(self):
+        Auction.objects.filter(pk=self.online_auction.pk).update(title="Fish </script><b>& Co")
+        body = self.client.get(self.online_auction.get_absolute_url()).content.decode()
+        self.assertEqual(body.count('<script type="application/ld+json">'), 1)
+        self.assertNotIn("</script><b>", body)
+        self.assertIn("\\u003C/script\\u003E", body)
+        self.assertIn("OnlineEventAttendanceMode", body)
+        self.assertIn("VirtualLocation", body)
+        self.assertIn('<meta property="og:site_name"', body)
+        self.assertIn('<meta name="twitter:card" content="summary" />', body)
+
+    def test_an_unpromoted_auction_has_no_event(self):
+        Auction.objects.filter(pk=self.online_auction.pk).update(promote_this_auction=False)
+        body = self.client.get(self.online_auction.get_absolute_url()).content.decode()
+        self.assertNotIn("application/ld+json", body)
+
+    def test_an_in_person_auction_is_offline(self):
+        body = self.client.get(self.in_person_auction.get_absolute_url()).content.decode()
+        self.assertIn("OfflineEventAttendanceMode", body)
+
+    def test_the_club_page_lists_its_events(self):
+        from auctions.models import ClubEvent
+
+        club = Club.objects.create(
+            name="Preview Club", outreach_stage=Club.LISTED, active=True, description="<p>We meet &amp; swap.</p>"
+        )
+        ClubEvent.objects.create(
+            club=club, title="Spring swap", location="1 Main St", date_start=timezone.now() + datetime.timedelta(days=5)
+        )
+        body = self.client.get(reverse("club_detail", kwargs={"slug": club.slug})).content.decode()
+        self.assertIn('"@type": "Event"', body)
+        self.assertIn("Spring swap", body)
+        self.assertIn('<meta property="og:description" content="We meet &amp; swap." />', body)

@@ -210,7 +210,7 @@ class PaletteAssistTestCase(StandardTestCase):
         self.provider.replies = list(replies)
         self.provider.calls = []
 
-    def _assist(self, query, context=None, user=None, skip_throttle_reset=False, path=""):
+    def _assist(self, query, context=None, user=None, skip_throttle_reset=False, path="", box=False):
         """POST to the assist endpoint as ``user`` (default self.user); returns an :class:`AssistResponse`."""
         user = user or self.user
         if not skip_throttle_reset:
@@ -219,18 +219,18 @@ class PaletteAssistTestCase(StandardTestCase):
         return AssistResponse(
             self.client.post(
                 reverse("command_palette_assist"),
-                data=json.dumps({"q": query, "context": context or [], "path": path}),
+                data=json.dumps({"q": query, "context": context or [], "path": path, "box": box}),
                 content_type="application/json",
             )
         )
 
-    def _execute(self, action, params, user=None, path=""):
+    def _execute(self, action, params, user=None, path="", box=False):
         user = user or self.user
         cache.delete(f"palette_assist_cooldown_{user.pk}")
         self.client.force_login(user)
         return self.client.post(
             reverse("command_palette_execute"),
-            data=json.dumps({"action": action, "params": params, "path": path}),
+            data=json.dumps({"action": action, "params": params, "path": path, "box": box}),
             content_type="application/json",
         )
 
@@ -2191,7 +2191,7 @@ class DriftTests(PaletteAssistTestCase):
         "watch_lot",
         "answer_question",
         "undo_last",
-        "request_a_skill",
+        "request_feature",
         # Which auction and club the rest of it means.
         "set_my_auction",
         "set_my_club",
@@ -2245,6 +2245,8 @@ class DriftTests(PaletteAssistTestCase):
         "cancel_volunteer_request": "request_volunteers",
         "undo_check_in": "check_in",
         "update_donation_vendor": "add_donation_vendor",
+        # The invoice page's adjustment rows delete through InvoiceAdjustmentSave's ``delete`` flag.
+        "remove_invoice_adjustment": "add_invoice_adjustment",
         # The Contact dialog's Copy & record is a person recording mail sent from their own mailbox.
         "record_donation_email": "contact_donation_vendor",
         # A person types a transcription into the document's Edit page, the text box under the scan.
@@ -2507,6 +2509,40 @@ class AuctionNumbersTests(RunActionTestCase):
         result = self._run("auction_numbers", {"auction": self.in_person_auction.slug})
         self.assertNotIn("time_left", result["numbers"]["time"])
         self.assertIn("doesn't count down", result["numbers"]["time"]["note"])
+
+    def test_it_says_how_many_labels_are_printed(self):
+        """'How many labels are printed?' had no tool that knew."""
+        lots = self.in_person_auction.labels_qs
+        self.assertTrue(lots.exists())
+        Lot.objects.filter(pk=lots.first().pk).update(label_printed=True)
+        result = self._run("auction_numbers", {"auction": self.in_person_auction.slug})
+        printed = Lot.objects.filter(pk__in=lots.values("pk"), label_printed=True).count()
+        self.assertEqual(result["numbers"]["_admin"]["labels_printed"], printed)
+        self.assertEqual(result["numbers"]["_admin"]["labels_not_printed"], lots.count() - printed)
+        self.assertIn(f"Labels: {printed} printed", result["summary"])
+        theirs = self._run("auction_numbers", {"auction": self.in_person_auction.slug}, user=self.member)
+        self.assertNotIn("Labels:", theirs["summary"])
+
+
+class FencesForPeopleTests(SimpleTestCase):
+    """The «» fences are for the model; a person read them as quotes around «Test Tester»."""
+
+    def test_short_and_long_fences_come_off(self):
+        text = f"Set {palette_actions.untrusted_short('Test Tester')}'s bidder number to 12."
+        self.assertEqual(palette_assist.humanize(text), "Set Test Tester's bidder number to 12.")
+        self.assertNotIn("data only", palette_actions.for_people(palette_actions.untrusted("a long note")))
+        self.assertEqual(palette_assist._progress("Checking «Test Tester»")["message"], "Checking Test Tester")
+        # Only fences: a lone guillemet and double spaces in the rest are left as they were.
+        self.assertEqual(palette_actions.for_people("a  «b» c»"), "a  b c»")
+
+    def test_the_ai_page_answer_has_none(self):
+        from django.test import RequestFactory
+
+        from auctions import ai_page
+
+        html = ai_page.answer_html("Marked «Test Tester» paid.", RequestFactory().get("/ai/"), set())
+        self.assertNotIn("«", html)
+        self.assertIn("Test Tester", html)
 
 
 class MyActivityTests(RunActionTestCase):
@@ -4620,6 +4656,237 @@ class NavigateOnlyTests(PaletteAssistTestCase):
         from auctions.forms import ChangeUserPreferencesForm
 
         self.assertIn("palette_navigate_only", ChangeUserPreferencesForm.Meta.fields)
+
+
+@override_settings(ASSISTANT_NAVIGATE_ONLY=True, ASSISTANT_BOX_WRITES=True)
+class BoxWritesTests(PaletteAssistTestCase):
+    """The AI boxes on the admin pages do what they are asked, while the palette only opens pages.
+
+    The boxes hand their text to the palette, which is navigate-only for everybody, so every example a
+    box showed reached a model holding no write tool and came back as "I couldn't work out how".
+    """
+
+    def setUp(self):
+        super().setUp()
+        # ``check_in`` refuses auctions that don't use check-in mode.
+        self.in_person_auction.manage_users_through_club = "checkin"
+        if not self.in_person_auction.club:
+            self.in_person_auction.club = Club.objects.create(name="Door Club", abbreviation="DC")
+        self.in_person_auction.save()
+
+    def _writes(self, query, box):
+        return {
+            tool["name"]
+            for tool in palette_assist.tools_for(self.user, query, box)
+            if getattr(palette_actions.get_action(tool["name"]), "danger", None) == palette_actions.DANGER_CONFIRM
+        }
+
+    def test_the_palette_is_offered_no_write(self):
+        self.assertEqual(self._writes("check in bidder 555", box=False), set())
+        self.assertEqual(palette_assist.tools_tier(self.user, "check in bidder 555"), palette_assist.TOOLS_LOCKED)
+
+    def test_a_box_is_offered_the_writes(self):
+        self.assertIn("check_in", self._writes("check in bidder 555", box=True))
+        self.assertEqual(
+            palette_assist.tools_tier(self.user, "check in bidder 555", box=True), palette_assist.TOOLS_ALL
+        )
+
+    def test_a_question_in_a_box_still_gets_only_the_reads(self):
+        self.assertEqual(self._writes("what time is check in?", box=True), set())
+
+    def test_a_command_from_a_box_is_done(self):
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        data = self._assist("check in bidder 555", box=True).json()
+        self.assertEqual(data["kind"], "done", data)
+        self.in_person_buyer.refresh_from_db()
+        self.assertIsNotNone(self.in_person_buyer.checked_in)
+        self.assertIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_ALL)
+
+    def test_a_write_that_asks_first_comes_back_from_a_box_as_a_countdown(self):
+        self._script({"action": "no_sale", "params": {"lot": "1"}, "summary": "No sale on lot 1"})
+        data = self._assist("no sale on lot 1", box=True).json()
+        self.assertEqual(data["kind"], "countdown", data)
+
+    def test_the_same_command_in_the_palette_is_sent_no_write(self):
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("check in bidder 555")
+        self.assertNotIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+
+    def test_a_countdown_from_a_box_runs(self):
+        response = self._execute("check_in", {"person": "555"}, box=True)
+        self.assertEqual(response.json()["kind"], "done", response.json())
+
+    def test_a_countdown_from_the_palette_still_cannot(self):
+        self.assertEqual(self._execute("check_in", {"person": "555"}).json()["kind"], "error")
+
+    LOCKED = "I can only take you to the right page"
+
+    def _auction_page(self, auction=None):
+        return reverse("auction_main", kwargs={"slug": (auction or self.in_person_auction).slug})
+
+    def test_the_palette_does_it_on_a_page_of_an_auction_they_run(self):
+        """Ira, 2026-11-14: commands in the palette too, on the pages you run."""
+        self._script({"action": "check_in", "params": {"person": "555"}, "summary": "Check in bidder 555"})
+        data = self._assist("check in bidder 555", path=self._auction_page()).json()
+        self.assertEqual(data["kind"], "done", data)
+        self.assertIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+        self.assertEqual(self._execute("check_in", {"person": "555"}, path=self._auction_page()).json()["kind"], "done")
+
+    def test_the_palette_does_it_on_a_club_page_they_run(self):
+        club = self.in_person_auction.club
+        ClubMember.objects.update_or_create(club=club, user=self.user, defaults={"permission_admin": True})
+        path = reverse("club_admin", kwargs={"slug": club.slug})
+        page = palette_routes.page_context_from_path(self.user, path)
+        self.assertTrue(palette_assist.may_write_here(self.user, False, page))
+
+    def test_the_palette_opens_pages_on_an_auction_they_do_not_run(self):
+        theirs = Auction.objects.create(
+            created_by=self.userB, title="Somebody else's auction", date_start=timezone.now(), is_online=True
+        )
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("check in bidder 555", path=self._auction_page(theirs))
+        self.assertNotIn("check_in", {tool["name"] for tool in self.provider.calls[-1]["tools"]})
+        refused = self._execute("check_in", {"person": "555"}, path=self._auction_page(theirs)).json()
+        self.assertIn(self.LOCKED, refused["message"])
+
+    def test_a_member_on_the_auction_page_still_only_gets_pages(self):
+        self.assertFalse(palette_assist.may_write_here(self.member, False, {"auction": self.in_person_auction.slug}))
+        response = self._execute("check_in", {"person": "555"}, user=self.member, path=self._auction_page())
+        # The gate's own refusal, not check_in's: that one would refuse a member anyway.
+        self.assertIn(self.LOCKED, response.json()["message"])
+
+    def test_a_superuser_only_writes_on_what_they_actually_run(self):
+        theirs = Auction.objects.create(
+            created_by=self.userB, title="Somebody else's auction", date_start=timezone.now(), is_online=True
+        )
+        self.admin_user.is_superuser = True
+        self.admin_user.save()
+        self.assertTrue(theirs.permission_check(self.admin_user))
+        self.assertFalse(palette_assist.may_write_here(self.admin_user, False, {"auction": theirs.slug}))
+        other_club = Club.objects.create(name="Somebody Else's Club", abbreviation="SEC")
+        self.assertFalse(palette_assist.may_write_here(self.admin_user, False, {"club": other_club.slug}))
+        mine = Auction.objects.create(
+            created_by=self.admin_user, title="The owner's auction", date_start=timezone.now(), is_online=True
+        )
+        self.assertTrue(palette_assist.may_write_here(self.admin_user, False, {"auction": mine.slug}))
+
+    def test_a_lot_slug_is_not_read_as_an_auction(self):
+        """A lot slugged like an auction they run named that auction instead of the lot's own."""
+        theirs = Auction.objects.create(
+            created_by=self.userB, title="Somebody else's auction", date_start=timezone.now(), is_online=True
+        )
+        lot = Lot.objects.create(lot_name="Guppies", auction=theirs, quantity=1)
+        path = reverse("lot_by_pk_and_slug", kwargs={"pk": lot.pk, "slug": self.in_person_auction.slug})
+        page = palette_routes.page_context_from_path(self.user, path)
+        self.assertEqual(page.get("auction"), theirs.slug)
+        self.assertFalse(palette_assist.may_write_here(self.user, False, page))
+
+    def test_a_lot_edit_page_names_the_lots_auction(self):
+        lot = Lot.objects.create(lot_name="Guppies", auction=self.in_person_auction, quantity=1)
+        page = palette_routes.page_context_from_path(self.user, reverse("edit_lot", kwargs={"pk": lot.pk}))
+        self.assertEqual(page.get("auction"), self.in_person_auction.slug)
+        self.assertTrue(palette_assist.may_write_here(self.user, False, page))
+
+    def test_a_club_page_is_that_club_whatever_it_is_called_by(self):
+        club = self.in_person_auction.club
+        ClubMember.objects.update_or_create(club=club, user=self.user, defaults={"permission_admin": True})
+        for key in (club.slug, club.abbreviation):
+            page = palette_routes.page_context_from_path(self.user, reverse("club_admin", kwargs={"slug": key}))
+            self.assertEqual(page.get("club"), club.slug, key)
+            self.assertNotIn("auction", page, key)
+
+    def test_a_club_page_is_never_an_auction_with_the_same_slug(self):
+        club = Club.objects.create(name="Shared Word Club", abbreviation="SWC")
+        Auction.objects.create(
+            created_by=self.user, title="Shared word", slug=club.slug, date_start=timezone.now(), is_online=True
+        )
+        page = palette_routes.page_context_from_path(self.user, reverse("club_admin", kwargs={"slug": club.slug}))
+        self.assertEqual(page.get("club"), club.slug)
+        self.assertFalse(palette_assist.may_write_here(self.user, False, page))
+
+    def test_a_page_name_on_a_page_they_run_is_still_just_the_page(self):
+        """No model call for "set lot winners" because the palette can write here."""
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        data = self._assist("set lot winners", path=self._auction_page()).json()
+        if data["kind"] == "navigate":
+            self.assertEqual(self.provider.calls, [])
+
+    def test_a_page_about_nothing_they_run_is_not_enough(self):
+        """The box may run anywhere for somebody who runs something; the palette needs the page."""
+        self.assertFalse(palette_assist.may_write_here(self.user, False, {}))
+        self.assertFalse(palette_assist.may_write_here(self.user, False, {"page": "watched"}))
+
+    def test_the_navigate_only_preference_keeps_the_palette_quiet_but_not_the_box(self):
+        self.user.userdata.palette_navigate_only = True
+        self.user.userdata.save()
+        self.user.userdata.refresh_from_db()
+        page = {"auction": self.in_person_auction.slug}
+        self.assertFalse(palette_assist.may_write_here(self.user, False, page))
+        self.assertTrue(palette_assist.may_write_here(self.user, True, page))
+
+    @override_settings(ASSISTANT_BOX_WRITES=False)
+    def test_the_switch_turns_the_palette_off_on_their_pages_too(self):
+        self.assertFalse(palette_assist.may_write_here(self.user, False, {"auction": self.in_person_auction.slug}))
+        refused = self._execute("check_in", {"person": "555"}, path=self._auction_page()).json()
+        self.assertIn(self.LOCKED, refused["message"])
+
+    def test_a_box_still_checks_who_is_asking(self):
+        """The flag says which input was typed into. It is not a permission."""
+        response = self._execute("check_in", {"person": "555"}, user=self.member, box=True)
+        self.assertEqual(response.json()["kind"], "error")
+
+    def test_anything_but_true_is_not_a_box(self):
+        for claimed in ("true", 1, [True], {"box": True}):
+            self.assertEqual(self._execute("check_in", {"person": "555"}, box=claimed).json()["kind"], "error")
+
+    @override_settings(ASSISTANT_BOX_WRITES=False)
+    def test_the_boxes_have_their_own_kill_switch(self):
+        self.assertFalse(palette_assist.box_enabled(self.user))
+        self.assertEqual(self._writes("check in bidder 555", box=True), set())
+        self.assertEqual(self._execute("check_in", {"person": "555"}, box=True).json()["kind"], "error")
+
+    def test_a_member_who_runs_nothing_cannot_claim_to_be_a_box(self):
+        """The flag is the page's claim. Somebody the boxes are never drawn for is not believed."""
+        self.assertFalse(self.in_person_auction.permission_check(self.member))
+        self.assertFalse(palette_assist.from_a_box(self.member, True, {}))
+        self.assertFalse(palette_assist.from_a_box(self.member, True, {"auction": self.in_person_auction.slug}))
+        self._script({"action": "go_to_page", "params": {"page": "watched"}, "summary": ""})
+        self._assist("watch lot 1", user=self.member, box=True)
+        offered = {tool["name"] for tool in self.provider.calls[-1]["tools"]}
+        self.assertNotIn("watch_lot", offered)
+        self.assertEqual(LLMUsage.objects.latest("pk").tools_offered, palette_assist.TOOLS_LOCKED)
+
+    def test_a_box_is_believed_on_what_they_run_and_not_on_somebody_elses(self):
+        path = reverse("auction_main", kwargs={"slug": self.in_person_auction.slug})
+        page = palette_routes.page_context_from_path(self.user, path)
+        self.assertTrue(palette_assist.from_a_box(self.user, True, page))
+        self.assertTrue(palette_assist.from_a_box(self.user, True, {}))
+        theirs = Auction.objects.create(
+            created_by=self.userB, title="Somebody else's auction", date_start=timezone.now(), is_online=True
+        )
+        self.assertFalse(palette_assist.from_a_box(self.user, True, {"auction": theirs.slug}))
+        other_club = Club.objects.create(name="Somebody Else's Club", abbreviation="SEC")
+        self.assertFalse(palette_assist.from_a_box(self.user, True, {"club": other_club.slug}))
+        ClubMember.objects.create(club=other_club, user=self.user, permission_view=True)
+        self.assertTrue(palette_assist.from_a_box(self.user, True, {"club": other_club.slug}))
+
+    def test_a_refusal_does_not_rest_the_assistant_for_everybody(self):
+        class Declines(FakeProvider):
+            def complete(self, system, messages, tools=None, max_tokens=800, tool_choice=""):
+                msg = "Language model declined to answer"
+                raise llm.Declined(msg)
+
+        cache.delete(palette_assist._BREAKER_KEY)
+        llm.set_provider_override(Declines())
+        for _ in range(palette_assist.BREAKER_FAILURES + 1):
+            self._assist("check in bidder 555", box=True)
+        self.assertFalse(palette_assist.provider_is_resting())
+
+    def test_no_box_without_the_assistant(self):
+        UserData.objects.filter(user=self.user).update(use_llm_search=False)
+        self.user.userdata.refresh_from_db()
+        self.assertFalse(palette_assist.box_enabled(self.user))
 
 
 class SiteLoadTests(PaletteAssistTestCase):

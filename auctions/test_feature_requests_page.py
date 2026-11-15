@@ -1,4 +1,4 @@
-"""/requests/: the web form for bug reports and feature requests, writing the same queue as request_a_skill."""
+"""/requests/: the web form for bug reports and feature requests, writing the same queue as request_feature."""
 
 from django.contrib.auth.models import User
 from django.test import TestCase

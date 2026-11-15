@@ -1,0 +1,2 @@
+{% load static %}{% comment %} camera_scanner.js, telling it where its reader is: static names are hashed, so it can't work that out from its own. {% endcomment %}
+<script src="{% static 'js/camera_scanner.js' %}" data-zxing-src="{% static 'js/vendor/zxing.min.js' %}"></script>

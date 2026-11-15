@@ -15,6 +15,7 @@ from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django.db.models import (
     Q,
 )
@@ -549,14 +550,21 @@ class InvoicePaid(APIView):
         if new_status in ("PAID", "UNPAID") and not invoice.renewal_needed:
             _ensure_invoice_renewal_state(invoice)
         # Save the status first; nothing after it may block the change.
-        invoice.status = new_status
         run_at = None
         if new_status in ("UNPAID", "PAID"):
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
-            invoice.invoice_notification_due = run_at
-        elif new_status == "DRAFT":
-            invoice.invoice_notification_due = None
-        invoice.save()
+        # Lock the row, so an adjustment saved meanwhile waits for this change. The total is recalculated
+        # first, so entering PAID freezes it with that adjustment included. Only the columns that change
+        # are written: a full-row save would write back the total read before the lock.
+        with transaction.atomic():
+            invoice = get_object_or_404(Invoice.objects.select_for_update(), pk=invoice.pk)
+            invoice.recalculate()
+            invoice.status = new_status
+            if run_at:
+                invoice.invoice_notification_due = run_at
+            elif new_status == "DRAFT":
+                invoice.invoice_notification_due = None
+            invoice.save(update_fields=["status", "invoice_notification_due", "auction"])
         try:
             if run_at:
                 schedule_invoice_notification(invoice.pk, run_at)
@@ -691,14 +699,16 @@ class UpdateLotPushNotificationsView(APIPostView):
 def _send_test_push(user, *, title, body, url, tag, icon=None, auction_pk=None):
     """A test push by the channel the real one will use: the app, else this account's browsers. False if neither."""
     if user_has_app_push(user):
-        send_push_to_user.delay(
-            user.pk,
-            title=title,
-            body=body,
-            url=url,
-            category=CATEGORY_LOT_SELLING,
-            collapse_key=tag,
-            auction_pk=auction_pk,
+        transaction.on_commit(
+            lambda: send_push_to_user.delay(
+                user.pk,
+                title=title,
+                body=body,
+                url=url,
+                category=CATEGORY_LOT_SELLING,
+                collapse_key=tag,
+                auction_pk=auction_pk,
+            )
         )
         return True
     if not PushInformation.objects.filter(user=user).exists():

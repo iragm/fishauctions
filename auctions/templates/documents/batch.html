@@ -28,9 +28,9 @@
         <form method="post">{% csrf_token %}<input type="hidden" name="action" value="finish"><button type="submit" class="btn btn-sm btn-primary">{% if batch.status == "failed" %}Carry on{% else %}Put the articles together now{% endif %}</button></form>
       {% endif %}
       {% if batch.status == "done" %}
-        <form method="post" onsubmit="return confirm('This replaces every article this batch made, and any corrections made to them.');">{% csrf_token %}<input type="hidden" name="action" value="again"><button type="submit" class="btn btn-sm btn-secondary">Put them together again</button></form>
+        <form method="post" data-confirm="This replaces every article this batch made, and any corrections made to them." data-confirm-variant="danger">{% csrf_token %}<input type="hidden" name="action" value="again"><button type="submit" class="btn btn-sm btn-secondary">Put them together again</button></form>
       {% endif %}
-      <form method="post" onsubmit="return confirm('Delete these pages and every article made from them?');">{% csrf_token %}<input type="hidden" name="action" value="delete"><button type="submit" class="btn btn-sm btn-danger">Delete</button></form>
+      <form method="post" data-confirm="Delete these pages and every article made from them?" data-confirm-variant="danger">{% csrf_token %}<input type="hidden" name="action" value="delete"><button type="submit" class="btn btn-sm btn-danger">Delete</button></form>
     </div>
   {% endif %}
 

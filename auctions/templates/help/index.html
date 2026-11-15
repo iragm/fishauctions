@@ -15,7 +15,7 @@
     <div class="small">{{ result.excerpt }}</div>
   </div>
   {% empty %}
-  <p>Nothing in the guides mentions that yet. Try fewer words, or <a href="{% url 'support' %}">ask a person</a>.</p>
+  <p>Nothing in the guides mentions that yet. Try fewer words, {% if ask_ai_url %}<a href="{{ ask_ai_url }}">ask the AI</a>, {% endif %}or <a href="{% url 'support' %}">ask a person</a>.</p>
   {% endfor %}
 {% else %}
   <h1 class="h4 mb-3">Help</h1>

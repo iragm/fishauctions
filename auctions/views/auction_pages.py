@@ -49,6 +49,7 @@ from auctions.models import (
     LotHistory,
     PickupLocation,
 )
+from auctions.sample_auction import offer_sample_data
 from auctions.services import (
     AUCTION_FIELDS_TO_CLONE,
     CONTACT_GATE_NEEDS_PHONE,
@@ -64,6 +65,7 @@ from auctions.services import (
     missing_contact_info,
     paid_club_for,
     readable_list,
+    switch_to_club_managed,
 )
 
 from .base import (
@@ -660,7 +662,8 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
         if self.request.user.is_superuser:
             auction_creation_allowed = True
         if not auction_creation_allowed:
-            return redirect(reverse("home"))
+            messages.error(request, "Your account can't create auctions yet; send us a message to get access.")
+            return redirect(reverse("support"))
         missing = missing_contact_info(request.user, require_phone=True)
         if missing:
             # Session flag so the page asks for the phone; see services.CONTACT_GATE_NEEDS_PHONE.
@@ -766,6 +769,7 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
     DISMISSALS = {
         "dismiss_promo_banner": ("dismissed_promo_banner", "auction", "admin"),
         "dismiss_customize_event_banner": ("dismissed_customize_event_banner", "auction", "admin"),
+        "dismiss_club_managed_banner": ("dismissed_club_managed_banner", "auction", "admin"),
         "dismiss_paypal_banner": ("dismissed_paypal_banner", "auction", "creator"),
         "dismiss_square_banner": ("dismissed_square_banner", "auction", "creator"),
         "never_show_paypal_connect": ("never_show_paypal_connect", "userdata", "creator"),
@@ -790,6 +794,14 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
             row.save(update_fields=[field])
             if action in self.NEVER_SHOW_MESSAGES:
                 messages.info(request, self.NEVER_SHOW_MESSAGES[action])
+        elif action == "switch_to_club_managed":
+            self.require_auction_admin()
+            if switch_to_club_managed(self.auction, request.user):
+                messages.success(request, f"Users in this auction are now managed through {self.auction.club}.")
+            elif not self.auction.club_id or not check_club_permission(
+                request.user, self.auction.club, "permission_manage_auctions"
+            ):
+                raise PermissionDenied()
         elif action == "trust_creator" and request.user.is_superuser and self.auction.created_by:
             userdata = self.auction.created_by.userdata
             userdata.is_trusted = True
@@ -923,6 +935,15 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 or check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
             )
         )
+        context["offer_sample_data"] = offer_sample_data(self.auction, self.request.user)
+        # In place of the setup checklist: see Auction.offers_club_managed_switch.
+        context["offer_club_managed_switch"] = bool(
+            self.auction.club_id
+            and self.auction.copy_users_when_copying_this_auction
+            and self.is_auction_admin
+            and check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
+            and self.auction.offers_club_managed_switch
+        )
         # Superusers: offer "make club admin"; see creator_club_admin_offer for which club.
         if self.request.user.is_superuser:
             offer = creator_club_admin_offer(self.auction)
@@ -931,14 +952,20 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["creator_club"], context["creator_club_source"] = offer
         if self.auction.closed:
             context["ended"] = True
-            messages.info(
-                self.request,
-                format_html(
+            following = self.auction.next_club_auction
+            if following:
+                ended_message = format_html(
+                    "This auction has ended: <a href='{}'>view lots</a>, or join the next one, <a href='{}'>{}</a>.",
+                    self.auction.view_lot_link,
+                    following.get_absolute_url(),
+                    following.title,
+                )
+            else:
+                ended_message = format_html(
                     "This auction has ended.  You can't bid on anything, but you can still <a href='{}'>view lots</a>.",
                     self.auction.view_lot_link,
-                ),
-                extra_tags="safe",
-            )
+                )
+            messages.info(self.request, ended_message, extra_tags="safe")
         else:
             context["ended"] = False
 
@@ -950,6 +977,9 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         if self.request.user.is_authenticated:
             tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
             existing_club_member = _find_club_member(self.auction.club, self.request.user, self.request.user.email)
+            if tos and tos.needs_pickup_location:
+                # The club added them; joining is picking a location, so the page asks as it would anyone.
+                tos = None
             if tos:
                 existingTos = tos.pickup_location
                 i_agree = True

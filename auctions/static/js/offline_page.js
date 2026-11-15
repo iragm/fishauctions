@@ -239,7 +239,10 @@
       return el('td', { class: 'text-end text-nowrap' }, [
         el('button', { class: 'btn btn-sm btn-secondary me-1', type: 'button', text: 'Edit', onclick: function () { edit(op); } }),
         el('button', { class: 'btn btn-sm btn-secondary', type: 'button', text: 'Dismiss', onclick: function () {
-          if (window.confirm('Dismiss this entry? It was never saved on the site.')) { undo(op.op_id, messageId); }
+          var dismiss = function () { undo(op.op_id, messageId); };
+          if (window.confirmAction) {
+            window.confirmAction({message: 'Dismiss this entry? It was never saved on the site.', okLabel: 'Dismiss', variant: 'danger'}, dismiss);
+          } else if (window.confirm('Dismiss this entry? It was never saved on the site.')) { dismiss(); }
         } }),
       ]);
     }

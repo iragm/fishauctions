@@ -1224,7 +1224,7 @@ class RequestASkillTests(SkillTestCase):
 
     def test_a_request_is_written_down(self):
         result = self._run(
-            "request_a_skill",
+            "request_feature",
             {"skill": "refund an invoice", "reason": "They wanted to refund bidder 12 and nothing here does that."},
         )
         self.assertTrue(result.get("ok"), result)
@@ -1234,20 +1234,20 @@ class RequestASkillTests(SkillTestCase):
         self.assertIn("bidder 12", row.reason)
 
     def test_a_name_with_no_reason_is_a_question(self):
-        result = self._run("request_a_skill", {"skill": "refund an invoice"})
+        result = self._run("request_feature", {"skill": "refund an invoice"})
         self.assertIn("more_info_needed", result)
         self.assertFalse(AssistantSkillRequest.objects.exists())
 
     def test_the_same_caller_asking_twice_updates_their_own_row(self):
-        self._run("request_a_skill", {"skill": "refund an invoice", "reason": "First try."})
-        self._run("request_a_skill", {"skill": "refund an invoice", "reason": "Second, better description."})
+        self._run("request_feature", {"skill": "refund an invoice", "reason": "First try."})
+        self._run("request_feature", {"skill": "refund an invoice", "reason": "Second, better description."})
         rows = AssistantSkillRequest.objects.filter(user=self.user, skill="refund an invoice")
         self.assertEqual(rows.count(), 1)
         self.assertIn("better", rows.first().reason)
 
     def test_two_people_asking_is_two_rows_and_it_says_so(self):
-        self._run("request_a_skill", {"skill": "refund an invoice", "reason": "Mine."})
-        result = self._run("request_a_skill", {"skill": "refund an invoice", "reason": "Theirs."}, user=self.admin_user)
+        self._run("request_feature", {"skill": "refund an invoice", "reason": "Mine."})
+        result = self._run("request_feature", {"skill": "refund an invoice", "reason": "Theirs."}, user=self.admin_user)
         self.assertEqual(AssistantSkillRequest.objects.filter(skill="refund an invoice").count(), 2)
         self.assertEqual(result["others_asking"], 1)
         self.assertIn("1 other person has asked", result["summary"])
@@ -2402,7 +2402,6 @@ class PageOnlyWriteRegistryTests(SimpleTestCase):
         "AuctionTOSDelete": "remove_person",
         "ClubMemberDeleteView": "set_member_active",
         "ClubMemberReactivateView": "set_member_active",
-        "InvoiceView": "remove_invoice_adjustment",
         "LotQueueView": "queue_lot",
         "ClubBapGenusOverrideSaveView": "set_point_rule",
         "ClubBapCategoryOverrideSaveView": "set_point_rule",

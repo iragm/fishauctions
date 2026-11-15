@@ -228,7 +228,8 @@ class Command(BaseCommand):
             if not campaign.auction.is_online and campaign.auction.started:
                 send_email = False
             user_has_already_joined = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
-            if user_has_already_joined:
+            # A row the club added still has a location to pick, which is what the reminder asks for.
+            if user_has_already_joined and not user_has_already_joined.needs_pickup_location:
                 send_email = False
             if not send_email:
                 campaign.result = "ERR"

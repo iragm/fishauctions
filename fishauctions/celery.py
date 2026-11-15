@@ -127,6 +127,26 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.send_auction_surveys",
         "schedule": 3600.0,  # Run every hour
     },
+    # "Ready for your next auction?" and the yearly copy prompt, to auction creators
+    "next_auction_emails": {
+        "task": "auctions.tasks.next_auction_emails",
+        "schedule": 3600.0,  # Run every hour
+    },
+    # Feature emails: once a day, so the daily cap is one batch (auctions/feature_emails.py)
+    "feature_emails": {
+        "task": "auctions.tasks.feature_emails",
+        "schedule": crontab(hour=10, minute=10),  # CELERY_TIMEZONE is Eastern
+    },
+    # Once per club: monthly auctions after a big one, then the club tools (auctions/club_emails.py)
+    "club_emails": {
+        "task": "auctions.tasks.club_emails",
+        "schedule": crontab(hour=10, minute=40),
+    },
+    # "More than one account?", once per account, to likely duplicates
+    "suggest_account_merges": {
+        "task": "auctions.tasks.suggest_account_merges",
+        "schedule": crontab(day_of_week=2, hour=15, minute=10),
+    },
     # Set user locations - every 2 hours
     "set_user_location": {
         "task": "auctions.tasks.set_user_location",

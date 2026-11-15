@@ -886,25 +886,34 @@ class SquareWebhookView(SquareAPIMixin, View):
                 if payment_record and refund_id:
                     refund_amount = Decimal(refund.get("amount_money", {}).get("amount", 0)) / 100
 
-                    # Square re-fires refunds: adjust by the delta so duplicates no-op.
-                    existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
-                    previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
+                    # Re-read under a row lock: Square re-fires refunds, and two deliveries at once would
+                    # each subtract the same delta from amount_available_to_refund.
+                    with transaction.atomic():
+                        payment_record = (
+                            InvoicePayment.objects.select_for_update().filter(external_id=payment_id).first()
+                        )
+                        if payment_record is None:
+                            return HttpResponse(status=200)
 
-                    refund_payment, created = InvoicePayment.objects.update_or_create(
-                        external_id=refund_id,
-                        defaults={
-                            "invoice": payment_record.invoice,
-                            "amount": -abs(refund_amount),  # Ensure negative for refund
-                            "currency": payment_record.currency,
-                            "payment_method": "Square Refund",
-                            "memo": refund.get("reason", "")[:500],
-                        },
-                    )
+                        # Square re-fires refunds: adjust by the delta so duplicates no-op.
+                        existing_refund = InvoicePayment.objects.filter(external_id=refund_id).first()
+                        previous_refund_abs = abs(existing_refund.amount) if existing_refund else Decimal("0.00")
 
-                    refund_delta = refund_amount - previous_refund_abs
-                    if refund_delta:
-                        payment_record.amount_available_to_refund -= refund_delta
-                        payment_record.save()
+                        refund_payment, created = InvoicePayment.objects.update_or_create(
+                            external_id=refund_id,
+                            defaults={
+                                "invoice": payment_record.invoice,
+                                "amount": -abs(refund_amount),  # Ensure negative for refund
+                                "currency": payment_record.currency,
+                                "payment_method": "Square Refund",
+                                "memo": refund.get("reason", "")[:500],
+                            },
+                        )
+
+                        refund_delta = refund_amount - previous_refund_abs
+                        if refund_delta:
+                            payment_record.amount_available_to_refund -= refund_delta
+                            payment_record.save(update_fields=["amount_available_to_refund"])
 
                     payment_record.invoice.recalculate()
                     invoice = payment_record.invoice

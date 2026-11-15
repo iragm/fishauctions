@@ -29,6 +29,10 @@ rearranged for a phone.  The form filters as you type, so there is no apply butt
     </div>
   </span>
 
+  {% if request.user.is_authenticated %}
+  <input type="checkbox" class="btn-check htmx-table-filter" id="speaker-remote" data-filter-key="remote" autocomplete="off"><label class="btn btn-sm btn-primary" for="speaker-remote"><i class="bi bi-camera-video"></i> Remote</label>
+  {% endif %}
+
   {% include "auctions/partials/htmx_table_filters.html" %}
 
   {% comment %}Where distances are measured from. There is no picker for it: the origin follows the club whose page you came from, or your own location. The list is newest first, so the "sort by the Location column" hint is the only place that says distance is still an option.{% endcomment %}

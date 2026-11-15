@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags bap_filters membership_tags static %}
 {% block title %}{{ club.name }}{% endblock %}
+{% load seo_tags %}
+{% block extra_head %}{% club_json_ld club upcoming_events %}{% endblock %}
+{% block open_graph %}
+{% absolute_uri request.path as og_url %}
+{% if club.icon %}{% absolute_uri club.icon_display_url as og_image %}{% endif %}
+{% include "open_graph.html" with og_title=club.name og_description=club.description|plain_excerpt:200 og_url=og_url og_image=og_image %}
+{% endblock %}
 
 {% block content %}
 {% include "club_ribbon.html" %}

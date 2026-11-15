@@ -21,6 +21,21 @@ location_form.html) -- the marker is the control, the numbers are noise.{% endco
 <div class="row justify-content-center">
   <div class="col-lg-9">
     <h3>{{ form_title }}</h3>
+    {% if possible_matches %}
+    {% comment %}Somebody adding themselves whose name is already listed (usually from the NEC import): claim that page instead of adding a second one.{% endcomment %}
+    <div class="alert alert-info">
+      You may already be in here:
+      {% for match in possible_matches %}
+      <span class="d-inline-flex align-items-center gap-1 ms-1">
+        <a href="{% url 'speaker_detail' match.slug %}" target="_blank" rel="noopener">{{ match.display_name }}{% if match.location %} ({{ match.location }}){% endif %}</a>
+        <form method="post" action="{% url 'speaker_claim' match.slug %}" class="d-inline">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-secondary py-0"><i class="bi bi-person-check"></i> This is me</button>
+        </form>
+      </span>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% crispy form form.helper %}
   </div>
 </div>

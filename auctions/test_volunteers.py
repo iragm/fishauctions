@@ -136,6 +136,7 @@ class VolunteerCreateTests(VolunteerBase):
         with (
             patch_views("send_push_to_user.delay") as push,
             patch("post_office.mail.send") as email,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             resp = self.client.post(
                 self._volunteers_url(),

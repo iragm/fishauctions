@@ -1,30 +1,20 @@
 {% extends base_template_name %}
 {% load crispy_forms_tags %}
+{% load qr_code %}
 {% load currency_filters %}
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
 {% block extra_js %}
 {% if is_admin %}
 <script type='text/javascript'>
-$('#add-form').click(function() {
-  cloneMore('.adjustment-form:last', 'form');
-});
-function cloneMore(selector, type) {
-    var newElement = $(selector).clone(true);
-    var total = $('#id_' + type + '-TOTAL_FORMS').val();
-    newElement.find(':input').each(function() {
-        var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
-        var id = 'id_' + name;
-        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values
-        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows
-    });
-    newElement.find('label').each(function() {
-        var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
-        $(this).attr('for', newFor);
-    });
-    total++;
-    $('#id_' + type + '-TOTAL_FORMS').val(total);
-    $(selector).after(newElement);
+function addAdjustmentRow(focus) {
+  var newRow = document.getElementById('adjustment-row-template').content.firstElementChild.cloneNode(true);
+  var key = 'n' + Date.now();
+  newRow.querySelector('input[name="row"]').value = key;
+  newRow.querySelector('input[name="adjustment"]').id = 'adj-pk-' + key;
+  document.getElementById('adjustment-rows').appendChild(newRow);
+  htmx.process(newRow);
+  if (focus) { newRow.querySelector('input[name="amount"]').focus(); }
 }
 document.querySelector('#memo').addEventListener('change', function(event) {
             $.ajax({
@@ -39,10 +29,6 @@ document.querySelector('#memo').addEventListener('change', function(event) {
                   isDirty = false;
                 }});
         });
-$('.form-control:not(#memo)').on('blur', function() {
-  $('#invoice_control_buttons').hide()
-  $('#form_dirty_warning').show()
-});
 $(document).ready(function(){
   {% if invoice.status != "DRAFT" %}
     $('#adjustments_area').hide();
@@ -53,6 +39,8 @@ $(document).ready(function(){
   $(document).on('click', '#{{invoice.pk}}_DRAFT', function() {
     $('#adjustments_area').show();
   });
+  $('#add-adjustment').on('click', function() { addAdjustmentRow(true); });
+  if (document.getElementById('adjustment-row-template')) { addAdjustmentRow(false); }
 });
 
 // Toggling the membership renewal checkbox can change the club member discount and
@@ -61,6 +49,12 @@ $(document).ready(function(){
 document.body.addEventListener('renewalToggled', function() {
   isDirty = false;
   window.location.reload();
+});
+
+// Adjustment rows swap nothing, so a refused save would otherwise look like it worked.
+document.body.addEventListener('htmx:responseError', function(e) {
+  var row = e.detail.elt && e.detail.elt.closest && e.detail.elt.closest('.adjustment-row');
+  if (row) { $.toast({title: e.detail.xhr.responseText || 'That did not save.', type: 'danger'}); }
 });
 
 </script>
@@ -107,6 +101,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% block content %}
 {% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
 
+{% if pickup_qr_code %}<div id="invoice-pickup-qr" class="float-md-end mx-auto mx-md-0 ms-md-3 mb-2" style="max-width: 160px;">{% qr_from_text pickup_qr_code size="S" border="2" %}</div>{% endif %}
 <h3>{{ invoice.auctiontos_user.name }}</h3>
 <small><span id="invoice-summary-short">{{ invoice.invoice_summary_short }}</span> {% if invoice.status == "PAID" %}<span class="badge rounded-pill bg-success">Paid in full</span>{% endif %}</small>
 {% if invoice.auction.multi_location %}
@@ -114,13 +109,20 @@ document.addEventListener("DOMContentLoaded", function() {
 <h5>{{location}}</h5>
 {% endif %}
 {% endif %}
+{% comment %}One tap turns a person a club added into an account: signing in with the address the club used links this invoice and everything else of theirs (signals.on_sign_in), silently.{% endcomment %}
+{% if using_no_login_link and show_links and not request.user.is_authenticated and not request.is_mobile_app and not invoice.auctiontos_user.user_id %}{% if GOOGLE_LOGIN_ENABLED or APPLE_LOGIN_ENABLED %}
+<div id="invoice-claim" class="d-flex flex-wrap gap-2 mt-2">
+  {% if GOOGLE_LOGIN_ENABLED %}<a id="invoice-claim-google" class="btn btn-sm btn-primary" rel="nofollow" href="/google/login/?process=login&next={{ request.path|urlencode }}"><i class="bi bi-google"></i> Continue with Google</a>{% endif %}
+  {% if APPLE_LOGIN_ENABLED %}<a id="invoice-claim-apple" class="btn btn-sm btn-primary" rel="nofollow" href="/apple/login/?process=login&next={{ request.path|urlencode }}"><i class="bi bi-apple"></i> Continue with Apple</a>{% endif %}
+</div>
+{% endif %}{% endif %}
 {% if survey_answers %}
 <form method="post" action="{% url 'auction_survey' slug=invoice.auction.slug %}" id="invoice-survey" class="d-flex flex-wrap align-items-center gap-2 mt-2">
   {% csrf_token %}
   {% if using_no_login_link %}<input type="hidden" name="uuid" value="{{ invoice.no_login_link }}">{% endif %}
   <span class="fw-semibold">How was {{ invoice.auction }}?</span>
   {% for value, label in survey_answers %}
-    <button type="submit" name="answer" value="{{ value }}" class="btn btn-sm {% if value == 'great' %}btn-outline-success{% else %}btn-outline-danger{% endif %}"><i class="bi {% if value == 'great' %}bi-emoji-smile{% else %}bi-emoji-frown{% endif %}"></i> {{ label }}</button>
+    <button type="submit" name="answer" value="{{ value }}" class="btn btn-sm {% if value == 'great' %}btn-success text-dark{% else %}btn-danger{% endif %}"><i class="bi {% if value == 'great' %}bi-emoji-smile{% else %}bi-emoji-frown{% endif %}"></i> {{ label }}</button>
   {% endfor %}
 </form>
 {% endif %}
@@ -192,7 +194,6 @@ document.addEventListener("DOMContentLoaded", function() {
           </script>
         {% endif %}
         <span id="invoice_control_buttons">{% include 'invoice_buttons.html' %}</span>
-        <span style="display: none;" class='text-danger' id="form_dirty_warning">Save adjustments to mark ready or paid</span>
       {% endif %}
       {% if invoice.auctiontos_user.user == request.user or using_no_login_link %}
 
@@ -301,12 +302,15 @@ document.addEventListener("DOMContentLoaded", function() {
     {%endif%}
     <span id="adjustments_area">
     <br><br><h5>Adjustments</h5>
-    {{ formset.management_form }}
-    <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
-      {% crispy formset helper %}
-      <button class='btn btn-info' id="add-form" type="button">Add row</button>
-      <input type="submit" class='btn btn-success text-dark submit-button ms-2' name='save' id='save' value="Save adjustments">
-    </form>
+    <div id="adjustment-rows">
+      {% for adjustment in adjustments %}
+        {% include "auctions/partials/invoice_adjustment_row.html" with adjustment=adjustment row=adjustment.pk %}
+      {% endfor %}
+    </div>
+    <template id="adjustment-row-template">
+      {% include "auctions/partials/invoice_adjustment_row.html" with adjustment=None row="" %}
+    </template>
+    <button class="btn btn-info" id="add-adjustment" type="button">Add row</button>
     </span>
   {% endif %}
 </div>
@@ -324,6 +328,7 @@ document.addEventListener("DOMContentLoaded", function() {
     {% endif %}
   </div>
 {% endif %}
+<div id="invoice-totals" hx-get="{{ request.path }}" hx-trigger="adjustmentSaved from:body" hx-select="#invoice-totals" hx-select-oob="#invoice-summary-short" hx-swap="outerHTML">
 <div class="table-responsive">
 <table class="table">
   <tr>
@@ -395,6 +400,7 @@ document.addEventListener("DOMContentLoaded", function() {
   {% endfor %}
   {% include "auctions/partials/invoice_final_total_row.html" %}
 </table>
+</div>
 </div>
 {%if invoice.lots_sold %}
   <h3>Lots sold</h3>

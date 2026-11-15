@@ -1,0 +1,9 @@
+{% comment %}Link-preview tags. Pass og_title, og_description, og_image (optional), og_url; image and url must already be absolute. Never on a private page.{% endcomment %}
+{% if not request.is_private_page %}
+<meta property="og:type" content="website" />
+<meta property="og:title" content="{{ og_title }}" />
+{% if og_description %}<meta property="og:description" content="{{ og_description }}" />{% endif %}
+<meta property="og:url" content="{{ og_url }}" />
+{% if og_image %}<meta property="og:image" content="{{ og_image }}" />{% endif %}
+<meta name="twitter:card" content="{% if og_image %}summary_large_image{% else %}summary{% endif %}" />
+{% endif %}

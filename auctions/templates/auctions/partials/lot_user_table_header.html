@@ -9,9 +9,9 @@
 {% endif %}
 {% comment %}Filled in by the ajax call in lot_user.html when the last auction used won't take any more lots.  It stays an inline span rather than an alert because it is empty on almost every load, and an empty alert is a coloured box saying nothing.{% endcomment %}
 <small><span class="text-warning" id="last-auction-special"></span></small>
-{% comment %}One wrapping row: adding a lot is what the page is for and keeps its own button, and the three things that only make sense for the auction you last used are that auction's menu rather than three more buttons repeating its name.{% endcomment %}
+{% comment %}One wrapping row: adding a lot is what the page is for and keeps its own button, aimed at the auction you joined last that still takes lots, and the three things that only make sense for the auction you last used are that auction's menu rather than three more buttons repeating its name.{% endcomment %}
 <div class="d-flex flex-wrap gap-2 align-items-center mt-2 mb-2">
-  <a href="{% url 'new_lot' %}" class="btn btn-sm btn-success text-dark"><i class="bi bi-calendar-plus"></i> Create new lot</a>
+  <a href="{% if not add_lot_auction %}{% url 'new_lot' %}{% elif not add_lot_auction.is_online and add_lot_auction.allow_bulk_adding_lots %}{% url 'bulk_add_lots_auto_for_myself' slug=add_lot_auction.slug %}{% else %}{{ add_lot_auction.add_lot_link }}{% endif %}" class="btn btn-sm btn-success text-dark"><i class="bi bi-calendar-plus"></i> Add lot</a>
   {% comment %}The same 15-day history the lot page offers, totalled over every lot you are selling.  A modal rather than a page: it is a glance at how the week went, not somewhere to navigate to and back from.{% endcomment %}
   <button type="button" class="btn btn-sm btn-primary" hx-get="{% url 'my_lots_page_view_history' %}" hx-target="#modals-here" hx-trigger="click"><i class="bi bi-graph-up htmx-busy-hide"></i><span class="spinner-border spinner-border-sm htmx-busy-show" aria-hidden="true"></span> 15 day view history</button>
   {% if userdata.last_auction_used %}
@@ -20,8 +20,8 @@
     <ul class="dropdown-menu">
       {% if not userdata.last_auction_used.is_online and userdata.last_auction_used.allow_bulk_adding_lots %}<li><a class="dropdown-item" href="{% url 'bulk_add_lots_auto_for_myself' slug=userdata.last_auction_used.slug %}"><i class="bi bi-calendar-plus"></i> Bulk add lots</a></li>{% endif %}
       <li><a class="dropdown-item" href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}"><i class="bi bi-bag"></i> My invoice</a></li>
-      <li><a class="dropdown-item" href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}"><i class="bi bi-tags"></i> Print my labels</a></li>
     </ul>
   </div>
+  <a class="btn btn-sm btn-primary" href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}"><i class="bi bi-tags"></i> Print labels</a>
   {% endif %}
 </div>

@@ -28,11 +28,11 @@
 <ol>
   <li><strong>{% if help.signed_in %}Sign in.{% else %}<a href="{% url 'account_login' %}">Sign in.</a>{% endif %}</strong> {% ui "Sign in with Google" %} or <strong>Apple</strong> is one click.</li>
   <li><strong>Open {% page "auction_main" "the auction's page" %}</strong>, or find it under {% page "auctions" "Auctions" %} at the top of the page.</li>
-  <li><strong>Join:</strong> scroll to the bottom, tick {% ui "Yes, I will be at this auction" %}, and click {% ui "Join auction" %}.</li>
-  <li><strong>Click {% page "bulk_add_lots_auto_for_myself" "Add Lots" %}</strong> near the top of the page.</li>
+  <li><strong>Join:</strong> scroll to the bottom and click {% ui "Join auction" %}.</li>
+  <li><strong>Click {% page "bulk_add_lots_auto_for_myself" "Add lots" %}</strong> near the top of the page.</li>
   <li><strong>One lot per row</strong>: what it is ("Corydoras sterbai"). Each row saves itself and gets a lot number.</li>
   <li><strong>Photos help.</strong> {% ui "Add image" %} or {% ui "Full editor" %} on a row. Many clubs put each lot's photo on a screen as it sells{% if help.photos.premium %}, and at the biggest in-person auctions here, a lot with a photo sells for about {{ help.photos.premium }}% more{% endif %}.</li>
-  <li><strong>Print labels:</strong> {% ui "Print Labels" %} on the auction page, once everything's in. You'll get a reminder email the day before.</li>
+  <li><strong>Print labels:</strong> {% ui "Print labels" %} on the auction page, once everything's in. You'll get a reminder email the day before.</li>
   <li><strong>Tape a label to each bag</strong> with clear packing tape, right over the label so it stays dry.</li>
 </ol>
 {% if help.auction and not help.auction.is_online %}{% helptip %}{% if help.auction.use_quantity_field %}{{ help.auction.title }} has a Quantity box on each row for how many.{% else %}{{ help.auction.title }} has no Quantity box, so put how many in the name: "3 Corydoras sterbai".{% endif %}{% endhelptip %}{% endif %}

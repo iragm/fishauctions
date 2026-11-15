@@ -22,7 +22,6 @@
 
 
 <br><small>Use this form to quickly add users to your auction</small>
-  {{ formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_users' slug=auction.slug %}">
     {% crispy formset helper %}
     <div class="d-flex flex-wrap gap-2 mt-2">

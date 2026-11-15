@@ -739,8 +739,13 @@ PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USE
 ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_FOR_USERS") or None, default=True)
 # On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
 # The kill switch for a write that misfires during somebody's auction, read on every request.
-# Default on since 2026-10: answering and doing things moved to /ai/, and the palette only opens pages.
+# Default on since 2026-10: answering moved to /ai/, and the palette only opens pages.
 ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=True)
+# The AI boxes on the auction and club admin pages, and the palette on any auction or club page the
+# person runs, do things ("lot 12 sold to 34 for $5"), each behind a countdown, whatever the switch
+# above says. Off: the palette opens pages everywhere (the boxes' inputs are off the pages for now). Their own kill switch. Off by
+# default since 2026-11-14: on staging it misread too many commands, and the boxes are off the pages.
+ASSISTANT_BOX_WRITES = parse_bool_env(os.environ.get("ASSISTANT_BOX_WRITES") or None, default=False)
 # /ai/ (auctions/ai_page.py): the model it runs on, and what one person may spend on it in a day, in
 # tokens with cached prompt tokens counted at a tenth. About twenty ordinary questions; connecting your
 # own agent at /ai/connect/ has no limit here.
@@ -770,6 +775,10 @@ ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=Fals
 ALLOW_SEARCH_INDEXING = parse_bool_env(os.environ.get("ALLOW_SEARCH_INDEXING") or None, default=True)
 # The phone app's store pages. The help's app guide says the app isn't out yet until one is set.
 APP_STORE_URL = os.environ.get("APP_STORE_URL", "")
+# No feature email (auctions/feature_emails.py) goes before this date; blank turns them off.
+FEATURE_EMAILS_START = os.environ.get("FEATURE_EMAILS_START", "2027-01-04")
+# auctions/club_emails.py: blank sends as soon as a club qualifies.
+CLUB_EMAILS_START = os.environ.get("CLUB_EMAILS_START", "")
 PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "")
 # Google Play's closed test, until PLAY_STORE_URL is set. Testers join this Google Group (the closed
 # track's tester list) and then opt in at PLAY_TESTING_URL. Blank hides /android-testers/ and its banner.
@@ -791,9 +800,11 @@ CARES_PARTNER_KEY = os.environ.get("CARES_PARTNER_KEY", "")
 CARES_API_URL = os.environ.get("CARES_API_URL", "https://aquaristspecies.net/api/partner/cares-species/")
 
 # Command palette assist (auctions/llm.py). Enabled only with an API key.
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
-LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano")
+# LLM_PROVIDER is "openai" or "anthropic" (Claude); each reads its own key and has its own default model.
+LLM_PROVIDER = (os.environ.get("LLM_PROVIDER") or "openai").lower()
+LLM_MODEL = os.environ.get("LLM_MODEL") or ("claude-haiku-5-5" if LLM_PROVIDER == "anthropic" else "gpt-5-nano")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Optional: point at any OpenAI-compatible endpoint (proxy, local model) instead of OpenAI.
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 # minimal / low / medium / high, or blank to omit. See llm.DEFAULT_REASONING_EFFORT.
@@ -807,7 +818,9 @@ LLM_EMBEDDING_MODEL = os.environ.get("LLM_EMBEDDING_MODEL", "" if LLM_BASE_URL e
 # articles, files them, and writes the answers on /library/. Cheaper than the palette's job is hard; this
 # is the one place a better model is worth paying for. Defaults to LLM_MODEL behind an LLM_BASE_URL,
 # which won't know OpenAI's model names.
-DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (LLM_MODEL if LLM_BASE_URL else "gpt-5-mini")
+DOCUMENT_MODEL = os.environ.get("DOCUMENT_MODEL", "") or (
+    LLM_MODEL if LLM_BASE_URL or LLM_PROVIDER != "openai" else "gpt-5-mini"
+)
 # Whether DOCUMENT_MODEL transcribes pictures and scanned pages. Off: they wait for a member's own AI
 # agent to transcribe them over /mcp/ (auctions/documents/transcribe.py), so the site's key pays for none.
 DOCUMENT_SERVER_OCR = parse_bool_env(os.environ.get("DOCUMENT_SERVER_OCR") or None, default=False)

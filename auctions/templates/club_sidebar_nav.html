@@ -6,13 +6,20 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link {% if active_tab == 'home' %}active{% endif %}" href="{% url 'club_detail' club.slug %}"><i class="bi bi-house-fill me-1"></i> Club Home</a>
   {% if show_library %}<a class="nav-link" href="{% url 'library' %}?club={{ club.slug }}"><i class="bi bi-book me-1"></i> Library</a>{% endif %}
 
-  {% if not members_through_auction and can_access_admin %}
+  {% if not members_through_auction and can_view_members %}
   <a class="nav-link {% if active_tab == 'members' %}active{% endif %}" href="{% url 'club_admin' club.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
   {% endif %}
 
+  {% if show_announcements %}
+  <a class="nav-link {% if active_tab == 'announcements' %}active{% endif %}" href="{% url 'club_announcements' club.slug %}"><i class="bi bi-megaphone-fill me-1"></i> Announcements</a>
+  {% endif %}
+
+  <a class="nav-link {% if active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map me-1"></i> Map</a>
+
   {% if sidebar_auction %}
   <hr class="my-2">
-  <h6 class="px-3 text-muted text-truncate mb-1" title="{{ sidebar_auction.title }}">{{ sidebar_auction.title }}</h6>
+  <button type="button" class="nav-link text-truncate text-start text-muted w-100 border-0 bg-transparent" data-bs-toggle="collapse" data-bs-target="#clubSidebarAuction" aria-controls="clubSidebarAuction" aria-expanded="{% if auction_block_open %}true{% else %}false{% endif %}" title="{{ sidebar_auction.title }}">{{ sidebar_auction.title }} <i class="bi bi-chevron-down float-end"></i></button>
+  <div id="clubSidebarAuction" class="collapse{% if auction_block_open %} show{% endif %}">
   {% if members_through_auction %}
   <a class="nav-link {% if active_tab == 'users' %}active{% endif %}" href="{% url 'auction_tos_list' slug=sidebar_auction.slug %}"><i class="bi bi-people-fill me-1"></i> Members</a>
   {% elif not sidebar_auction.is_club_managed %}
@@ -44,10 +51,14 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link" href="{% url 'auction_printing' slug=sidebar_auction.slug %}"><i class="bi bi-printer me-1"></i> Print labels</a>
   <a class="nav-link" href="{% url 'auction_paddles' slug=sidebar_auction.slug %}"><i class="bi bi-123 me-1"></i> Print paddles</a>
   {% endif %}
+  </div>
+  {% endif %}
+
+  {% if can_manage_bap and club.enable_breeder_award_program or can_manage_money or show_donation_tracking %}
+  <hr class="my-2">
   {% endif %}
 
   {% if can_manage_bap and club.enable_breeder_award_program %}
-  <hr class="my-2">
   <a class="nav-link {% if active_tab == 'bap_lots' %}active{% endif %}" href="{{ bap_url }}"><i class="bi bi-award me-1"></i> BAP</a>
   {% endif %}
 
@@ -55,26 +66,21 @@ below stretches past the sidebar instead of being clipped by text-truncate.{% en
   <a class="nav-link {% if active_tab == 'treasurer_report' %}active{% endif %}" href="{% url 'club_treasurer_report' club.slug %}"><i class="bi bi-cash-coin me-1"></i> Treasurer's Report</a>
   {% endif %}
 
-  {% if show_announcements %}
-  <a class="nav-link {% if active_tab == 'announcements' %}active{% endif %}" href="{% url 'club_announcements' club.slug %}"><i class="bi bi-megaphone-fill me-1"></i> Announcements</a>
+  {% if show_donation_tracking %}
+  <a class="nav-link {% if active_tab == 'donations' %}active{% endif %}" href="{% url 'club_donation_vendors' club.slug %}"><i class="bi bi-gift me-1"></i> Donation Tracking</a>
   {% endif %}
 
-  <a class="nav-link {% if active_tab == 'map' %}active{% endif %}" href="{% url 'club_member_map' club.slug %}"><i class="bi bi-map me-1"></i> Map</a>
+  {% if can_access_admin or can_edit_settings %}
+  <hr class="my-2">
+  {% endif %}
 
   {% if can_access_admin %}
   <a class="nav-link {% if active_tab == 'barcode_labels' %}active{% endif %}" href="{% url 'club_barcode_labels' club.slug %}"><i class="bi bi-upc-scan me-1"></i> Print Barcodes</a>
   <a class="nav-link {% if active_tab == 'stats' %}active{% endif %}" href="{% url 'club_stats' club.slug %}"><i class="bi bi-graph-up me-1"></i> Club stats</a>
   {% endif %}
 
-  {% comment %}Find speakers, Setup and Club history are the tail of the nav on purpose: they're
-  occasional errands rather than things you come here to do, so they sit below the day-to-day links.{% endcomment %}
-  {% if show_speakers %}
-  <a class="nav-link {% if active_tab == 'speakers' %}active{% endif %}" href="{{ speakers_url }}"><i class="bi bi-person-fill me-1"></i> Find speakers</a>
-  {% endif %}
-
-  {% if show_donation_tracking %}
-  <a class="nav-link {% if active_tab == 'donations' %}active{% endif %}" href="{% url 'club_donation_vendors' club.slug %}"><i class="bi bi-gift me-1"></i> Donation Tracking</a>
-  {% endif %}
+  {% comment %}Setup and Club history are the tail of the nav on purpose: they're occasional errands
+  rather than things you come here to do, so they sit below the day-to-day links.{% endcomment %}
 
   {% if can_edit_settings %}
   <a class="nav-link {% if setup_active %}active{% endif %}" href="{% url 'club_setup' club.slug %}"><i class="bi bi-gear me-1"></i> Setup</a>

@@ -26,17 +26,21 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
+    BlockedEmailDomain,
     Category,
     ChunkedJobState,
     Club,
     ClubAnnouncement,
     ClubAPIKey,
     ClubDiscordRole,
+    ClubEmail,
     ClubEvent,
     ClubHistory,
     ClubMember,
     CommandPalettePage,
     CommandPaletteSearch,
+    FeatureEmail,
+    FeatureEmailPause,
     GeneralInterest,
     Invoice,
     InvoicePayment,
@@ -320,6 +324,29 @@ class UserAdmin(BaseUserAdmin):
     # Doesn't seem to work; use admin/auth/user/?o=-4.
     last_activity.admin_order_field = "userdata__last_activity"
     last_activity.short_description = "Last activity"
+
+
+@admin.register(FeatureEmailPause)
+class FeatureEmailPauseAdmin(admin.ModelAdmin):
+    """Delete the row to let feature emails resume (auctions/feature_emails.py)."""
+
+    list_display = ("created_on", "reason")
+
+
+@admin.register(FeatureEmail)
+class FeatureEmailAdmin(admin.ModelAdmin):
+    list_display = ("sent_on", "kind", "user", "about")
+    list_filter = ("kind",)
+    raw_id_fields = ("user",)
+
+
+@admin.register(ClubEmail)
+class ClubEmailAdmin(admin.ModelAdmin):
+    """Once per club (auctions/club_emails.py). To send one again, delete this row and its recipients' ``FeatureEmail`` rows of the same kind."""
+
+    list_display = ("sent_on", "kind", "club")
+    list_filter = ("kind",)
+    raw_id_fields = ("club",)
 
 
 @admin.register(MobileDevice)
@@ -1104,9 +1131,11 @@ class BoughtLotInline(FlatInline, admin.TabularInline):
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice
     ordering = ("-pk",)  # # ordered for autocomplete pagination
+    # What __str__ reads, so the changelist doesn't query per row.
+    list_select_related = ("auctiontos_user__auction", "auction", "buyer", "club")
     list_display = (
         "__str__",
-        "rounded_net",
+        "calculated_total",
         "status",
     )
     list_filter = (
@@ -1526,18 +1555,18 @@ class SpeakerAdmin(admin.ModelAdmin):
         "location",
         "topics_need_review",
         "topic_review_note",
-        "nec_only",
+        "visibility",
         "imported_from_nec",
         "created_by",
         "is_deleted",
         "createdon",
     )
     list_select_related = ("created_by",)
-    list_filter = ("topics_need_review", "nec_only", "imported_from_nec", "is_deleted", "topics")
+    list_filter = ("topics_need_review", "visibility", "imported_from_nec", "is_deleted", "topics")
     search_fields = ("name", "bio", "programs", "location", "email")
     raw_id_fields = ("created_by", "club")
     filter_horizontal = ("topics",)
-    readonly_fields = ("slug", "source_url", "wordpress_post_id", "createdon", "lastmodified")
+    readonly_fields = ("slug", "source_url", "wordpress_post_id", "merged_into", "createdon", "lastmodified")
     inlines = [SpeakerTagInline, SpeakerCommentInline]
     actions = [export_to_csv, "mark_topics_reviewed"]
 
@@ -1573,6 +1602,14 @@ class AssistantSkillRequestAdmin(admin.ModelAdmin):
     search_fields = ("skill", "reason", "params", "user__username")
     readonly_fields = ("createdon", "updatedon")
     list_select_related = ("user",)
+
+
+@admin.register(BlockedEmailDomain)
+class BlockedEmailDomainAdmin(admin.ModelAdmin):
+    """Domains the contact form silently ignores from signed-out visitors."""
+
+    list_display = ("domain", "createdon")
+    search_fields = ("domain",)
 
 
 # Imported to register their pages: moderation queue and advertising.

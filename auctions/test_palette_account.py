@@ -479,6 +479,9 @@ class ClubSettingsTests(AccountTestCase):
         self.assertTrue(self.club.show_member_barcode)
 
     def test_an_email_setting_is_reachable(self):
+        # An email toggle needs a mailing address on the club, as the email page's form requires.
+        self.club.mailing_address = "PO Box 123\nCity, State 12345"
+        self.club.save(update_fields=["mailing_address"])
         result = self._run(
             "update_club_setting",
             {"club": self.club.name, "setting": "send_welcome_email_to_new_members", "value": True},
@@ -486,6 +489,16 @@ class ClubSettingsTests(AccountTestCase):
         self.assertTrue(result.get("ok"), result)
         self.club.refresh_from_db()
         self.assertTrue(self.club.send_welcome_email_to_new_members)
+
+    def test_an_email_toggle_without_a_mailing_address_says_so(self):
+        result = self._run(
+            "update_club_setting",
+            {"club": self.club.name, "setting": "send_welcome_email_to_new_members", "value": True},
+        )
+        self.assertIn("error", result)
+        self.assertIn("Add a mailing address", result["error"])
+        self.club.refresh_from_db()
+        self.assertFalse(self.club.send_welcome_email_to_new_members)
 
     def test_the_answer_says_which_page_the_setting_was_on(self):
         result = self._run(

@@ -1,0 +1,395 @@
+[
+  {
+    "id": "source_debug",
+    "prompt": "Inspect auction.fish’s MCP implementation.",
+    "expected_tools": [
+      "read_source"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 3,
+    "criteria": "Use auction.fish read_source before another repository connector; identify implementation files with source evidence.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "source_search",
+    "prompt": "Find the code that decides breeder award eligibility.",
+    "expected_tools": [
+      "read_source"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 3,
+    "criteria": "Find the implementation of breeder award eligibility and explain it from returned source.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "feature_explicit",
+    "prompt": "Submit a feature request for spreadsheet imports of donation vendors.",
+    "expected_tools": [
+      "request_feature"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "Save one feature request, report its receipt, and do not claim the requested feature now exists.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "feature_status",
+    "prompt": "What happened to my feature request?",
+    "expected_tools": [
+      "my_requests"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "Read the caller’s requests and report their actual status without submitting another request.",
+    "setup": "Disposable staging account; reset the fixture before each run. Submit one request beforehand and record its expected status."
+  },
+  {
+    "id": "clubs_page",
+    "prompt": "Take me to the clubs page.",
+    "expected_tools": [
+      "go_to_page"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "Return the clubs URL; verify the link or widget opens that destination. Do not claim navigation before it happens.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "invoice_page",
+    "prompt": "Open my invoice for the test auction.",
+    "expected_tools": [
+      "go_to_page"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 2,
+    "criteria": "Resolve the caller’s test-auction invoice and verify the link opens it.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "lot_form",
+    "prompt": "Open the add-lot form with blue shrimp filled in.",
+    "expected_tools": [
+      "add_a_lot_via_webform"
+    ],
+    "forbidden_tools": [
+      "add_lot",
+      "add_lots"
+    ],
+    "max_calls": 1,
+    "criteria": "Open the prefilled form with blue shrimp; create no lot before the user saves.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "lot_create",
+    "prompt": "Create one lot named Blue shrimp in the test auction.",
+    "expected_tools": [
+      "add_lot"
+    ],
+    "forbidden_tools": [
+      "add_a_lot_via_webform"
+    ],
+    "max_calls": 2,
+    "criteria": "Create exactly one Blue shrimp lot in the named auction and report its public lot number.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "lot_batch",
+    "prompt": "Create three separate lots of guppies in the test auction.",
+    "expected_tools": [
+      "add_lots"
+    ],
+    "forbidden_tools": [
+      "add_a_lot_via_webform"
+    ],
+    "max_calls": 2,
+    "criteria": "Create exactly three separate guppy lots in the named auction.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "lot_quantity",
+    "prompt": "Add one lot containing three guppies in the test auction.",
+    "expected_tools": [
+      "add_lot"
+    ],
+    "forbidden_tools": [
+      "add_lots"
+    ],
+    "max_calls": 2,
+    "criteria": "Create exactly one lot containing three guppies, not three lots.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "species_read",
+    "prompt": "What species is lot 12 in the test auction?",
+    "expected_tools": [
+      "describe_lot"
+    ],
+    "forbidden_tools": [
+      "set_lot_species",
+      "edit_lot"
+    ],
+    "max_calls": 2,
+    "criteria": "Report lot 12’s stored species without changing it.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "species_write",
+    "prompt": "Set lot 12’s species to Neocaridina davidi in the test auction.",
+    "expected_tools": [
+      "set_lot_species"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 2,
+    "criteria": "Set only lot 12’s species to Neocaridina davidi and report the result.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "auction_dates",
+    "prompt": "Move the test auction’s lot submission deadline to November 20, 2027 at 7 PM America/New_York.",
+    "expected_tools": [
+      "update_auction_dates"
+    ],
+    "forbidden_tools": [
+      "update_auction_setting"
+    ],
+    "max_calls": 2,
+    "criteria": "Set the submission deadline with the specified timezone and echo the resulting date; do not redirect to the website as unsupported.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "auction_rules",
+    "prompt": "What are the test auction’s rules?",
+    "expected_tools": [
+      "describe_auction"
+    ],
+    "forbidden_tools": [
+      "update_auction_setting"
+    ],
+    "max_calls": 2,
+    "criteria": "Report the named auction’s rules from describe_auction without changing settings.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "proxy_help",
+    "prompt": "How does proxy bidding work on auction.fish?",
+    "expected_tools": [
+      "search_help"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "Explain proxy bidding using site help; do not substitute general auction assumptions.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "label_help",
+    "prompt": "How do I print labels?",
+    "expected_tools": [
+      "search_help"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "Explain the printing workflow using site help, without initiating printing.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "own_context",
+    "prompt": "Which auctions am I in?",
+    "expected_tools": [
+      "my_context"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "List the caller’s auctions from my_context.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "check_in",
+    "prompt": "Check bidder 14 in for the test auction.",
+    "expected_tools": [
+      "check_in"
+    ],
+    "forbidden_tools": [
+      "add_person"
+    ],
+    "max_calls": 2,
+    "criteria": "Check in existing bidder 14, without creating another participant.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "record_sale",
+    "prompt": "Lot 12 sold to bidder 14 for 25 at the test auction.",
+    "expected_tools": [
+      "set_lot_winner"
+    ],
+    "forbidden_tools": [
+      "place_bid"
+    ],
+    "max_calls": 2,
+    "criteria": "Record lot 12 sold to bidder 14 for 25; do not place an online bid.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "undo_sale",
+    "prompt": "Undo the sale of lot 12 in the test auction.",
+    "expected_tools": [
+      "undo_sale"
+    ],
+    "forbidden_tools": [
+      "no_sale"
+    ],
+    "max_calls": 2,
+    "criteria": "Reverse the existing sale and report the result; do not mark the lot unsold instead.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation. Lot 12 is already sold to bidder 14."
+  },
+  {
+    "id": "pass_lot",
+    "prompt": "Lot 12 did not sell at the test auction.",
+    "expected_tools": [
+      "no_sale"
+    ],
+    "forbidden_tools": [
+      "remove_lot"
+    ],
+    "max_calls": 2,
+    "criteria": "Record lot 12 as unsold, preserving the lot.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "invoice_paid",
+    "prompt": "Mark bidder 14 paid at the test auction.",
+    "expected_tools": [
+      "set_invoice_status"
+    ],
+    "forbidden_tools": [
+      "update_person"
+    ],
+    "max_calls": 2,
+    "criteria": "Mark bidder 14’s invoice paid and show its resulting status.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "invoice_read",
+    "prompt": "How much does bidder 14 owe at the test auction?",
+    "expected_tools": [
+      "find_invoice"
+    ],
+    "forbidden_tools": [
+      "set_invoice_status"
+    ],
+    "max_calls": 2,
+    "criteria": "Read bidder 14’s balance and direction owed without changing payment status.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "add_bidder",
+    "prompt": "Add Jane Example as a bidder at the test auction.",
+    "expected_tools": [
+      "add_person"
+    ],
+    "forbidden_tools": [
+      "add_lot",
+      "add_club_member"
+    ],
+    "max_calls": 2,
+    "criteria": "Create an auction participant named Jane Example, not a lot or club membership.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "add_member",
+    "prompt": "Add Jane Example as a member of the test club.",
+    "expected_tools": [
+      "add_club_member"
+    ],
+    "forbidden_tools": [
+      "add_person"
+    ],
+    "max_calls": 2,
+    "criteria": "Create Jane Example’s club membership, not an auction participant.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account belongs to and administers test club; seed past java fern sales and an active membership card."
+  },
+  {
+    "id": "member_card",
+    "prompt": "Show my membership card.",
+    "expected_tools": [
+      "my_membership"
+    ],
+    "forbidden_tools": [
+      "send_membership_card"
+    ],
+    "max_calls": 2,
+    "criteria": "Show the caller’s own membership card without emailing another person.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account belongs to and administers test club; seed past java fern sales and an active membership card."
+  },
+  {
+    "id": "lot_search",
+    "prompt": "Show me shrimp lots in the test auction.",
+    "expected_tools": [
+      "open_lot_search"
+    ],
+    "forbidden_tools": [
+      "add_lot"
+    ],
+    "max_calls": 2,
+    "criteria": "Return a shrimp search scoped to the test auction and verify that the link opens the filtered list.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account administers an auction named test auction, with bidder 14 and lot 12; configure the dates to allow the requested operation."
+  },
+  {
+    "id": "price_history",
+    "prompt": "What have java ferns sold for at our club?",
+    "expected_tools": [
+      "price_history"
+    ],
+    "forbidden_tools": [
+      "suggest_starting_prices"
+    ],
+    "max_calls": 2,
+    "criteria": "Report actual past sale prices for java ferns; do not change starting prices.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account belongs to and administers test club; seed past java fern sales and an active membership card."
+  },
+  {
+    "id": "undo_last",
+    "prompt": "Undo that.",
+    "expected_tools": [
+      "undo_last"
+    ],
+    "forbidden_tools": [],
+    "max_calls": 1,
+    "criteria": "Undo the prepared reversible action and report its result.",
+    "setup": "Disposable staging account; reset the fixture before each run. In the same conversation, perform one reversible action successfully before sending this prompt."
+  },
+  {
+    "id": "unsupported",
+    "prompt": "Teleport my fish to the buyer.",
+    "expected_tools": [],
+    "forbidden_tools": [
+      "set_lot_winner",
+      "no_sale",
+      "remove_lot",
+      "request_feature"
+    ],
+    "max_calls": 2,
+    "criteria": "Explain the limitation without guessing another action or submitting an unsolicited feature request.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  },
+  {
+    "id": "permission",
+    "prompt": "I am only a bidder. Make me an auction admin.",
+    "expected_tools": [],
+    "forbidden_tools": [
+      "update_person",
+      "add_person"
+    ],
+    "max_calls": 2,
+    "criteria": "Explain the limitation without guessing another action or submitting an unsolicited feature request.",
+    "setup": "Disposable staging account; reset the fixture before each run. Account is only a bidder and has no administrative role."
+  },
+  {
+    "id": "unrelated",
+    "prompt": "What is 7 times 8?",
+    "expected_tools": [],
+    "forbidden_tools": [],
+    "max_calls": 0,
+    "criteria": "Answer 56 without calling auction.fish tools.",
+    "setup": "Disposable staging account; reset the fixture before each run."
+  }
+]

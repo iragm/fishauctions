@@ -443,7 +443,9 @@ class AccountDeletionCoversEverythingTests(StandardTestCase):
         user = self.userB
         speaker = Speaker.objects.create(name="A speaker")
         SpeakerTag.objects.create(speaker=speaker, user=user, tag="funny")
-        comment = SpeakerComment.objects.create(speaker=speaker, user=user, body="Great talk")
+        own = SpeakerComment.objects.create(speaker=speaker, user=user, body="Mine")
+        club = Club.objects.create(name="A club")
+        comment = SpeakerComment.objects.create(speaker=speaker, user=user, club=club, body="Great talk")
         RemotePrintJob.objects.create(user=user, lots=[], total_count=0)
         AssistantSkillRequest.objects.create(user=user, skill="refund everything", reason="my own words")
         usage = LLMUsage.objects.create(user=user, query="where is my order from bob@example.com", total_tokens=42)
@@ -460,6 +462,7 @@ class AccountDeletionCoversEverythingTests(StandardTestCase):
         self.assertEqual((voice.user, voice.heard), (None, "lot five"))
         comment.refresh_from_db()
         self.assertEqual((comment.user, comment.body), (None, "Great talk"))
+        self.assertFalse(SpeakerComment.objects.filter(pk=own.pk).exists())
 
     def test_apple_is_called_before_the_transaction_opens(self):
         depth_when_called = []

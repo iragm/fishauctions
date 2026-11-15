@@ -806,7 +806,7 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
             messages.success(request, f"Fetched {updated} role(s) from Discord.")
             from auctions.tasks import sync_discord_member_roles_for_club
 
-            sync_discord_member_roles_for_club.delay(club.pk)
+            transaction.on_commit(lambda: sync_discord_member_roles_for_club.delay(club.pk))
         return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
 

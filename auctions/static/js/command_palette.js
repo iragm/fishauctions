@@ -61,6 +61,10 @@
     var lastQueryEmpty = false; // did the most recent executed query return zero results?
     var navigatedByClick = false; // suppress the abandon-on-close beacon after a click
     var finalized = false; // has the current query already been finalized (abandoned/bounce)?
+    var pendingPrefill = null; // text handed over by an AI box; the palette opens holding it and submits it
+    // Opened by an AI box on an admin page. The palette on its own only opens pages; a box is where a
+    // command is typed, so the server is told and offers the tools that change things. Until it closes.
+    var fromBox = false;
     var logChain = Promise.resolve(); // serialize log writes so refinements share one row
     var items = []; // flat list of rendered result elements for keyboard nav
     var activeIndex = -1;
@@ -301,7 +305,7 @@
       function isStale() {
         return generation !== renderGeneration;
       }
-      fetch(searchUrl + "?q=" + encodeURIComponent(query), {
+      fetch(searchUrl + "?q=" + encodeURIComponent(query) + "&path=" + encodeURIComponent(window.location.pathname), {
         headers: { "X-Requested-With": "XMLHttpRequest" },
         credentials: "same-origin",
       })
@@ -699,6 +703,7 @@
           action: response.action,
           params: response.params,
           path: window.location.pathname,
+          box: fromBox,
         }),
       })
         .then(function (resp) {
@@ -850,7 +855,7 @@
         credentials: "same-origin",
         // `path` lets the server work out which auction/club/lot we're looking at. It resolves the
         // path through its own URLconf and re-checks every object, so this is a hint, not a claim.
-        body: JSON.stringify({ q: query, context: loadContext(), path: window.location.pathname }),
+        body: JSON.stringify({ q: query, context: loadContext(), path: window.location.pathname, box: fromBox }),
         signal: assistAbort ? assistAbort.signal : undefined,
       })
         .then(function (resp) {
@@ -1278,6 +1283,15 @@
 
     modalEl.addEventListener("shown.bs.modal", function () {
       input.focus();
+      if (pendingPrefill) {
+        // Opened from an AI box: the text is the request, so send it rather than select it for typing over.
+        var prefill = pendingPrefill;
+        pendingPrefill = null;
+        if (assistEnabled) {
+          submitAssist(prefill);
+        }
+        return;
+      }
       input.select();
       autoStartListening();
     });
@@ -1287,8 +1301,10 @@
       finalized = false;
       currentSearchId = null;
       lastQuery = "";
-      input.value = "";
-      fetchResults("");
+      input.value = pendingPrefill || "";
+      if (!pendingPrefill) {
+        fetchResults("");
+      }
     });
     modalEl.addEventListener("hidden.bs.modal", function () {
       // Never leave the microphone running, a countdown pending, a hint on screen, or a navigation
@@ -1299,11 +1315,37 @@
       cancelPendingNavigation();
       abortAssist();
       flushFinal();
+      fromBox = false;
     });
 
     // Leaving the page (normal link, back button, tab close) does not fire the modal's hidden
     // event, so finalize here too. pagehide fires on navigation and on bfcache unload.
     window.addEventListener("pagehide", flushFinal);
+
+    // The AI boxes on the club and auction ribbons. Enter hands their text to the palette, which opens already
+    // holding it and submits it, the same as Enter inside the palette -- except that it may change things.
+    document.querySelectorAll("[data-palette-box]").forEach(function (box) {
+      var placeholders = [];
+      try {
+        placeholders = JSON.parse(box.dataset.placeholders || "[]");
+      } catch (e) {
+        // No examples to show: the box keeps its plain placeholder.
+      }
+      if (placeholders.length) {
+        box.placeholder = placeholders[Math.floor(Math.random() * placeholders.length)];
+      }
+      box.addEventListener("keydown", function (event) {
+        var text = box.value.trim();
+        if (event.key !== "Enter" || !text) {
+          return;
+        }
+        event.preventDefault();
+        pendingPrefill = text;
+        fromBox = true;
+        box.value = "";
+        open();
+      });
+    });
 
     // Navbar brand opens the palette instead of navigating to the landing page.
     var brand = document.querySelector(".navbar-brand");

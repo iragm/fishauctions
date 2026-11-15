@@ -13,6 +13,7 @@ import logging
 import threading
 
 from django.conf import settings
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +113,18 @@ def notify_user(user, *, category, title, body, url, send_email, auction_pk=None
 
     from auctions.tasks import send_push_to_user
 
-    send_push_to_user.delay(
-        user.pk,
-        title=title,
-        body=body,
-        url=url,
-        category=category,
-        collapse_key=collapse_key,
-        auction_pk=auction_pk,
-        invoice_pk=invoice_pk,
+    # After commit, so a push never announces a change that rolls back.
+    transaction.on_commit(
+        lambda: send_push_to_user.delay(
+            user.pk,
+            title=title,
+            body=body,
+            url=url,
+            category=category,
+            collapse_key=collapse_key,
+            auction_pk=auction_pk,
+            invoice_pk=invoice_pk,
+        )
     )
     return True
 
@@ -137,7 +141,6 @@ def notify_running_total(lot):
     Shared by the set-winners view and the app's offline sync. Returns True when a push was enqueued.
     """
     from django.contrib.sites.models import Site
-    from django.db import transaction
     from django.urls import reverse
 
     from auctions.models import Invoice

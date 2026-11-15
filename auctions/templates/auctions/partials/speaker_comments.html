@@ -9,7 +9,7 @@ and SpeakerCommentDeleteView, so it has to stand alone.
   <div class="card-body p-2">
     <div class="d-flex justify-content-between align-items-start gap-2">
       <div class="min-w-0">
-        <small class="text-muted">{{ comment.author_display }} &middot; {{ comment.createdon|date:"M j, Y" }}</small>
+        <small class="text-muted">{{ comment.author_username }} &middot; {{ comment.createdon|date:"M j, Y" }}</small>
         <div style="white-space: pre-line;">{{ comment.body }}</div>
       </div>
       {% comment %}Mirrors SpeakerComment.can_be_deleted_by, which is what actually enforces this.{% endcomment %}
@@ -34,6 +34,7 @@ and SpeakerCommentDeleteView, so it has to stand alone.
 
 <form hx-post="{% url 'speaker_comment' speaker.slug %}" hx-target="#speaker-comments-block" hx-swap="innerHTML" class="mb-3">
   {% csrf_token %}
+  {% if comment_form.non_field_errors %}<div class="text-danger small">{{ comment_form.non_field_errors|striptags }}</div>{% endif %}
   {{ comment_form.body }}
   {% if comment_form.body.errors %}<div class="text-danger small">{{ comment_form.body.errors|striptags }}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2 align-items-center mt-2">

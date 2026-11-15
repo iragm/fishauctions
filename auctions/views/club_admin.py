@@ -723,7 +723,22 @@ class ClubSetupView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["club"] = self.club
+        club = self.club
+        context["club"] = club
+        # A check mark on each row that is already set up. Mailchimp and Brevo are two providers for one
+        # list, so each row is hidden only when the other is the one connected.
+        mailchimp = bool(club.mailchimp_connected_on)
+        brevo = bool(club.brevo_connected_on)
+        context["connected"] = {
+            "discord": bool(club.discord_server_id),
+            "google_calendar": bool(club.google_calendar_connected_on),
+            "mailchimp": mailchimp,
+            "brevo": brevo,
+            "membership": bool(club.enable_membership or club.paypal_client_id),
+            "mailing_address": bool((club.mailing_address or "").strip()),
+        }
+        context["show_mailchimp"] = mailchimp or not brevo
+        context["show_brevo"] = brevo or not mailchimp
         return context
 
 

@@ -18,6 +18,12 @@ attackers use to split a scheme name stripped first. ``style`` is narrowed again
 own, ``position`` and ``z-index`` because stored content must not cover the page showing it -- and
 anything with ``url()`` goes so stored content cannot fetch from elsewhere.
 
+``class`` is narrowed to ``ALLOWED_SUMMERNOTE_CLASSES``, the table and float classes Summernote emits.
+Otherwise stored content could carry the site's own layout classes (``position-fixed``, ``w-100``)
+and cover the page showing it. Comments, CDATA and other preformatted nodes are dropped outright,
+because ``<![CDATA[...]]>`` is parsed as text by ``html.parser`` and can smuggle markup past the
+tag rule once it is serialised.
+
 Here rather than in ``models.py`` because it has no model dependencies and both ``models.py`` and
 ``forms.py`` import it.
 """
@@ -25,6 +31,7 @@ Here rather than in ``models.py`` because it has no model dependencies and both 
 import re
 
 from bs4 import BeautifulSoup
+from bs4.element import PreformattedString
 
 # Tags Summernote legitimately emits. Anything else is stripped; an allowlist can't be bypassed by
 # novel or foreign elements the way the old blocklist could.
@@ -67,6 +74,10 @@ ALLOWED_SUMMERNOTE_ATTRIBUTES = frozenset(
 #: which this site has none of.
 ALLOWED_LINK_TARGETS = frozenset({"_blank", "_self", "_parent", "_top"})
 
+#: ``class`` values Summernote's table and float tools produce. The site's own layout classes
+#: (``position-fixed``, ``w-100``...) would otherwise let stored content cover the page showing it.
+ALLOWED_SUMMERNOTE_CLASSES = frozenset({"table", "table-bordered", "note-float-left", "note-float-right"})
+
 #: CSS properties Summernote's toolbar produces. Everything else goes: ``position``/``z-index`` alone
 #: let stored content cover the page it is displayed on.
 ALLOWED_STYLE_PROPERTIES = frozenset(
@@ -92,6 +103,8 @@ def sanitize_summernote_html(text, allowed_tags=None):
 
     allowed_tags = ALLOWED_SUMMERNOTE_TAGS if allowed_tags is None else frozenset(allowed_tags)
     soup = BeautifulSoup(text, "html.parser")
+    for node in soup.find_all(string=lambda s: isinstance(s, PreformattedString)):
+        node.extract()
 
     # Enforce the tag allowlist. ``find_all(True)`` yields tags in document order, so decomposing a
     # parent marks its descendants ``decomposed`` and they are skipped below.
@@ -118,6 +131,15 @@ def sanitize_summernote_html(text, allowed_tags=None):
                 # only closed by ``rel`` (below), which old browsers still need spelled out.
                 value = attr_value[0] if isinstance(attr_value, list) else attr_value
                 if str(value).lower() not in ALLOWED_LINK_TARGETS:
+                    del tag[attr_name]
+                continue
+            if normalized_attr == "class":
+                # bs4 parses ``class`` as a list; a string value is split the same way.
+                tokens = attr_value if isinstance(attr_value, list) else str(attr_value).split()
+                kept = [token for token in tokens if token in ALLOWED_SUMMERNOTE_CLASSES]
+                if kept:
+                    tag[attr_name] = kept
+                else:
                     del tag[attr_name]
                 continue
             if normalized_attr == "rel":

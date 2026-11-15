@@ -834,7 +834,10 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                     "<code>LLM_BASE_URL</code> points at any OpenAI-compatible endpoint &mdash; a proxy, "
                     "OpenRouter, or a model running on your own hardware &mdash; so the key doesn't have to be "
                     "OpenAI's. The default model is a small, cheap one; a smarter model gets more commands right "
-                    "and costs more per use."
+                    "and costs more per use.<br><br>"
+                    'Claude works too: <code>LLM_PROVIDER="anthropic"</code> with an '
+                    "<code>ANTHROPIC_API_KEY</code>, and <code>LLM_MODEL</code> blank for Claude Haiku. Keep "
+                    "<code>OPENAI_API_KEY</code> as well if you have one: the library's search and voice use it."
                 ),
                 "setup_steps": [
                     "Create an API key with your provider and paste it into <code>OPENAI_API_KEY</code>.",
@@ -856,6 +859,7 @@ class AdminSetupChecklistView(AdminOnlyViewMixin, TemplateView):
                 ],
                 "links": [
                     {"label": "OpenAI API keys", "url": "https://platform.openai.com/api-keys"},
+                    {"label": "Anthropic API keys", "url": "https://console.anthropic.com/settings/keys"},
                 ],
             },
             # -- Mailchimp --------------------------------------------------------

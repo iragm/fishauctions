@@ -290,6 +290,171 @@ class PostAuctionBannerTests(PickupTestCase):
         self.assertIsNone(logistics.progress(Auction.objects.get(pk=self.multi.pk)))
 
 
+class CheckInTests(PickupTestCase):
+    """Invoice and lot scans on the logistics page, the "waiting on" note, and the lots step of the banner."""
+
+    def setUp(self):
+        super().setUp()
+        self.scan_url = reverse("auction_logistics_scan", kwargs={"slug": self.multi.slug})
+        self.client.force_login(self.organizer)
+
+    def scan(self, code=None, **fields):
+        if code is not None:
+            fields["code"] = code
+        return self.client.post(self.scan_url, fields).json()
+
+    def invoice_code(self, tos):
+        return f"https://example.com/invoices/{self.invoice_for(tos).pk}/"
+
+    def test_only_admins_scan(self):
+        lot = self.sell(self.ma_seller, self.vt_buyer)
+        self.client.force_login(self.buyer_user)
+        self.assertEqual(self.client.post(self.scan_url, {"code": f"/qr/{lot.pk}/"}).status_code, 403)
+        lot.refresh_from_db()
+        self.assertIsNone(lot.checked_in)
+
+    def test_invoice_scan_crosses_off_the_seller_and_checks_in_their_lots(self):
+        lots = [self.sell(self.ma_seller, self.vt_buyer) for _ in range(3)]
+        other = self.sell(self.vt_seller, self.vt_buyer)
+        result = self.scan(self.invoice_code(self.ma_seller))
+        self.assertTrue(result["ok"])
+        self.assertIn("3 lots accounted for from Ma Seller", result["message"])
+        self.assertTrue(all(Lot.objects.get(pk=lot.pk).checked_in for lot in lots))
+        self.assertIsNone(Lot.objects.get(pk=other.pk).checked_in)
+        self.assertIsNotNone(AuctionTOS.objects.get(pk=self.ma_seller.pk).marked_off_first_pickup)
+
+    def test_buyer_invoice_scan_says_what_to_collect(self):
+        self.sell(self.ma_seller, self.vt_buyer)
+        self.sell(self.ma_seller, self.vt_buyer)
+        self.sell(self.vt_seller, self.vt_buyer)
+        result = self.scan(self.invoice_code(self.vt_buyer))
+        self.assertTrue(result["ok"])
+        self.assertIn("Vt Buyer needs to collect 3 lots from 2 sellers, <a href=", result["message"])
+        self.assertIn("open invoice</a>", result["message"])
+        self.assertIsNone(AuctionTOS.objects.get(pk=self.vt_buyer.pk).marked_off_first_pickup)
+
+    def test_invoice_from_another_auction_is_refused(self):
+        other = Auction.objects.create(
+            created_by=self.organizer, title="Other", is_online=True, date_start=timezone.now()
+        )
+        place = PickupLocation.objects.create(name="There", auction=other, pickup_time=timezone.now())
+        tos = AuctionTOS.objects.create(auction=other, name="Elsewhere", pickup_location=place)
+        invoice = Invoice.objects.create(auctiontos_user=tos, auction=other)
+        self.assertFalse(self.scan(f"/invoices/{invoice.pk}/")["ok"])
+
+    def test_lot_scan_and_the_first_time_tip(self):
+        lots = [self.sell(self.ma_seller, self.vt_buyer) for _ in range(5)]
+        first = self.scan(lots[0].qr_code)
+        self.assertTrue(first["ok"])
+        self.assertIn("Tip: you can scan invoice barcodes to mark all lots from a seller collected", first["message"])
+        self.assertIn("click here to mark all 5 lots from Ma Seller as dropped off", first["message"])
+        self.assertIsNotNone(Lot.objects.get(pk=lots[0].pk).checked_in)
+        self.assertEqual(Lot.objects.filter(checked_in__isnull=False).count(), 1)
+        second = self.scan(lots[1].qr_code)
+        self.assertNotIn("Tip", second["message"])
+        self.assertIn("already", self.scan(lots[1].qr_code)["message"])
+        result = self.scan(seller=self.ma_seller.pk)
+        self.assertTrue(result["ok"])
+        self.assertEqual(Lot.objects.filter(checked_in__isnull=False).count(), 5)
+
+    def test_unsold_and_foreign_lots(self):
+        unsold = self.sell(self.ma_seller, None, price=None)
+        self.assertFalse(self.scan(unsold.qr_code)["ok"])
+        self.assertFalse(self.scan("/qr/999999/")["ok"])
+        self.assertFalse(self.scan("nonsense")["ok"])
+
+    def test_names_are_escaped(self):
+        AuctionTOS.objects.filter(pk=self.ma_seller.pk).update(name="<b>x</b>")
+        self.sell(self.ma_seller, self.vt_buyer)
+        self.assertIn("&lt;b&gt;", self.scan(self.invoice_code(self.ma_seller))["message"])
+
+    def test_tap_checks_lots_in_and_out(self):
+        scanned = self.sell(self.ma_seller, self.vt_buyer)
+        self.scan(scanned.qr_code)
+        lot = self.sell(self.ma_seller, self.vt_buyer)
+        logistics.mark_off(self.ma_seller, logistics.FIRST, self.organizer, marked=True)
+        self.assertIsNotNone(Lot.objects.get(pk=lot.pk).checked_in)
+        logistics.mark_off(AuctionTOS.objects.get(pk=self.ma_seller.pk), logistics.FIRST, self.organizer, marked=False)
+        self.assertIsNone(Lot.objects.get(pk=lot.pk).checked_in)
+        # Scanned before the name was crossed off, so a mistap doesn't lose it.
+        self.assertIsNotNone(Lot.objects.get(pk=scanned.pk).checked_in)
+
+    def test_no_login_link_is_not_read_as_a_pk(self):
+        self.sell(self.ma_seller, self.vt_buyer)
+        pk = self.invoice_for(self.ma_seller).pk
+        result = self.scan(f"https://example.com/invoices/{pk}0000-aaaa-bbbb-cccc-dddddddddddd/")
+        self.assertFalse(result["ok"])
+        self.assertIsNone(AuctionTOS.objects.get(pk=self.ma_seller.pk).marked_off_first_pickup)
+
+    def test_second_pickup_scan_only_reports(self):
+        self.sell(self.vt_seller, self.vt_buyer)
+        self.sell(self.ma_seller, self.vt_seller)
+        result = self.scan(self.invoice_code(self.vt_seller), tab=f"{self.vt.pk}-2")
+        self.assertIn("Vt Seller needs to collect 1 lot from 1 seller", result["message"])
+        self.assertIsNone(AuctionTOS.objects.get(pk=self.vt_seller.pk).marked_off_first_pickup)
+        self.assertFalse(Lot.objects.filter(checked_in__isnull=False).exists())
+
+    def test_typed_lot_number(self):
+        lot = self.sell(self.ma_seller, self.vt_buyer)
+        self.assertTrue(self.scan(str(Lot.objects.get(pk=lot.pk).lot_number_int))["ok"])
+        self.assertIsNotNone(Lot.objects.get(pk=lot.pk).checked_in)
+
+    def test_mail_lots_are_not_scanned_in(self):
+        mail = PickupLocation.objects.create(name="Mail", auction=self.multi, pickup_by_mail=True)
+        shipper = AuctionTOS.objects.create(auction=self.multi, pickup_location=mail, name="Shipper")
+        lot = self.sell(shipper, self.vt_buyer)
+        self.assertIn("ships by mail", self.scan(lot.qr_code)["message"])
+        self.assertFalse(self.scan(seller="abc")["ok"])
+
+    def test_waiting_on(self):
+        ma_tab = next(tab for tab in logistics.tabs(self.multi) if tab.location == self.ma)
+        ma_buyer = AuctionTOS.objects.create(auction=self.multi, pickup_location=self.ma, name="Ma Buyer")
+        lot = self.sell(self.ma_seller, ma_buyer)
+        self.assertEqual(logistics.waiting_on(self.multi, ma_tab), {ma_buyer.pk: ["Ma Seller"]})
+        url = reverse("auction_logistics", kwargs={"slug": self.multi.slug})
+        self.assertContains(self.client.get(f"{url}?tab={ma_tab.key}"), "(waiting on Ma Seller)")
+        second_seller = AuctionTOS.objects.create(auction=self.multi, pickup_location=self.ma, name="Second")
+        self.sell(second_seller, ma_buyer)
+        self.assertContains(self.client.get(f"{url}?tab={ma_tab.key}"), "(waiting on 2 sellers)")
+        logistics.check_in_lots(Lot.objects.filter(pk=lot.pk))
+        self.assertEqual(logistics.waiting_on(self.multi, ma_tab), {ma_buyer.pk: ["Second"]})
+
+    def test_lots_step_only_in_the_exchange_window(self):
+        lot = self.sell(self.ma_seller, self.vt_buyer)
+        self.sell(self.vt_seller, self.vt_buyer)
+        steps = logistics.progress(self.multi) or {}
+        self.assertNotIn("accounted", steps)
+        now = timezone.now()
+        PickupLocation.objects.filter(pk=self.ma.pk).update(pickup_time=now + datetime.timedelta(hours=1))
+        logistics.check_in_lots(Lot.objects.filter(pk=lot.pk))
+        self.assertEqual(logistics.progress(self.multi)["accounted"], {"done": 1, "total": 2, "percent": 50})
+        banner = self.client.get(reverse("auction_post_end_banner", kwargs={"slug": self.multi.slug}))
+        self.assertContains(banner, "1 out of 2 lots accounted for.")
+        self.assertContains(banner, "Scan users in to account for their lots")
+        # A day after the last exchange (VT's second pickup), it's gone.
+        PickupLocation.objects.filter(pk=self.vt.pk).update(second_pickup_time=now - datetime.timedelta(hours=25))
+        PickupLocation.objects.filter(pk=self.ma.pk).update(pickup_time=now - datetime.timedelta(hours=26))
+        PickupLocation.objects.filter(pk=self.vt.pk).update(pickup_time=now - datetime.timedelta(hours=26))
+        self.assertNotIn("accounted", logistics.progress(self.multi) or {})
+
+    def test_invoice_shows_its_code(self):
+        self.sell(self.ma_seller, self.vt_buyer)
+        invoice = self.invoice_for(self.vt_buyer)
+        self.client.force_login(self.buyer_user)
+        url = reverse("invoice_by_pk", kwargs={"pk": invoice.pk})
+        # Pickups are 20 hours out: too early.
+        self.assertNotContains(self.client.get(url), 'id="invoice-pickup-qr"')
+        PickupLocation.objects.filter(pk=self.vt.pk).update(pickup_time=timezone.now() + datetime.timedelta(hours=1))
+        self.assertContains(self.client.get(url), 'id="invoice-pickup-qr"')
+
+    def test_pickup_code_without_pickup_times(self):
+        PickupLocation.objects.filter(auction=self.multi).update(pickup_time=None, second_pickup_time=None)
+        auction = Auction.objects.get(pk=self.multi.pk)
+        self.assertTrue(logistics.shows_pickup_code(auction))
+        Auction.objects.filter(pk=auction.pk).update(date_end=timezone.now() + datetime.timedelta(hours=1))
+        self.assertFalse(logistics.shows_pickup_code(Auction.objects.get(pk=auction.pk)))
+
+
 class UsersFilterTests(PickupTestCase):
     def test_outstanding_and_unprinted(self):
         from auctions.filters import AuctionTOSFilter

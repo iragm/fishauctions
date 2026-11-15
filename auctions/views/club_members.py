@@ -688,8 +688,9 @@ class ClubMemberCreateView(APIView):
     @staticmethod
     def _create_auction_tos(auction, member, form_cleaned_data):
         """Create an AuctionTOS for *member* in *auction*, applying form overrides."""
-        pickup_location = form_cleaned_data.get("pickup_location") or _default_pickup_location_for_auction(auction)
-        if not pickup_location:
+        # Only a location the admin picked counts as the person's own (AuctionTOS.needs_pickup_location).
+        pickup_location = form_cleaned_data.get("pickup_location")
+        if not (pickup_location or _default_pickup_location_for_auction(auction)):
             return None
         if auction.alternate_split_mode == "club_member":
             # The alternate split is applied automatically to paid club members.

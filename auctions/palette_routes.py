@@ -147,6 +147,12 @@ ROUTE_LIST: list[Route] = [
         keywords=["new speaker", "add a presenter", "add a program"],
     ),
     _r(
+        "speaker_add_self",
+        "Add yourself to the speaker directory",
+        "Browsing",
+        keywords=["i give talks", "list me as a speaker", "my speaker profile", "become a speaker"],
+    ),
+    _r(
         "help",
         "Help guides",
         "Browsing",
@@ -1258,6 +1264,7 @@ EXCLUDED: dict[str, str] = {
     ),
     "document_picture": "One picture from a document, shown on that document's page.",
     "promo": "Marketing for people who don't use the site yet; anyone who does is better served by the help.",
+    "promo_nearby": "A strip the promo page fetches for itself; auctions_near_me answers the same question.",
     "help_guide": (
         "One help guide. search_help answers with a link to the section that holds the answer, which "
         "beats landing on the top of a guide, and the help index lists every guide."
@@ -1270,9 +1277,13 @@ EXCLUDED: dict[str, str] = {
     "mcp_admin": "The superusers' read-only MCP endpoint; the same answer as mcp.",
     # django-oauth-toolkit's URLs are namespaced and excused like allauth's; an entry would show up
     # as stale in the audit.
+    # Account access requests: a POST from the account's own pages; the pages are in the catalog.
+    "access_request": _ACTION_ONLY,
     # Speaker directory
+    "invoice_adjustment_save": _API,
     "speaker_panel": _API,
     "speaker_tag": _API,
+    "speaker_claim": "POST-only request made from a speaker's page; the page itself is the destination.",
     "speaker_comment": _API,
     "speaker_comment_delete": _API,
     "speaker_delete": _ACTION_ONLY,
@@ -1322,6 +1333,7 @@ EXCLUDED: dict[str, str] = {
     "auctiontosdelete": _API,
     "auctiontosmemo": _API,
     "auction_check_in": _ACTION_ONLY,
+    "auction_sample_data": "POST-only button on a test auction's own page; the banner there offers it.",
     "add_single_auctiontos_to_club": _API,
     "save_lot_ajax": _API,
     "auction_barcode_scan": _API,
@@ -1329,11 +1341,15 @@ EXCLUDED: dict[str, str] = {
     "auction_lot_queue_fullscreen": _API,
     "auction_lot_map_data": _API,
     "auction_logistics_mark": "The tap on a name on the logistics page, which crosses it off that pickup.",
+    "auction_logistics_scan": "The logistics page's scanner, reading an invoice or lot code held up to the camera.",
     "auction_post_end_banner": _API,
     "auction_show_high_bidder": _API,
     "auto_image_available": _API,
     "species_suggestions": _AUTOCOMPLETE,
     "species_quick_create": _API,
+    # Unlinked while new: a superuser reaches one from a lot's species name.
+    "species_detail": "One species' public page, for search engines and people browsing; find_species and price_history answer the same questions.",
+    "species_detail_slug": "One species' public page, with its name in the address; the same page as species_detail.",
     # Species gaps page buttons and the club API endpoint; the palette sends people to species_gaps.
     "species_cache_forget": _API,
     "species_approve": _API,
@@ -1464,6 +1480,7 @@ EXCLUDED: dict[str, str] = {
     "club_member_by_uuid": _TOKEN,
     "club_member_by_number": _TOKEN,
     "club_member_unsubscribe": _TOKEN,
+    "club_cadence_answer": _TOKEN,
     "donation_unsubscribe": (
         "Vendor-facing opt-out, keyed on the vendor's uuid and only ever reached from a link in the "
         "mail we sent them. The vendors it is for don't have accounts here."
@@ -1946,11 +1963,9 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
     elif route.scope == SCOPE_SPEAKER:
         from .models import Speaker
 
-        # Scoped to the NEC rule, so this can't confirm a hidden speaker. Matches "Last, First" and
-        # "First Last".
-        speakers = Speaker.objects.filter(is_deleted=False)
-        if not _user_sees_nec_speakers(user):
-            speakers = speakers.filter(nec_only=False)
+        # Only the speakers the directory lists for this user, so this can't confirm a link-only or
+        # NEC-only profile exists. Matches "Last, First" and "First Last".
+        speakers = Speaker.listed_for(user, _user_sees_nec_speakers(user))
         speaker = None
         if hint:
             words = [word for word in hint.split() if word]
@@ -1981,6 +1996,13 @@ def resolve_route(request, route: Route, params: dict[str, Any]) -> dict[str, An
 # --- where the user currently is ---------------------------------------------
 
 
+#: Pages whose ``slug`` is the lot's or the species' own, not an auction's. Read as an auction, a lot
+#: slugged "guppies" named whichever auction was slugged "guppies" instead of its own.
+_SLUG_IS_NOT_AN_AUCTION = frozenset({"lot_by_pk_and_slug", "species_detail_slug"})
+#: A lot's pages whose names don't start with "lot".
+_LOT_PAGES = frozenset({"edit_lot", "delete_lot", "single_lot_label"})
+
+
 def page_context_from_path(user, path: str) -> dict[str, Any]:
     """What the user is looking at, from their URL, resolved through the URLconf. This makes "add a lot"
     mean this auction.
@@ -1998,11 +2020,23 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
     if route:
         data["page_label"] = route.label
     slug = match.kwargs.get("slug")
+    url_name = match.url_name or ""
 
     from . import command_palette
     from .models import Auction, Club, Lot
 
-    if slug:
+    if slug and url_name.startswith("club"):
+        # A club's own pages, which take its number and abbreviation as well as its slug, never an
+        # auction that happens to share the word.
+        from .views.base import club_from_url
+
+        club = club_from_url(slug)
+        if club:
+            data["club"] = club.slug
+            data["club_name"] = club.name
+    elif slug and url_name in _SLUG_IS_NOT_AN_AUCTION:
+        pass
+    elif slug:
         # Any auction by slug, joined or not: the auction page is public to anyone with the slug, so
         # a forged path reveals nothing, and non-members asking about it need context. This widens
         # context, not permission: resolve_auction still re-scopes through _joined_auctions.
@@ -2019,7 +2053,7 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
                 data["club_name"] = club.name
 
     pk = match.kwargs.get("pk")
-    if pk and (match.url_name or "").startswith("lot"):
+    if pk and (url_name.startswith("lot") or url_name in _LOT_PAGES):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if lot:
             data["lot_id"] = lot.pk
@@ -2028,6 +2062,15 @@ def page_context_from_path(user, path: str) -> dict[str, Any]:
                 data["auction"] = lot.auction.slug
                 data["auction_title"] = lot.auction.title
                 data["auction_joined"] = command_palette._joined_auctions(user).filter(pk=lot.auction.pk).exists()
+    if pk and match.url_name == "invoice_by_pk" and "auction" not in data:
+        # Only for somebody who runs that auction: "mark bidder 14 paid" on the invoice means its auction.
+        from .models import Invoice
+
+        invoice = Invoice.objects.filter(pk=pk).select_related("auction").first()
+        if invoice and invoice.auction_id and invoice.auction.permission_check(user):
+            data["auction"] = invoice.auction.slug
+            data["auction_title"] = invoice.auction.title
+            data["auction_joined"] = True
     custom_lot_number = match.kwargs.get("custom_lot_number")
     if custom_lot_number and data.get("auction"):
         lot = Lot.objects.filter(

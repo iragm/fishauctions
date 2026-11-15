@@ -239,7 +239,11 @@ class AnnouncementDeliveryTests(TestCase):
 
         Posting the form delivers nothing: every announcement waits GRACE_SECONDS so it can be retracted.
         """
-        return announcements.send_due(now=timezone.now() + datetime.timedelta(seconds=announcements.GRACE_SECONDS + 5))
+        # Deliveries are on_commit, which a test transaction never reaches unless captured.
+        with self.captureOnCommitCallbacks(execute=True):
+            return announcements.send_due(
+                now=timezone.now() + datetime.timedelta(seconds=announcements.GRACE_SECONDS + 5)
+            )
 
     def test_nothing_leaves_the_building_during_the_retract_window(self):
         self._reachable_member()
@@ -695,7 +699,10 @@ class AnnouncementEmailChannelTests(TestCase):
     def test_the_email_is_queued_once_the_retract_window_has_passed(self):
         self._connect_mailchimp()
         self.client.force_login(self.admin)
-        with patch("auctions.tasks.send_announcement_emails.delay") as task:
+        with (
+            patch("auctions.tasks.send_announcement_emails.delay") as task,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
             self.client.post(self.url, {"text": "Swap night", "send_to_mailchimp": "on"})
             # Not during the window: an email can't be retracted, so it must not go out while the
             # club still thinks it can stop it.

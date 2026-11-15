@@ -34,7 +34,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.utils.safestring import mark_safe
 from django.views.generic import DetailView, TemplateView, View
 from django.views.generic.edit import (
     CreateView,
@@ -52,7 +51,7 @@ from auctions.forms import (
     EditLot,
     validate_image_url,
 )
-from auctions.helper_functions import cookie_coordinates
+from auctions.helper_functions import cookie_coordinates, static_html
 from auctions.models import (
     Auction,
     AuctionTOS,
@@ -70,6 +69,7 @@ from auctions.models import (
 from auctions.notifications import user_has_app_push
 from auctions.services import (
     copy_lot_images,
+    join_auction,
     missing_contact_info,
     readable_list,
     remove_bid,
@@ -432,6 +432,11 @@ class ViewLot(DetailView):
                 if not tos.can_bid_in_auction:
                     if tos.requires_check_in_before_bidding:
                         context["user_specific_bidding_error"] = "You must check in at the event before you can bid"
+                    elif tos.needs_pickup_location:
+                        context["user_specific_bidding_error"] = format_html(
+                            "<a href='{}#join'>Pick your pickup location</a> before you bid",
+                            tos.auction.get_absolute_url(),
+                        )
                     else:
                         context["user_specific_bidding_error"] = (
                             "This auction requires admin approval before you can bid"
@@ -868,14 +873,9 @@ class LotValidation(LoginRequiredMixin):
                     self.request, "We couldn't process the pasted image.  Try adding it again from the lot page."
                 )
         if is_new:
-            # After the images, so "add an image" is only suggested to a lot that really has none.
-            msg = mark_safe("Created lot! ")
-            if not LotImage.objects.filter(lot_number=lot).exists():
-                msg += format_html(
-                    "You should probably <a href='/images/add_image/{}/'>add an image</a>  to this lot.  Or, ",
-                    lot.lot_number,
-                )
-            msg += mark_safe("<a href='/lots/new'>create another lot</a>")
+            msg = static_html(
+                "Lot created. <a class='btn btn-sm btn-success text-dark ms-2' href='/lots/new'>Add another</a>"
+            )
             messages.success(
                 self.request,
                 msg,
@@ -913,6 +913,10 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
         context = super().get_context_data(**kwargs)
         context["title"] = "New lot"
         context["new"] = True
+        # From an auction's Add Lot the auction is already chosen, so "Put into an auction?" isn't asked.
+        context["auction_chosen"] = bool(
+            self.auction and context["form"].fields["auction"].queryset.filter(pk=self.auction.pk).exists()
+        )
 
         # Check if user needs to see the modal about joining an auction
         userData = self.request.user.userdata
@@ -1015,12 +1019,42 @@ class LotCreateView(FormFrictionMixin, LotValidation, CreateView):
                     if self.auction.lot_submission_end_date < timezone.now():
                         error = "Lot submission has ended for this auction."
                 tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
+                if not tos and not error:
+                    tos = self._join_silently(request)
                 if not tos:
-                    error = "You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction.</a>"
+                    error = "You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction."
                 if error:
                     messages.error(request, error)
                     return redirect(self.auction.get_absolute_url())
         return super().dispatch(request, *args, **kwargs)
+
+    def _join_silently(self, request):
+        """Join ``self.auction`` for someone who clicked Add Lot on its own page, or None where the Join
+        button must ask.
+
+        Only from that auction's page or its lots (a link anywhere else, a lot description included,
+        can't join you to anything), and only where there's nothing to choose or approve: exactly one
+        pickup location, sellers not vetted, no detail missing from the account.
+        """
+        from urllib.parse import parse_qs, urlsplit
+
+        auction = self.auction
+        referer = request.headers.get("Referer", "")
+        if not referer or not url_has_allowed_host_and_scheme(
+            referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            return None
+        parts = urlsplit(referer)
+        from_lots = parts.path == reverse("allLots") and parse_qs(parts.query).get("auction") == [auction.slug]
+        if not (parts.path.startswith(auction.get_absolute_url()) or from_lots):
+            return None
+        if auction.closed or auction.pretty_much_over or auction.only_approved_sellers:
+            return None
+        locations = list(auction.location_qs[:2])
+        if len(locations) != 1:
+            return None
+        tos, _created, problem = join_auction(request.user, auction, locations[0])
+        return None if problem else tos
 
 
 class LotUpdate(FormFrictionMixin, LotValidation, UpdateView):

@@ -192,14 +192,14 @@ class InvoiceViewTests(StandardTestCase):
 
     def adjustment_post(self, amount):
         return {
-            "form-TOTAL_FORMS": "1",
-            "form-INITIAL_FORMS": "0",
-            "form-MIN_NUM_FORMS": "0",
-            "form-MAX_NUM_FORMS": "1000",
-            "form-0-adjustment_type": "ADD",
-            "form-0-amount": str(amount),
-            "form-0-notes": "club dues",
+            "row": "n1",
+            "adjustment_type": "ADD",
+            "amount": str(amount),
+            "notes": "club dues",
         }
+
+    def adjustment_url(self, invoice):
+        return reverse("invoice_adjustment_save", kwargs={"pk": invoice.pk})
 
     def test_stranger_is_sent_home(self):
         self.client.force_login(self.user_who_does_not_join)
@@ -221,8 +221,8 @@ class InvoiceViewTests(StandardTestCase):
 
     def test_admin_adds_an_adjustment(self):
         self.client.force_login(self.admin_user)
-        response = self.client.post(self.url(self.invoice), self.adjustment_post(5))
-        self.assertRedirects(response, self.url(self.invoice), fetch_redirect_response=False)
+        response = self.client.post(self.adjustment_url(self.invoice), self.adjustment_post(5))
+        self.assertEqual(response.status_code, 200)
         adjustment = InvoiceAdjustment.objects.get(invoice=self.invoice)
         self.assertEqual(adjustment.amount, 5)
         self.assertEqual(adjustment.user, self.admin_user)
@@ -230,15 +230,15 @@ class InvoiceViewTests(StandardTestCase):
     def test_owner_cannot_adjust_their_own_invoice(self):
         self.client.force_login(self.userB)
         count = InvoiceAdjustment.objects.filter(invoice=self.invoiceB).count()
-        response = self.client.post(self.url(self.invoiceB), self.adjustment_post(-500))
-        self.assertEqual(response.status_code, 200)
-        response = self.client.post(self.url(self.invoiceB), self.adjustment_post(5))
+        response = self.client.post(self.adjustment_url(self.invoiceB), self.adjustment_post(-500))
+        self.assertEqual(response.status_code, 403)
+        response = self.client.post(self.adjustment_url(self.invoiceB), self.adjustment_post(5))
         self.assertEqual(InvoiceAdjustment.objects.filter(invoice=self.invoiceB).count(), count)
 
     def test_negative_adjustment_is_rejected(self):
         self.client.force_login(self.admin_user)
-        response = self.client.post(self.url(self.invoice), self.adjustment_post(-5))
-        self.assertEqual(response.status_code, 200)
+        response = self.client.post(self.adjustment_url(self.invoice), self.adjustment_post(-5))
+        self.assertEqual(response.status_code, 422)
         self.assertFalse(InvoiceAdjustment.objects.filter(invoice=self.invoice).exists())
 
     def test_no_invoice_in_auction_redirects_to_the_auction(self):

@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 #: fish, and it also stops a max bid locking a lot: the next allowed bid after one is 11 digits, so
 #: nobody could outbid it and the DataError only showed as "something went wrong".
 MAX_BID = Decimal("999999.99")
+#: Club-managed auction with several locations, and the person hasn't picked theirs (AuctionTOS.needs_pickup_location).
+PICK_LOCATION_FIRST = "Pick your pickup location on the auction's page before you bid"
 
 
 def check_bidding_permissions(lot, user):
@@ -46,6 +48,8 @@ def check_bidding_permissions(lot, user):
             # Check-in mode: joining isn't enough. Enforced here, not just via bidding_allowed, so
             # no join or import path can hand out bidding without a check-in.
             return "You must check in at the event before you can bid"
+        if tos.needs_pickup_location:
+            return PICK_LOCATION_FIRST
         if not tos.bidding_allowed:
             return "This auction requires admin approval before you can bid"
     # Timing rules (auction started, online bidding windows, very new or deactivated lots) all live

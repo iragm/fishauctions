@@ -19,6 +19,7 @@ import requests
 from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Q
 
 from auctions.models import Speaker, SpeakerTopic
 from auctions.speaker_topics import STARTER_TOPICS, canonical_topic_name, ensure_speaker_topics, topic_needs_review
@@ -213,9 +214,6 @@ class Command(BaseCommand):
             "programs": programs,
             "source_url": self._findtext(item, "link") or "",
             "imported_from_nec": True,
-            # Everything here came from the NEC's own database, so it stays NEC-only. Not settable
-            # from the add-speaker form.
-            "nec_only": True,
             **self._review_fields(item),
         }
         linked_user = self._user_for_email(self._speaker_email(item))
@@ -230,6 +228,9 @@ class Command(BaseCommand):
             )
             return not exists
 
+        # A profile the person now owns, or one merged into another, is theirs: a re-import leaves it be.
+        if self._belongs_to_someone(post_id):
+            return False
         with transaction.atomic():
             speaker, created = Speaker.objects.update_or_create(wordpress_post_id=post_id, defaults=fields)
             speaker.topics.set(self._topics_for(item))
@@ -243,6 +244,15 @@ class Command(BaseCommand):
             )
         return created
 
+    @staticmethod
+    def _belongs_to_someone(post_id):
+        """A record the person now owns, or one merged into another: theirs, so a re-import leaves it be."""
+        return (
+            Speaker.objects.filter(wordpress_post_id=post_id)
+            .filter(Q(user__isnull=False) | Q(is_deleted=True))
+            .exists()
+        )
+
     def _retag_speaker(self, post_id, name, item):
         """Re-apply this speaker's topics from the export, touching nothing else.
 
@@ -253,6 +263,8 @@ class Command(BaseCommand):
         speaker = Speaker.objects.filter(wordpress_post_id=post_id).first()
         if not speaker:
             return None
+        if self._belongs_to_someone(post_id):
+            return False
         review = self._review_fields(item)
         if self.dry_run:
             topics = self._canonical_topic_names(item)

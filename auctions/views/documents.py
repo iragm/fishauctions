@@ -158,12 +158,20 @@ class LibraryView(LibraryMixin, HTMxTableView):
 
     def get(self, request, *args, **kwargs):
         # Old links to the search, from before it had a page of its own.
-        if any(request.GET.get(key) for key in ("q", "topic", "species")):
+        if request.GET.get("q"):
             return redirect(reverse("library_search") + "?" + request.GET.urlencode())
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
-        return my_library(self.request.user).select_related("club").defer("text").order_by("-createdon", "-pk")
+        # Everything you may read by default; "Mine" narrows to what you uploaded and your clubs' documents.
+        base = my_library if self.request.GET.get("mine") else visible_documents
+        return (
+            base(self.request.user)
+            .select_related("club")
+            .prefetch_related("pictures")
+            .defer("text")
+            .order_by("-createdon", "-pk")
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -172,6 +180,10 @@ class LibraryView(LibraryMixin, HTMxTableView):
         context["visibility_choices"] = [("", "Anyone"), *Visibility.choices]
         context["selected_visibility"] = chosen if chosen in Visibility.values else ""
         context["selected_visibility_label"] = dict(Visibility.choices).get(chosen, "")
+        context["topic_choices"] = [("", "Any topic"), *TOPICS]
+        context["selected_topic"] = self.request.GET.get("topic", "")
+        context["selected_topic_label"] = dict(TOPICS).get(context["selected_topic"], "")
+        context["mine"] = bool(self.request.GET.get("mine"))
         context["club"] = Club.objects.filter(slug=self.request.GET.get("club", "")).first()
         if not self.request.htmx:
             context["removed"] = Document.objects.filter(owner=user, removed=True).order_by("-createdon")
@@ -192,7 +204,7 @@ class LibrarySearchView(LibraryMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
         documents, chosen = _filtered(self.request, visible_documents(user))
-        query = self.request.GET.get("q", "").strip()[:300]
+        query = (self.request.GET.get("q") or self.request.GET.get("query") or "").strip()[:300]
         context.update(chosen)
         context["query"] = query
         context["topics"] = TOPICS

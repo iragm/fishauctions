@@ -8,9 +8,9 @@ server copy always wins. A conflicted op is never applied. Applied ops are recor
 :class:`~auctions.models.MobileOfflineOp` so a resent queue returns ``already_applied`` and a later
 op can reference an offline-created row by ``op:<op_id>``.
 
-This re-implements the effects of :class:`auctions.views.AuctionTOSAdmin`,
-:class:`auctions.views.BulkAddLots` and :class:`auctions.views.DynamicSetLotWinner` rather than
-calling those request/response views. Keep them in sync.
+This re-implements the effects of :class:`auctions.views.AuctionTOSAdmin` and
+:class:`auctions.views.BulkAddLots` rather than calling those request/response views. A sale is recorded
+by :func:`auctions.sales.record_sale`, the same code the set-winners page runs. Keep them in sync.
 """
 
 import datetime
@@ -22,6 +22,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from auctions import sales
 from auctions.bidding import MAX_BID
 from auctions.models import (
     Auction,
@@ -32,6 +33,7 @@ from auctions.models import (
     PickupLocation,
     note_email_if_unusable,
 )
+from auctions.sales import check_in_winner
 from auctions.services import apply_club_member_to_tos, ensure_club_member, existing_tos_for_club_member
 
 logger = logging.getLogger(__name__)
@@ -357,7 +359,7 @@ class _OpApplier:
         if lot is None:
             return self._conflict("not_found", "Lot not found")
 
-        server_sold = bool(lot.auctiontos_winner_id and lot.winning_price is not None)
+        server_sold = sales.is_sold(lot)
 
         if op.get("unsold"):
             if server_sold:
@@ -377,21 +379,28 @@ class _OpApplier:
             return self._conflict("invalid_price", "A valid winning price is required")
 
         if server_sold:
-            # The server copy wins: the same winner and price is a no-op, anything else a conflict.
-            if lot.auctiontos_winner_id == winner.pk and lot.winning_price == price:
-                self._record(op["op_id"], "set_winner", None, {})
-                return "already_applied", {}
-            return self._conflict("winner_conflict", self._server_sold_message(lot))
+            return self._sold_already(lot, op, winner, price)
 
         if self._invoice_blocks(lot.auctiontos_seller):
             return self._conflict("invoice_not_open", "The seller's invoice is not open")
         if self._invoice_blocks(winner):
             return self._conflict("invoice_not_open", f"Bidder {winner.bidder_number}'s invoice is not open")
 
-        self._set_winner(lot, winner, price, sold_at=self._recorded_at(op))
+        try:
+            self._set_winner(lot, winner, price, sold_at=self._recorded_at(op))
+        except sales.AlreadySold as exc:
+            # Recorded on the server between the check above and the lock; record_sale rolled back its own writes.
+            return self._sold_already(exc.lot, op, winner, price)
         self._record(op["op_id"], "set_winner", None, {})
         self._queue_recorded(lot)
         return "applied", {}
+
+    def _sold_already(self, lot, op, winner, price):
+        """The server copy wins: the same winner and price is a no-op, anything else a conflict."""
+        if lot.auctiontos_winner_id == winner.pk and lot.winning_price == price:
+            self._record(op["op_id"], "set_winner", None, {})
+            return "already_applied", {}
+        return self._conflict("winner_conflict", self._server_sold_message(lot))
 
     # -- effects (mirror DynamicSetLotWinner) ---------------------------------
 
@@ -449,47 +458,14 @@ class _OpApplier:
         )
 
     def _set_winner(self, lot, winning_tos, winning_price, sold_at=None):
-        """Mirror DynamicSetLotWinner.set_winner: winner, check-in side effects, history, bap."""
-        lot.auctiontos_winner = winning_tos
-        lot.winning_price = winning_price
-        lot.date_end = sold_at or timezone.now()
-        lot.active = False
-        lot.save()
-        if (
-            lot.auction
-            and lot.auction.use_check_in_mode
-            and lot.auctiontos_seller
-            and not lot.auctiontos_seller.checked_in
-        ):
-            seller = lot.auctiontos_seller
-            seller.checked_in = timezone.now()
-            update_fields = ["checked_in"]
-            if not seller.bidding_allowed:
-                seller.bidding_allowed = True
-                update_fields.append("bidding_allowed")
-            seller.save(update_fields=update_fields)
-            lot.auction.create_history(
-                applies_to="USERS",
-                action=f"Checked in {seller.name} (lot sold)",
-                user=self.user,
+        """The sale itself is :func:`auctions.sales.record_sale`, as on the web. Offline skips the soft checks,
+        so the winner is checked in as a force save does, and the history line is written here.
+        """
+        sales.record_sale(lot, winning_tos, winning_price, self.user, sold_at=sold_at)
+        if self.auction.use_check_in_mode and not winning_tos.checked_in:
+            check_in_winner(
+                winning_tos, self.auction, self.user, f"Checked in {winning_tos.name} (ignored errors, lot sold)"
             )
-        try:
-            lot.add_winner_message(self.user, winning_tos, winning_price)
-        except Exception:
-            logger.exception("add_winner_message failed for lot %s", lot.pk)
-        # The same running-total push the web screen sends; collapsed on the auction, so a late
-        # sync buzzes the buyer once with the final total.
-        try:
-            from auctions.notifications import notify_running_total
-
-            notify_running_total(lot)
-        except Exception:
-            logger.exception("notify_running_total failed for lot %s", lot.pk)
-        if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
-            try:
-                lot.auto_award_bap_points()
-            except Exception:
-                logger.exception("auto_award_bap_points failed for lot %s", lot.pk)
         self.auction.create_history(
             applies_to="LOTS",
             action=f"Set lot {lot.lot_number_display} as sold",

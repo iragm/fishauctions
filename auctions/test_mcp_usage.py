@@ -91,6 +91,7 @@ class RecordingTests(StandardTestCase):
         _anonymize_assistant_records(self.user)
         row = MCPCall.objects.get(tool="find_person")
         self.assertEqual((row.user, row.arguments, row.client), (None, "", ""))
+        self.assertEqual(row.result_metadata, {})
 
     def test_results_are_compact(self):
         text = self.call("my_context").json()["result"]["content"][0]["text"]
@@ -183,11 +184,11 @@ class UsageReportTests(AdminEndpointCase):
         found = self.call("mcp_usage")["structuredContent"]
         self.assertIn("3 tool calls from 1 people", found["summary"])
         (client,) = found["by_client"]
-        self.assertEqual((client["client"], client["calls"], client["went_wrong"]), ("«ChatGPT»", 3, "67%"))
+        self.assertEqual((client["client"], client["calls"], client["went_wrong"]), ("«ChatGPT»", 3, "33%"))
         unknown = [tool["tool"] for tool in found["by_tool"] if "describe_clubs" in tool["tool"]]
         self.assertEqual(unknown, ["«describe_clubs»"])
         self.assertIn("my_context", [tool["tool"] for tool in found["by_tool"]])
-        self.assertEqual({problem["outcome"] for problem in found["what_went_wrong"]}, {"empty", "unknown_tool"})
+        self.assertEqual({problem["outcome"] for problem in found["what_went_wrong"]}, {"unknown_tool"})
         (story,) = found["recent_conversations"]
         self.assertEqual(story["who"], "person 1")
         text = json.dumps(found)

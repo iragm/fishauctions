@@ -8,6 +8,7 @@
 {% endblock %}
 
 {% block htmx_table %}
+{% if show_import_members %}<a class="btn btn-info mb-3" href="{% url 'club_member_import' club.slug %}">Import members</a>{% endif %}
 {% if no_results %}
   {{ block.super }}
 {% else %}

@@ -137,15 +137,25 @@ class BuyingDashboardTests(StandardTestCase):
         Bid.objects.create(user=self.user_with_no_lots, lot_number=lot, amount=50)
         self.assertIn(">Outbid<", self._badge(lot))
 
-    def test_defaults_to_the_last_auction_used(self):
+    def test_defaults_to_the_last_auction_joined(self):
         watched = self._lot("In person watched", auction=self.in_person_auction)
         Watch.objects.create(user=self.userB, lot_number=watched)
-        self.userB.userdata.last_auction_used = self.in_person_auction
+        AuctionTOS.objects.create(
+            user=self.userB, auction=self.in_person_auction, pickup_location=self.in_person_location
+        )
+        # Looked at last, but joined earlier.
+        self.userB.userdata.last_auction_used = self.online_auction
         self.userB.userdata.save()
         response = self.client.get(reverse("buying"))
         self.assertEqual(response.context["auction"], self.in_person_auction)
         self.assertContains(response, "In person watched")
         self.assertNotContains(response, "A test lot")
+
+    def test_last_auction_used_when_nothing_is_joined(self):
+        AuctionTOS.objects.filter(user=self.userB).update(user=None)
+        self.userB.userdata.last_auction_used = self.in_person_auction
+        self.userB.userdata.save()
+        self.assertEqual(self.client.get(reverse("buying")).context["auction"], self.in_person_auction)
 
     def test_auction_dropdown_lists_joined_auctions(self):
         AuctionTOS.objects.create(

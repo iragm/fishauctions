@@ -1,0 +1,177 @@
+{
+  "_about": "Invented sample data for test auctions (auctions/sample_auction.py). The people are made up: no real person, no email, no phone.",
+  "participants": [
+    {
+      "name": "Terry Ashworth"
+    },
+    {
+      "name": "Priya Lindgren"
+    },
+    {
+      "name": "Walt Brannigan"
+    },
+    {
+      "name": "Lucia Fenwick"
+    },
+    {
+      "name": "Omar Castellan"
+    },
+    {
+      "name": "Gwen Tillotson"
+    },
+    {
+      "name": "Harlan Voss"
+    },
+    {
+      "name": "Mina Rasmussen"
+    },
+    {
+      "name": "Devon Pruitt"
+    },
+    {
+      "name": "Ines Calloway"
+    }
+  ],
+  "lots": [
+    {
+      "lot_name": "Neocaridina shrimp, 10 pack",
+      "seller": 0,
+      "quantity": 10,
+      "reserve_price": 4,
+      "description": "Mixed red and orange cherry shrimp, bred in a planted tank."
+    },
+    {
+      "lot_name": "Java fern on driftwood",
+      "seller": 1,
+      "quantity": 1,
+      "reserve_price": 5,
+      "description": "Established fern tied to a small piece of driftwood, ready to place."
+    },
+    {
+      "lot_name": "Bristlenose pleco, 2 inch",
+      "seller": 2,
+      "quantity": 1,
+      "reserve_price": 6,
+      "description": "Young albino bristlenose. Eats algae wafers and zucchini."
+    },
+    {
+      "lot_name": "Amazon sword plant",
+      "seller": 3,
+      "quantity": 1,
+      "reserve_price": 3,
+      "description": "Large healthy plant with several leaves and a good root system."
+    },
+    {
+      "lot_name": "Hang-on-back filter, 30 gallon",
+      "seller": 4,
+      "quantity": 1,
+      "reserve_price": 8,
+      "description": "Works fine, new sponge included. Cleaned and ready to run."
+    },
+    {
+      "lot_name": "Guppies, fancy mix, trio",
+      "seller": 5,
+      "quantity": 3,
+      "reserve_price": 6,
+      "description": "One male and two females, home bred. Mixed tail colors."
+    },
+    {
+      "lot_name": "Cory catfish, peppered, 4 pack",
+      "seller": 6,
+      "quantity": 4,
+      "reserve_price": 10,
+      "description": "Active little group, eating well. Great for community tanks."
+    },
+    {
+      "lot_name": "Anubias nana, 3 rhizomes",
+      "seller": 7,
+      "quantity": 3,
+      "reserve_price": 5,
+      "description": "Hardy low light plant, rhizomes with leaves attached."
+    },
+    {
+      "lot_name": "Dwarf hairgrass, large portion",
+      "seller": 8,
+      "quantity": 1,
+      "reserve_price": 4,
+      "description": "Carpeting plant, trimmed from a thick mat. Plant in small tufts."
+    },
+    {
+      "lot_name": "Sponge filter, large",
+      "seller": 9,
+      "quantity": 1,
+      "reserve_price": 3,
+      "description": "Air driven sponge filter, seasoned in a mature tank."
+    },
+    {
+      "lot_name": "Albino cory, 3 pack",
+      "seller": 0,
+      "quantity": 3,
+      "reserve_price": 8,
+      "description": "Juveniles about an inch long, eating flakes and frozen food."
+    },
+    {
+      "lot_name": "Ramshorn snails, 12 pack",
+      "seller": 1,
+      "quantity": 12,
+      "reserve_price": 2,
+      "description": "Red ramshorns. A small starter group for a planted tank."
+    },
+    {
+      "lot_name": "Cherry barbs, 6 pack",
+      "seller": 2,
+      "quantity": 6,
+      "reserve_price": 8,
+      "description": "Peaceful schooling fish, a mix of males and females."
+    },
+    {
+      "lot_name": "Cryptocoryne wendtii, 2 pots",
+      "seller": 3,
+      "quantity": 2,
+      "reserve_price": 6,
+      "description": "Bronze wendtii potted in gravel, ready for a low tech tank."
+    },
+    {
+      "lot_name": "Glass lid, 20 gallon long",
+      "seller": 4,
+      "quantity": 1,
+      "reserve_price": 5,
+      "description": "Fits a 20 gallon long tank, no chips. Two feeding flaps."
+    },
+    {
+      "lot_name": "Betta, male, halfmoon",
+      "seller": 5,
+      "quantity": 1,
+      "reserve_price": 12,
+      "description": "Blue and white male, a bit over a year old. Eats pellets well."
+    },
+    {
+      "lot_name": "Marimo moss balls, 4 pack",
+      "seller": 6,
+      "quantity": 4,
+      "reserve_price": 6,
+      "description": "About an inch and a half across, easy care and slow growing."
+    },
+    {
+      "lot_name": "Aquarium heater, 100 watt",
+      "seller": 7,
+      "quantity": 1,
+      "reserve_price": 6,
+      "description": "Submersible heater with adjustable dial, tested and accurate."
+    },
+    {
+      "lot_name": "Platy, mixed, 5 pack",
+      "seller": 8,
+      "quantity": 5,
+      "reserve_price": 6,
+      "description": "Assorted colors, home bred. Peaceful and hardy."
+    },
+    {
+      "lot_name": "Water sprite bunch",
+      "seller": 9,
+      "quantity": 1,
+      "reserve_price": 3,
+      "description": "Floating or planted, grows very quickly. Good for new tanks."
+    }
+  ]
+}

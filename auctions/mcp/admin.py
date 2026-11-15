@@ -56,7 +56,7 @@ from auctions import club_onboarding, palette_actions, palette_routes
 from auctions.helper_functions import scrub_emails
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
 
-from . import admin_species, tools
+from . import admin_reports, admin_species, tools
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,11 @@ INSTRUCTIONS = (
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
     "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
     "list_feature_requests, read_logs, list_app_crashes, site_health, "
-    "palette_shortcut_candidates, mcp_usage, square_reconnects and untrusted_auction_creators. Nothing here "
+    "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects, untrusted_auction_creators, and seventeen growth "
+    "reports (signup_funnel, entry_page_outcomes, club_retention, unclaimed_people, dead_ends, "
+    "help_search_misses, referrers_without_club, seller_reach, feature_adoption_by_club, "
+    "auction_setup_time, read_feedback, club_first_touch, outreach_outcomes, tools_vs_retention, club_funnel, outreach_queue, feature_email_results) "
+    "that name nobody. Nothing here "
     "changes the site; backup_database only copies its data offsite. "
     "To change its data, call propose_change with the exact tool calls: a person reads the "
     "proposal on the site and approves or rejects it, and only then does it run. An idea for the "
@@ -1259,7 +1263,38 @@ def palette_shortcut_candidates(request, params: dict[str, Any]) -> dict[str, An
     lookups = palette_assist.mine_preloaded_lookups(min_count)
     summary = f"{len(found)} phrase{'s' if len(found) != 1 else ''} the assistant always sends to the same page"
     summary += f", {len(disputed)} it answers more than one way, {len(lookups)} answered from one lookup."
-    return _ok(summary, candidates=found[:SHORTCUT_CANDIDATES_SHOWN], answered_two_ways=len(disputed))
+    return _ok(
+        summary,
+        candidates=found[:SHORTCUT_CANDIDATES_SHOWN],
+        answered_two_ways=len(disputed),
+        actions_run=_palette_writes_run(),
+    )
+
+
+def _palette_writes_run(days: int = 90) -> list[dict[str, Any]]:
+    """The writes people ran through the palette lately, most first: the verbs worth a place on the
+    page that uses them (``command_palette.page_verb_items``)."""
+    from django.db.models import Count
+
+    from auctions.models import LLMUsage
+
+    rows = (
+        # A "done" round is a write that ran; a countdown card nobody confirmed is a different kind.
+        LLMUsage.objects.filter(
+            createdon__gte=timezone.now() - timedelta(days=days), success=True, cancelled=False, response_kind="done"
+        )
+        .exclude(action="")
+        .values("action")
+        .annotate(times=Count("pk"), people=Count("user", distinct=True))
+        .order_by("-times")
+    )
+    found = []
+    for row in rows:
+        action = palette_actions.get_action(row["action"])
+        if action is None or tools.read_only(action):
+            continue
+        found.append({"action": action.name, "times": row["times"], "people": row["people"]})
+    return found[:15]
 
 
 def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -1295,6 +1330,9 @@ def mcp_usage(request, params: dict[str, Any]) -> dict[str, Any]:
     for story in found["recent_conversations"]:
         story["client"] = fence(story["client"])
         story["calls"] = [fence(step) for step in story["calls"]]
+    for search in found["recent_searches"]:
+        search["tool"] = tool_name(search["tool"])
+        search["arguments"] = fence(search["arguments"])
     found["ai_page"]["marked_not_helpful"] = [fence(query) for query in found["ai_page"]["marked_not_helpful"]]
     found["skills_asked_for"] = [fence(skill) for skill in found["skills_asked_for"]]
     summary = found.pop("summary")
@@ -1490,6 +1528,91 @@ def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Added {club.name} (club {club.pk}), {shown}.{where}", club=club.pk)
 
 
+#: Clubs per ``list_clubs`` page by default and at most: a full row with a website, Facebook page and
+#: meeting place is about 450 characters, so 30 stays well inside ``tools.MAX_RESULT_CHARS``.
+CLUB_DIRECTORY_PAGE = 30
+
+
+def _club_row(club) -> dict[str, Any]:
+    """One club as ``list_clubs`` shows it. Club admins and imports typed these, so they're fenced.
+
+    No contact address leaves this endpoint (:func:`private`), so only whether there is one and whether
+    it is at the club's own website's domain. An unlisted club's meeting place may be somebody's house
+    and was never published, so only listed clubs show theirs.
+    """
+    from auctions import club_import
+    from auctions.models import Club
+
+    email = (club.contact_email or "").strip()
+    email_domain = email.rpartition("@")[2].lower().removeprefix("www.") if email.count("@") == 1 else ""
+    homepage_domain = club_import.domain_of(club.homepage or "")
+    listed = club.outreach_stage == Club.LISTED
+    return {
+        "club": club.pk,
+        "name": palette_actions.untrusted_short(club.name),
+        "abbreviation": palette_actions.untrusted_short(club.abbreviation or ""),
+        "homepage": palette_actions.untrusted_short(club.homepage or ""),
+        "facebook_page": palette_actions.untrusted_short(club.facebook_page or ""),
+        "location": palette_actions.untrusted_short(club.location or "") if listed else "",
+        "on_the_map": club.latitude is not None and club.longitude is not None,
+        "has_contact_email": bool(email),
+        "contact_email_at_homepage_domain": bool(email_domain and email_domain == homepage_domain),
+        "contact_method": club.contact_method,
+        "stage": club.outreach_stage,
+        "active": club.active,
+    }
+
+
+def list_clubs(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The whole club directory, prospects included, with the details ``add_club`` and ``update_club`` set.
+
+    What an agent checks a pasted list of clubs against before proposing either. ``name`` (with an
+    optional ``homepage``) asks the question ``add_club`` itself asks, :func:`club_import.find_existing`:
+    same website domain, or a close enough name.
+    """
+    from django.db.models import Q
+
+    from auctions import club_import
+    from auctions.models import Club
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    clubs = Club.objects.order_by("name", "pk")
+    name = _str(params, "name")[:255]
+    if name:
+        found = club_import.ImportedClub(name=name, homepage=club_onboarding.web_address(_str(params, "homepage")))
+        existing = club_import.find_existing(found, list(clubs))
+        if existing is None:
+            return _ok("No club on the site matches that name or website.", clubs=[])
+        return _ok(f"That is club {existing.pk}.", clubs=[_club_row(existing)])
+    stages = dict(Club.OUTREACH_STAGE_CHOICES)
+    labels = {label.lower(): value for value, label in Club.OUTREACH_STAGE_CHOICES}
+    stage = _str(params, "stage").lower()
+    if stage:
+        stage = labels.get(stage, stage)
+        if stage not in stages:
+            return _need("Which stage? One of: " + ", ".join(stages) + ".")
+        clubs = clubs.filter(outreach_stage=stage)
+    search = _str(params, "search")[:100]
+    if search:
+        clubs = clubs.filter(
+            Q(name__icontains=search)
+            | Q(abbreviation__icontains=search)
+            | Q(homepage__icontains=search)
+            | Q(facebook_page__icontains=search)
+            | Q(location__icontains=search, outreach_stage=Club.LISTED)
+        )
+    total = clubs.count()
+    limit, offset = palette_actions._slice(params, CLUB_DIRECTORY_PAGE)
+    limit = min(limit, CLUB_DIRECTORY_PAGE)
+    rows = [_club_row(club) for club in clubs[offset : offset + limit]]
+    found = {"clubs": rows}
+    if offset + len(rows) < total:
+        found["next_offset"] = offset + len(rows)
+    showing = palette_actions._showing(total, limit, offset)
+    return _ok(f"{total} club{'s' if total != 1 else ''}.{showing}", **found)
+
+
 def _club(params: dict[str, Any]):
     """The club a step names, by number or exact name, and ``None`` if that isn't exactly one."""
     from auctions.models import Club
@@ -1517,6 +1640,63 @@ def set_club_stage(request, params: dict[str, Any]) -> dict[str, Any]:
     club.outreach_stage = stage
     club.save(update_fields=["outreach_stage"])
     return _ok(f"{club.name} is now “{stages[stage]}”.")
+
+
+#: What ``record_outreach`` accepts as the email that went: see ``admin_reports.outreach_queue``.
+OUTREACH_VERSIONS = {
+    "a": "the general introduction",
+    "b": "the one for a club with its own system",
+    "lapsed": "a personal note to a club that stopped",
+}
+
+
+def record_outreach(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Note that the owner wrote to a club: stamps ``date_contacted`` (which keeps it off
+    ``outreach_queue`` for two years) and logs which email it was. A listed club stays listed."""
+    from auctions.models import Club, ClubHistory
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    club = _club(params)
+    if club is None:
+        return _error("There is no one club by that number or name.")
+    version = _str(params, "version", "a").lower()
+    if version not in OUTREACH_VERSIONS:
+        return _need("Which email? a (general), b (club with its own system) or lapsed (a club that stopped).")
+    reason = _str(params, "stall_reason").lower()
+    reasons = {value for value, _label in Club.STALL_REASON_CHOICES}
+    if reason and reason not in reasons:
+        return _need("stall_reason is one of: " + ", ".join(sorted(reasons - {""})) + ".")
+    if _flag(params, "replied"):
+        club.outreach_replied_on = timezone.now()
+        fields = ["outreach_replied_on"]
+        if reason:
+            club.stall_reason = reason
+            fields.append("stall_reason")
+        club.save(update_fields=fields)
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action="Replied to outreach" + (f" ({reason})" if reason else "") + ", through an approved proposal.",
+            applies_to="SETTINGS",
+        )
+        return _ok(f"Recorded that {club.name} wrote back.", club=club.pk)
+    club.date_contacted = timezone.now()
+    fields = ["date_contacted"]
+    if club.outreach_stage == Club.PROSPECT:
+        club.outreach_stage = Club.CONTACTED
+        fields.append("outreach_stage")
+    if reason:
+        club.stall_reason = reason
+        fields.append("stall_reason")
+    club.save(update_fields=fields)
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action=f"Outreach email {version.upper()} ({OUTREACH_VERSIONS[version]}) sent, through an approved proposal.",
+        applies_to="SETTINGS",
+    )
+    return _ok(f"Recorded outreach email {version.upper()} to {club.name}.", club=club.pk)
 
 
 def trust_user(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -1586,6 +1766,159 @@ def merge_accounts(request, params: dict[str, Any]) -> dict[str, Any]:
     name = closed.username
     merge(closed, kept)
     return _ok(f"Moved everything from {name} to {kept.username} and closed {name}.")
+
+
+# --- the speaker directory's duplicates ---------------------------------------------------------------
+
+
+def _speaker(params: dict[str, Any], key: str):
+    """The live speaker a step names by slug, or ``None``."""
+    from auctions.models import Speaker
+
+    slug = _str(params, key)
+    return Speaker.objects.filter(slug=slug, is_deleted=False).first() if slug else None
+
+
+def _speaker_row(speaker) -> dict[str, Any]:
+    bio = " ".join((speaker.bio or "").split())
+    return {
+        "slug": speaker.slug,
+        "name": palette_actions.untrusted_short(speaker.display_name),
+        "location": palette_actions.untrusted_short(speaker.location),
+        "bio_starts": palette_actions.untrusted(bio[:200]) if bio else "",
+        "visibility": speaker.visibility,
+        "from_the_nec": speaker.imported_from_nec,
+        "has_an_account": bool(speaker.user_id),
+        "added_on": speaker.createdon.date().isoformat() if speaker.createdon else "",
+        "page_url": speaker.get_absolute_url(),
+    }
+
+
+def _speaker_pair(params: dict[str, Any]):
+    """``merge_speakers``' two speakers as ``(closed, kept, "")``, or ``(None, None, why not)``."""
+    from auctions.speaker_duplicates import merge_problem
+
+    closed, kept = _speaker(params, "close"), _speaker(params, "keep")
+    problem = merge_problem(closed, kept)
+    return (None, None, problem) if problem else (closed, kept, "")
+
+
+def merge_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Fold one speaker into another: the duplicate's address redirects to the kept page."""
+    from auctions import speaker_duplicates
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    closed, kept, problem = _speaker_pair(params)
+    if problem:
+        return _error(problem)
+    speaker_duplicates.merge_speakers(closed, kept)
+    return _ok(f"Merged {closed.slug} into {kept.slug}.")
+
+
+def _speaker_and_claimant(params: dict[str, Any]):
+    """A claim step's speaker and account as ``(speaker, user, claim, "")``, or ``(None, None, None, why not)``."""
+    from auctions.models import SpeakerClaim
+
+    speaker, user = _speaker(params, "speaker"), _account(params, "account")
+    if speaker is None:
+        return None, None, None, "There is no live speaker by that slug."
+    if user is None:
+        return None, None, None, "There is no active account by that number or username."
+    claim = SpeakerClaim.objects.filter(speaker=speaker, user=user).first()
+    if claim is None:
+        return None, None, None, "That account hasn't asked for that speaker's page."
+    return speaker, user, claim, ""
+
+
+def _claim_problem(params: dict[str, Any]) -> str:
+    speaker, user, _claim, problem = _speaker_and_claimant(params)
+    if problem:
+        return problem
+    if speaker.user_id and speaker.user_id != user.pk:
+        return "That speaker already belongs to another account."
+    if user.is_staff or user.is_superuser:
+        return "Staff accounts aren't linked through a proposal."
+    return ""
+
+
+def link_speaker_to_account(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Approve a "This is me": the speaker becomes the account's profile, its own profile merged in."""
+    from auctions import speaker_duplicates
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    problem = _claim_problem(params)
+    if problem:
+        return _error(problem)
+    speaker, user, _claim, _problem = _speaker_and_claimant(params)
+    speaker_duplicates.link_speaker_to_account(speaker, user)
+    return _ok(f"{speaker.slug} is now {user.username}'s speaker profile.")
+
+
+def decline_speaker_claim(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Turn down a "This is me" that isn't them. The page stays as it is."""
+    from auctions.models import SpeakerClaim
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    _speaker_obj, _user, claim, problem = _speaker_and_claimant(params)
+    if problem:
+        return _error(problem)
+    SpeakerClaim.objects.filter(pk=claim.pk).update(status=SpeakerClaim.STATUS_DECLINED)
+    return _ok("Declined.")
+
+
+def find_duplicate_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Open "This is me" requests, then pairs of speakers that are probably one person, each with the
+    proposal step that would settle it.
+    """
+    from auctions import speaker_duplicates
+    from auctions.models import Speaker, SpeakerClaim
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    claims = []
+    for claim in SpeakerClaim.objects.filter(status=SpeakerClaim.STATUS_OPEN, speaker__is_deleted=False).select_related(
+        "speaker", "user"
+    )[:50]:
+        own = Speaker.objects.filter(user=claim.user, is_deleted=False).exclude(pk=claim.speaker_id).first()
+        claims.append(
+            {
+                "speaker": _speaker_row(claim.speaker),
+                "account": claim.user_id,
+                "account_name": palette_actions.untrusted_short(claim.user.get_full_name() or claim.user.username),
+                "their_own_profile": _speaker_row(own) if own else None,
+                "asked_on": claim.createdon.date().isoformat(),
+                "approve_with": {
+                    "tool": "link_speaker_to_account",
+                    "arguments": {"speaker": claim.speaker.slug, "account": claim.user_id},
+                },
+                "decline_with": {
+                    "tool": "decline_speaker_claim",
+                    "arguments": {"speaker": claim.speaker.slug, "account": claim.user_id},
+                },
+            }
+        )
+    pairs = []
+    for first, second, reasons in speaker_duplicates.duplicate_groups():
+        kept, closed = speaker_duplicates.suggested_keep(first, second)
+        problem = speaker_duplicates.merge_problem(closed, kept)
+        row = {"keep": _speaker_row(kept), "close": _speaker_row(closed), "why": reasons}
+        if problem:
+            row["cannot_merge"] = problem
+        else:
+            row["merge_with"] = {"tool": "merge_speakers", "arguments": {"keep": kept.slug, "close": closed.slug}}
+        pairs.append(row)
+    limit, offset = palette_actions._slice(params)
+    result = {"claims": claims, "pairs": pairs[offset : offset + limit], "total_pairs": len(pairs)}
+    if offset + limit < len(pairs):
+        result["next_offset"] = offset + limit
+    summary = (
+        f'{len(claims)} open "This is me" request{"s" if len(claims) != 1 else ""} and '
+        f"{len(pairs)} likely duplicate pair{'s' if len(pairs) != 1 else ''}. Read both pages before proposing a merge."
+    )
+    return _ok(summary, **result)
 
 
 def _auction_and_club(params: dict[str, Any]):
@@ -1736,6 +2069,8 @@ UPDATABLE_CLUB_FIELDS = {
     "contact_email": 255,
     "contact_method": 20,
     "notes": 300,
+    "other_software": 20,
+    "auction_cadence": 20,
 }
 
 
@@ -1781,6 +2116,16 @@ def _club_changes(params: dict[str, Any]):
         methods = {value for value, _label in Club.CONTACT_METHOD_CHOICES}
         if changes["contact_method"] not in methods:
             return club, {}, None, "contact_method is one of: " + ", ".join(sorted(methods - {""})) + "."
+    if "other_software" in changes:
+        changes["other_software"] = changes["other_software"].lower()
+        kinds = {value for value, _label in Club.OTHER_SOFTWARE_CHOICES}
+        if changes["other_software"] not in kinds:
+            return club, {}, None, "other_software is one of: " + ", ".join(sorted(kinds - {""})) + ", or empty."
+    if "auction_cadence" in changes:
+        changes["auction_cadence"] = changes["auction_cadence"].lower()
+        answers = {value for value, _label in Club.AUCTION_CADENCE_CHOICES}
+        if changes["auction_cadence"] not in answers:
+            return club, {}, None, "auction_cadence is one of: " + ", ".join(sorted(answers - {""})) + ", or empty."
     interests = None
     if "interests" in params:
         names = [name.strip() for name in _str(params, "interests").split(",") if name.strip()]
@@ -1823,7 +2168,9 @@ def update_club(request, params: dict[str, Any]) -> dict[str, Any]:
             else ""
         )
     for field, value in changes.items():
-        setattr(club, field, value or (None if field != "contact_method" else ""))
+        setattr(
+            club, field, value or (None if field not in ("contact_method", "other_software", "auction_cadence") else "")
+        )
     club.save()
     if interests is not None:
         club.interests.set(interests)
@@ -2000,7 +2347,7 @@ APPROVAL_ONLY: dict[str, Action] = {
             name="add_club",
             description=(
                 "Create a club the owner told you about. Check first that it isn't already on the site "
-                "(clubs_near_me, describe_club); a club that looks like one already here is refused. "
+                "(list_clubs with its name and homepage); a club that looks like one already here is refused. "
                 "Listed on the map and in club search unless listed is false."
             ),
             params={
@@ -2029,6 +2376,27 @@ APPROVAL_ONLY: dict[str, Action] = {
             idempotent=True,
             confirm_template="Set a club's outreach stage",
             resolver=set_club_stage,
+        ),
+        Action(
+            name="record_outreach",
+            description=(
+                "Record that the owner emailed a club from outreach_queue: it leaves the queue for two years, "
+                "and the club's history says which email went. A listed club stays listed. With replied=true, "
+                "record instead that the club wrote back, which takes it off outreach_queue(awaiting_reply=true)."
+            ),
+            params={
+                "club": "string, required. The club's number, or its exact name.",
+                "version": (
+                    "string, optional, default a. a (general), b (a club with its own system) or lapsed "
+                    "(a club that stopped)."
+                ),
+                "stall_reason": "string, optional. Why it stalled, if the owner already knows (uses_other, ...).",
+                "replied": "boolean, optional, default false. True records a reply rather than an email sent.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Record an outreach email",
+            resolver=record_outreach,
         ),
         Action(
             name="trust_user",
@@ -2109,6 +2477,14 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "contact_email": "string, optional. Where membership questions should go.",
                 "contact_method": "string, optional. email, webform or facebook: how to reach it.",
                 "notes": "string, optional. For the owner only, at most 300 characters.",
+                "other_software": (
+                    "string, optional. What it may run auctions on instead: mygroupauctions, own or other; "
+                    "empty clears it."
+                ),
+                "auction_cadence": (
+                    "string, optional. The club's answer about monthly auctions, when it replied in words: "
+                    "monthly, no_monthly or not_interested; empty clears it and lets the email ask again."
+                ),
                 "interests": "string, optional. Comma-separated interest names, replacing the club's.",
             },
             danger=DANGER_CONFIRM,
@@ -2147,6 +2523,48 @@ APPROVAL_ONLY: dict[str, Action] = {
             resolver=merge_accounts,
         ),
         Action(
+            name="merge_speakers",
+            description=(
+                "Fold a duplicate speaker into another: blanks filled, topics, tags and comments moved, and "
+                "the duplicate's page redirecting to the kept one. The person's own (account-linked) text "
+                "wins. find_duplicate_speakers suggests the pairs."
+            ),
+            params={
+                "keep": "string, required. The slug of the speaker page to keep.",
+                "close": "string, required. The slug of the duplicate to fold in and retire.",
+            },
+            danger=DANGER_CONFIRM,
+            destructive=True,
+            confirm_template="Merge two speakers",
+            resolver=merge_speakers,
+        ),
+        Action(
+            name="link_speaker_to_account",
+            description=(
+                'Approve a "This is me" request: the speaker page becomes that account\'s profile, and any '
+                "profile the account already had is merged into it. find_duplicate_speakers lists the requests."
+            ),
+            params={
+                "speaker": "string, required. The slug of the speaker page that was claimed.",
+                "account": "string, required. The claiming account's number or username.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="Give a speaker page to its owner",
+            resolver=link_speaker_to_account,
+        ),
+        Action(
+            name="decline_speaker_claim",
+            description='Turn down a "This is me" request that isn\'t them. The page is left as it is.',
+            params={
+                "speaker": "string, required. The slug of the speaker page that was claimed.",
+                "account": "string, required. The claiming account's number or username.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Decline a speaker page request",
+            resolver=decline_speaker_claim,
+        ),
+        Action(
             name="add_palette_shortcut",
             description=(
                 "Answer one phrase from the command palette straight from the page catalogue, with no "
@@ -2176,6 +2594,9 @@ PROPOSAL_CHECKS = {
     "update_club": lambda arguments: _club_changes(arguments)[3],
     "link_auction_to_club": lambda arguments: _auction_and_club(arguments)[2],
     "merge_accounts": lambda arguments: _merge_pair(arguments)[2],
+    "merge_speakers": lambda arguments: _speaker_pair(arguments)[2],
+    "link_speaker_to_account": _claim_problem,
+    "decline_speaker_claim": lambda arguments: _speaker_and_claimant(arguments)[3],
     "add_palette_shortcut": _shortcut_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
@@ -2360,7 +2781,7 @@ def suggest_feature(request, params: dict[str, Any]) -> dict[str, Any]:
     reason = _str(params, "reason")
     if evidence:
         reason = f"{reason}\n\nEvidence: {evidence}" if reason else f"Evidence: {evidence}"
-    result = palette_actions.request_a_skill(
+    result = palette_actions.request_feature(
         request, {"skill": feature, "reason": reason, "params": _str(params, "would_need")}
     )
     if result.get("request_id"):
@@ -2503,6 +2924,20 @@ ADMIN_TOOLS: dict[str, Action] = {
             resolver=read_logs,
         ),
         Action(
+            name="find_duplicate_speakers",
+            description=(
+                'The speaker directory\'s open "This is me" requests, and pairs of speakers that are probably '
+                "one person (same or similar name, email or website), each with the proposal step that "
+                "settles it: merge_speakers, link_speaker_to_account or decline_speaker_claim."
+            ),
+            params={
+                "limit": "integer, optional, default 15. Pairs to return.",
+                "offset": "integer, optional, default 0.",
+            },
+            danger=DANGER_SAFE,
+            resolver=find_duplicate_speakers,
+        ),
+        Action(
             name="site_health",
             description=(
                 "What is deployed and whether it is well: branch and commit, migrations not yet "
@@ -2541,11 +2976,14 @@ ADMIN_TOOLS: dict[str, Action] = {
             resolver=list_app_crashes,
         ),
         *admin_species.READS,
+        *admin_reports.READS,
         Action(
             name="palette_shortcut_candidates",
             description=(
                 "Phrases people type into the command palette that the assistant has sent to the same "
-                "page every time, and have no shortcut yet. Each can be proposed as add_palette_shortcut."
+                "page every time, and have no shortcut yet. Each can be proposed as add_palette_shortcut. "
+                "Also the writes people ran through the palette in 90 days, most first: verbs worth "
+                "offering on the page that uses them."
             ),
             params={
                 "min_count": "integer, optional, default 5, at least 5. How many times a phrase must have been asked.",
@@ -2583,6 +3021,25 @@ ADMIN_TOOLS: dict[str, Action] = {
             params={"days": "integer, optional, default 7. How far back to look, at most 60."},
             danger=DANGER_SAFE,
             resolver=untrusted_auction_creators,
+        ),
+        Action(
+            name="list_clubs",
+            description=(
+                "The whole club directory, prospects included: each club's number, name, abbreviation, "
+                "website, Facebook page, meeting place (listed clubs only), contact method, whether it has "
+                "a contact email, and outreach stage. Pass name (and homepage) to ask whether one club is "
+                "already here, the same check add_club makes, before proposing add_club or update_club."
+            ),
+            params={
+                "name": "string, optional. A club's name: returns the one club on the site it matches, if any.",
+                "homepage": "string, optional, with name. Its website; a club at the same domain matches.",
+                "search": "string, optional. Only clubs whose name, abbreviation, website, Facebook or place contains this.",
+                "stage": "string, optional. listed, contacted or prospect.",
+                "limit": f"integer, optional, default {CLUB_DIRECTORY_PAGE}, at most {CLUB_DIRECTORY_PAGE}.",
+                "offset": "integer, optional, default 0. Skip this many clubs (next_offset).",
+            },
+            danger=DANGER_SAFE,
+            resolver=list_clubs,
         ),
         Action(
             name="square_reconnects",

@@ -1185,6 +1185,15 @@ class AuctionEventWordingOverMCPTests(TestCase):
         html = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key}), {"format": "js"})
         self.assertContains(html, "Speaker: a guest")
 
+    def test_embed_links_say_they_came_from_the_club_website(self):
+        client = Client()
+        events = client.get(reverse("club_events_embed", kwargs={"slug": self.club.url_key})).json()["events"]
+        auction = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key})).json()["auction"]
+        for url in [row["url"] for row in events] + [auction["url"]]:
+            self.assertTrue(url.endswith("?src=embed"), url)
+        html = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key}), {"format": "iframelight"})
+        self.assertContains(html, "?src=embed")
+
     def test_the_generated_blurb_stays_off_the_embeds(self):
         client = Client()
         auction = client.get(reverse("club_auction_embed", kwargs={"slug": self.club.url_key})).json()["auction"]

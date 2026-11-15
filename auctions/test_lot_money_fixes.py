@@ -401,17 +401,9 @@ class AdjustmentCapTests(StandardTestCase):
 
     def test_the_invoice_formset_caps_the_amount(self):
         self.client.force_login(self.admin_user)
-        data = {
-            "form-TOTAL_FORMS": "1",
-            "form-INITIAL_FORMS": "0",
-            "form-MIN_NUM_FORMS": "0",
-            "form-MAX_NUM_FORMS": "1000",
-            "form-0-adjustment_type": "ADD",
-            "form-0-amount": "100000",
-            "form-0-notes": "typo",
-        }
-        response = self.client.post(reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk}), data)
-        self.assertEqual(response.status_code, 200)
+        data = {"row": "n1", "adjustment_type": "ADD", "amount": "100000", "notes": "typo"}
+        response = self.client.post(reverse("invoice_adjustment_save", kwargs={"pk": self.invoice.pk}), data)
+        self.assertEqual(response.status_code, 422)
         self.assertFalse(InvoiceAdjustment.objects.filter(invoice=self.invoice).exists())
 
 

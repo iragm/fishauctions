@@ -3,7 +3,7 @@
 {% load i18n %}
 {% block title %}Quick checkout for {{ auction }}{% endblock %}
 {% block extra_js %}
-{% if show_camera_scanner %}<script src="{% static 'js/camera_scanner.js' %}"></script>{% endif %}
+{% if show_camera_scanner %}{% include "auctions/camera_scanner.html" %}{% endif %}
 <script>
 $(document).ready(function() {
   (function(){
@@ -44,44 +44,60 @@ $(document).ready(function() {
     // Re-fetch the checkout section (regenerating QR codes with the updated total)
     // whenever the membership renewal checkbox is toggled.
     document.body.addEventListener('renewalToggled', function() {
-      const value = ($tos.val() || '').trim();
+      const value = ($('#tos').val() || '').trim();
       if (value) {
         htmx.ajax('get', '/api/auctions/{{ auction.slug }}/checkout/' + encodeURIComponent(value), { target: '#result' });
       }
     });
   })();
-  var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
-  const auctionWebSocket = new WebSocket(
-      ws_protocol
-      + window.location.host
-      + '/ws/auctions/{{ auction.pk }}/'
-  );
-  auctionWebSocket.onmessage = function(e) {
-    const data = JSON.parse(e.data);
-    console.log(data);
-    if (data.type == "invoice_approved") {
-      console.log(data);
-      // Update both PayPal and Square QR scan text if they exist
-      const paypalQrScan = document.getElementById("invoice_" + data.pk + "_paypal_qr_scan");
-      const squareQrScan = document.getElementById("invoice_" + data.pk + "_square_qr_scan");
-      if (paypalQrScan) {
-        paypalQrScan.innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+  var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+  let auctionSocketDelay = 1000;
+  let auctionSocketReconnecting = false;
+  function connectAuctionSocket() {
+    const auctionWebSocket = new WebSocket(
+        ws_protocol
+        + window.location.host
+        + '/ws/auctions/{{ auction.pk }}/'
+    );
+    auctionWebSocket.onopen = function() {
+      auctionSocketDelay = 1000;
+      if (auctionSocketReconnecting) {
+        // Payments that finished while the socket was down are only shown after a re-fetch.
+        auctionSocketReconnecting = false;
+        const value = ($('#tos').val() || '').trim();
+        if (value) {
+          htmx.ajax('get', '/api/auctions/{{ auction.slug }}/checkout/' + encodeURIComponent(value), { target: '#result' });
+        }
       }
-      if (squareQrScan) {
-        squareQrScan.innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+    };
+    auctionWebSocket.onmessage = function(e) {
+      const data = JSON.parse(e.data);
+      if (data.type == "invoice_approved") {
+        // Update both PayPal and Square QR scan text if they exist
+        const paypalQrScan = document.getElementById("invoice_" + data.pk + "_paypal_qr_scan");
+        const squareQrScan = document.getElementById("invoice_" + data.pk + "_square_qr_scan");
+        if (paypalQrScan) {
+          paypalQrScan.innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+        }
+        if (squareQrScan) {
+          squareQrScan.innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+        }
       }
-
-    }
-    else if (data.type == "capture_complete") {
-      paymentCompleted(data.pk);
-
-    }
-    else if (data.type == "invoice_paid") {
-      paymentCompleted(data.pk);
-
-
-    }
+      else if (data.type == "capture_complete") {
+        paymentCompleted(data.pk);
+      }
+      else if (data.type == "invoice_paid") {
+        paymentCompleted(data.pk);
+      }
+    };
+    auctionWebSocket.onclose = function() {
+      // Reconnect with backoff (1s doubling to 15s) so the page heals itself.
+      auctionSocketReconnecting = true;
+      setTimeout(connectAuctionSocket, auctionSocketDelay);
+      auctionSocketDelay = Math.min(auctionSocketDelay * 2, 15000);
+    };
   }
+  connectAuctionSocket();
 });
 function paymentCompleted(pk) {
   const btnWrapper = document.getElementById(`invoice_${pk}_button_wrapper`);

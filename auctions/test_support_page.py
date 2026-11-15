@@ -210,6 +210,52 @@ class SupportFormDeliveryTests(TestCase):
         self.assertContains(response, "your message is on its way")
         self.assertFalse(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
 
+    def test_a_blocked_domain_looks_sent_but_sends_nothing(self):
+        from post_office.models import Email
+
+        from auctions.models import BlockedEmailDomain
+
+        BlockedEmailDomain.objects.create(domain=" @Spam.Example ")
+        for email in ("bob@spam.example", "BOB@SPAM.EXAMPLE", "bob@mail.spam.example", "bob@ｓpam.example"):
+            response = self.client.post(self.url, {**self.body, "email": email}, follow=True)
+            self.assertContains(response, "your message is on its way")
+        self.assertFalse(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
+
+    def test_a_lookalike_domain_is_not_blocked(self):
+        from post_office.models import Email
+
+        from auctions.models import BlockedEmailDomain
+
+        BlockedEmailDomain.objects.create(domain="spam.example")
+        self.client.post(self.url, {**self.body, "email": "bob@notspam.example"})
+        self.assertTrue(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
+
+    def test_the_admin_rejects_something_that_is_not_a_domain(self):
+        from django.core.exceptions import ValidationError
+
+        from auctions.models import BlockedEmailDomain
+
+        for bad in ("@", "com", "http://spam.example", "*.spam.example"):
+            with self.assertRaises(ValidationError):
+                BlockedEmailDomain(domain=bad).full_clean()
+        entry = BlockedEmailDomain(domain=" @Spam.Example. ")
+        entry.full_clean()
+        self.assertEqual(entry.domain, "spam.example")
+
+    def test_the_migration_seeds_the_list(self):
+        # Called directly: a TransactionTestCase's flush elsewhere in a parallel run can wipe seed rows.
+        from importlib import import_module
+
+        from django.apps import apps
+
+        from auctions.models import BlockedEmailDomain
+
+        migration = import_module("auctions.migrations.0534_blockedemaildomain")
+        BlockedEmailDomain.objects.all().delete()
+        migration.seed(apps, None)
+        for domain in migration.SEED:
+            self.assertTrue(BlockedEmailDomain.blocks(f"someone@{domain}"))
+
     def test_the_honeypot_is_on_the_page_and_off_the_screen(self):
         html = self.client.get(self.url).content.decode()
         self.assertIn('id="div_id_website"', html)
@@ -255,6 +301,16 @@ class SupportFormSignedInTests(StandardTestCase):
         self.assertIsNotNone(sent)
         self.assertEqual(sent.headers.get("Reply-To"), self.user.email)
         self.assertNotIn("attacker@example.com", sent.message)
+
+    def test_a_signed_in_person_is_never_blocked_by_domain(self):
+        from post_office.models import Email
+
+        from auctions.models import BlockedEmailDomain
+
+        BlockedEmailDomain.objects.create(domain=self.user.email.rpartition("@")[2])
+        self.client.force_login(self.user)
+        self.client.post(reverse("support"), {"message": "hello"})
+        self.assertTrue(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
 
     def test_a_signed_in_account_with_no_email_is_still_asked_for_one(self):
         # There is nothing to reply to otherwise, which is the point of the form.

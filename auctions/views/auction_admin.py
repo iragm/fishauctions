@@ -68,6 +68,7 @@ from auctions.models import (
     Lot,
     PickupLocation,
 )
+from auctions.sample_auction import load_sample_data
 from auctions.services import (
     auction_date_warnings,
     check_in_auctiontos,
@@ -431,6 +432,8 @@ class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
+        if not self.is_auction_admin:
+            return HttpResponseForbidden()
         options = list(
             self.option_model.objects.filter(auction=self.auction)
             .order_by("createdon")
@@ -810,6 +813,22 @@ class AuctionDisableBidding(LoginRequiredMixin, AuctionViewMixin, View):
         )
         messages.success(request, f"Turned bidding off for {updated} user{'s' if updated != 1 else ''}.")
         return redirect("auction_tos_list", slug=self.auction.slug)
+
+
+class AuctionSampleData(LoginRequiredMixin, AuctionViewMixin, View):
+    """The test auction banner's button: fill the auction with invented people and lots.
+    POST only; ``auctions.sample_auction`` says what is added and when it refuses.
+    """
+
+    http_method_names = ["post", "options"]
+
+    def post(self, request, *args, **kwargs):
+        result = load_sample_data(self.auction, request.user)
+        if result.problem:
+            messages.info(request, result.message)
+        else:
+            messages.success(request, result.message)
+        return redirect(self.auction.get_absolute_url())
 
 
 class AuctionCheckIn(LoginRequiredMixin, AuctionViewMixin, View):
