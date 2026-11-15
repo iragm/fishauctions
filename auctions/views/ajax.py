@@ -42,7 +42,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from auctions.client_ip import client_ip
-from auctions.crawlers import is_crawler
+from auctions.crawlers import is_automated_browser, is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -483,20 +483,22 @@ class PageViewCreate(APIView):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            PageView.objects.create(
-                lot_number=lot_number,
-                url=url,
-                auction=auction,
-                session_id=session_id,
-                user=user,
-                user_agent=user_agent,
-                ip_address=ip[:100],
-                platform=parsed_ua.os.family,
-                os=os,
-                referrer=referrer[:600],
-                title=data.get("title", "")[:600],
-                source=source,
-            )
+            # A scraper's view is not counted, but a person caught by mistake still gets the rest.
+            if user or not is_automated_browser(request.META.get("HTTP_USER_AGENT", "")):
+                PageView.objects.create(
+                    lot_number=lot_number,
+                    url=url,
+                    auction=auction,
+                    session_id=session_id,
+                    user=user,
+                    user_agent=user_agent,
+                    ip_address=ip[:100],
+                    platform=parsed_ua.os.family,
+                    os=os,
+                    referrer=referrer[:600],
+                    title=data.get("title", "")[:600],
+                    source=source,
+                )
             if user:
                 UserData.objects.filter(user=user).update(last_activity=timezone.now())
             if user and lot_number and lot_number.species_category:

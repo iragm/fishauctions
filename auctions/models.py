@@ -12204,8 +12204,8 @@ class PageView(CachedPropertiesMixin, models.Model):
     """One row per page opened.
 
     **Repeat views are history, not duplicates.** ``remove_duplicate_views`` merged them and was removed:
-    it only reached anonymous rows and had no time window. Nothing purges this table; its readers carry
-    a window and an owner.
+    it only reached anonymous rows and had no time window. Nothing purges this table but bots' rows
+    (migration 0232, ``tasks.delete_bot_page_views``); its readers carry a window and an owner.
 
     Inert columns: ``total_time`` and ``counter`` (disabled heartbeat), ``notification_sent`` (no
     writer), ``duplicate_check_completed`` (the removed job).
