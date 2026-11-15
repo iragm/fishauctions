@@ -13299,16 +13299,9 @@ class UserData(CachedPropertiesMixin, models.Model):
     def other_lot_subscriptions_count(self):
         return self.other_lot_subscriptions.count()
 
-    @property
     def mark_all_subscriptions_notified(self):
         for subscription in self.subscriptions:
             subscription.last_notification_sent = timezone.now()
-            subscription.save()
-
-    @property
-    def mark_all_subscriptions_seen(self):
-        for subscription in self.subscriptions:
-            subscription.last_seen = timezone.now()
             subscription.save()
 
     def save(self, *args, **kwargs):
