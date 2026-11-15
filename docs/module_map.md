@@ -236,7 +236,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17142 lines)
+- **`palette_actions.py`** (17144 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -927,7 +927,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`chatgpt_reviewer.py`** (158 lines)
   Make the account OpenAI's reviewer signs in with, and the auction its test cases name.
   `Command`
-- **`chatgpt_submission.py`** (427 lines)
+- **`chatgpt_submission.py`** (431 lines)
   Write ``chatgpt-app-submission.json``, the file OpenAI's plugin form imports.
   `behaviour`, `justifications`, `build`, `Command`
 - **`check_apple_wallet.py`** (91 lines)
