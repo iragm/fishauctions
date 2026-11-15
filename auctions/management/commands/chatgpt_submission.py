@@ -87,13 +87,16 @@ _REACHES = {
     "add_lots": "the lots are listed on their auction's page, which anyone on the internet can read once the auction is public",
     "answer_question": "the reply is posted publicly on the lot's page",
     "leave_feedback": "the rating and comment are shown on the other person's public profile",
-    "add_lot_image": "it downloads the picture from the outside link it is given and shows it on the public lot page",
-    "update_auction_setting": (
-        "settings such as whether the auction is listed publicly decide what anyone on the internet, "
-        "and search engines, can see of it"
+    "add_lot_image": (
+        "the public lot page shows a picture hosted at the outside address it is given, which every "
+        "visitor's browser loads from that host"
     ),
-    "add_document": "the library indexes and tags the new document's text through an outside model provider",
-    "update_document": "the library re-indexes the corrected document through an outside model provider",
+    "update_auction_setting": (
+        "promoting the auction puts it in the emails sent to members and on club websites' embedded auction lists"
+    ),
+    "add_document": "with visibility 'web' the document is published to anyone, and search engines may list it",
+    "update_document": "changing visibility to 'web' publishes the document to anyone, and search engines may list it",
+    "set_invoice_status": "marking it paid or ready emails the person their invoice",
 }
 
 
@@ -122,15 +125,19 @@ def behaviour(action: palette_actions.Action) -> str:
 #: says what a tool is *for*. ``test_mcp.SubmissionFileTests`` fails a destructive tool with no entry.
 _DESTROYS = {
     "set_invoice_status": (
-        "It changes whether an invoice counts as paid, which the checkout desk, the seller payout and "
-        "the person's own invoice page all act on; setting it back is another call."
+        "It changes whether an invoice counts as paid, which the checkout desk and the seller payout act "
+        "on; marking it paid can also renew a club membership and email the person, and setting the "
+        "status back undoes neither."
     ),
     "review_points": (
         "It awards or denies a lot's breeder award points, which changes the member's club standing; "
         "the 'undo' decision puts the lot back on the pending list."
     ),
     "delete_document": "It deletes a library document and its uploaded file for everyone who could read it.",
-    "update_document": "It overwrites a library document's title, author, year or topics with the new ones.",
+    "update_document": (
+        "It overwrites a library document's title, author, year, topics or visibility, which can make it "
+        "readable by anyone or take it away from everyone else."
+    ),
     "remove_lot_image": "It deletes the picture from the lot; putting it back means adding the image again.",
     "undo_check_in": "It clears a person's checked-in status, overwriting what the check-in desk recorded.",
     "refund_lot": (
@@ -247,14 +254,8 @@ _SENDS_BUT_KEEPS = {
         "It deletes nothing, and the event it posts can be moved, renamed or called off afterwards with "
         "update_club_event, which updates the calendar and Discord to match."
     ),
-    "add_lot_image": (
-        "It fetches the picture from the outside link it is given and adds it to the public lot "
-        "page, deleting nothing; remove_lot_image takes it off again."
-    ),
-    "add_document": (
-        "It only adds a new library document, deleting nothing; the site's indexing sends its text to "
-        "an outside model provider, and delete_document removes it."
-    ),
+    "add_lot_image": "It only adds a picture to a lot, deleting nothing, and remove_lot_image takes it off again.",
+    "add_document": "It only adds a new library document, deleting nothing, and delete_document removes it.",
     "add_lot": "It only adds a new lot, deleting and overwriting nothing, and remove_lot takes it down again.",
     "add_lots": ("It only adds new lots, deleting and overwriting nothing, and remove_lot takes each one down again."),
 }

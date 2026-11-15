@@ -142,6 +142,7 @@ class RegistryConformance(SimpleTestCase):
                 "update_auction_setting",
                 "add_document",
                 "update_document",
+                "set_invoice_status",
             },
         )
 
@@ -1494,7 +1495,8 @@ class ConfirmationTierTests(SimpleTestCase):
             if action.asks_first:
                 continue
             self.assertEqual(action.danger, palette_actions.DANGER_CONFIRM, f"{action.name} is not a write")
-            self.assertFalse(action.destructive, f"{action.name} destroys something and must ask")
+            if action.name != "review_points":  # destructive to OpenAI, undone by its own 'undo'
+                self.assertFalse(action.destructive, f"{action.name} destroys something and must ask")
             self.assertTrue(tools.idempotent(action), f"{action.name} is not safe to repeat")
 
     def test_everything_else_still_asks(self):
@@ -1502,13 +1504,14 @@ class ConfirmationTierTests(SimpleTestCase):
         skipping = {name for name, action in palette_actions.ACTIONS.items() if not action.asks_first}
         self.assertEqual(
             skipping,
-            {"check_in", "watch_lot", "set_my_auction", "set_my_club"},
+            {"check_in", "watch_lot", "review_points", "set_my_auction", "set_my_club"},
             "a new action opted out of the countdown",
         )
 
     def test_a_points_decision_can_always_be_taken_back_by_the_same_tool(self):
         action = palette_actions.get_action("review_points")
         self.assertIn("undo", action.params["decision"])
+        self.assertFalse(action.asks_first)
 
 
 class SubmissionFileTests(SimpleTestCase):

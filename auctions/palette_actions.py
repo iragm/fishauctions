@@ -119,7 +119,8 @@ class Action:
     #: deletes something (remove_lot), overwrites what somebody typed or decided (edit_lot,
     #: set_lot_winner), revokes access (set_member_active), moves money (refund_lot), or sends a
     #: message that can't be recalled (send_club_announcement). Adding a row is not destructive, and
-    #: nor is a toggle or a pointer the same tool flips back (check_in, watch_lot, set_my_auction).
+    #: nor is a toggle or a pointer the same tool flips back (check_in, watch_lot, set_my_auction),
+    #: except review_points, which decides somebody else's points and OpenAI's review counts.
     destructive: bool = False
     #: Whether the palette counts down first. False only for writes that are non-destructive,
     #: idempotent and undone by an existing tool (check_in). Changes nothing about MCP: still a
@@ -13192,6 +13193,7 @@ register(
         },
         danger=DANGER_CONFIRM,
         destructive=True,
+        open_world=True,
         idempotent=True,
         resolver=set_invoice_status,
         aliases={"bidder", "name"},
@@ -13357,10 +13359,12 @@ register(
             "auction": "string, optional. Which auction the lot is in, if its number or name is ambiguous.",
         },
         danger=DANGER_CONFIRM,
-        # Undo is one of its values, but OpenAI's review (2026-11-15) counts awarding or denying
-        # points as a hard-to-reverse change, so it is marked destructive and the palette asks first.
+        # OpenAI's review counts deciding somebody's points as destructive. The palette still doesn't
+        # ask first: each value replaces the last and undo is one of them, and an admin says it dozens
+        # of times in a row. Enforced by test_mcp.ConfirmationTierTests.
         destructive=True,
         idempotent=True,
+        asks_first=False,
         resolver=review_points,
         # lot_id accepted, not advertised (see mcp.tools._INTERNAL_RESULT_KEYS).
         aliases={"name", "query", "action", "lot_id"},

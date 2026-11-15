@@ -372,9 +372,8 @@ the whole registry as three people who shouldn't reach a tenant's objects.
 
 ## Confirmation tier
 
-`Action.asks_first` is the palette's confirmation card, separate from the read/write split. Two
-opt out, plus the user's own pointers: `check_in`, `watch_lot`. `review_points` asked since OpenAI's
-review called it destructive (2026-11-15). The bar is confirm-tier and idempotent, not
+`Action.asks_first` is the palette's confirmation card, separate from the read/write split. Three
+opt out: `check_in`, `watch_lot`, `review_points`. The bar is confirm-tier and idempotent, not
 `destructive` (`test_mcp.ConfirmationTierTests`). `undo_check_in` still asks.
 
 ## Housekeeping
