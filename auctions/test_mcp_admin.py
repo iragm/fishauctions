@@ -543,6 +543,40 @@ class ProposalPageTests(AdminEndpointCase):
         self.assertEqual(rejected.status, AgentProposal.STATUS_REJECTED)
         self.assertIsNone(self.club.notes)
 
+    def test_a_closed_account_reads_as_gone(self):
+        User.objects.filter(pk=self.userB.pk).update(is_active=False)
+        AgentProposal.objects.create(
+            summary="Trust",
+            steps=[{"tool": "trust_user", "arguments": {"user": self.userB.pk}}],
+            proposed_by=self.owner,
+        )
+        self.assertContains(self.client.get(reverse("agent_proposals")), f"user {self.userB.pk} (no longer exists)")
+
+    def test_a_number_that_is_not_ascii_is_ignored(self):
+        proposal = self.note("odd")
+        for data in ({"decision": "approve_all", "pks": ["²"]}, {"decision": "approve", "pk": "²"}):
+            self.assertEqual(self.client.post(reverse("agent_proposals"), data).status_code, 302)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_PENDING)
+
+    def test_a_crash_leaves_it_failed_and_the_rest_still_run(self):
+        first = self.note("first", minutes_ago=5)
+        second = self.note("second", minutes_ago=1)
+        real = admin.apply_proposal
+
+        def crash_on_first(proposal, request):
+            if proposal.pk == first.pk:
+                message = "database went away"
+                raise RuntimeError(message)
+            real(proposal, request)
+
+        with mock.patch("auctions.mcp.admin.apply_proposal", side_effect=crash_on_first):
+            self.approve_all(first, second)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.status, AgentProposal.STATUS_FAILED)
+        self.assertEqual(second.status, AgentProposal.STATUS_APPLIED)
+
     def test_only_a_superuser_can_approve_all(self):
         proposal = self.note("member")
         self.client.force_login(self.user)

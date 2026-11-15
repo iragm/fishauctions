@@ -2828,7 +2828,8 @@ def argument_names(tool: str, arguments: dict[str, Any]) -> dict[str, str]:
 
     models = {
         "club": (Club.objects.all(), "name"),
-        "user": (User.objects.all(), "username"),
+        # The steps act only on an active account.
+        "user": (User.objects.filter(is_active=True), "username"),
         "auction": (Auction.objects.all(), "title"),
     }
     names = {}
@@ -2841,8 +2842,8 @@ def argument_names(tool: str, arguments: dict[str, Any]) -> dict[str, str]:
         if number is None:
             continue
         rows, field = models[kind]
-        name = rows.filter(pk=number).values_list(field, flat=True).first()
-        names[key] = name or f"{kind} {number} (no longer exists)"
+        found = list(rows.filter(pk=number).values_list(field, flat=True)[:1])
+        names[key] = (found[0] or f"{kind} {number}") if found else f"{kind} {number} (no longer exists)"
     return names
 
 
