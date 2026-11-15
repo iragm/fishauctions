@@ -343,60 +343,115 @@ class AgentProposalsView(AdminOnlyViewMixin, TemplateView):
     """Changes an agent on ``/mcp/admin/`` proposed, each waiting for Approve or Reject.
 
     Approving runs the steps here, as the person who pressed it (``mcp.admin.apply_proposal``). Step
-    arguments were written by a model and are displayed escaped.
+    arguments were written by a model and are displayed escaped. Approve all runs the waiting ones the
+    page showed, oldest first, since a later proposal may undo or redo an earlier one's change; one that
+    fails doesn't stop the rest. Decided proposals are shown only with ``?history=1``.
     """
 
     template_name = "agent_proposals.html"
 
-    #: Decided proposals shown under the waiting ones.
+    #: Decided proposals shown with ``?history=1``.
     RECENT = 30
 
-    def post(self, request, *args, **kwargs):
+    def _claim(self, request, pk):
+        """The proposal, claimed for ``request.user``, or ``None`` if it was already decided.
+
+        Claimed before anything runs, so a double click or a second tab can't apply it twice."""
+        claimed = AgentProposal.objects.filter(
+            pk=pk, status=AgentProposal.STATUS_PENDING, decided_on__isnull=True
+        ).update(decided_on=timezone.now(), decided_by=request.user)
+        return AgentProposal.objects.get(pk=pk) if claimed else None
+
+    @staticmethod
+    def _apply(proposal, request):
+        """Run it; anything that escapes the steps' own guard rails still leaves it decided, not stuck."""
         from auctions.mcp.admin import apply_proposal
 
+        try:
+            apply_proposal(proposal, request)
+        except Exception:
+            logger.exception("Approving proposal %s failed", proposal.pk)
+            proposal.status = AgentProposal.STATUS_FAILED
+            proposal.results = [{"tool": "", "ok": False, "said": "Something went wrong running it."}]
+            proposal.save(update_fields=["status", "results"])
+
+    @staticmethod
+    def _failure(proposal):
+        said = next((result.get("said") for result in proposal.results if not result.get("ok")), "")
+        return f"“{proposal.summary}” stopped on an error{f': {said}' if said else ''}."
+
+    def post(self, request, *args, **kwargs):
         decision = request.POST.get("decision", "")
+        if decision == "approve_all":
+            return self._approve_all(request)
         pk = request.POST.get("pk", "")
-        if decision not in ("approve", "reject") or not pk.isdigit():
+        if decision not in ("approve", "reject") or not (pk.isascii() and pk.isdigit()):
             return redirect(reverse("agent_proposals"))
-        # Claimed before anything runs, so a double click or a second tab can't apply it twice.
-        claimed = AgentProposal.objects.filter(
-            pk=int(pk), status=AgentProposal.STATUS_PENDING, decided_on__isnull=True
-        ).update(decided_on=timezone.now(), decided_by=request.user)
-        if not claimed:
+        proposal = self._claim(request, int(pk))
+        if proposal is None:
             messages.info(request, "That proposal was already decided.")
             return redirect(reverse("agent_proposals"))
-        proposal = AgentProposal.objects.get(pk=int(pk))
         if decision == "reject":
             proposal.status = AgentProposal.STATUS_REJECTED
             proposal.save(update_fields=["status"])
             messages.success(request, f"Rejected “{proposal.summary}”.")
         else:
-            apply_proposal(proposal, request)
+            self._apply(proposal, request)
             if proposal.status == AgentProposal.STATUS_APPLIED:
                 messages.success(request, f"Done: “{proposal.summary}”.")
             else:
-                messages.error(request, f"“{proposal.summary}” stopped on an error; see below.")
+                messages.error(request, self._failure(proposal))
+        return redirect(reverse("agent_proposals"))
+
+    def _approve_all(self, request):
+        """Every waiting proposal the page listed (never one that arrived since), oldest first."""
+        shown = {int(pk) for pk in request.POST.getlist("pks") if pk.isascii() and pk.isdigit()}
+        order = AgentProposal.objects.filter(pk__in=shown, status=AgentProposal.STATUS_PENDING).order_by(
+            "createdon", "pk"
+        )
+        done = 0
+        for pk in list(order.values_list("pk", flat=True)):
+            proposal = self._claim(request, pk)
+            if proposal is None:
+                continue
+            self._apply(proposal, request)
+            if proposal.status == AgentProposal.STATUS_APPLIED:
+                done += 1
+            else:
+                messages.error(request, self._failure(proposal))
+        if done:
+            messages.success(request, f"Done: {done} proposal{'s' if done != 1 else ''}.")
         return redirect(reverse("agent_proposals"))
 
     def get_context_data(self, **kwargs):
-        from auctions.mcp.admin import describe_step, step_action
+        from auctions.mcp.admin import argument_names, describe_step, step_action
 
         context = super().get_context_data(**kwargs)
         rows = AgentProposal.objects.select_related("proposed_by", "decided_by")
-        context["pending"] = list(rows.filter(status=AgentProposal.STATUS_PENDING))
-        context["decided"] = list(rows.exclude(status=AgentProposal.STATUS_PENDING)[: self.RECENT])
+        context["pending"] = list(rows.filter(status=AgentProposal.STATUS_PENDING).order_by("createdon", "pk"))
+        context["history"] = self.request.GET.get("history") == "1"
+        if context["history"]:
+            context["decided"] = list(rows.exclude(status=AgentProposal.STATUS_PENDING)[: self.RECENT])
         for proposal in context["pending"]:
             proposal.step_rows = []
             for step in proposal.steps:
                 action = step_action(step.get("tool"))
                 arguments = step.get("arguments") or {}
+                # Names, not row numbers, for the species list's and the request queue's steps.
+                description = describe_step(action.name, arguments) if action else None
+                names = argument_names(action.name, arguments) if action and not description else {}
                 proposal.step_rows.append(
                     {
                         "label": (action.confirm_template if action else "") or step.get("tool"),
-                        # Names, not row numbers, for the species list's and the request queue's steps.
-                        "description": describe_step(action.name, arguments) if action else None,
+                        "description": description,
+                        # A row's name in place of its number; the number stays in the tooltip.
                         "arguments": [
-                            (key.replace("_", " "), _argument_text(value)) for key, value in arguments.items()
+                            (
+                                key.replace("_", " "),
+                                names.get(key, _argument_text(value)),
+                                _argument_text(value) if key in names else "",
+                            )
+                            for key, value in arguments.items()
                         ],
                     }
                 )
