@@ -31,7 +31,7 @@
         <div class="small ms-2">{{ step.description }}</div>
         {% elif step.arguments %}
         <ul class="list-unstyled small ms-2 mb-0">
-          {% for key, value in step.arguments %}<li><span class="text-muted">{{ key }}:</span> {{ value }}</li>{% endfor %}
+          {% for key, value, number in step.arguments %}<li><span class="text-muted">{{ key }}:</span> {% if number %}<span title="{{ number }}">{{ value }}</span>{% else %}{{ value }}{% endif %}</li>{% endfor %}
         </ul>
         {% endif %}
       </li>
@@ -47,7 +47,17 @@
 </div>
 {% endfor %}
 
-{% if decided %}
+{% if pending|length > 1 %}
+<form method="post" class="mb-3">
+  {% csrf_token %}
+  {% for proposal in pending %}<input type="hidden" name="pks" value="{{ proposal.pk }}">{% endfor %}
+  <button type="submit" name="decision" value="approve_all" class="btn btn-success text-dark">Approve all</button>
+</form>
+{% endif %}
+
+{% if not history %}
+<a href="?history=1" class="small text-muted">History</a>
+{% elif decided %}
 <h4 class="mt-4">Decided</h4>
 {% for proposal in decided %}
 <div class="border-top pt-2 mt-2">

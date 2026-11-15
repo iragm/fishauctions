@@ -2807,6 +2807,45 @@ def describe_step(tool: str, arguments: dict[str, Any]) -> str | None:
     return admin_species.describe_step(tool, arguments)
 
 
+#: Step arguments that name a row by number, and what the approver reads instead: (key, tools, kind).
+#: An empty set of tools means every tool with that argument.
+_NAMED_ARGUMENTS = (
+    ("club", frozenset(), "club"),
+    ("user", frozenset(), "user"),
+    ("account", frozenset(), "user"),
+    ("close", frozenset({"merge_accounts"}), "user"),
+    ("keep", frozenset({"merge_accounts"}), "user"),
+    # Elsewhere an auction is a slug or a title, and a title can be a number.
+    ("auction", frozenset({"link_auction_to_club"}), "auction"),
+)
+
+
+def argument_names(tool: str, arguments: dict[str, Any]) -> dict[str, str]:
+    """Each argument of a step that gives a row's number, as that row's name; others are left out."""
+    from django.contrib.auth.models import User
+
+    from auctions.models import Auction, Club
+
+    models = {
+        "club": (Club.objects.all(), "name"),
+        "user": (User.objects.all(), "username"),
+        "auction": (Auction.objects.all(), "title"),
+    }
+    names = {}
+    if not isinstance(arguments, dict):
+        return names
+    for key, tools_for_key, kind in _NAMED_ARGUMENTS:
+        if key not in arguments or (tools_for_key and tool not in tools_for_key):
+            continue
+        number = _int(arguments, key)
+        if number is None:
+            continue
+        rows, field = models[kind]
+        name = rows.filter(pk=number).values_list(field, flat=True).first()
+        names[key] = name or f"{kind} {number} (no longer exists)"
+    return names
+
+
 def apply_proposal(proposal, request) -> None:
     """Run an approved proposal's steps in order, as ``request.user``, stopping at the first that fails.
 
