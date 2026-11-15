@@ -457,6 +457,134 @@ class ProposalTests(AdminEndpointCase):
         self.assertContains(response, "set_request_status")
 
 
+class ProposalPageTests(AdminEndpointCase):
+    """The approval page: names in place of row numbers, history out of the way, and Approve all."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(name="Harbor Aquarium Society")
+        self.client.force_login(self.owner)
+
+    def note(self, text, minutes_ago=0, club=None):
+        proposal = AgentProposal.objects.create(
+            summary=f"Note {text}",
+            steps=[{"tool": "update_club", "arguments": {"club": (club or self.club).pk, "notes": text}}],
+            proposed_by=self.owner,
+        )
+        AgentProposal.objects.filter(pk=proposal.pk).update(
+            createdon=timezone.now() - datetime.timedelta(minutes=minutes_ago)
+        )
+        return proposal
+
+    def approve_all(self, *proposals):
+        return self.client.post(
+            reverse("agent_proposals"), {"decision": "approve_all", "pks": [p.pk for p in proposals]}
+        )
+
+    def test_a_club_and_an_account_show_by_name(self):
+        AgentProposal.objects.create(
+            summary="Make an admin",
+            steps=[{"tool": "make_club_admin", "arguments": {"club": self.club.pk, "user": self.userB.pk}}],
+            proposed_by=self.owner,
+        )
+        response = self.client.get(reverse("agent_proposals"))
+        self.assertContains(response, "Harbor Aquarium Society")
+        self.assertContains(response, self.userB.username)
+        self.assertContains(response, f'title="{self.club.pk}"')
+
+    def test_a_number_for_a_row_that_is_gone_says_so(self):
+        AgentProposal.objects.create(
+            summary="Trust", steps=[{"tool": "trust_user", "arguments": {"user": 987654}}], proposed_by=self.owner
+        )
+        self.assertContains(self.client.get(reverse("agent_proposals")), "user 987654 (no longer exists)")
+
+    def test_decided_proposals_show_only_in_history(self):
+        AgentProposal.objects.create(summary="Long since done", status=AgentProposal.STATUS_APPLIED, steps=[])
+        self.assertNotContains(self.client.get(reverse("agent_proposals")), "Long since done")
+        self.assertContains(self.client.get(reverse("agent_proposals") + "?history=1"), "Long since done")
+
+    def test_approve_all_runs_oldest_first(self):
+        # Made newest first, so the row numbers run the other way from the dates.
+        newer = self.note("second", minutes_ago=1)
+        older = self.note("first", minutes_ago=5)
+        self.approve_all(newer, older)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.notes, "second")
+        for proposal in (newer, older):
+            proposal.refresh_from_db()
+            self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+            self.assertEqual(proposal.decided_by, self.owner)
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        gone = Club.objects.create(name="Bay Killifish Association")
+        doomed = self.note("doomed", minutes_ago=5, club=gone)
+        fine = self.note("fine", minutes_ago=1)
+        gone.delete()
+        response = self.approve_all(doomed, fine)
+        doomed.refresh_from_db()
+        fine.refresh_from_db()
+        self.assertEqual(doomed.status, AgentProposal.STATUS_FAILED)
+        self.assertEqual(fine.status, AgentProposal.STATUS_APPLIED)
+        self.assertRedirects(response, reverse("agent_proposals"))
+
+    def test_approve_all_leaves_what_the_page_did_not_show(self):
+        shown = self.note("shown", minutes_ago=5)
+        arrived_since = self.note("arrived since")
+        self.approve_all(shown)
+        arrived_since.refresh_from_db()
+        self.assertEqual(arrived_since.status, AgentProposal.STATUS_PENDING)
+
+    def test_approve_all_skips_one_already_decided(self):
+        rejected = self.note("rejected", minutes_ago=5)
+        self.client.post(reverse("agent_proposals"), {"pk": rejected.pk, "decision": "reject"})
+        self.approve_all(rejected)
+        rejected.refresh_from_db()
+        self.club.refresh_from_db()
+        self.assertEqual(rejected.status, AgentProposal.STATUS_REJECTED)
+        self.assertIsNone(self.club.notes)
+
+    def test_a_closed_account_reads_as_gone(self):
+        User.objects.filter(pk=self.userB.pk).update(is_active=False)
+        AgentProposal.objects.create(
+            summary="Trust",
+            steps=[{"tool": "trust_user", "arguments": {"user": self.userB.pk}}],
+            proposed_by=self.owner,
+        )
+        self.assertContains(self.client.get(reverse("agent_proposals")), f"user {self.userB.pk} (no longer exists)")
+
+    def test_a_number_that_is_not_ascii_is_ignored(self):
+        proposal = self.note("odd")
+        for data in ({"decision": "approve_all", "pks": ["²"]}, {"decision": "approve", "pk": "²"}):
+            self.assertEqual(self.client.post(reverse("agent_proposals"), data).status_code, 302)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_PENDING)
+
+    def test_a_crash_leaves_it_failed_and_the_rest_still_run(self):
+        first = self.note("first", minutes_ago=5)
+        second = self.note("second", minutes_ago=1)
+        real = admin.apply_proposal
+
+        def crash_on_first(proposal, request):
+            if proposal.pk == first.pk:
+                message = "database went away"
+                raise RuntimeError(message)
+            real(proposal, request)
+
+        with mock.patch("auctions.mcp.admin.apply_proposal", side_effect=crash_on_first):
+            self.approve_all(first, second)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.status, AgentProposal.STATUS_FAILED)
+        self.assertEqual(second.status, AgentProposal.STATUS_APPLIED)
+
+    def test_only_a_superuser_can_approve_all(self):
+        proposal = self.note("member")
+        self.client.force_login(self.user)
+        self.approve_all(proposal)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_PENDING)
+
+
 class AdminJobProposalTests(AdminEndpointCase):
     """Adding a club, approving one for the map, and trusting an account: proposed, then approved."""
 
@@ -663,6 +791,30 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertIsNone(club.latitude)
         self.assertIn("Not on the map", proposal.results[0]["said"])
 
+    def test_a_note_is_added_without_losing_the_old_one(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", notes="Met at the spring swap.")
+        self.propose("update_club", {"club": club.pk, "add_note": "Contact form: https://harbor.example.org/contact"})
+        Club.objects.filter(pk=club.pk).update(notes="Met at the spring swap. Treasurer is new.")
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        club.refresh_from_db()
+        self.assertEqual(
+            club.notes, "Met at the spring swap. Treasurer is new.\nContact form: https://harbor.example.org/contact"
+        )
+        self.propose("update_club", {"club": club.pk, "add_note": "Treasurer is new."})
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        club.refresh_from_db()
+        self.assertTrue(club.notes.endswith("\nTreasurer is new."))
+        for arguments, expected in (
+            ({"club": club.pk, "add_note": "Contact form: https://harbor.example.org/contact"}, "already say"),
+            ({"club": club.pk, "add_note": "x" * 300}, "room for"),
+            ({"club": club.pk, "add_note": "  "}, "needs the line"),
+            ({"club": club.pk, "add_note": "a", "notes": "b"}, "not both"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("update_club", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+
     def test_bad_club_corrections_are_refused_when_proposed(self):
         club = Club.objects.create(name="Harbor Aquarium Society")
         Club.objects.create(name="Bay Killifish Association")
@@ -740,6 +892,36 @@ class AdminJobProposalTests(AdminEndpointCase):
                 clubs = self.call("list_clubs", arguments)["structuredContent"]["clubs"]
                 self.assertEqual([club["club"] for club in clubs], [harbor.pk])
         self.assertEqual(self.call("list_clubs", {"name": "Desert Killifish Guild"})["structuredContent"]["clubs"], [])
+
+    def test_the_club_directory_shows_interests_software_and_the_last_real_auction(self):
+        from auctions.models import Auction, GeneralInterest
+
+        reef = GeneralInterest.objects.create(name="Reef test")
+        harbor = Club.objects.create(name="Harbor Reef Society", other_software="mygroupauctions")
+        harbor.interests.add(reef)
+        bare = Club.objects.create(name="Harbor Bare Club")
+        started = timezone.now() - datetime.timedelta(days=40)
+        coming = timezone.now() + datetime.timedelta(days=30)
+        for title, start in (("Spring swap", started), ("Test auction", timezone.now()), ("Fall swap", coming)):
+            Auction.objects.create(
+                title=title,
+                club=harbor,
+                created_by=self.user,
+                date_start=start,
+                date_end=start + datetime.timedelta(days=1),
+            )
+        clubs = self.call("list_clubs", {"search": "Harbor"})["structuredContent"]["clubs"]
+        rows = {club["club"]: club for club in clubs}
+        self.assertEqual(rows[harbor.pk]["interests"], ["Reef test"])
+        self.assertEqual(rows[harbor.pk]["other_software"], "mygroupauctions")
+        self.assertEqual(rows[harbor.pk]["last_real_auction"], started.date().isoformat())
+        self.assertIsNone(rows[bare.pk]["last_real_auction"])
+        for interest, expected in (("reef TEST", [harbor.pk]), ("none", [bare.pk])):
+            with self.subTest(interest=interest):
+                found = self.call("list_clubs", {"search": "Harbor", "interest": interest})["structuredContent"][
+                    "clubs"
+                ]
+                self.assertEqual([club["club"] for club in found], expected)
 
     def test_the_club_directory_pages_within_the_size_cap(self):
         from auctions.models import Club

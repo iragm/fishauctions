@@ -928,3 +928,37 @@ class ChatSubscriptionTests(TestCase):
         # Now there should be no unread messages
         assert lot_owner_data.other_lot_subscriptions_count == 0
         assert lot_owner_data.unnotified_subscriptions_count == 0
+
+
+class EmailUnseenChatsTests(TestCase):
+    def test_a_reply_is_emailed_once_without_an_error(self):
+        """The command used to call a property, so every user it notified logged a TypeError."""
+        from django.core.management import call_command
+
+        lotuser = User.objects.create(username="seller", email="seller@example.com")
+        chatuser = User.objects.create(username="asker")
+        lot = Lot.objects.create(
+            lot_name="A lot",
+            date_end=timezone.now() + datetime.timedelta(days=30),
+            reserve_price=5,
+            user=lotuser,
+            quantity=1,
+        )
+        an_hour_ago = timezone.now() - datetime.timedelta(hours=1)
+        ChatSubscription.objects.filter(lot=lot, user=lotuser).update(
+            last_seen=an_hour_ago, last_notification_sent=an_hour_ago
+        )
+        history = LotHistory.objects.create(user=chatuser, lot=lot, message="a question", changed_price=False)
+        lotuser.userdata.email_me_when_people_comment_on_my_lots = True
+        lotuser.userdata.save()
+        self.assertEqual(lotuser.userdata.my_lot_subscriptions_count, 1)
+        from post_office.models import Email
+
+        with self.assertNoLogs("auctions.management.commands.email_unseen_chats", level="ERROR"):
+            call_command("email_unseen_chats")
+        self.assertEqual(Email.objects.filter(to__icontains="seller@example.com").count(), 1)
+        call_command("email_unseen_chats")
+        self.assertEqual(Email.objects.filter(to__icontains="seller@example.com").count(), 1)
+        subscription = ChatSubscription.objects.get(lot=lot, user=lotuser)
+        self.assertGreater(subscription.last_notification_sent, history.timestamp)
+        self.assertEqual(lotuser.userdata.my_lot_subscriptions_count, 0)

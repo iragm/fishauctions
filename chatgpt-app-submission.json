@@ -47,13 +47,13 @@
     "add_document": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": false
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: add a document to the library from its text, when you have read it yourself -- typically transcribing scans or photos of old club.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "open_world_justification": "Reaches outside this site: with visibility 'web' the document is published to anyone, and search engines may list it.",
+        "destructive_justification": "It only adds a new library document, deleting nothing, and delete_document removes it."
       }
     },
     "add_donation_vendor": {
@@ -107,13 +107,13 @@
     "add_lot_image": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": false
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: put a picture on a lot, from a link to the image.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "open_world_justification": "Reaches outside this site: the public lot page shows a picture hosted at the outside address it is given, which every visitor's browser loads from that host.",
+        "destructive_justification": "It only adds a picture to a lot, deleting nothing, and remove_lot_image takes it off again."
       }
     },
     "add_lots": {
@@ -1179,13 +1179,13 @@
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: Approve, deny, or un-decide the breeder award points on one lot.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "destructive_justification": "It awards or denies a lot's breeder award points, which changes the member's club standing; the 'undo' decision puts the lot back on the pending list."
       }
     },
     "rotate_lot_image": {
@@ -1290,14 +1290,14 @@
     "set_invoice_status": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
-        "destructiveHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: mark one person's invoice in an auction as paid, ready, or open again.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "open_world_justification": "Reaches outside this site: marking it paid or ready emails the person their invoice.",
+        "destructive_justification": "It changes whether an invoice counts as paid, which the checkout desk and the seller payout act on; marking it paid can also renew a club membership and email the person, and setting the status back undoes neither."
       }
     },
     "set_lot_species": {
@@ -1469,13 +1469,13 @@
     "update_auction_setting": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: change one of an auction's settings by name.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "open_world_justification": "Reaches outside this site: promoting the auction puts it in the emails sent to members and on club websites' embedded auction lists.",
         "destructive_justification": "It overwrites one of an auction's settings, such as the minimum bid, the club's cut or whether the auction is listed publicly."
       }
     },
@@ -1533,14 +1533,14 @@
     "update_document": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: correct a library document's title, author, the year it was written, or its topics -- often worked out by reading it.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It overwrites a library document's title, author, year or topics with the new ones."
+        "open_world_justification": "Reaches outside this site: changing visibility to 'web' publishes the document to anyone, and search engines may list it.",
+        "destructive_justification": "It overwrites a library document's title, author, year, topics or visibility, which can make it readable by anyone or take it away from everyone else."
       }
     },
     "update_donation_vendor": {

@@ -17,6 +17,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from auctions.club_matching import (
+    NAME_MATCH_THRESHOLD,
     Suggestion,
     best_match,
     initials,
@@ -208,6 +209,49 @@ class ClubNameMatchingTests(TestCase):
 
     def test_a_shortened_spelling_still_matches(self):
         self.assertGreater(similarity("Greater Seattle Aquarium Society", "greater-seattle aquarium soc."), 0.82)
+
+    def test_legal_suffixes_and_short_forms_are_the_same_club(self):
+        """A pasted directory writes "Inc." and "Soc."; scoring those 0 against the club here made duplicates."""
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        for written in (
+            "Harbor Aquarium Society Inc.",
+            "Harbor Aquarium Society, Incorporated",
+            "HARBOR AQUARIUM SOC.",
+            "Harbor Aquarium Assoc.",
+            "Harbor Aquarium Assn",
+            "harbor aquarium society llc",
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(best_match(written, [club])[0], club)
+        self.assertEqual(initials("Greater Seattle Aquarium Society, Inc."), "gsas")
+        self.assertEqual(similarity("Inc.", "Harbor Aquarium Society"), 0.0)
+        self.assertIsNone(best_match("Boston Aquarium Society Inc.", [club])[0])
+        self.assertEqual(similarity("HAS Inc.", "Harbor Aquarium Society"), 1.0)
+
+    def test_a_legal_word_that_is_part_of_the_name_still_counts(self):
+        """Only a trailing legal word goes, and a one-word acronym is never read as a short form."""
+        self.assertLess(similarity("Limited Space Reef Club", "Space Reef Club"), 0.82)
+        self.assertEqual(similarity("SOC", "Society of Cichlids"), 1.0)
+        self.assertEqual(normalize("Inc"), "inc")
+
+    def test_one_shared_word_does_not_make_two_clubs_one(self):
+        """Real pairs the directory check refused as look-alikes, each a different club."""
+        for left, right in (
+            ("Northeast Ohio Fish Club", "Northwest Ohio Aquarium Society"),
+            ("North Florida Fish Keepers", "North Florida Koi Club"),
+            ("Tri-County Tropical Fish Society", "Tropical Fish Club of Erie County"),
+            ("San Diego Tropical Fish Society", "San Diego Killifish Group"),
+        ):
+            with self.subTest(left=left):
+                self.assertLess(similarity(left, right), NAME_MATCH_THRESHOLD)
+        for left, right in (
+            ("Harbour Aquarium Society", "Harbor Aquarium Society"),
+            ("Bay Area Reefs Club", "Bay Area Reef Club"),
+            ("Lakeshore Cichlid Club", "Lake Shore Cichlid Club"),
+            ("Cihclid Society of Ohio", "Cichlid Society of Ohio"),
+        ):
+            with self.subTest(left=left):
+                self.assertGreater(similarity(left, right), NAME_MATCH_THRESHOLD)
 
     def test_two_different_clubs_do_not_match(self):
         self.assertLess(similarity("Boston Aquarium Society", "Seattle Aquarium Society"), 0.82)

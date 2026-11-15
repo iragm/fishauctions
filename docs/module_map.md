@@ -114,7 +114,7 @@ this only quotes its opening sentence.
 - **`club_import.py`** (244 lines)
   Getting a list of aquarium clubs onto this site from a curated CSV.
   `ImportedClub`, `IngestReport`, `domain_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
-- **`club_matching.py`** (264 lines)
+- **`club_matching.py`** (317 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
 - **`club_onboarding.py`** (137 lines)
@@ -216,7 +216,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15917 lines)
+- **`models.py`** (15910 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -236,7 +236,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17133 lines)
+- **`palette_actions.py`** (17142 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -443,7 +443,7 @@ this only quotes its opening sentence.
 - **`test_club_ledger.py`** (1118 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
   `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (558 lines)
+- **`test_club_linking.py`** (602 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_managed_switch.py`** (253 lines)
@@ -561,9 +561,9 @@ this only quotes its opening sentence.
 - **`test_lot_images.py`** (753 lines)
   Lot images: uploading, ordering, rotating and deleting them; plus signup forms.
   `LotImageManagementTests`, `ImageSourceOnThePageTests`, `ChangeUsernameFormTest`, `CustomSignupFormTest`, `AdminUserSignupsJSONTests`
-- **`test_lot_models.py`** (930 lines)
+- **`test_lot_models.py`** (964 lines)
   Lot and auction model behaviour, and the chat subscriptions hanging off a lot.
-  `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
+  `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`, `EmailUnseenChatsTests`
 - **`test_lot_money_fixes.py`** (502 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
 - **`test_lot_page_fixes.py`** (281 lines)
@@ -582,9 +582,9 @@ this only quotes its opening sentence.
   Mailchimp and Brevo: syncing members, webhooks, self-service and what gets redacted.
 - **`test_marketing_sync_and_tasks.py`** (763 lines)
   Gaps left by test_marketing.py and test_celery_tasks.py: the per-member Mailchimp and Brevo sync
-- **`test_mcp.py`** (1575 lines)
+- **`test_mcp.py`** (1582 lines)
   Tests for the MCP tool catalogue.
-- **`test_mcp_admin.py`** (1931 lines)
+- **`test_mcp_admin.py`** (2113 lines)
   The superusers' read-only endpoint, ``/mcp/admin/``, and the proposals that are its only way to change
 - **`test_mcp_admin_reports.py`** (585 lines)
   The growth reports on ``/mcp/admin/`` (:mod:`auctions.mcp.admin_reports`), the 404 page's title they
@@ -927,7 +927,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`chatgpt_reviewer.py`** (158 lines)
   Make the account OpenAI's reviewer signs in with, and the auction its test cases name.
   `Command`
-- **`chatgpt_submission.py`** (403 lines)
+- **`chatgpt_submission.py`** (427 lines)
   Write ``chatgpt-app-submission.json``, the file OpenAI's plugin form imports.
   `behaviour`, `justifications`, `build`, `Command`
 - **`check_apple_wallet.py`** (91 lines)
@@ -1018,7 +1018,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (3154 lines)
+- **`admin.py`** (3238 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_reports.py`** (1657 lines)
   Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
@@ -1236,7 +1236,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`paddles.py`** (251 lines)
   Bidder paddles: a sheet of paper per person, with their number on both halves, folded so it stands up.
   `paper_for`, `needs_paper_check`, `font_path`, `width_in_ems`, `barcode_svg`, `lay_out`, `PaddleViewMixin`, `AuctionPaddles`, `AuctionPaddlesPDF`
-- **`palette.py`** (577 lines)
+- **`palette.py`** (632 lines)
   The command palette's views (ask, execute, cancel, report), ``/ai/`` (asking the site's own model,
 - **`payments.py`** (1187 lines)
   Connecting PayPal and Square accounts and taking payments through them.
