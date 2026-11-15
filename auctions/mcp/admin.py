@@ -1533,7 +1533,22 @@ def add_club(request, params: dict[str, Any]) -> dict[str, Any]:
 CLUB_DIRECTORY_PAGE = 30
 
 
-def _club_row(club) -> dict[str, Any]:
+def _last_real_auctions(clubs) -> dict[int, Any]:
+    """Each club's latest real (not test-named) auction start, the date ``club_funnel`` counts by."""
+    from auctions.club_health import is_test_auction
+    from auctions.models import Auction
+
+    latest: dict[int, Any] = {}
+    started = Auction.objects.filter(is_deleted=False, club__in=clubs, date_start__lte=timezone.now())
+    for auction in started.only("club_id", "slug", "title", "date_start"):
+        if is_test_auction(auction):
+            continue
+        if auction.club_id not in latest or auction.date_start > latest[auction.club_id]:
+            latest[auction.club_id] = auction.date_start
+    return latest
+
+
+def _club_row(club, last_auction=None) -> dict[str, Any]:
     """One club as ``list_clubs`` shows it. Club admins and imports typed these, so they're fenced.
 
     No contact address leaves this endpoint (:func:`private`), so only whether there is one and whether
@@ -1560,6 +1575,9 @@ def _club_row(club) -> dict[str, Any]:
         "contact_method": club.contact_method,
         "stage": club.outreach_stage,
         "active": club.active,
+        "interests": sorted(interest.name for interest in club.interests.all()),
+        "other_software": club.other_software,
+        "last_real_auction": timezone.localtime(last_auction).date().isoformat() if last_auction else None,
     }
 
 
@@ -1584,7 +1602,8 @@ def list_clubs(request, params: dict[str, Any]) -> dict[str, Any]:
         existing = club_import.find_existing(found, list(clubs))
         if existing is None:
             return _ok("No club on the site matches that name or website.", clubs=[])
-        return _ok(f"That is club {existing.pk}.", clubs=[_club_row(existing)])
+        latest = _last_real_auctions([existing])
+        return _ok(f"That is club {existing.pk}.", clubs=[_club_row(existing, latest.get(existing.pk))])
     stages = dict(Club.OUTREACH_STAGE_CHOICES)
     labels = {label.lower(): value for value, label in Club.OUTREACH_STAGE_CHOICES}
     stage = _str(params, "stage").lower()
@@ -1602,10 +1621,17 @@ def list_clubs(request, params: dict[str, Any]) -> dict[str, Any]:
             | Q(facebook_page__icontains=search)
             | Q(location__icontains=search, outreach_stage=Club.LISTED)
         )
+    interest = _str(params, "interest")[:255]
+    if interest.lower() == "none":
+        clubs = clubs.filter(interests__isnull=True)
+    elif interest:
+        clubs = clubs.filter(interests__name__iexact=interest).distinct()
     total = clubs.count()
     limit, offset = palette_actions._slice(params, CLUB_DIRECTORY_PAGE)
     limit = min(limit, CLUB_DIRECTORY_PAGE)
-    rows = [_club_row(club) for club in clubs[offset : offset + limit]]
+    page = list(clubs.prefetch_related("interests")[offset : offset + limit])
+    latest = _last_real_auctions(page)
+    rows = [_club_row(club, latest.get(club.pk)) for club in page]
     found = {"clubs": rows}
     if offset + len(rows) < total:
         found["next_offset"] = offset + len(rows)
@@ -2126,6 +2152,21 @@ def _club_changes(params: dict[str, Any]):
         answers = {value for value, _label in Club.AUCTION_CADENCE_CHOICES}
         if changes["auction_cadence"] not in answers:
             return club, {}, None, "auction_cadence is one of: " + ", ".join(sorted(answers - {""})) + ", or empty."
+    if "add_note" in params:
+        if "notes" in changes:
+            return club, {}, None, "Use notes to replace the notes or add_note to add a line, not both."
+        line = " ".join(_str(params, "add_note").split())
+        if not line:
+            return club, {}, None, "add_note needs the line to add."
+        existing = (club.notes or "").strip()
+        if line not in {" ".join(old.split()) for old in existing.splitlines()}:
+            combined = f"{existing}\n{line}".strip()
+            if len(combined) > UPDATABLE_CLUB_FIELDS["notes"]:
+                room = UPDATABLE_CLUB_FIELDS["notes"] - len(existing) - (1 if existing else 0)
+                return club, {}, None, f"The notes have room for {max(room, 0)} more characters; shorten add_note."
+            changes["notes"] = combined
+        elif not changes and "interests" not in params:
+            return club, {}, None, "The notes already say that."
     interests = None
     if "interests" in params:
         names = [name.strip() for name in _str(params, "interests").split(",") if name.strip()]
@@ -2477,6 +2518,7 @@ APPROVAL_ONLY: dict[str, Action] = {
                 "contact_email": "string, optional. Where membership questions should go.",
                 "contact_method": "string, optional. email, webform or facebook: how to reach it.",
                 "notes": "string, optional. For the owner only, at most 300 characters.",
+                "add_note": "string, optional. A line added to the end of the owner's notes, keeping what's there.",
                 "other_software": (
                     "string, optional. What it may run auctions on instead: mygroupauctions, own or other; "
                     "empty clears it."
@@ -3067,7 +3109,8 @@ ADMIN_TOOLS: dict[str, Action] = {
             description=(
                 "The whole club directory, prospects included: each club's number, name, abbreviation, "
                 "website, Facebook page, meeting place (listed clubs only), contact method, whether it has "
-                "a contact email, and outreach stage. Pass name (and homepage) to ask whether one club is "
+                "a contact email, outreach stage, interests, other_software and the start date of its "
+                "latest real auction. Pass name (and homepage) to ask whether one club is "
                 "already here, the same check add_club makes, before proposing add_club or update_club."
             ),
             params={
@@ -3075,6 +3118,7 @@ ADMIN_TOOLS: dict[str, Action] = {
                 "homepage": "string, optional, with name. Its website; a club at the same domain matches.",
                 "search": "string, optional. Only clubs whose name, abbreviation, website, Facebook or place contains this.",
                 "stage": "string, optional. listed, contacted or prospect.",
+                "interest": "string, optional. Only clubs with this interest, or none for clubs with no interests.",
                 "limit": f"integer, optional, default {CLUB_DIRECTORY_PAGE}, at most {CLUB_DIRECTORY_PAGE}.",
                 "offset": "integer, optional, default 0. Skip this many clubs (next_offset).",
             },
