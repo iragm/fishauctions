@@ -114,7 +114,7 @@ this only quotes its opening sentence.
 - **`club_import.py`** (244 lines)
   Getting a list of aquarium clubs onto this site from a curated CSV.
   `ImportedClub`, `IngestReport`, `domain_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
-- **`club_matching.py`** (264 lines)
+- **`club_matching.py`** (282 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
 - **`club_onboarding.py`** (137 lines)
@@ -216,7 +216,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15917 lines)
+- **`models.py`** (15910 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -443,7 +443,7 @@ this only quotes its opening sentence.
 - **`test_club_ledger.py`** (1118 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
   `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
-- **`test_club_linking.py`** (558 lines)
+- **`test_club_linking.py`** (582 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
 - **`test_club_managed_switch.py`** (253 lines)
@@ -561,9 +561,9 @@ this only quotes its opening sentence.
 - **`test_lot_images.py`** (753 lines)
   Lot images: uploading, ordering, rotating and deleting them; plus signup forms.
   `LotImageManagementTests`, `ImageSourceOnThePageTests`, `ChangeUsernameFormTest`, `CustomSignupFormTest`, `AdminUserSignupsJSONTests`
-- **`test_lot_models.py`** (930 lines)
+- **`test_lot_models.py`** (964 lines)
   Lot and auction model behaviour, and the chat subscriptions hanging off a lot.
-  `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`
+  `ViewLotTest`, `AuctionModelTests`, `LotModelTests`, `LotModelConcurrencyTests`, `ChatSubscriptionTests`, `EmailUnseenChatsTests`
 - **`test_lot_money_fixes.py`** (502 lines)
   Regression tests for taking a lot away from a winner, and the money and 500s around it.
 - **`test_lot_page_fixes.py`** (281 lines)

@@ -209,6 +209,30 @@ class ClubNameMatchingTests(TestCase):
     def test_a_shortened_spelling_still_matches(self):
         self.assertGreater(similarity("Greater Seattle Aquarium Society", "greater-seattle aquarium soc."), 0.82)
 
+    def test_legal_suffixes_and_short_forms_are_the_same_club(self):
+        """A pasted directory writes "Inc." and "Soc."; scoring those 0 against the club here made duplicates."""
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        for written in (
+            "Harbor Aquarium Society Inc.",
+            "Harbor Aquarium Society, Incorporated",
+            "HARBOR AQUARIUM SOC.",
+            "Harbor Aquarium Assoc.",
+            "Harbor Aquarium Assn",
+            "harbor aquarium society llc",
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(best_match(written, [club])[0], club)
+        self.assertEqual(initials("Greater Seattle Aquarium Society, Inc."), "gsas")
+        self.assertEqual(similarity("Inc.", "Harbor Aquarium Society"), 0.0)
+        self.assertIsNone(best_match("Boston Aquarium Society Inc.", [club])[0])
+        self.assertEqual(similarity("HAS Inc.", "Harbor Aquarium Society"), 1.0)
+
+    def test_a_legal_word_that_is_part_of_the_name_still_counts(self):
+        """Only a trailing legal word goes, and a one-word acronym is never read as a short form."""
+        self.assertLess(similarity("Limited Space Reef Club", "Space Reef Club"), 0.82)
+        self.assertEqual(similarity("SOC", "Society of Cichlids"), 1.0)
+        self.assertEqual(normalize("Inc"), "inc")
+
     def test_two_different_clubs_do_not_match(self):
         self.assertLess(similarity("Boston Aquarium Society", "Seattle Aquarium Society"), 0.82)
 

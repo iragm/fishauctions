@@ -43,8 +43,8 @@ GENERIC_WORDS = frozenset(
     }
 )
 
-#: Below this, two names are different clubs. Set where "…aquarium society" still matches
-#: "…aquarium soc" and no pair of real club names here collides.
+#: Below this, two names are different clubs. Set where a one-letter spelling slip still matches and
+#: no pair of real club names here collides.
 NAME_MATCH_THRESHOLD = 0.82
 
 #: A shorter abbreviation matches too much ordinary text to be evidence.
@@ -53,23 +53,41 @@ MIN_ABBREVIATION = 3
 #: The shortest normalised club name looked for inside an auction title; shorter is ordinary text.
 MIN_NAME_IN_TITLE = 5
 
+#: Legal-form words: "Harbor Aquarium Society, Inc." is the same club as "Harbor Aquarium Society".
+LEGAL_SUFFIXES = frozenset({"inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation"})
+
+#: Short forms written out before comparison, so "Soc." is "society" and drops as a generic word.
+ABBREVIATED_WORDS = {"soc": "society", "assoc": "association", "assn": "association"}
+
 _PUNCTUATION = re.compile(r"[^a-z0-9\s]+")
 _WHITESPACE = re.compile(r"\s+")
 
 
+def _words(name: str) -> list[str]:
+    """Lower-cased words with punctuation folded, short forms written out and trailing legal suffixes gone.
+
+    A one-word name is left alone, since "SOC" or "INC" on its own is an acronym; and only the end of a
+    name loses a legal word, since "Limited Space Reef Club" is not "Space Reef Club".
+    """
+    folded = _PUNCTUATION.sub(" ", (name or "").lower())
+    words = [word for word in _WHITESPACE.split(folded) if word]
+    if len(words) < 2:
+        return words
+    while len(words) > 1 and words[-1] in LEGAL_SUFFIXES:
+        words.pop()
+    return [ABBREVIATED_WORDS.get(word, word) for word in words]
+
+
 def normalize(name: str) -> str:
     """Fold case and punctuation and drop the generic words; ``""`` if nothing is left."""
-    folded = _PUNCTUATION.sub(" ", (name or "").lower())
-    words = [word for word in _WHITESPACE.split(folded) if word and word not in GENERIC_WORDS]
-    return " ".join(words)
+    return " ".join(word for word in _words(name) if word not in GENERIC_WORDS)
 
 
 def initials(name: str) -> str:
     """``"Greater Seattle Aquarium Society"`` -> ``"gsas"``, built from the whole name including generic
-    words, because that is how clubs build their own abbreviations.
+    words, because that is how clubs build their own abbreviations. A legal suffix ("Inc.") is left out.
     """
-    folded = _PUNCTUATION.sub(" ", (name or "").lower())
-    return "".join(word[0] for word in _WHITESPACE.split(folded) if word)
+    return "".join(word[0] for word in _words(name))
 
 
 def derived_abbreviation(name: str) -> str:
@@ -93,7 +111,7 @@ def similarity(left: str, right: str) -> float:
         return 1.0
     scores = [SequenceMatcher(None, left_normal, right_normal).ratio()]
     for one, other in ((left, right), (right, left)):
-        abbreviation = _PUNCTUATION.sub("", (one or "").lower()).replace(" ", "")
+        abbreviation = "".join(_words(one))
         if len(abbreviation) >= MIN_ABBREVIATION and abbreviation == initials(other):
             scores.append(1.0)
     return max(scores)
