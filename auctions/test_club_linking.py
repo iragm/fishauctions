@@ -17,6 +17,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from auctions.club_matching import (
+    NAME_MATCH_THRESHOLD,
     Suggestion,
     best_match,
     initials,
@@ -232,6 +233,25 @@ class ClubNameMatchingTests(TestCase):
         self.assertLess(similarity("Limited Space Reef Club", "Space Reef Club"), 0.82)
         self.assertEqual(similarity("SOC", "Society of Cichlids"), 1.0)
         self.assertEqual(normalize("Inc"), "inc")
+
+    def test_one_shared_word_does_not_make_two_clubs_one(self):
+        """Real pairs the directory check refused as look-alikes, each a different club."""
+        for left, right in (
+            ("Northeast Ohio Fish Club", "Northwest Ohio Aquarium Society"),
+            ("North Florida Fish Keepers", "North Florida Koi Club"),
+            ("Tri-County Tropical Fish Society", "Tropical Fish Club of Erie County"),
+            ("San Diego Tropical Fish Society", "San Diego Killifish Group"),
+        ):
+            with self.subTest(left=left):
+                self.assertLess(similarity(left, right), NAME_MATCH_THRESHOLD)
+        for left, right in (
+            ("Harbour Aquarium Society", "Harbor Aquarium Society"),
+            ("Bay Area Reefs Club", "Bay Area Reef Club"),
+            ("Lakeshore Cichlid Club", "Lake Shore Cichlid Club"),
+            ("Cihclid Society of Ohio", "Cichlid Society of Ohio"),
+        ):
+            with self.subTest(left=left):
+                self.assertGreater(similarity(left, right), NAME_MATCH_THRESHOLD)
 
     def test_two_different_clubs_do_not_match(self):
         self.assertLess(similarity("Boston Aquarium Society", "Seattle Aquarium Society"), 0.82)

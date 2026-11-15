@@ -100,6 +100,39 @@ def derived_abbreviation(name: str) -> str:
     return "".join(word[0].upper() for word in (name or "").split() if word)
 
 
+def _one_slip_apart(word: str, other: str) -> bool:
+    """The same word, a plural, or one letter added, dropped, changed or swapped with its neighbour in a
+    word of five letters or more: "harbour" is "harbor", but "northeast" is not "northwest".
+    """
+    if word == other or word.rstrip("s") == other.rstrip("s"):
+        return True
+    if min(len(word), len(other)) < 5 or abs(len(word) - len(other)) > 1:
+        return False
+    if len(word) == len(other):
+        differ = [i for i, (a, b) in enumerate(zip(word, other)) if a != b]
+        swapped = len(differ) == 2 and differ[1] == differ[0] + 1 and word[differ[0]] == other[differ[1]]
+        return len(differ) == 1 or (swapped and word[differ[1]] == other[differ[0]])
+    shorter, longer = sorted((word, other), key=len)
+    return any(longer[:i] + longer[i + 1 :] == shorter for i in range(len(longer)))
+
+
+def _same_words(left_normal: str, right_normal: str) -> bool:
+    """Whether every word on each side is, give or take one slip, a word on the other.
+
+    The same letters spaced differently ("lake shore", "lakeshore") count as the same words. The
+    whole-string ratio alone lets one shared word carry a short name: "northeast ohio" against
+    "northwest ohio", or "north florida" against "north florida koi", both score over the threshold.
+    """
+    if left_normal.replace(" ", "") == right_normal.replace(" ", ""):
+        return True
+    left_words, right_words = left_normal.split(), right_normal.split()
+
+    def covered(words, others):
+        return all(any(_one_slip_apart(word, other) for other in others) for word in words)
+
+    return covered(left_words, right_words) and covered(right_words, left_words)
+
+
 def similarity(left: str, right: str) -> float:
     """How alike two club names are, 0 to 1: the normalised names, and each side's initialism against the
     other written without spaces, best of the three. Without the initialisms "GSAS" scores near zero.
@@ -109,7 +142,9 @@ def similarity(left: str, right: str) -> float:
         return 0.0
     if left_normal == right_normal:
         return 1.0
-    scores = [SequenceMatcher(None, left_normal, right_normal).ratio()]
+    scores = [
+        SequenceMatcher(None, left_normal, right_normal).ratio() if _same_words(left_normal, right_normal) else 0.0
+    ]
     for one, other in ((left, right), (right, left)):
         abbreviation = "".join(_words(one))
         if len(abbreviation) >= MIN_ABBREVIATION and abbreviation == initials(other):
