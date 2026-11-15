@@ -12286,6 +12286,7 @@ register(
             "primary": "boolean, optional. True to make it the lot's thumbnail. The first picture always is.",
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         resolver=add_lot_image,
         aliases={"name", "query", "lot_id", "image_url", "source"},
         confirm_template="Add a picture to a lot",
@@ -13190,6 +13191,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        destructive=True,
         idempotent=True,
         resolver=set_invoice_status,
         aliases={"bidder", "name"},
@@ -13355,10 +13357,10 @@ register(
             "auction": "string, optional. Which auction the lot is in, if its number or name is ambiguous.",
         },
         danger=DANGER_CONFIRM,
+        # Undo is one of its values, but OpenAI's review (2026-11-15) counts awarding or denying
+        # points as a hard-to-reverse change, so it is marked destructive and the palette asks first.
+        destructive=True,
         idempotent=True,
-        # Each value replaces the last and undo is one of them. Enforced by
-        # test_mcp.ConfirmationTierTests.
-        asks_first=False,
         resolver=review_points,
         # lot_id accepted, not advertised (see mcp.tools._INTERNAL_RESULT_KEYS).
         aliases={"name", "query", "action", "lot_id"},
@@ -13953,6 +13955,7 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         destructive=True,
         idempotent=True,
         resolver=update_auction_setting,
@@ -16197,6 +16200,7 @@ register(
             "visibility": "string, optional. Who can read it: public (everyone signed in), web (anyone, and search engines may list it), club (its club's members), or private (only its uploader).",
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         destructive=True,
         idempotent=True,
         resolver=update_document,
@@ -16258,6 +16262,7 @@ register(
             "topics": f"array of strings, optional. Up to four of: {', '.join(slug for slug, _label in TOPICS)}.",
         },
         danger=DANGER_CONFIRM,
+        open_world=True,
         resolver=add_document,
         needs=NEEDS_LIBRARY,
         aliases={"name", "body", "content", "markdown"},

@@ -47,13 +47,13 @@
     "add_document": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": false
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: add a document to the library from its text, when you have read it yourself -- typically transcribing scans or photos of old club.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "open_world_justification": "Reaches outside this site: the library indexes and tags the new document's text through an outside model provider.",
+        "destructive_justification": "It only adds a new library document, deleting nothing; the site's indexing sends its text to an outside model provider, and delete_document removes it."
       }
     },
     "add_donation_vendor": {
@@ -107,13 +107,13 @@
     "add_lot_image": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": false
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: put a picture on a lot, from a link to the image.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "open_world_justification": "Reaches outside this site: it downloads the picture from the outside link it is given and shows it on the public lot page.",
+        "destructive_justification": "It fetches the picture from the outside link it is given and adds it to the public lot page, deleting nothing; remove_lot_image takes it off again."
       }
     },
     "add_lots": {
@@ -1179,13 +1179,13 @@
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: Approve, deny, or un-decide the breeder award points on one lot.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "destructive_justification": "It awards or denies a lot's breeder award points, which changes the member's club standing; the 'undo' decision puts the lot back on the pending list."
       }
     },
     "rotate_lot_image": {
@@ -1291,13 +1291,13 @@
       "annotations": {
         "readOnlyHint": false,
         "openWorldHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: mark one person's invoice in an auction as paid, ready, or open again.",
         "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
-        "destructive_justification": "It deletes nothing and takes no payment, and whatever it adds or changes can be corrected afterwards, on the website or with another tool here."
+        "destructive_justification": "It changes whether an invoice counts as paid, which the checkout desk, the seller payout and the person's own invoice page all act on; setting it back is another call."
       }
     },
     "set_lot_species": {
@@ -1469,13 +1469,13 @@
     "update_auction_setting": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: change one of an auction's settings by name.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "open_world_justification": "Reaches outside this site: settings such as whether the auction is listed publicly decide what anyone on the internet, and search engines, can see of it.",
         "destructive_justification": "It overwrites one of an auction's settings, such as the minimum bid, the club's cut or whether the auction is listed publicly."
       }
     },
@@ -1533,13 +1533,13 @@
     "update_document": {
       "annotations": {
         "readOnlyHint": false,
-        "openWorldHint": false,
+        "openWorldHint": true,
         "destructiveHint": true,
         "idempotentHint": true
       },
       "justifications": {
         "read_only_justification": "Changes data on this site: correct a library document's title, author, the year it was written, or its topics -- often worked out by reading it.",
-        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "open_world_justification": "Reaches outside this site: the library re-indexes the corrected document through an outside model provider.",
         "destructive_justification": "It overwrites a library document's title, author, year or topics with the new ones."
       }
     },

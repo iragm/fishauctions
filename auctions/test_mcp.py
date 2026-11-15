@@ -137,6 +137,11 @@ class RegistryConformance(SimpleTestCase):
                 "add_lots",
                 "answer_question",
                 "leave_feedback",
+                # OpenAI's review, 2026-11-15: an outside link fetched, a public listing, an outside model.
+                "add_lot_image",
+                "update_auction_setting",
+                "add_document",
+                "update_document",
             },
         )
 
@@ -1497,14 +1502,13 @@ class ConfirmationTierTests(SimpleTestCase):
         skipping = {name for name, action in palette_actions.ACTIONS.items() if not action.asks_first}
         self.assertEqual(
             skipping,
-            {"check_in", "watch_lot", "review_points", "set_my_auction", "set_my_club"},
+            {"check_in", "watch_lot", "set_my_auction", "set_my_club"},
             "a new action opted out of the countdown",
         )
 
     def test_a_points_decision_can_always_be_taken_back_by_the_same_tool(self):
         action = palette_actions.get_action("review_points")
         self.assertIn("undo", action.params["decision"])
-        self.assertFalse(action.destructive)
 
 
 class SubmissionFileTests(SimpleTestCase):
