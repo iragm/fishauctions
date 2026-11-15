@@ -172,6 +172,10 @@ _DESTROYS = {
         "It deletes the user's own place in an auction, and is refused once they have bids, lots, "
         "invoice entries or were added by an organizer."
     ),
+    "add_invoice_adjustment": (
+        "It changes what a person owes: a charge or discount line on their invoice that they are asked "
+        "to pay; it works only while the invoice is open, and remove_invoice_adjustment takes it off."
+    ),
     "remove_invoice_adjustment": "It deletes one charge or discount line from an invoice that is still open.",
     "update_contact_info": (
         "It overwrites the user's name, phone number or address on their account and on the auctions "

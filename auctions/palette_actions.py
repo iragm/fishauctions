@@ -13090,6 +13090,8 @@ register(
             "auction": "string, optional. Auction slug or title. See my_context.",
         },
         danger=DANGER_CONFIRM,
+        # It changes what somebody owes, which OpenAI's review counts as moving money.
+        destructive=True,
         resolver=add_invoice_adjustment,
         aliases={"bidder", "note", "reason"},
         needs=NEEDS_AUCTION_ADMIN,
