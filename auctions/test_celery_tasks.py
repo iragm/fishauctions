@@ -1140,3 +1140,102 @@ class CleanupMailTestCase(TestCase):
         tasks.cleanup_mail()
 
         self.assertEqual(list(Email.objects.values_list("pk", flat=True)), [new.pk])
+
+
+STALE_CHROME = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36"
+)
+PHONE = (
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
+)
+
+
+@isolated_cache("celery-bot-page-views")
+class DeleteBotPageViewsTestCase(TestCase):
+    """The one-shot removal of bot page views: judged as of the row's own day, never a member's."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.delete(tasks.BOT_PAGE_VIEW_LOCK_KEY)
+        self.user = User.objects.create_user(username="bot_views_user", password="testpassword")
+        self.auction = Auction.objects.create(
+            title="Bot views auction",
+            created_by=self.user,
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            date_end=timezone.now(),
+            is_online=True,
+            cached_stats={"activity": []},
+            next_update_due=timezone.now() + datetime.timedelta(days=30),
+        )
+
+    def _view(self, user_agent, written=None, **kwargs):
+        view = PageView.objects.create(url="/x/", user_agent=user_agent, **kwargs)
+        if written:
+            PageView.objects.filter(pk=view.pk).update(date_start=written)
+        return view
+
+    def _state(self):
+        return ChunkedJobState.objects.get(name=tasks.BOT_PAGE_VIEW_JOB)
+
+    def test_bots_go_and_people_stay(self):
+        bots = [
+            self._view(STALE_CHROME, auction=self.auction),
+            self._view("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"),
+            self._view("Lightpanda/1.0"),
+        ]
+        people = [
+            self._view(PHONE),
+            self._view(""),
+            self._view(None),
+            # Chrome 99 was current in spring 2022.
+            self._view(STALE_CHROME, written=datetime.datetime(2022, 4, 1, tzinfo=datetime.UTC)),
+            # A signed-in member is never deleted, whatever their browser says.
+            self._view(STALE_CHROME, user=self.user),
+            self._view("Mozilla/5.0 (Linux; Android 11; CUBOT KINGKONG 5 Pro) Chrome/120 Mobile Safari/537.36"),
+        ]
+        tasks.delete_bot_page_views()
+        remaining = set(PageView.objects.values_list("pk", flat=True))
+        self.assertEqual(remaining, {view.pk for view in people})
+        self.assertFalse(remaining & {view.pk for view in bots})
+        self.assertTrue(self._state().finished)
+
+    def test_an_auction_that_lost_views_gets_its_stats_recalculated(self):
+        self._view(STALE_CHROME, auction=self.auction)
+        tasks.delete_bot_page_views()
+        self.auction.refresh_from_db()
+        self.assertLessEqual(self.auction.next_update_due, timezone.now())
+
+    def test_an_auction_that_lost_nothing_keeps_its_schedule(self):
+        self._view(PHONE, auction=self.auction)
+        tasks.delete_bot_page_views()
+        self.auction.refresh_from_db()
+        self.assertGreater(self.auction.next_update_due, timezone.now())
+
+    def test_it_walks_in_windows_and_switches_its_beat_entry_off(self):
+        every_minute = IntervalSchedule.objects.create(every=60, period=IntervalSchedule.SECONDS)
+        PeriodicTask.objects.create(
+            name=tasks.BOT_PAGE_VIEW_BEAT,
+            task="auctions.tasks.delete_bot_page_views",
+            interval=every_minute,
+            enabled=True,
+        )
+        first = self._view(STALE_CHROME)
+        second = self._view(STALE_CHROME)
+        ChunkedJobState.objects.create(name=tasks.BOT_PAGE_VIEW_JOB, cursor=first.pk, ceiling=second.pk)
+        with patch.object(tasks, "BOT_PAGE_VIEW_SCAN", 1):
+            tasks.delete_bot_page_views()
+            self.assertFalse(PageView.objects.filter(pk=first.pk).exists())
+            self.assertTrue(PageView.objects.filter(pk=second.pk).exists())
+            self.assertIsNone(self._state().finished)
+            tasks.delete_bot_page_views()
+        self.assertFalse(PageView.objects.exists())
+        self.assertTrue(self._state().finished)
+        self.assertFalse(PeriodicTask.objects.get(name=tasks.BOT_PAGE_VIEW_BEAT).enabled)
+
+    def test_rows_written_after_it_started_are_not_chased(self):
+        self._view(PHONE)
+        tasks.delete_bot_page_views()
+        later = self._view(STALE_CHROME)
+        tasks.delete_bot_page_views()
+        self.assertTrue(PageView.objects.filter(pk=later.pk).exists())

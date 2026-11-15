@@ -65,7 +65,8 @@ class AutomatedBrowserTests(StandardTestCase):
     def test_the_release_clock(self):
         self.assertEqual(current_chrome_major(date(2024, 11, 12)), 131)
         self.assertEqual(current_chrome_major(self.TODAY), 157)
-        self.assertEqual(current_chrome_major(date(2020, 1, 1)), 131)
+        # Counting back runs low (Chrome 120 shipped 2023-12-05), so an old row is kept, not deleted.
+        self.assertLessEqual(current_chrome_major(date(2023, 12, 5)), 120)
 
     def test_scrapers(self):
         for user_agent in (
@@ -111,6 +112,14 @@ class AutomatedBrowserTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 204)
         self.assertFalse(PageView.objects.exists())
+
+    def test_a_signed_in_member_on_an_old_browser_is_still_counted(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("pageview"), {"first_view": "true", "url": "/lots/"}, HTTP_USER_AGENT=desktop_chrome(99)
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(PageView.objects.filter(user=self.user).exists())
 
     def test_a_scraper_still_gets_a_session(self):
         """Only page views are filtered: a person caught by mistake can still sign in."""

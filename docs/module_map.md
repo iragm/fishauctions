@@ -128,9 +128,9 @@ this only quotes its opening sentence.
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
 - **`context_processors.py`** (377 lines)
   Values every template needs and no view should have to pass.
-- **`crawlers.py`** (16 lines)
+- **`crawlers.py`** (70 lines)
   Telling a crawler from a visitor by its User-Agent.
-  `is_crawler`
+  `is_crawler`, `current_chrome_major`, `is_automated_browser`, `is_bot_page_view`
 - **`deploy_window.py`** (135 lines)
   Whether now is a quiet time to deploy production: traffic against its usual lows, and auctions in play.
   `hourly_views`, `quietest_hour`, `auctions_in_play`, `deploy_window`, `summary`
@@ -313,7 +313,7 @@ this only quotes its opening sentence.
   `script_tag`, `club_url`, `auction_summary`, `auction_event`, `club_events`
 - **`tables.py`** (1836 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (1947 lines)
+- **`tasks.py`** (2024 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -413,7 +413,7 @@ this only quotes its opening sentence.
 - **`test_cares.py`** (471 lines)
   The CARES list: the weekly sync from aquaristspecies.net, and where a CARES species shows.
   `record`, `FakeResponse`, `FakeSession`, `page`, `CaresSyncTests`, `CaresSpeciesTests`, `CaresLotTests`, `CaresBapTests`
-- **`test_celery_tasks.py`** (1142 lines)
+- **`test_celery_tasks.py`** (1241 lines)
   Tests that Celery tasks call their corresponding management commands.
 - **`test_checkin.py`** (638 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
@@ -466,8 +466,8 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1379 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_crawler_sessions.py`** (141 lines)
-  `IsCrawlerTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
+- **`test_crawler_sessions.py`** (219 lines)
+  `IsCrawlerTests`, `desktop_chrome`, `AutomatedBrowserTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
 - **`test_csv_import.py`** (1051 lines)
   Importing lots and users from a CSV or a club's Google Drive sheet.
   `AuctionHistoryTests`, `CSVImportTests`, `CSVImportBiddingPermissionTests`, `EnableBiddingForAllUsersTests`, `CSVImportPreviewTests`, `GoogleDriveImportTests`
@@ -1161,7 +1161,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`admin_checklist.py`** (1053 lines)
   The admin setup checklist: the one page that says what a new site still needs.
   `AdminSetupChecklistView`
-- **`ajax.py`** (843 lines)
+- **`ajax.py`** (847 lines)
   The small endpoints pages call: POST targets, HTMx fragments and moderation actions.
 - **`auction_admin.py`** (1292 lines)
   Setting an auction up and running the room: pickup locations, users, check-in.
@@ -1280,7 +1280,7 @@ This will make sure the app is always imported when
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
-- **`celery.py`** (316 lines)
+- **`celery.py`** (321 lines)
   Celery configuration: the app, its beat schedule, and the self-scheduling tasks started at boot.
   `use_django_logging`, `start_auction_stats_task`, `start_bap_recalculation_tasks`, `record_container_start`, `debug_task`
 - **`custom_scheduler.py`** (53 lines)

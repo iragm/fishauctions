@@ -440,7 +440,7 @@ class PageViewCreate(APIView):
     def post(self, request):
         if (
             is_crawler(request)
-            or is_automated_browser(request.META.get("HTTP_USER_AGENT", ""))
+            or (not request.user.is_authenticated and is_automated_browser(request.META.get("HTTP_USER_AGENT", "")))
             or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE)
         ):
             return HttpResponse(status=204)

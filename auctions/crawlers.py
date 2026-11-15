@@ -30,7 +30,9 @@ STOCK_DESKTOP_CHROME = re.compile(
     r"(?: Edg/(?P=major)\.[\d.]+)?$"
 )
 
-# Chrome ships a major version every four weeks; 131 was stable on this date.
+# Chrome ships a major version every four weeks; 131 was stable on this date. Before it, real
+# releases came a little slower than this clock counts back, so an old row is judged against a
+# version a few lower than was current: it errs toward keeping a view, never toward deleting one.
 CHROME_RELEASE = (131, date(2024, 11, 12))
 CHROME_RELEASE_DAYS = 28
 # About eleven months behind. No desktop Chrome that updates itself gets this far back.
@@ -46,7 +48,7 @@ def is_crawler(request):
 def current_chrome_major(today=None):
     version, released = CHROME_RELEASE
     today = today or timezone.now().date()
-    return version + max((today - released).days, 0) // CHROME_RELEASE_DAYS
+    return version + (today - released).days // CHROME_RELEASE_DAYS
 
 
 def is_automated_browser(user_agent, today=None):
@@ -60,3 +62,9 @@ def is_automated_browser(user_agent, today=None):
     if match["os"].startswith("Macintosh") and major in LAST_CHROME_FOR_OLD_MACS:
         return False
     return major <= current_chrome_major(today) - STALE_CHROME_VERSIONS
+
+
+def is_bot_page_view(user_agent, written):
+    """Whether a stored anonymous page view came from a bot, judged as of the moment it was written."""
+    user_agent = user_agent or ""
+    return bool(CRAWLER_PATTERN.search(user_agent)) or is_automated_browser(user_agent, written.date())

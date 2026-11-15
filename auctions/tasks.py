@@ -52,6 +52,20 @@ PAGE_VIEW_BACKFILL_SCAN = 50000
 PAGE_VIEW_BACKFILL_LOCK_KEY = "backfill_page_view_auctions_running"
 PAGE_VIEW_BACKFILL_LOCK_SECONDS = 20 * 60
 
+# One-shot removal of page views written by bots before the beacon refused them
+# (crawlers.is_automated_browser). Same windowed walk as the backfill above.
+BOT_PAGE_VIEW_JOB = "bot_page_views"
+BOT_PAGE_VIEW_BEAT = "delete_bot_page_views"
+BOT_PAGE_VIEW_SCAN = 50000
+BOT_PAGE_VIEW_LOCK_KEY = "delete_bot_page_views_running"
+BOT_PAGE_VIEW_LOCK_SECONDS = 20 * 60
+# Cheap first cut in SQL; crawlers.is_bot_page_view decides each row it lets through.
+BOT_PAGE_VIEW_SQL_PREFILTER = (
+    r"bot|crawl|spider|slurp|externalagent|externalhit|bingpreview|headlesschrome|lightpanda|"
+    r"^Mozilla/5\.0 \((Windows NT 10\.0; Win64; x64|Macintosh; Intel Mac OS X 10_15_7)\) AppleWebKit/537\.36 "
+    r"\(KHTML, like Gecko\) Chrome/"
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -595,6 +609,69 @@ def backfill_page_view_auctions(self):
     )
     if state.finished:
         _switch_off_beat_entry(PAGE_VIEW_BACKFILL_BEAT)
+
+
+@shared_task(bind=True, ignore_result=True)
+def delete_bot_page_views(self):
+    """Delete the anonymous page views that bots wrote before the beacon turned them away.
+
+    Junk, not history: migration 0232 did the same for Baiduspider. A row is judged as of the day it
+    was written, so a browser that was current then is kept. Signed-in views are never touched. Each
+    run walks one primary-key window up to the ceiling captured on the first run, then switches its
+    own beat entry off. Auctions that lose views get their cached stats recalculated.
+    """
+    from django.core.cache import cache
+    from django.db.models import Max
+    from django.utils import timezone
+
+    from auctions.crawlers import is_bot_page_view
+    from auctions.models import Auction, ChunkedJobState, PageView
+
+    state, _ = ChunkedJobState.objects.get_or_create(name=BOT_PAGE_VIEW_JOB)
+    if state.finished:
+        _switch_off_beat_entry(BOT_PAGE_VIEW_BEAT)
+        return
+
+    if not cache.add(BOT_PAGE_VIEW_LOCK_KEY, "1", timeout=BOT_PAGE_VIEW_LOCK_SECONDS):
+        logger.info("delete_bot_page_views is already running; skipping this tick.")
+        return
+    try:
+        if not state.ceiling:
+            state.ceiling = PageView.objects.aggregate(Max("pk"))["pk__max"] or 0
+        window_end = min(state.cursor + BOT_PAGE_VIEW_SCAN, state.ceiling + 1)
+        candidates = PageView.objects.filter(
+            pk__gte=state.cursor,
+            pk__lt=window_end,
+            user__isnull=True,
+            user_agent__iregex=BOT_PAGE_VIEW_SQL_PREFILTER,
+        ).values_list("pk", "user_agent", "date_start", "auction_id", "lot_number__auction_id")
+        pks, auction_ids = [], set()
+        for pk, user_agent, date_start, auction_id, lot_auction_id in candidates:
+            if is_bot_page_view(user_agent, date_start):
+                pks.append(pk)
+                auction_ids.update({auction_id, lot_auction_id} - {None})
+        deleted = PageView.objects.filter(pk__in=pks).delete()[0] if pks else 0
+        if auction_ids:
+            Auction.objects.filter(pk__in=auction_ids, cached_stats__isnull=False).update(
+                next_update_due=timezone.now()
+            )
+
+        state.cursor = window_end
+        if state.cursor > state.ceiling:
+            state.finished = timezone.now()
+        state.save()
+    finally:
+        cache.delete(BOT_PAGE_VIEW_LOCK_KEY)
+
+    logger.info(
+        "deleted %s bot page views; cursor %s of %s%s",
+        deleted,
+        state.cursor,
+        state.ceiling,
+        " (finished)" if state.finished else "",
+    )
+    if state.finished:
+        _switch_off_beat_entry(BOT_PAGE_VIEW_BEAT)
 
 
 @shared_task(bind=True, ignore_result=True)
