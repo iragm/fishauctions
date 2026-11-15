@@ -19,6 +19,7 @@ from auctions.models import (
     Lot,
     PageView,
     PickupLocation,
+    SignInStitch,
 )
 from auctions.test_support import isolated_cache
 
@@ -1205,6 +1206,19 @@ class DeleteBotPageViewsTestCase(TestCase):
         tasks.delete_bot_page_views()
         self.auction.refresh_from_db()
         self.assertLessEqual(self.auction.next_update_due, timezone.now())
+
+    def test_an_auction_whose_stats_are_frozen_stays_frozen(self):
+        Auction.objects.filter(pk=self.auction.pk).update(next_update_due=None)
+        self._view(STALE_CHROME, auction=self.auction)
+        tasks.delete_bot_page_views()
+        self.auction.refresh_from_db()
+        self.assertIsNone(self.auction.next_update_due)
+
+    def test_a_session_that_later_signed_in_is_kept(self):
+        view = self._view(STALE_CHROME, session_id="abc")
+        SignInStitch.objects.create(user=self.user, session_id="abc")
+        tasks.delete_bot_page_views()
+        self.assertTrue(PageView.objects.filter(pk=view.pk).exists())
 
     def test_an_auction_that_lost_nothing_keeps_its_schedule(self):
         self._view(PHONE, auction=self.auction)

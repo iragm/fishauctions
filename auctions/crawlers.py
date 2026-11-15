@@ -30,15 +30,24 @@ STOCK_DESKTOP_CHROME = re.compile(
     r"(?: Edg/(?P=major)\.[\d.]+)?$"
 )
 
-# Chrome ships a major version every four weeks; 131 was stable on this date. Before it, real
-# releases came a little slower than this clock counts back, so an old row is judged against a
-# version a few lower than was current: it errs toward keeping a view, never toward deleting one.
-CHROME_RELEASE = (131, date(2024, 11, 12))
-CHROME_RELEASE_DAYS = 28
+# Chrome 157 was in wide use on this date (seen in the traffic that prompted this). A major ships
+# every four weeks with a pause each winter, so the clock counts forward slower than that and back
+# faster: either way it lands at or below the real version, erring toward keeping a view.
+CHROME_RELEASE = (157, date(2026, 11, 15))
+CHROME_DAYS_PER_VERSION_AHEAD = 31
+CHROME_DAYS_PER_VERSION_BEHIND = 28
 # About eleven months behind. No desktop Chrome that updates itself gets this far back.
 STALE_CHROME_VERSIONS = 12
-# A Mac always says 10_15_7, but these are the last versions for macOS 10.13-10.14 and 10.15.
-LAST_CHROME_FOR_OLD_MACS = {116, 128}
+# A Mac always says 10_15_7, but these are the last versions for macOS 10.13-10.14, 10.15 and 11.
+LAST_CHROME_FOR_OLD_MACS = {116, 128, 138}
+
+# A cheap first cut for MariaDB's REGEXP, which the cleanup job runs before is_bot_page_view decides
+# each row: everything the patterns above can match, minus CUBOT's lookbehind.
+SQL_PREFILTER = (
+    r"bot|crawl|spider|slurp|externalagent|externalhit|bingpreview|headlesschrome|lightpanda|"
+    r"^Mozilla/5\.0 \((Windows NT 10\.0; Win64; x64|Macintosh; Intel Mac OS X 10_15_7)\) AppleWebKit/537\.36 "
+    r"\(KHTML, like Gecko\) Chrome/"
+)
 
 
 def is_crawler(request):
@@ -47,8 +56,10 @@ def is_crawler(request):
 
 def current_chrome_major(today=None):
     version, released = CHROME_RELEASE
-    today = today or timezone.now().date()
-    return version + (today - released).days // CHROME_RELEASE_DAYS
+    days = ((today or timezone.now().date()) - released).days
+    if days >= 0:
+        return version + days // CHROME_DAYS_PER_VERSION_AHEAD
+    return version + days // CHROME_DAYS_PER_VERSION_BEHIND
 
 
 def is_automated_browser(user_agent, today=None):

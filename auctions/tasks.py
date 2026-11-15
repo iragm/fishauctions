@@ -59,12 +59,6 @@ BOT_PAGE_VIEW_BEAT = "delete_bot_page_views"
 BOT_PAGE_VIEW_SCAN = 50000
 BOT_PAGE_VIEW_LOCK_KEY = "delete_bot_page_views_running"
 BOT_PAGE_VIEW_LOCK_SECONDS = 20 * 60
-# Cheap first cut in SQL; crawlers.is_bot_page_view decides each row it lets through.
-BOT_PAGE_VIEW_SQL_PREFILTER = (
-    r"bot|crawl|spider|slurp|externalagent|externalhit|bingpreview|headlesschrome|lightpanda|"
-    r"^Mozilla/5\.0 \((Windows NT 10\.0; Win64; x64|Macintosh; Intel Mac OS X 10_15_7)\) AppleWebKit/537\.36 "
-    r"\(KHTML, like Gecko\) Chrome/"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -616,7 +610,8 @@ def delete_bot_page_views(self):
     """Delete the anonymous page views that bots wrote before the beacon turned them away.
 
     Junk, not history: migration 0232 did the same for Baiduspider. A row is judged as of the day it
-    was written, so a browser that was current then is kept. Signed-in views are never touched. Each
+    was written, so a browser that was current then is kept. Signed-in views are never touched, nor a
+    session that later signed in. Each
     run walks one primary-key window up to the ceiling captured on the first run, then switches its
     own beat entry off. Auctions that lose views get their cached stats recalculated.
     """
@@ -624,8 +619,8 @@ def delete_bot_page_views(self):
     from django.db.models import Max
     from django.utils import timezone
 
-    from auctions.crawlers import is_bot_page_view
-    from auctions.models import Auction, ChunkedJobState, PageView
+    from auctions.crawlers import SQL_PREFILTER, is_bot_page_view
+    from auctions.models import Auction, ChunkedJobState, PageView, SignInStitch
 
     state, _ = ChunkedJobState.objects.get_or_create(name=BOT_PAGE_VIEW_JOB)
     if state.finished:
@@ -643,16 +638,22 @@ def delete_bot_page_views(self):
             pk__gte=state.cursor,
             pk__lt=window_end,
             user__isnull=True,
-            user_agent__iregex=BOT_PAGE_VIEW_SQL_PREFILTER,
-        ).values_list("pk", "user_agent", "date_start", "auction_id", "lot_number__auction_id")
+            user_agent__iregex=SQL_PREFILTER,
+        ).values_list("pk", "user_agent", "date_start", "session_id", "auction_id", "lot_number__auction_id")
+        candidates = [row for row in candidates if is_bot_page_view(row[1], row[2])]
+        # A session that later signed in was a person, and its views are their first touch.
+        sessions = {row[3] for row in candidates if row[3]}
+        signed_in = set(SignInStitch.objects.filter(session_id__in=sessions).values_list("session_id", flat=True))
         pks, auction_ids = [], set()
-        for pk, user_agent, date_start, auction_id, lot_auction_id in candidates:
-            if is_bot_page_view(user_agent, date_start):
+        for pk, _user_agent, _date_start, session_id, auction_id, lot_auction_id in candidates:
+            if session_id not in signed_in:
                 pks.append(pk)
                 auction_ids.update({auction_id, lot_auction_id} - {None})
         deleted = PageView.objects.filter(pk__in=pks).delete()[0] if pks else 0
         if auction_ids:
-            Auction.objects.filter(pk__in=auction_ids, cached_stats__isnull=False).update(
+            # Only auctions still being kept up to date: older stats are frozen on purpose, and the
+            # stats task does one auction a run, so a backlog would starve the live ones.
+            Auction.objects.filter(pk__in=auction_ids, next_update_due__gt=timezone.now()).update(
                 next_update_due=timezone.now()
             )
 

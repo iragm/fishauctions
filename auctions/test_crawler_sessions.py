@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import date
 from unittest.mock import patch
@@ -6,9 +7,10 @@ from django.contrib.sessions.models import Session
 from django.core.cache import caches
 from django.test import RequestFactory
 from django.urls import reverse
+from django.utils import timezone
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from auctions.crawlers import current_chrome_major, is_automated_browser, is_crawler
+from auctions.crawlers import SQL_PREFILTER, current_chrome_major, is_automated_browser, is_bot_page_view, is_crawler
 from auctions.models import PageView
 from auctions.session_store import CACHE_MAX_AGE, SessionStore
 from auctions.tests import StandardTestCase
@@ -63,8 +65,9 @@ class AutomatedBrowserTests(StandardTestCase):
     MAC = "Macintosh; Intel Mac OS X 10_15_7"
 
     def test_the_release_clock(self):
-        self.assertEqual(current_chrome_major(date(2024, 11, 12)), 131)
         self.assertEqual(current_chrome_major(self.TODAY), 157)
+        # Counting forward runs slow: a year on is 168 at four weeks, 168 or 169 with a winter pause.
+        self.assertLessEqual(current_chrome_major(date(2027, 11, 15)), 168)
         # Counting back runs low (Chrome 120 shipped 2023-12-05), so an old row is kept, not deleted.
         self.assertLessEqual(current_chrome_major(date(2023, 12, 5)), 120)
 
@@ -110,8 +113,31 @@ class AutomatedBrowserTests(StandardTestCase):
         response = self.client.post(
             reverse("pageview"), {"first_view": "true", "url": "/lots/"}, HTTP_USER_AGENT=desktop_chrome(99)
         )
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         self.assertFalse(PageView.objects.exists())
+
+    def test_the_sql_prefilter_lets_through_everything_the_patterns_catch(self):
+        """The cleanup job's REGEXP is a hand copy of the patterns; it must never be narrower."""
+        for user_agent in (
+            desktop_chrome(99),
+            desktop_chrome(120, os=self.MAC),
+            desktop_chrome(119, edge=True),
+            "Lightpanda/1.0",
+            "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)",
+            "Mozilla/5.0 (compatible; Yahoo! Slurp; http://help.yahoo.com/help/us/ysearch/slurp)",
+            "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+            "Mozilla/5.0 (compatible; meta-externalagent/1.1)",
+            "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) BingPreview/1.0b",
+            "Some Crawler/1.0",
+        ):
+            with self.subTest(user_agent=user_agent):
+                self.assertTrue(is_bot_page_view(user_agent, timezone.now()))
+                self.assertRegex(user_agent, re.compile(SQL_PREFILTER, re.IGNORECASE))
+
+    def test_the_last_chrome_for_big_sur_is_a_person(self):
+        self.assertFalse(is_automated_browser(desktop_chrome(138, os=self.MAC), self.TODAY))
 
     def test_a_signed_in_member_on_an_old_browser_is_still_counted(self):
         self.client.force_login(self.user)

@@ -438,11 +438,7 @@ class PageViewCreate(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        if (
-            is_crawler(request)
-            or (not request.user.is_authenticated and is_automated_browser(request.META.get("HTTP_USER_AGENT", "")))
-            or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE)
-        ):
+        if is_crawler(request) or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
             return HttpResponse(status=204)
         data = request.POST
         auction = beacon_subject(Auction, data.get("auction"))
@@ -487,20 +483,22 @@ class PageViewCreate(APIView):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            PageView.objects.create(
-                lot_number=lot_number,
-                url=url,
-                auction=auction,
-                session_id=session_id,
-                user=user,
-                user_agent=user_agent,
-                ip_address=ip[:100],
-                platform=parsed_ua.os.family,
-                os=os,
-                referrer=referrer[:600],
-                title=data.get("title", "")[:600],
-                source=source,
-            )
+            # A scraper's view is not counted, but a person caught by mistake still gets the rest.
+            if user or not is_automated_browser(request.META.get("HTTP_USER_AGENT", "")):
+                PageView.objects.create(
+                    lot_number=lot_number,
+                    url=url,
+                    auction=auction,
+                    session_id=session_id,
+                    user=user,
+                    user_agent=user_agent,
+                    ip_address=ip[:100],
+                    platform=parsed_ua.os.family,
+                    os=os,
+                    referrer=referrer[:600],
+                    title=data.get("title", "")[:600],
+                    source=source,
+                )
             if user:
                 UserData.objects.filter(user=user).update(last_activity=timezone.now())
             if user and lot_number and lot_number.species_category:
