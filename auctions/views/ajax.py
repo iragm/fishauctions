@@ -42,7 +42,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from auctions.client_ip import client_ip
-from auctions.crawlers import is_crawler
+from auctions.crawlers import is_automated_browser, is_crawler
 from auctions.filters import (
     AuctionTOSFilter,
 )
@@ -438,7 +438,11 @@ class PageViewCreate(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        if is_crawler(request) or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE):
+        if (
+            is_crawler(request)
+            or is_automated_browser(request.META.get("HTTP_USER_AGENT", ""))
+            or beacon_over_the_limit(request, "pageview", PAGE_VIEWS_PER_ADDRESS_PER_MINUTE)
+        ):
             return HttpResponse(status=204)
         data = request.POST
         auction = beacon_subject(Auction, data.get("auction"))
