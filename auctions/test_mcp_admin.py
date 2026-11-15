@@ -800,6 +800,10 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertEqual(
             club.notes, "Met at the spring swap. Treasurer is new.\nContact form: https://harbor.example.org/contact"
         )
+        self.propose("update_club", {"club": club.pk, "add_note": "Treasurer is new."})
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        club.refresh_from_db()
+        self.assertTrue(club.notes.endswith("\nTreasurer is new."))
         for arguments, expected in (
             ({"club": club.pk, "add_note": "Contact form: https://harbor.example.org/contact"}, "already say"),
             ({"club": club.pk, "add_note": "x" * 300}, "room for"),
@@ -897,7 +901,8 @@ class AdminJobProposalTests(AdminEndpointCase):
         harbor.interests.add(reef)
         bare = Club.objects.create(name="Harbor Bare Club")
         started = timezone.now() - datetime.timedelta(days=40)
-        for title, start in (("Spring swap", started), ("Test auction", timezone.now())):
+        coming = timezone.now() + datetime.timedelta(days=30)
+        for title, start in (("Spring swap", started), ("Test auction", timezone.now()), ("Fall swap", coming)):
             Auction.objects.create(
                 title=title,
                 club=harbor,

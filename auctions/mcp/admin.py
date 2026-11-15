@@ -1539,9 +1539,8 @@ def _last_real_auctions(clubs) -> dict[int, Any]:
     from auctions.models import Auction
 
     latest: dict[int, Any] = {}
-    for auction in Auction.objects.filter(is_deleted=False, club__in=clubs, date_start__isnull=False).only(
-        "club_id", "slug", "title", "date_start"
-    ):
+    started = Auction.objects.filter(is_deleted=False, club__in=clubs, date_start__lte=timezone.now())
+    for auction in started.only("club_id", "slug", "title", "date_start"):
         if is_test_auction(auction):
             continue
         if auction.club_id not in latest or auction.date_start > latest[auction.club_id]:
@@ -1578,7 +1577,7 @@ def _club_row(club, last_auction=None) -> dict[str, Any]:
         "active": club.active,
         "interests": sorted(interest.name for interest in club.interests.all()),
         "other_software": club.other_software,
-        "last_real_auction": last_auction.date().isoformat() if last_auction else None,
+        "last_real_auction": timezone.localtime(last_auction).date().isoformat() if last_auction else None,
     }
 
 
@@ -1596,7 +1595,7 @@ def list_clubs(request, params: dict[str, Any]) -> dict[str, Any]:
 
     if not request.user.is_superuser:
         raise PermissionDenied
-    clubs = Club.objects.order_by("name", "pk").prefetch_related("interests")
+    clubs = Club.objects.order_by("name", "pk")
     name = _str(params, "name")[:255]
     if name:
         found = club_import.ImportedClub(name=name, homepage=club_onboarding.web_address(_str(params, "homepage")))
@@ -1623,14 +1622,14 @@ def list_clubs(request, params: dict[str, Any]) -> dict[str, Any]:
             | Q(location__icontains=search, outreach_stage=Club.LISTED)
         )
     interest = _str(params, "interest")[:255]
-    if interest == "none":
+    if interest.lower() == "none":
         clubs = clubs.filter(interests__isnull=True)
     elif interest:
         clubs = clubs.filter(interests__name__iexact=interest).distinct()
     total = clubs.count()
     limit, offset = palette_actions._slice(params, CLUB_DIRECTORY_PAGE)
     limit = min(limit, CLUB_DIRECTORY_PAGE)
-    page = list(clubs[offset : offset + limit])
+    page = list(clubs.prefetch_related("interests")[offset : offset + limit])
     latest = _last_real_auctions(page)
     rows = [_club_row(club, latest.get(club.pk)) for club in page]
     found = {"clubs": rows}
@@ -2160,10 +2159,10 @@ def _club_changes(params: dict[str, Any]):
         if not line:
             return club, {}, None, "add_note needs the line to add."
         existing = (club.notes or "").strip()
-        if line not in existing:
+        if line not in {" ".join(old.split()) for old in existing.splitlines()}:
             combined = f"{existing}\n{line}".strip()
             if len(combined) > UPDATABLE_CLUB_FIELDS["notes"]:
-                room = UPDATABLE_CLUB_FIELDS["notes"] - len(existing) - 1
+                room = UPDATABLE_CLUB_FIELDS["notes"] - len(existing) - (1 if existing else 0)
                 return club, {}, None, f"The notes have room for {max(room, 0)} more characters; shorten add_note."
             changes["notes"] = combined
         elif not changes and "interests" not in params:
