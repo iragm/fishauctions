@@ -969,9 +969,7 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         else:
             context["ended"] = False
 
-        # Initialize existingTos and i_agree for form
         existingTos = None
-        i_agree = False
         existing_club_member = None
 
         if self.request.user.is_authenticated:
@@ -982,7 +980,6 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 tos = None
             if tos:
                 existingTos = tos.pickup_location
-                i_agree = True
                 context["hasChosenLocation"] = existingTos.pk if existingTos else False
                 context["joined"] = True
                 context["leave_problem"] = leave_auction_problem(tos)
@@ -990,15 +987,11 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["leave_paid_club"] = None if context["leave_problem"] else paid_club_for(tos)
             else:
                 context["hasChosenLocation"] = False
-                if self.auction.multi_location:
-                    i_agree = True
-                else:
+                if not self.auction.multi_location:
                     existingTos = PickupLocation.objects.filter(auction=self.auction).first()
         else:
             context["hasChosenLocation"] = False
-            if self.auction.multi_location:
-                i_agree = True
-            else:
+            if not self.auction.multi_location:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
         context["show_club_join_message"] = bool(
             self.request.user.is_authenticated
@@ -1056,7 +1049,6 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 "user": getattr(self.request.user, "id", None),
                 "auction": self.auction.pk,
                 "pickup_location": existingTos,
-                "i_agree": i_agree,
             },
         )
         context["rewrite_url"] = self.rewrite_url

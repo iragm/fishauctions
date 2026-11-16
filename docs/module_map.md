@@ -170,7 +170,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6752 lines)
+- **`forms.py`** (6746 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -361,7 +361,7 @@ this only quotes its opening sentence.
   What the assistant does when nobody is looking at a page.
 - **`test_auction_admin_views.py`** (840 lines)
   Regression tests for auction-admin and lot-management views with thin coverage: the add-to-calendar
-- **`test_auction_links.py`** (661 lines)
+- **`test_auction_links.py`** (659 lines)
   Auction join links, the lot list's behaviour, and the Cloudflare image pipeline.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
@@ -722,7 +722,7 @@ this only quotes its opening sentence.
 - **`test_review_fixes_money.py`** (220 lines)
   WP2 regression tests: Square refund amounts and keys, refund webhook redelivery, the PAID total freeze,
   `SquareRefundAmountTests`, `SquareRefundWebhookTests`, `InvoiceRecalculateFreezeTests`, `JoinAuctionOnceTests`, `ClubMemberListPagingTests`, `SwitchToClubManagedWelcomeTests`
-- **`test_review_fixes_onboarding.py`** (95 lines)
+- **`test_review_fixes_onboarding.py`** (120 lines)
   Getting started, sellers and bidders: the create bounce, the join form, the email settings mailing address.
   `OnboardingTests`
 - **`test_review_fixes_round2.py`** (85 lines)
@@ -1167,7 +1167,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1177 lines)
+- **`auction_pages.py`** (1169 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
