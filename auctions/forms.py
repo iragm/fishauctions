@@ -1959,7 +1959,6 @@ class LotRefundForm(forms.ModelForm):
 
 
 class AuctionJoin(forms.ModelForm):
-    i_agree = forms.BooleanField(required=True)
     hold_for_second_pickup = forms.BooleanField(
         required=False, label="Hold lots purchased at my location for the second pickup time"
     )
@@ -1988,8 +1987,8 @@ class AuctionJoin(forms.ModelForm):
             link = self._missing_detail_link(user, auction)
             if link is not None:
                 submit = link
+        # Pressing Join is the agreement to the rules; there is no checkbox.
         self.helper.layout = Layout(
-            "i_agree",
             "time_spent_reading_rules",
             "pickup_location",
             submit,
@@ -2064,14 +2063,10 @@ class AuctionJoin(forms.ModelForm):
         else:
             del self.fields["hold_for_second_pickup"]
         if self.auction.multi_location:
-            self.fields["i_agree"].initial = True
-            self.fields["i_agree"].widget = HiddenInput()
             self.fields["pickup_location"].label = "Yes, I will be at "
         else:
             # single location auction
             self.fields["pickup_location"].widget = HiddenInput()
-            self.fields["i_agree"].initial = True
-            self.fields["i_agree"].widget = HiddenInput()
             if self.auction.all_location_count == 1:  # # number_of_locations excludes the default location
                 location = auction.location_qs[0]
                 self.fields["pickup_location"].initial = location
@@ -2103,7 +2098,6 @@ class AuctionJoin(forms.ModelForm):
     class Meta:
         model = AuctionTOS
         fields = [
-            "i_agree",
             "pickup_location",
             "time_spent_reading_rules",
         ]

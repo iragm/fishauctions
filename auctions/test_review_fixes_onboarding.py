@@ -4,14 +4,16 @@ These are the review fixes that send a new person to the right page instead of l
 """
 
 import datetime
+import re
 
+from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
 from django.forms import HiddenInput
 from django.urls import reverse
 from django.utils import timezone
 
 from auctions.forms import AuctionJoin, ClubEmailSettingsForm
-from auctions.models import Club
+from auctions.models import AuctionTOS, Club
 from auctions.tests import StandardTestCase
 
 
@@ -38,8 +40,31 @@ class OnboardingTests(StandardTestCase):
 
     def test_single_location_join_needs_no_tick(self):
         form = AuctionJoin(user=self.user_with_no_lots, auction=self.in_person_auction)
-        self.assertTrue(form.fields["i_agree"].initial)
-        self.assertIsInstance(form.fields["i_agree"].widget, HiddenInput)
+        self.assertNotIn("i_agree", form.fields)
+        self.assertIsInstance(form.fields["pickup_location"].widget, HiddenInput)
+
+    def test_single_location_join_posts_back_what_the_page_renders(self):
+        """A hidden agree field once rendered "False", so pressing Join on a single-location auction did nothing."""
+        self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=3)
+        self.in_person_auction.save()
+        newcomer = get_user_model().objects.create_user(
+            username="newcomer", password="testpassword", email="newcomer@example.com"
+        )
+        newcomer.emailaddress_set.create(email=newcomer.email, verified=True, primary=True)
+        self.client.login(username="newcomer", password="testpassword")
+        url = reverse("auction_main", kwargs={"slug": self.in_person_auction.slug})
+        page = self.client.get(url).content.decode()
+        form = re.search(r'<form[^>]*id="rule-form".*?</form>', page, re.DOTALL).group(0)
+        data = {}
+        for tag in re.findall(r"<input[^>]*>", form):
+            name = re.search(r'name="([^"]*)"', tag)
+            if name and 'type="checkbox"' not in tag:
+                value = re.search(r'value="([^"]*)"', tag)
+                data[name.group(1)] = value.group(1) if value else ""
+        self.assertIn("pickup_location", data)
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(AuctionTOS.objects.filter(user=newcomer, auction=self.in_person_auction).exists())
 
     def test_join_page_shows_add_phone_link(self):
         self.online_auction.require_phone_number = True

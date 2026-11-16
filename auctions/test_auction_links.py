@@ -137,12 +137,10 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         self.assertEqual(AuctionTOS.objects.filter(auction=self.open_auction).count(), before)
 
     def test_invalid_join_rerenders_form(self):
-        """Missing the rules checkbox re-shows the page without joining."""
+        """A pickup location that isn't this auction's re-shows the page without joining."""
         self.client.force_login(self.fresh_user)
         url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
-        response = self.client.post(
-            url, {"pickup_location": str(self.open_location.pk), "time_spent_reading_rules": "5"}
-        )
+        response = self.client.post(url, {"pickup_location": "999999", "time_spent_reading_rules": "5"})
         self.assertEqual(response.status_code, 200)
         self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction, user=self.fresh_user).exists())
 
