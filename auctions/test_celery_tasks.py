@@ -1,8 +1,9 @@
 """Tests that Celery tasks call their corresponding management commands."""
 
 import datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
@@ -100,6 +101,63 @@ class CeleryTasksTestCase(TestCase):
         self.assertEqual(call_args[0][1]["type"], "stats_updated")  # Message type
 
         # Verify the task schedules itself
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    @patch("auctions.tasks.connections")
+    @patch("auctions.models.Auction.recalculate_stats", side_effect=SoftTimeLimitExceeded())
+    def test_update_auction_stats_resets_connection_after_time_limit(
+        self, mock_recalc, mock_connections, mock_schedule
+    ):
+        # A soft time limit mid-query leaves the connection unusable: it must be dropped before the
+        # failure is recorded, and the auction still pushed a day out and the chain re-armed.
+        steps = []
+        broken = MagicMock(in_atomic_block=False, closed_in_transaction=False)
+        broken.close.side_effect = lambda: steps.append("close")
+        in_transaction = MagicMock(in_atomic_block=True, closed_in_transaction=False)
+        mock_connections.all.return_value = [broken, in_transaction]
+        now = timezone.now()
+        auction = Auction.objects.create(
+            title="Slow stats",
+            is_deleted=False,
+            next_update_due=now - datetime.timedelta(minutes=10),
+            date_start=now - datetime.timedelta(days=1),
+        )
+        real_create_history = Auction.create_history
+
+        def record_history(self, *args, **kwargs):
+            steps.append("history")
+            return real_create_history(self, *args, **kwargs)
+
+        with patch.object(Auction, "create_history", record_history):
+            tasks.update_auction_stats()
+
+        self.assertEqual(steps, ["close", "history"])
+        in_transaction.close.assert_not_called()
+        auction.refresh_from_db()
+        self.assertGreater(auction.next_update_due, now + datetime.timedelta(hours=23))
+        self.assertTrue(
+            AuctionHistory.objects.filter(
+                auction=auction, action__startswith="Stats update failed: SoftTimeLimitExceeded"
+            ).exists()
+        )
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    @patch("auctions.tasks.connections")
+    @patch("auctions.models.Auction.recalculate_stats", side_effect=ValueError("bad data"))
+    def test_update_auction_stats_keeps_connection_on_ordinary_error(
+        self, mock_recalc, mock_connections, mock_schedule
+    ):
+        now = timezone.now()
+        Auction.objects.create(
+            title="Bad stats",
+            is_deleted=False,
+            next_update_due=now - datetime.timedelta(minutes=10),
+            date_start=now - datetime.timedelta(days=1),
+        )
+        tasks.update_auction_stats()
+        mock_connections.all.assert_not_called()
         mock_schedule.assert_called_once()
 
     @patch("auctions.tasks.schedule_auction_stats_update")

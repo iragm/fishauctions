@@ -12,6 +12,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management import call_command
+from django.db import DatabaseError, connections
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
@@ -1364,6 +1365,22 @@ def ensure_auction_stats_task_scheduled(self):
     schedule_auction_stats_update()
 
 
+def _drop_database_connections():
+    """Close this thread's connections after a soft time limit or database error interrupted a query.
+
+    The interrupted query leaves MySQL out of sync (2014), so every later query on that connection fails
+    too; Django opens a fresh one on the next query. Inside a transaction ``close()`` only marks the
+    connection for rollback, so those are left alone.
+    """
+    for conn in connections.all(initialized_only=True):
+        if conn.in_atomic_block or conn.closed_in_transaction:
+            continue
+        try:
+            conn.close()
+        except Exception:
+            logger.warning("Could not close the %s database connection", conn.alias)
+
+
 @shared_task(bind=True, ignore_result=True)
 def update_auction_stats(self):
     """Update stats for the most overdue auction, then schedule the next run for when the next is due."""
@@ -1418,6 +1435,8 @@ def update_auction_stats(self):
         except Exception as e:
             logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
             logger.exception(e)
+            if isinstance(e, (SoftTimeLimitExceeded, DatabaseError)):
+                _drop_database_connections()
             try:
                 auction.create_history("STATS", f"Stats update failed: {e}")
             except Exception:
