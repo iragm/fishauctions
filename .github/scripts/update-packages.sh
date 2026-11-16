@@ -34,8 +34,8 @@ process_args "$@"
 
 docker compose up -d
 
-# Ensure pip is compatible with pip-tools 7.5.1
-docker exec -u root django python -m pip install --upgrade --no-cache-dir "pip<25" setuptools wheel
+# Latest pip: pip-tools 7.7 needs pip 26 (pip<25 broke pip-compile)
+docker exec -u root django python -m pip install --upgrade --no-cache-dir pip setuptools wheel
 
 # Run pip-compile inside the container as root to avoid permission issues
 docker exec -u root django pip-compile ./requirements.in $UPGRADE_DEPS

@@ -16,7 +16,7 @@ autobahn==26.11.1
     # via daphne
 automat==25.4.16
     # via twisted
-cbor2==6.2.1
+cbor2==6.3.0
     # via autobahn
 certifi==2026.10.23
     # via selenium
@@ -37,7 +37,7 @@ daphne==4.2.3
     # via -r requirements-test.in
 distlib==0.4.4
     # via virtualenv
-filelock==4.2.9
+filelock==4.2.10
     # via
     #   python-discovery
     #   virtualenv
