@@ -166,7 +166,7 @@ class AIAgentBannerTests(StandardTestCase):
         response = self.client.post(
             reverse("hide_ai_agent_banner"), HTTP_REFERER=f"http://testserver{self.auction_url}"
         )
-        self.assertRedirects(response, self.auction_url, fetch_redirect_response=False)
+        self.assertRedirects(response, f"http://testserver{self.auction_url}", fetch_redirect_response=False)
         response = self.client.post(reverse("hide_ai_agent_banner"), HTTP_REFERER="https://elsewhere.example.com/")
         self.assertEqual(response.url, reverse("home"))
 
