@@ -2636,39 +2636,68 @@ def block_email_address(request, params: dict[str, Any]) -> dict[str, Any]:
 
 def _blocked_domain(params: dict[str, Any]) -> tuple[str, str]:
     """The domain ``block_email_domain`` names, normalized, and why it can't be blocked (or ``""``)."""
-    from django.core.exceptions import ValidationError
-
     from auctions.models import BlockedEmailDomain
 
-    row = BlockedEmailDomain(domain=_str(params, "domain"))
-    if not row.normalize(row.domain):
+    domain = BlockedEmailDomain.normalize(_str(params, "domain"))
+    if not domain:
         return "", "Say which domain to block."
-    try:
-        row.full_clean(validate_unique=False)
-    except ValidationError:
+    labels = domain.split(".")
+    if len(domain) > 253 or len(labels) < 2 or not all(_DOMAIN_LABEL.fullmatch(label) for label in labels):
         return "", "That isn't a domain: give one like example.com."
-    if row.domain in FREE_MAIL_DOMAINS:
+    if len(labels) == 2 and len(labels[0]) <= 3 and len(labels[1]) == 2:
+        return "", "That is a whole country's suffix (like co.uk), not one domain."
+    if any(shared == domain or shared.endswith(f".{domain}") for shared in FREE_MAIL_DOMAINS):
         return "", "That domain is shared by everyone who uses it: block the sender's address instead."
-    return row.domain, ""
+    return domain, ""
 
 
-#: Webmail domains a block would cut off whole crowds of real members along with one pest.
+_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+#: Webmail and ISP domains a block would cut off whole crowds of real members along with one pest.
+#: A domain these sit under (yahoo.co.uk under co.uk) is refused too.
 FREE_MAIL_DOMAINS = frozenset(
     {
+        "163.com",
         "aol.com",
+        "att.net",
+        "bellsouth.net",
+        "charter.net",
         "comcast.net",
+        "cox.net",
+        "earthlink.net",
+        "fastmail.com",
         "gmail.com",
+        "gmx.com",
+        "gmx.de",
         "googlemail.com",
+        "hey.com",
+        "hotmail.co.uk",
         "hotmail.com",
         "icloud.com",
         "live.com",
         "mac.com",
+        "mail.com",
+        "mail.ru",
         "me.com",
         "msn.com",
+        "optonline.net",
         "outlook.com",
+        "pm.me",
         "proton.me",
         "protonmail.com",
+        "qq.com",
+        "rocketmail.com",
+        "sbcglobal.net",
+        "shaw.ca",
+        "sympatico.ca",
+        "verizon.net",
+        "web.de",
+        "yahoo.ca",
+        "yahoo.co.uk",
         "yahoo.com",
+        "yandex.ru",
+        "ymail.com",
+        "zoho.com",
     }
 )
 
@@ -2698,7 +2727,7 @@ def block_email_domain(request, params: dict[str, Any]) -> dict[str, Any]:
     _row, created = BlockedEmailDomain.objects.get_or_create(domain=domain)
     if not created:
         return _ok("That domain was already blocked.")
-    return _ok(f"Blocked {domain}: the contact form now ignores signed-out senders from it.")
+    return _ok("Blocked that domain: the contact form now ignores signed-out senders from it.")
 
 
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
