@@ -6,7 +6,7 @@
   {% endif %}
   <span>{{auction}}</span>
 </h3>
-<small><span class='text-muted'>{% if auction.club %}An official {{ auction.club }} auction{% else %}An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}{% endif %}</span></small>
+<small><span class='text-muted'>{% if auction.club %}An official {{ auction.club }} {% if auction.is_online %}online {% endif %}auction{% else %}An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
 {% if request.user.is_superuser and not auction.created_by.userdata.is_trusted %}
       <br><form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="trust_creator" class="btn btn-info btn-sm mt-2">Trust this user</button></form>
