@@ -1,4 +1,4 @@
-"""Three emails to clubs that already use the site, each once per club ever.
+"""Four emails to clubs that already use the site, each once per club ever.
 
 * ``monthly_invite`` (:func:`monthly_invite_due`): a club ran a big auction here, one with "annual" in
   its title or a gross over :data:`BIG_GROSS`, and it ended at least :data:`AFTER_AUCTION` ago (and no
@@ -16,6 +16,8 @@
 * ``thanks`` (:func:`thanks_due`): a club that has finished :data:`THANKS_AFTER` real auctions here, one
   within :data:`THANKS_ACTIVE`. A thank you to its latest auction's creator that asks them to tell
   another club about the site. No link and no referral code: it's a nudge, not a program.
+* ``add_icon`` (:func:`add_icon_due`): a club with no icon, :data:`ICON_AFTER` after its first auction was
+  made. One line to its latest auction's creator, linking the club's edit page.
 
 The claim is a ``ClubEmail`` row per club and kind, inserted before sending. Each person it goes to also
 gets a ``FeatureEmail`` row of the same kind, so ``feature_email_results`` reports them beside the
@@ -63,6 +65,8 @@ THANKS_ACTIVE = datetime.timedelta(days=180)
 PER_RUN = 25
 #: Someone who had any feature email this recently waits a day or two: never two in one morning.
 RECENT = datetime.timedelta(days=7)
+#: How long after a club's first auction is made before it's asked for an icon.
+ICON_AFTER = datetime.timedelta(hours=24)
 ANNUAL = re.compile(r"\bannual\b", re.IGNORECASE)
 TOKEN_SALT = "club-cadence"
 TOKEN_MAX_AGE = 60 * 60 * 24 * 365
@@ -287,10 +291,41 @@ def thanks_context(club, auction, user, domain) -> dict:
     return {"subject": f"Thanks, {club.name}", "club": club, "auction": auction}
 
 
+def add_icon_due(now=None):
+    """``(club, latest auction)`` for each club with no icon whose first auction is :data:`ICON_AFTER` old."""
+    from django.db.models import Min
+
+    from auctions.models import Auction, Club, ClubEmail
+
+    now = now or timezone.now()
+    asked = ClubEmail.objects.filter(kind="add_icon").values_list("club_id", flat=True)
+    clubs = (
+        Club.objects.filter(Q(icon="") | Q(icon__isnull=True))
+        .exclude(pk__in=asked)
+        .annotate(first_auction=Min("auctions__date_posted", filter=Q(auctions__is_deleted=False)))
+        .filter(first_auction__lte=now - ICON_AFTER)
+    )
+    for club in clubs:
+        latest = (
+            Auction.objects.filter(club=club, is_deleted=False, created_by__isnull=False)
+            .select_related("club", "created_by__userdata")
+            .order_by("-date_posted")
+            .first()
+        )
+        if latest is not None:
+            yield club, latest
+
+
+def add_icon_context(club, auction, user, domain) -> dict:
+    edit_url = _url(domain, reverse("club_edit", kwargs={"slug": club.slug}), "add_icon")
+    return {"subject": f"An icon for {club.name}", "club": club, "auction": auction, "edit_url": edit_url}
+
+
 KINDS = {
     "monthly_invite": (monthly_invite_due, lambda auction: [auction.created_by], monthly_invite_context),
     "club_tools": (club_tools_due, club_tools_recipients, club_tools_context),
     "thanks": (thanks_due, lambda auction: [auction.created_by], thanks_context),
+    "add_icon": (add_icon_due, lambda auction: [auction.created_by], add_icon_context),
 }
 
 

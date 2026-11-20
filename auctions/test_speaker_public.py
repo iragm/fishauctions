@@ -659,3 +659,151 @@ class SignedInReadersTests(TestCase):
         self.assertEqual(response.content, b"")
         self.comment.refresh_from_db()
         self.assertTrue(self.comment.is_deleted)
+
+
+class AddAndUpdateSpeakerStepTests(TestCase):
+    """``add_speaker`` and ``update_speaker``: approval-only steps an agent proposes from a club's website."""
+
+    def setUp(self):
+        from auctions.mcp import admin
+
+        self.admin = admin
+        self.owner = User.objects.create_superuser("speakerowner", "speakerowner@example.com", "pw")
+        self.request = RequestFactory().get("/")
+        self.request.user = self.owner
+        self.topic = SpeakerTopic.objects.get_or_create(name="Killifish")[0]
+
+    def test_they_are_approval_only_and_checked(self):
+        from auctions import palette_actions
+
+        for name in ("add_speaker", "update_speaker"):
+            self.assertIn(name, self.admin.APPROVAL_ONLY)
+            self.assertIn(name, self.admin.PROPOSAL_CHECKS)
+            self.assertNotIn(name, palette_actions.ACTIONS)
+        check = self.admin.PROPOSAL_CHECKS["add_speaker"]
+        self.assertIn("name", check({"location": "Providence, RI"}))
+        self.assertIn("location", check({"name": "Kim Killi"}))
+        self.assertIn("no topic called", check({"name": "Kim Killi", "location": "Boston", "topics": "Lizards"}))
+        self.assertEqual(check({"name": "Kim Killi", "location": "Boston", "topics": "killifish"}), "")
+        self.assertIn("no live speaker", self.admin.PROPOSAL_CHECKS["update_speaker"]({"speaker": "nobody"}))
+
+    def test_add_speaker_makes_a_public_page(self):
+        result = self.admin.add_speaker(
+            self.request,
+            {
+                "name": "Kim Killi",
+                "location": "Boston, MA",
+                "topics": "Killifish",
+                "talks": "Annual killies",
+                "website": "example.org/kim",
+                "remote": True,
+                "source_url": "https://club.example.org/speakers",
+            },
+        )
+        self.assertTrue(result.get("ok"), result)
+        speaker = Speaker.objects.get(name="Kim Killi")
+        self.assertEqual(speaker.visibility, Speaker.VISIBILITY_PUBLIC)
+        self.assertEqual(speaker.created_by, self.owner)
+        self.assertEqual(speaker.programs, "Annual killies")
+        self.assertEqual(speaker.website, "https://example.org/kim")
+        self.assertEqual(speaker.source_url, "https://club.example.org/speakers")
+        self.assertEqual(list(speaker.topics.all()), [self.topic])
+        self.assertTrue(SpeakerTag.objects.filter(speaker=speaker, tag="remote").exists())
+
+    def test_add_speaker_refuses_somebody_already_listed(self):
+        existing = Speaker.objects.create(name="Killi, Kim")
+        result = self.admin.add_speaker(self.request, {"name": "Kim Killi", "location": "Boston"})
+        self.assertIn(existing.slug, result["error"])
+        self.assertEqual(Speaker.objects.count(), 1)
+
+    def test_update_speaker_changes_only_what_it_names(self):
+        speaker = Speaker.objects.create(name="Kim Killi", bio="Keeps killies.", location="Boston, MA")
+        SpeakerTag.objects.create(speaker=speaker, user=self.owner, tag="remote")
+        result = self.admin.update_speaker(
+            self.request, {"speaker": speaker.slug, "topics": "Killifish", "remote": "false", "location": "Albany, NY"}
+        )
+        self.assertTrue(result.get("ok"), result)
+        speaker.refresh_from_db()
+        self.assertEqual(speaker.bio, "Keeps killies.")
+        self.assertEqual(speaker.location, "Albany, NY")
+        self.assertEqual(list(speaker.topics.all()), [self.topic])
+        self.assertFalse(SpeakerTag.objects.filter(speaker=speaker, tag="remote").exists())
+        self.assertIn("at least one", self.admin.update_speaker(self.request, {"speaker": speaker.slug})["error"])
+
+    def test_they_are_for_superusers_only(self):
+        from django.core.exceptions import PermissionDenied
+
+        self.request.user = User.objects.create_user("notowner", "notowner@example.com", "pw")
+        with self.assertRaises(PermissionDenied):
+            self.admin.add_speaker(self.request, {"name": "Kim Killi", "location": "Boston"})
+        with self.assertRaises(PermissionDenied):
+            self.admin.update_speaker(self.request, {"speaker": "x", "bio": "y"})
+
+
+class FindSpeakersToolTests(TestCase):
+    """``find_speakers``: the speaker directory on ``/mcp/`` and in the palette, public fields only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("finder", "finder@example.com", "pw")
+        cls.tagger = User.objects.create_user("tagger", "tagger@example.com", "pw")
+        cichlids = SpeakerTopic.objects.get_or_create(name="Dwarf Cichlids")[0]
+        plants = SpeakerTopic.objects.get_or_create(name="Plants")[0]
+        cls.remote = Speaker.objects.create(
+            name="Remote, Rita", location="Columbus, Ohio", email="rita@example.com", phone="555-0100"
+        )
+        cls.remote.topics.add(cichlids)
+        SpeakerTag.objects.create(speaker=cls.remote, user=cls.tagger, tag="remote")
+        cls.local = Speaker.objects.create(name="Local Larry", location="Albany, NY", latitude=42.6, longitude=-73.8)
+        cls.local.topics.add(cichlids)
+        cls.plants = Speaker.objects.create(name="Plant Pat", location="Toledo, Ohio")
+        cls.plants.topics.add(plants)
+        Speaker.objects.create(name="Hidden Hank", location="Ohio", visibility=Speaker.VISIBILITY_HIDDEN).topics.add(
+            cichlids
+        )
+
+    def find(self, **params):
+        from auctions import palette_actions
+
+        request = RequestFactory().get("/")
+        request.user = self.user
+        return palette_actions.find_speakers(request, params)
+
+    def names(self, **params):
+        return [row["name"] for row in self.find(**params)["speakers"]]
+
+    def test_it_is_a_public_read_on_mcp(self):
+        from auctions import palette_actions
+        from auctions.mcp import tools
+
+        action = palette_actions.get_action("find_speakers")
+        self.assertTrue(action.lookup)
+        self.assertIn("find_speakers", {tool["name"] for tool in tools.tool_descriptors(self.user, writes=False)})
+
+    def test_a_topic_and_remote(self):
+        self.assertEqual(self.names(topic="cichlids", remote=True), ["«Rita Remote»"])
+        self.assertEqual(self.names(topic="cichlids", remote="false"), ["«Local Larry»"])
+        self.assertEqual(sorted(self.names(topic="cichlids")), ["«Local Larry»", "«Rita Remote»"])
+
+    def test_a_place(self):
+        self.assertEqual(sorted(self.names(location="Ohio")), ["«Plant Pat»", "«Rita Remote»"])
+        self.assertEqual(self.names(location="Ohio", topic="plants"), ["«Plant Pat»"])
+
+    def test_near_me(self):
+        from auctions.models import UserData
+
+        UserData.objects.filter(user=self.user).update(latitude=42.7, longitude=-73.7)
+        self.user = User.objects.get(pk=self.user.pk)
+        result = self.find(near_me=True, distance=50)
+        self.assertEqual([row["name"] for row in result["speakers"]], ["«Local Larry»"])
+        self.assertIn("miles_away", result["speakers"][0])
+
+    def test_only_public_fields_and_only_listed_speakers(self):
+        result = self.find(topic="cichlids")
+        text = json.dumps(result)
+        self.assertNotIn("rita@example.com", text)
+        self.assertNotIn("555-0100", text)
+        self.assertNotIn("Hank", text)
+        row = next(row for row in result["speakers"] if "Rita" in row["name"])
+        self.assertTrue(row["presents_remotely"])
+        self.assertEqual(row["topics"], ["Dwarf Cichlids"])
