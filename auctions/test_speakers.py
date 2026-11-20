@@ -1418,3 +1418,37 @@ class ClubSidebarAuctionLinkTests(TestCase):
         response = self.sidebar_for(is_online=True)
         for label in ("Rules", "Lots", "Add user"):
             self.assertContains(response, label)
+
+
+class SoundAlikeSearchTests(TestCase):
+    """A misspelled or nicknamed name still finds the speaker (``SpeakerFilter.speaker_search``)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.smith = Speaker.objects.create(name="Smith, Robert", bio="Keeps killifish.")
+        cls.other = Speaker.objects.create(name="Jones, Alice", bio="Keeps plants.")
+
+    def search(self, text):
+        from auctions.filters import SpeakerFilter
+
+        return list(SpeakerFilter({"query": text}, queryset=Speaker.objects.all()).qs)
+
+    def test_soundex(self):
+        from auctions.filters import soundex
+
+        self.assertEqual(soundex("Smith"), "S530")
+        self.assertEqual(soundex("Smyth"), "S530")
+        self.assertEqual(soundex("Robert"), soundex("Rupert"))
+        self.assertEqual(soundex(""), "")
+
+    def test_a_misspelled_surname_finds_the_speaker(self):
+        self.assertEqual(self.search("Smyth"), [self.smith])
+        self.assertEqual(self.search("Robert Smythe"), [self.smith])
+
+    def test_a_nickname_finds_the_speaker(self):
+        Speaker.objects.create(name="Robert Fry")
+        self.assertEqual([speaker.name for speaker in self.search("Bob Fry")], ["Robert Fry"])
+
+    def test_it_doesnt_match_everyone(self):
+        self.assertEqual(self.search("Smyth Alice"), [])
+        self.assertEqual(self.search("plants"), [self.other])

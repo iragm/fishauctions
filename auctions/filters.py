@@ -224,6 +224,54 @@ def rhyming_name_q(value, name_field="name"):
     return q
 
 
+_SOUNDEX_CODES = {
+    **dict.fromkeys("bfpv", "1"),
+    **dict.fromkeys("cgjkqsxz", "2"),
+    **dict.fromkeys("dt", "3"),
+    "l": "4",
+    **dict.fromkeys("mn", "5"),
+    "r": "6",
+}
+#: Words shorter than this aren't sound-matched: three letters' soundex matches half the directory.
+SOUND_ALIKE_MIN_LENGTH = 4
+
+
+def soundex(word):
+    """American Soundex of one word ("Smyth" and "Smith" are both S530), or ``""`` for no letters."""
+    letters = [letter for letter in (word or "").lower() if "a" <= letter <= "z"]
+    if not letters:
+        return ""
+    code = letters[0].upper()
+    previous = _SOUNDEX_CODES.get(letters[0], "")
+    for letter in letters[1:]:
+        digit = _SOUNDEX_CODES.get(letter, "")
+        if digit and digit != previous:
+            code += digit
+            if len(code) == 4:
+                break
+        # h and w don't separate two letters with the same code; vowels do.
+        if letter not in "hw":
+            previous = digit
+    return code.ljust(4, "0")
+
+
+def sound_alike_pks(queryset, text, name_field="name"):
+    """Primary keys of rows in *queryset* whose name sounds like *text*: every word of it (of at least
+    :data:`SOUND_ALIKE_MIN_LENGTH` letters) sounds like some word of the name. Read in Python, names only,
+    so it is for lists the size of the speaker directory, not the lot table.
+    """
+    wanted = {soundex(word) for word in re.findall(r"[a-z]+", text.lower()) if len(word) >= SOUND_ALIKE_MIN_LENGTH}
+    wanted.discard("")
+    if not wanted:
+        return []
+    pks = []
+    for pk, name in queryset.values_list("pk", name_field):
+        sounds = {soundex(word) for word in re.findall(r"[a-z]+", (name or "").lower())}
+        if wanted <= sounds:
+            pks.append(pk)
+    return pks
+
+
 #: ``location:"Name with spaces"`` or ``location:Name`` in the users list search; stacks with the keywords.
 LOCATION_FILTER = re.compile(r'(?:^|\s)location:(?:"([^"]*)"|([^"\s]\S*))', re.IGNORECASE)
 
@@ -1796,12 +1844,15 @@ class SpeakerFilter(django_filters.FilterSet):
 
         text = " ".join(remaining)
         if text:
+            # A nickname ("Bob" for Robert) or a misspelled name ("Smyth") still finds the speaker.
             queryset = queryset.filter(
                 Q(name__icontains=text)
                 | Q(bio__icontains=text)
                 | Q(programs__icontains=text)
                 | Q(location__icontains=text)
                 | Q(topics__name__icontains=text)
+                | rhyming_name_q(text)
+                | Q(pk__in=sound_alike_pks(queryset, text))
             ).distinct()
         return queryset
 

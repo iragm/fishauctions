@@ -162,7 +162,7 @@ this only quotes its opening sentence.
 - **`field_adoption.py`** (230 lines)
   Which settings has anybody ever changed, reconstructed from the rows rather than a changelog.
   `FieldAdoption`, `model_field_default`, `form_field_names`, `history_edit_counts`, `field_adoption`, `auction_field_adoption`
-- **`filters.py`** (2064 lines)
+- **`filters.py`** (2115 lines)
   The search and filter boxes above every table.
 - **`fishbase.py`** (59 lines)
   Where the species list comes from.
@@ -759,7 +759,7 @@ this only quotes its opening sentence.
 - **`test_speaker_public.py`** (740 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
   `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`, `AddAndUpdateSpeakerStepTests`
-- **`test_speakers.py`** (1420 lines)
+- **`test_speakers.py`** (1454 lines)
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
