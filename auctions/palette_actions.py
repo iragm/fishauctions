@@ -5617,6 +5617,89 @@ def clubs_near_me(request, params: dict[str, Any]) -> dict[str, Any]:
     return {"found": True, "clubs": rows, "summary": f"{len(rows)} club(s) within {distance} miles of you."}
 
 
+#: How far ``find_speakers`` looks with ``near_me`` and no ``distance``.
+SPEAKER_SEARCH_MILES = 150
+
+
+def _speaker_result_row(speaker, tags: set[str]) -> dict[str, Any]:
+    """One speaker's public details: never an email or phone number, and their own words fenced."""
+    row: dict[str, Any] = {
+        "name": untrusted_short(speaker.display_name),
+        "location": untrusted_short(speaker.location),
+        "topics": [topic.name for topic in speaker.topics.all()],
+        "talks": untrusted(plain_text(speaker.programs, limit=300)),
+        "bio_starts": untrusted(plain_text(speaker.bio, limit=200)),
+        "presents_remotely": "remote" in tags,
+        "willing_to_travel": "travels" in tags,
+        "url": speaker.get_absolute_url(),
+    }
+    if "no_longer_speaking" in tags:
+        row["no_longer_speaking"] = True
+    for key in ("website", "facebook_page"):
+        if getattr(speaker, key):
+            row[key] = getattr(speaker, key)
+    distance = getattr(speaker, "distance", None)
+    if distance is not None:
+        row["miles_away"] = round(float(distance))
+    return row
+
+
+def find_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
+    """The speaker directory's search, as ``SpeakerListView`` lists it for this person: by name or talk
+    (``SpeakerFilter``'s own search, sound-alike names included), topic, remote or in person, and place.
+    """
+    from .filters import SpeakerFilter
+    from .models import Speaker, SpeakerTag, distance_to
+    from .views.base import clubs_with_any_permission
+
+    user = request.user
+    nec_member = bool(user.is_authenticated and (user.is_superuser or clubs_with_any_permission(user).exists()))
+    speakers = Speaker.listed_for(user, nec_member)
+    latitude = longitude = None
+    distance = None
+    if _flag(params, "near_me"):
+        latitude, longitude, problem = _user_coordinates(user)
+        if problem:
+            return problem
+        miles = _int(params, "distance") or _int(params, "miles") or _int(params, "radius")
+        distance = max(10, min(miles or SPEAKER_SEARCH_MILES, MAX_SEARCH_MILES))
+        speakers = speakers.annotate(distance=distance_to(latitude, longitude)).filter(
+            latitude__isnull=False, longitude__isnull=False, distance__lte=distance
+        )
+    topic = _str(params, "topic") or _str(params, "topics")
+    if topic:
+        # "cichlids" finds "African Cichlids" and "Dwarf Cichlids"; "cichlid" finds them too.
+        stem = topic[:-1] if len(topic) > 3 and topic.lower().endswith("s") else topic
+        speakers = speakers.filter(Q(topics__name__icontains=stem) | Q(topics__slug=topic.lower())).distinct()
+    location = _str(params, "location")
+    if location:
+        speakers = speakers.filter(location__icontains=location)
+    remote = _flag(params, "remote") if "remote" in params else None
+    if remote:
+        speakers = speakers.filter(tags__tag="remote").distinct()
+    elif remote is not None:
+        remote_ids = SpeakerTag.objects.filter(tag="remote").values("speaker_id")
+        speakers = speakers.filter(Q(tags__tag="travels") | ~Q(pk__in=remote_ids)).distinct()
+    query = _str(params, "query") or _str(params, "name")
+    if query:
+        speakers = SpeakerFilter(
+            {"query": query}, queryset=speakers, latitude=latitude, longitude=longitude, user=user
+        ).qs
+    speakers = speakers.order_by("distance", "name") if latitude is not None else speakers.order_by("name")
+    limit, offset = _slice(params)
+    total = speakers.count()
+    page = list(speakers.prefetch_related("topics")[offset : offset + limit])
+    tags: dict[int, set[str]] = {}
+    for speaker_id, tag in SpeakerTag.objects.filter(speaker__in=page).values_list("speaker_id", "tag"):
+        tags.setdefault(speaker_id, set()).add(tag)
+    rows = [_speaker_result_row(speaker, tags.get(speaker.pk, set())) for speaker in page]
+    where = f" within {distance} miles of you" if distance else ""
+    if not rows:
+        return {"found": False, "speakers": [], "summary": f"No speakers in the directory match that{where}."}
+    summary = f"{total} speaker{'s' if total != 1 else ''} match{'' if total != 1 else 'es'}{where}."
+    return {"found": True, "speakers": rows, "summary": summary + _showing(total, limit, offset)}
+
+
 #: Characters of one FAQ answer sent.
 HELP_ANSWER_CHARS = 600
 
@@ -10759,7 +10842,7 @@ def _image_echo(image) -> dict[str, Any]:
 def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     """Put a picture on a lot from a URL (``LotImage.url``), through ``CreateImageForm``.
 
-    Nothing is fetched server-side, so no SSRF. ``image_source`` defaults to ``RANDOM``, so an agent's
+    The form fetches the link once (``auctions.image_links``, public addresses only). ``image_source`` defaults to ``RANDOM``, so an agent's
     picture is never labelled as the seller's own photo of the item.
     """
     from .forms import CreateImageForm
@@ -14954,6 +15037,33 @@ register(
 
 register(
     Action(
+        name="find_speakers",
+        description=(
+            "Search the directory of people who give talks to fish clubs. Ask it for 'a speaker on "
+            "cichlids who presents remotely' or 'speakers near me'; each comes back with their topics, "
+            "talks, where they're from and a link to their page."
+        ),
+        params={
+            "topic": "string, optional. A talk topic, e.g. 'cichlids', 'killifish', 'plants'.",
+            "remote": (
+                "boolean, optional. true for speakers who present remotely; false for those who come in "
+                "person. Leave it out for both."
+            ),
+            "location": "string, optional. A town, state or region their location names, e.g. 'Ohio'.",
+            "near_me": "boolean, optional, default false. Only speakers within distance of the user's location.",
+            "distance": f"integer, optional, default {SPEAKER_SEARCH_MILES}. Miles from the user, with near_me.",
+            "query": "string, optional. A name or words from their talks or bio; misspelled names still match.",
+            **PAGING_PARAMS,
+        },
+        danger=DANGER_SAFE,
+        resolver=find_speakers,
+        aliases={"topics", "name", "miles", "radius"},
+        lookup=True,
+    )
+)
+
+register(
+    Action(
         name="search_help",
         description=(
             "Search this site's own help guides and FAQ for how something works, or read the "
@@ -16775,6 +16885,10 @@ NOT_A_SKILL: dict[str, str] = {
     "AuctionLogisticsScan": (
         "Reads an invoice or lot label held up to a camera at the pickup table, checking those lots in. "
         "It needs the physical barcode in front of the volunteer; a caller without one has nothing to scan."
+    ),
+    "HideAiAgentBannerView": (
+        "Hides the connect-an-AI-agent banner for the person who pressed it. It changes what two pages "
+        "show one person and nothing else, and an agent asked to do it is the thing the banner points at."
     ),
     "AuctionPageAction": (
         "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "

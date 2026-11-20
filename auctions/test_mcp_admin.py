@@ -201,7 +201,58 @@ class NothingWritesTests(AdminEndpointCase):
 
 class NoContactDetailsLeaveTests(AdminEndpointCase):
     """An agent here can also read text strangers typed and may be able to push somewhere public, so
-    no address, phone number or email ever reaches it, however much a superuser could see."""
+    no address, phone number or email ever reaches it, however much a superuser could see -- except a
+    club's own contact email, under ``admin.CLUB_CONTACT_KEY``, for drafting outreach."""
+
+    def test_a_clubs_own_address_passes_and_a_members_never_does(self):
+        structured = {
+            "clubs": [
+                {
+                    "club_contact_email": "secretary@club.example",
+                    "contact_email": "secretary@club.example",
+                    "note": "or ask member@home.example",
+                    "members": [{"email": "member@home.example", "club_contact_email": "deep@club.example"}],
+                },
+                {"club_contact_email": "a@b.example x"},
+            ],
+            "email": "member@home.example",
+        }
+        cleaned = admin.private_result({"structuredContent": structured, "content": []}, "list_clubs")
+        cleaned = cleaned["structuredContent"]
+        club = cleaned["clubs"][0]
+        self.assertEqual(club["club_contact_email"], "secretary@club.example")
+        self.assertNotIn("contact_email", club)
+        self.assertNotIn("email", cleaned)
+        text = json.dumps(cleaned)
+        self.assertNotIn("member@home.example", text)
+        # Only a bare address in a row passes; deeper, or with more in it, it is scrubbed like everything else.
+        self.assertNotIn("deep@club.example", text)
+        self.assertNotIn("a@b.example", text)
+
+    def test_another_tools_club_contact_key_is_scrubbed(self):
+        structured = {
+            "club": {"club_contact_email": "secretary@club.example"},
+            "clubs": [{"club_contact_email": "x@club.example"}],
+        }
+        for tool in ("describe_person", "list_people", ""):
+            cleaned = admin.private_result({"structuredContent": structured, "content": []}, tool)
+            text = json.dumps(cleaned)
+            self.assertNotIn("secretary@club.example", text, tool)
+            self.assertNotIn("x@club.example", text, tool)
+        self.assertNotIn("secretary@club.example", json.dumps(admin.private(structured)))
+
+    def test_describe_club_shows_the_clubs_address_but_not_a_members(self):
+        from auctions.models import Club, ClubMember
+
+        club = Club.objects.create(
+            name="Contactable Aquarium Society", contact_email="board@club.example", outreach_stage=Club.LISTED
+        )
+        ClubMember.objects.create(club=club, name="A member", email="member-private@home.example")
+        result = self.call("describe_club", {"club": club.name})
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(result["structuredContent"]["club"]["club_contact_email"], "board@club.example")
+        text = json.dumps(result)
+        self.assertNotIn("member-private@home.example", text)
 
     def test_people_come_back_without_their_contact_details(self):
         from auctions.models import AuctionTOS
@@ -623,6 +674,107 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertAlmostEqual(club.latitude, 42.36)
         self.assertIn("Boston, MA, USA", proposal.results[0]["said"])
 
+    def test_a_contact_form_sender_is_blocked_only_once_approved(self):
+        from auctions.models import BlockedEmailAddress
+
+        result = self.propose("block_email_address", {"email": "  Pest@Example.COM "})
+        self.assertFalse(result["isError"], result)
+        self.assertNotIn("pest@example.com", json.dumps(result).lower())
+        self.assertFalse(BlockedEmailAddress.objects.exists())
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertTrue(BlockedEmailAddress.blocks("pest@example.com"))
+        self.assertNotIn("pest", proposal.results[0]["said"].lower())
+
+    def test_a_bad_or_already_blocked_address_is_refused_and_approval_is_idempotent(self):
+        from auctions.models import BlockedEmailAddress
+
+        BlockedEmailAddress.objects.create(email="pest@example.com")
+        for arguments, expected in (
+            ({}, "Say which"),
+            ({"email": "not an address"}, "isn't an email"),
+            ({"email": "a" * 250 + "@example.com"}, "longer than"),
+            ({"email": "PEST@example.com"}, "already blocked"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("block_email_address", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+                self.assertNotIn("pest@", result["content"][0]["text"].lower())
+        self.assertFalse(AgentProposal.objects.exists())
+        # Blocked by hand between proposing and approving: the step still succeeds, once.
+        BlockedEmailAddress.objects.all().delete()
+        self.assertFalse(self.propose("block_email_address", {"email": "pest@example.com"})["isError"])
+        BlockedEmailAddress.objects.create(email="pest@example.com")
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailAddress.objects.count(), 1)
+
+    def test_a_block_racing_another_reports_already_blocked(self):
+        from auctions.models import BlockedEmailAddress
+
+        self.assertFalse(self.propose("block_email_address", {"email": "pest@example.com"})["isError"])
+        BlockedEmailAddress.objects.create(email="pest@example.com")
+        with mock.patch.object(BlockedEmailAddress, "blocks", return_value=False):
+            proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailAddress.objects.count(), 1)
+
+    def test_a_contact_form_domain_is_blocked_only_once_approved(self):
+        from auctions.models import BlockedEmailDomain
+
+        result = self.propose("block_email_domain", {"domain": "  @Spam-Leads.EXAMPLE. "})
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(BlockedEmailDomain.blocks("pest@spam-leads.example"))
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertTrue(BlockedEmailDomain.objects.filter(domain="spam-leads.example").exists())
+        self.assertTrue(BlockedEmailDomain.blocks("anyone@mail.spam-leads.example"))
+        self.assertNotIn("spam-leads", proposal.results[0]["said"])
+
+    def test_a_unicode_domain_is_stored_as_the_ascii_it_resolves_to(self):
+        from auctions.models import BlockedEmailDomain
+
+        self.assertFalse(self.propose("block_email_domain", {"domain": "Bücher.example"})["isError"])
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertTrue(BlockedEmailDomain.objects.filter(domain="xn--bcher-kva.example").exists())
+
+    def test_a_bad_shared_or_already_blocked_domain_is_refused_and_approval_is_idempotent(self):
+        from auctions.models import BlockedEmailDomain
+
+        BlockedEmailDomain.objects.create(domain="spam-leads.example")
+        for arguments, expected in (
+            ({}, "Say which"),
+            ({"domain": "  "}, "Say which"),
+            ({"domain": "localhost"}, "isn't a domain"),
+            ({"domain": "pest@spam.example"}, "isn't a domain"),
+            ({"domain": "*.spam.example"}, "isn't a domain"),
+            ({"domain": "a" * 250 + ".example"}, "isn't a domain"),
+            ({"domain": ".spam.example"}, "isn't a domain"),
+            ({"domain": "spam..example"}, "isn't a domain"),
+            ({"domain": ".".join(["é" * 15 + "a" * 10] * 9) + ".ex"}, "isn't a domain"),
+            ({"domain": "co.uk"}, "country's suffix"),
+            ({"domain": "GMail.com"}, "shared by everyone"),
+            ({"domain": "sbcglobal.net"}, "shared by everyone"),
+            ({"domain": "SPAM-LEADS.example"}, "already blocked"),
+            ({"domain": "mail.spam-leads.example"}, "already blocked"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.propose("block_email_domain", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+        # Blocked by hand between proposing and approving: the step still succeeds, once.
+        BlockedEmailDomain.objects.filter(domain="spam-leads.example").delete()
+        self.assertFalse(self.propose("block_email_domain", {"domain": "spam-leads.example"})["isError"])
+        BlockedEmailDomain.objects.create(domain="spam-leads.example")
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailDomain.objects.filter(domain="spam-leads.example").count(), 1)
+
     def test_a_club_already_on_the_site_is_refused_when_proposed(self):
         Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org/")
         for arguments in (
@@ -853,7 +1005,7 @@ class AdminJobProposalTests(AdminEndpointCase):
                 self.assertTrue(result["isError"])
                 self.assertIn(expected, result["content"][0]["text"])
 
-    def test_the_club_directory_lists_prospects_without_their_contact_address(self):
+    def test_the_club_directory_lists_prospects_with_only_the_clubs_own_address(self):
         from auctions.models import Club
 
         harbor = Club.objects.create(
@@ -872,9 +1024,8 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertEqual(clubs[0]["stage"], Club.PROSPECT)
         self.assertTrue(clubs[0]["has_contact_email"])
         self.assertTrue(clubs[0]["contact_email_at_homepage_domain"])
-        text = json.dumps(result)
-        for secret in ("membership", "Member Lane"):
-            self.assertNotIn(secret, text)
+        self.assertEqual(clubs[0]["club_contact_email"], "membership@harboraquarium.example.org")
+        self.assertNotIn("Member Lane", json.dumps(result))
         listed = self.call("list_clubs", {"stage": "Approved and listed"})["structuredContent"]["clubs"]
         self.assertNotIn(harbor.pk, [club["club"] for club in listed])
         self.assertIn("Bay Library", json.dumps(listed))

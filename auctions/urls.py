@@ -734,6 +734,7 @@ urlpatterns = [
     path("ai/", views.AIPageView.as_view(), name="ai"),
     path("ai/ask/", views.AIAskView.as_view(), name="ai_ask"),
     path("ai/connect/", views.UserAPIKeyView.as_view(), name="user_api_keys"),
+    path("ai/not-interested/", views.HideAiAgentBannerView.as_view(), name="hide_ai_agent_banner"),
     # Printing from a computer to the phone's Bluetooth printer: the waiting page polls the first of
     # these once a second. Session auth -- the phone's half is under /api/mobile/printjobs/.
     path(

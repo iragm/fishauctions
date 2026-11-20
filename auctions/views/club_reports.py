@@ -19,7 +19,7 @@ from django.db.models import (
     Value,
 )
 from django.db.models.base import Model as Model
-from django.db.models.functions import TruncDay
+from django.db.models.functions import Coalesce, TruncDay
 from django.http import (
     HttpResponse,
     HttpResponseBadRequest,
@@ -346,6 +346,25 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         currency = seller.user.userdata.currency if (seller and seller.user) else "USD"
         return get_currency_symbol(currency)
 
+    #: How long after the user's latest auction ends the report points at that auction's stats.
+    RECENT_AUCTION_WINDOW = timedelta(hours=48)
+
+    def recent_club_auction(self):
+        """The user's most recently ended auction, when it is this club's and ended within
+        :data:`RECENT_AUCTION_WINDOW`; else None. An in-person auction with no end ended when it started.
+        """
+        now = timezone.now()
+        latest = (
+            Auction.objects.filter(created_by=self.request.user, is_deleted=False)
+            .annotate(ended=Coalesce("date_end", "date_start"))
+            .filter(ended__lte=now)
+            .order_by("-ended")
+            .first()
+        )
+        if latest and latest.club_id == self.club.pk and latest.ended >= now - self.RECENT_AUCTION_WINDOW:
+            return latest
+        return None
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         filter_form, start_date, end_date = self._get_filter_form()
@@ -372,6 +391,9 @@ class ClubTreasurerReportView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 "currency_symbol": currency_symbol,
                 "treasurer_export_url": reverse("club_treasurer_report_export", kwargs={"slug": self.club.slug}),
                 "can_manage_money": self.has_treasurer_permission(),
+                # Without PayPal or Square on the site, nothing paid at the auction reaches this report by itself.
+                "payments_enabled": self.club.can_accept_paypal or self.club.can_accept_square,
+                "recent_auction": self.recent_club_auction(),
             }
         )
         return context

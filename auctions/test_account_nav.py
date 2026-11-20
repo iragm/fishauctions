@@ -177,7 +177,7 @@ class PaymentRowTests(TestCase):
 
 @isolated_cache("account-nav-navbar")
 class NavbarTests(TestCase):
-    """What is left in the navbar's user menu: three rows, and none of the settings pages."""
+    """What is left in the navbar's user menu: four rows, and none of the settings pages."""
 
     @classmethod
     def setUpTestData(cls):
@@ -187,8 +187,8 @@ class NavbarTests(TestCase):
         self.client.force_login(self.user)
         self.html = self.client.get(reverse("selling")).content.decode()
 
-    def test_the_three_rows_are_there(self):
-        for url in (reverse("my_invoices"), reverse("feedback"), reverse("account_setup")):
+    def test_the_four_rows_are_there(self):
+        for url in (reverse("my_invoices"), reverse("feedback"), reverse("feature_requests"), reverse("account_setup")):
             self.assertIn(f'href="{url}"', self.html)
 
     def test_the_settings_pages_left(self):

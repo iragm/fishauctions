@@ -503,6 +503,18 @@
         "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
       }
     },
+    "find_speakers": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only looks up and returns data (search the directory of people who give talks to fish clubs).",
+        "open_world_justification": "Stays inside this site's own auctions and clubs, scoped to what the signed-in user may already see or do there.",
+        "destructive_justification": "It only reads, so it deletes, overwrites and sends nothing."
+      }
+    },
     "go_to_page": {
       "annotations": {
         "readOnlyHint": true,

@@ -1,0 +1,200 @@
+"""A picture added by link is fetched once, here, to see that it really comes back as a picture.
+
+Some hosts block linking from other sites (by ``Referer``), so a link that works in the seller's own
+browser shows nothing, or a placeholder, on the lot page. The fetch sends this site as the referrer, as
+a visitor's browser would, and refuses anything but a ``200`` image. Only public addresses are fetched:
+every hop's host is resolved once, every address it gives must be global, and the connection goes to
+that vetted address (with the original ``Host`` header and, for https, SNI and certificate check against
+the host name), so a second lookup can't be rebound onto the server's own network.
+
+The whole check has one deadline across every hop, and it reads only the first few KB: an ``image/*``
+answer whose first bytes arrive is enough, so a slow or huge file never holds a worker.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import socket
+import time
+from urllib.parse import urljoin, urlparse
+
+import certifi
+import urllib3
+
+#: Seconds for each connect and each read, never more than what is left of :data:`DEADLINE`.
+TIMEOUT = 5
+#: Seconds for the whole check, across every hop.
+DEADLINE = 8
+#: Bytes read to confirm a picture; nothing after them is downloaded.
+ENOUGH_BYTES = 4 * 1024
+#: A declared ``Content-Length`` above this counts as too big to link to.
+MAX_BYTES = 15 * 1024 * 1024
+#: Redirects followed. One that changes the path is treated as a hotlink blocker's placeholder.
+MAX_REDIRECTS = 3
+
+NOT_A_PICTURE = "That link doesn't give back a picture here (the site may block linking), so upload the image instead."
+TOO_BIG = "That picture is too big to link to, so upload a smaller copy instead."
+
+FETCH_ERRORS = (urllib3.exceptions.HTTPError, OSError, ValueError)
+
+
+#: IPv6 ranges whose last 32 bits are an IPv4 address a translator may route to: IPv4-compatible,
+#: IPv4-translated (SIIT) and NAT64. ``is_global`` judges the IPv6 form, so these are judged by the IPv4 one.
+_EMBEDS_IPV4 = tuple(ipaddress.ip_network(n) for n in ("::/96", "::ffff:0:0:0/96", "64:ff9b::/96"))
+#: Local-use NAT64: wraps addresses of the server's own network.
+_LOCAL_NAT64 = ipaddress.ip_network("64:ff9b:1::/48")
+
+
+def _as_checked(address: ipaddress.IPv4Address | ipaddress.IPv6Address):
+    """The address to judge and connect to: the IPv4 address an IPv6 one carries, else itself.
+
+    IPv4-mapped, IPv4-compatible, IPv4-translated, NAT64 and 6to4 addresses are judged by the IPv4
+    address inside them, which older Pythons' ``is_global`` doesn't do. ``None`` for local-use NAT64
+    and the deprecated site-local range, which are never public.
+    """
+    if address.version == 4:
+        return address
+    if address.ipv4_mapped:
+        return address.ipv4_mapped
+    if address.sixtofour:
+        return address.sixtofour
+    if address in _LOCAL_NAT64 or address.is_site_local:
+        return None
+    if any(address in network for network in _EMBEDS_IPV4):
+        return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return address
+
+
+def _is_public(address) -> bool:
+    return address is not None and address.is_global and not address.is_multicast
+
+
+def public_address(host: str, port: int) -> str:
+    """One address for ``host``, resolved once, or ``""`` unless every address it resolves to is public."""
+    if not host:
+        return ""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, OSError):
+        return ""
+    addresses = []
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            return ""
+        checked = _as_checked(address)
+        if not _is_public(checked):
+            return ""
+        # A mapped address is the IPv4 one in another spelling: connect to what was checked.
+        addresses.append(str(address.ipv4_mapped if address.version == 6 and address.ipv4_mapped else address))
+    return addresses[0] if addresses else ""
+
+
+def public_host(host: str) -> bool:
+    """Whether every address ``host`` resolves to is a public one."""
+    return bool(public_address(host, 443))
+
+
+def _referer() -> str:
+    from django.contrib.sites.models import Site
+
+    try:
+        return f"https://{Site.objects.get_current().domain}/"
+    except Exception:
+        return ""
+
+
+def _open(url: str, address: str, headers: dict, timeout: float):
+    """GET ``url`` from exactly ``address``: no second lookup, no redirects, nothing read yet."""
+    parsed = urlparse(url)
+    https = parsed.scheme == "https"
+    hostname = parsed.hostname or ""
+    port = parsed.port or (443 if https else 80)
+    host_header = parsed.netloc.rsplit("@", 1)[-1]
+    common = {"port": port, "timeout": urllib3.Timeout(connect=timeout, read=timeout), "retries": False, "maxsize": 1}
+    if https:
+        pool = urllib3.HTTPSConnectionPool(
+            address,
+            server_hostname=hostname,
+            assert_hostname=hostname,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=certifi.where(),
+            **common,
+        )
+    else:
+        pool = urllib3.HTTPConnectionPool(address, **common)
+    path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+    return pool.urlopen(
+        "GET",
+        path,
+        headers={**headers, "Host": host_header},
+        redirect=False,
+        retries=False,
+        preload_content=False,
+        assert_same_host=False,
+    )
+
+
+def _looks_like_markup(start: bytes, content_type: str) -> bool:
+    return content_type != "image/svg+xml" and start.lstrip()[:1] == b"<"
+
+
+def problem(url: str) -> str:
+    """Why ``url`` can't be used as a picture, in one sentence, or ``""`` when it can."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; image-link-check)", "Accept": "image/*"}
+    referer = _referer()
+    if referer:
+        headers["Referer"] = referer
+    deadline = time.monotonic() + DEADLINE
+    first_path = urlparse(url).path
+    for _hop in range(MAX_REDIRECTS + 1):
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return NOT_A_PICTURE
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError:
+            return NOT_A_PICTURE
+        address = public_address(parsed.hostname or "", port)
+        left = deadline - time.monotonic()
+        if not address or left <= 0:
+            return NOT_A_PICTURE
+        try:
+            response = _open(url, address, headers, min(TIMEOUT, left))
+        except FETCH_ERRORS:
+            return NOT_A_PICTURE
+        try:
+            if response.status in (301, 302, 303, 307, 308):
+                url = urljoin(url, response.headers.get("Location", ""))
+                # http -> https, or another host serving the same file, is fine; a different file isn't.
+                if urlparse(url).path != first_path:
+                    return NOT_A_PICTURE
+                continue
+            if response.status != 200:
+                return NOT_A_PICTURE
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if not content_type.startswith("image/"):
+                return NOT_A_PICTURE
+            try:
+                if int(response.headers.get("Content-Length") or 0) > MAX_BYTES:
+                    return TOO_BIG
+            except ValueError:
+                return NOT_A_PICTURE
+            start = b""
+            try:
+                while len(start) < ENOUGH_BYTES:
+                    if time.monotonic() > deadline:
+                        return NOT_A_PICTURE
+                    chunk = response.read1(ENOUGH_BYTES - len(start))
+                    if not chunk:
+                        break
+                    start += chunk
+            except FETCH_ERRORS:
+                return NOT_A_PICTURE
+            if not start or _looks_like_markup(start, content_type):
+                return NOT_A_PICTURE
+            return ""
+        finally:
+            response.close()
+    return NOT_A_PICTURE

@@ -202,7 +202,9 @@ def redact(text: str) -> str:
 #
 # Agents on this endpoint also read text members wrote, and some of them can push to a public
 # repository. So the contact details a superuser can see never leave: an agent talked into copying
-# what it read somewhere public has no address, phone number or email to copy.
+# what it read somewhere public has no address, phone number or email to copy. One exemption, by the
+# owner's decision, for drafting outreach: a club's own published contact email, under
+# CLUB_CONTACT_KEY and set only from Club.contact_email. A member's or user's never leaves.
 
 #: Result keys dropped at any depth.
 PRIVATE_KEYS = frozenset(
@@ -220,8 +222,60 @@ PRIVATE_KEYS = frozenset(
 )
 
 
+#: The one key whose email passes :func:`private_result`: a club's ``Club.contact_email``, set by
+#: :func:`club_contact` and nothing else, in :data:`CLUB_CONTACT_TOOLS` only. Only a bare address
+#: passes; anything else is redacted.
+CLUB_CONTACT_KEY = "club_contact_email"
+
+_BARE_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+
+
+def club_contact(club) -> str:
+    """The club's own contact email for :data:`CLUB_CONTACT_KEY`, or ``""``."""
+    email = (club.contact_email or "").strip()
+    return email if _BARE_EMAIL.fullmatch(email) else ""
+
+
+def _with_club_contact(tool: str, structured: dict[str, Any]) -> dict[str, Any]:
+    """``describe_club``'s ``contact_email`` (``Club.contact_email``) under :data:`CLUB_CONTACT_KEY`, here only."""
+    club = structured.get("club")
+    if tool != "describe_club" or not isinstance(club, dict) or not isinstance(club.get("contact_email"), str):
+        return structured
+    email = club["contact_email"].strip()
+    return {**structured, "club": {**club, CLUB_CONTACT_KEY: email if _BARE_EMAIL.fullmatch(email) else ""}}
+
+
+#: The tools whose results carry :data:`CLUB_CONTACT_KEY`, and where: ``"club"`` is the result's one club,
+#: ``"clubs"`` each of its rows. Anywhere else, and in any other tool's result, the key is scrubbed.
+CLUB_CONTACT_TOOLS = {"list_clubs": "clubs", "outreach_queue": "clubs", "describe_club": "club"}
+
+
+def _club_contacts(tool: str, structured: dict[str, Any]) -> dict[Any, str]:
+    """The bare club addresses ``tool``'s result carries under :data:`CLUB_CONTACT_KEY`, by row (``None``
+    for the one club), read before :func:`private` scrubs them so they can be put back."""
+    where = CLUB_CONTACT_TOOLS.get(tool)
+    found = structured.get(where) if where else None
+    rows = {None: found} if where == "club" else dict(enumerate(found)) if isinstance(found, list) else {}
+    return {
+        index: row[CLUB_CONTACT_KEY]
+        for index, row in rows.items()
+        if isinstance(row, dict)
+        and isinstance(row.get(CLUB_CONTACT_KEY), str)
+        and _BARE_EMAIL.fullmatch(row[CLUB_CONTACT_KEY])
+    }
+
+
+def _restore_club_contacts(tool: str, structured: dict[str, Any], contacts: dict[Any, str]) -> dict[str, Any]:
+    where = CLUB_CONTACT_TOOLS.get(tool)
+    for index, email in contacts.items():
+        row = structured.get(where) if index is None else structured[where][index]
+        row[CLUB_CONTACT_KEY] = email
+    return structured
+
+
 def private(value: Any) -> Any:
-    """``value`` with :data:`PRIVATE_KEYS` removed and every string through :func:`redact`."""
+    """``value`` with :data:`PRIVATE_KEYS` removed and every string through :func:`redact`. The club contact
+    exemption is :func:`private_result`'s, for :data:`CLUB_CONTACT_TOOLS` only."""
     if isinstance(value, dict):
         return {key: private(item) for key, item in value.items() if str(key).lower() not in PRIVATE_KEYS}
     if isinstance(value, list):
@@ -244,7 +298,9 @@ def private_result(result: dict[str, Any], tool: str = "") -> dict[str, Any]:
         dict(block) for block in result.get("content") or [] if block.get("type") != "image" or tool in PICTURE_TOOLS
     ]
     if isinstance(structured, dict):
-        structured = private(structured)
+        structured = _with_club_contact(tool, structured)
+        contacts = _club_contacts(tool, structured)
+        structured = _restore_club_contacts(tool, private(structured), contacts)
         result = {**result, "structuredContent": structured}
         if content and content[0].get("type") == "text":
             content[0]["text"] = json.dumps(structured, indent=2, default=str)
@@ -1551,8 +1607,8 @@ def _last_real_auctions(clubs) -> dict[int, Any]:
 def _club_row(club, last_auction=None) -> dict[str, Any]:
     """One club as ``list_clubs`` shows it. Club admins and imports typed these, so they're fenced.
 
-    No contact address leaves this endpoint (:func:`private`), so only whether there is one and whether
-    it is at the club's own website's domain. An unlisted club's meeting place may be somebody's house
+    The club's own contact email is the one address that leaves this endpoint (:data:`CLUB_CONTACT_KEY`),
+    with whether it is at the club's own website's domain. An unlisted club's meeting place may be somebody's house
     and was never published, so only listed clubs show theirs.
     """
     from auctions import club_import
@@ -1571,6 +1627,7 @@ def _club_row(club, last_auction=None) -> dict[str, Any]:
         "location": palette_actions.untrusted_short(club.location or "") if listed else "",
         "on_the_map": club.latitude is not None and club.longitude is not None,
         "has_contact_email": bool(email),
+        CLUB_CONTACT_KEY: club_contact(club),
         "contact_email_at_homepage_domain": bool(email_domain and email_domain == homepage_domain),
         "contact_method": club.contact_method,
         "stage": club.outreach_stage,
@@ -1893,6 +1950,177 @@ def decline_speaker_claim(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(problem)
     SpeakerClaim.objects.filter(pk=claim.pk).update(status=SpeakerClaim.STATUS_DECLINED)
     return _ok("Declined.")
+
+
+#: ``add_speaker``/``update_speaker`` parameter -> (``Speaker`` field, longest value; ``None`` is unbounded).
+#: The directory's public fields only: contact details a club website lists stay off a scraped record.
+SPEAKER_FIELDS = {
+    "name": ("name", 200),
+    "bio": ("bio", None),
+    "talks": ("programs", None),
+    "website": ("website", 500),
+    "facebook_page": ("facebook_page", 500),
+    "location": ("location", 500),
+    "source_url": ("source_url", 500),
+}
+_SPEAKER_URL_FIELDS = ("website", "facebook_page", "source_url")
+
+
+def _speaker_changes(params: dict[str, Any], speaker=None):
+    """``add_speaker``/``update_speaker``'s fields as ``(changes, topics, remote, "")``, or a reason last.
+
+    Only what the step names changes; ``topics`` is ``None`` when it names none and ``remote`` is ``None``
+    when it doesn't say. Topics are the directory's closed vocabulary, matched by name in any case.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import URLValidator
+
+    from auctions import speaker_duplicates
+    from auctions.models import SpeakerTopic
+
+    changes = {}
+    for param, (field, length) in SPEAKER_FIELDS.items():
+        if param not in params:
+            continue
+        value = _str(params, param)
+        if param in _SPEAKER_URL_FIELDS and value:
+            value = club_onboarding.web_address(value)
+            try:
+                URLValidator()(value)
+            except ValidationError:
+                return {}, None, None, f"{param} isn't a web address."
+        changes[field] = value[:length] if length else value
+    if "name" in changes and not changes["name"]:
+        return {}, None, None, "A speaker needs a name."
+    if speaker is None:
+        if not changes.get("name"):
+            return {}, None, None, "A speaker needs a name."
+        if not changes.get("location"):
+            return {}, None, None, "A speaker needs a location: roughly where they travel from."
+    if "name" in changes:
+        exclude = speaker.pk if speaker is not None else None
+        existing = speaker_duplicates.possible_matches(changes["name"], exclude_pk=exclude)
+        if existing:
+            return {}, None, None, f"That looks like {existing[0].slug}, already in the directory; update_speaker it."
+    topics = None
+    if "topics" in params:
+        names = [name.strip() for name in _str(params, "topics").split(",") if name.strip()]
+        found = {topic.name.casefold(): topic for topic in SpeakerTopic.objects.all()}
+        unknown = [name for name in names if name.casefold() not in found]
+        if unknown:
+            known = ", ".join(sorted(topic.name for topic in found.values()))
+            return {}, None, None, f"There is no topic called {unknown[0]}. The topics are: {known}."
+        topics = [found[name.casefold()] for name in names]
+    remote = palette_actions._flag(params, "remote") if "remote" in params else None
+    if speaker is not None and not changes and topics is None and remote is None:
+        return {}, None, None, "Name at least one thing to change."
+    problem = _speaker_form(speaker, changes, topics)[1]
+    if problem:
+        return {}, None, None, problem
+    return changes, topics, remote, ""
+
+
+def _speaker_form(speaker, changes: dict[str, Any], topics):
+    """``SpeakerForm`` (the add and edit pages' form) bound to ``speaker``'s details with ``changes`` on
+    top, so its clean methods judge a step as they judge the page, as ``(form, "")`` or ``(form, why)``.
+
+    ``source_url`` isn't on the form; the caller sets it on the saved instance.
+    """
+    from django.forms.models import model_to_dict
+
+    from auctions.forms import SpeakerForm
+    from auctions.models import Speaker
+
+    instance = speaker if speaker is not None else Speaker()
+    fields = [field for field in SpeakerForm._meta.fields if field != "image"]
+    data = model_to_dict(instance, fields=fields)
+    data["topics"] = [topic.pk for topic in (topics if topics is not None else data.get("topics") or [])]
+    data.update({field: value for field, value in changes.items() if field in fields})
+    if "location" in changes and changes["location"] != instance.location:
+        # The old pin would stay where they no longer are; the post_save signal geocodes the new place.
+        data["location_coordinates"] = ""
+    data = {field: value for field, value in data.items() if value is not None}
+    form = SpeakerForm(data=data, instance=instance)
+    if form.is_valid():
+        return form, ""
+    field, errors = next(iter(form.errors.items()))
+    return form, f"{field}: {errors[0]}" if field != "__all__" else errors[0]
+
+
+def _save_speaker(speaker, changes: dict[str, Any], topics, user):
+    """Save through :func:`_speaker_form`, as the add and edit pages do, or raise ``ValueError`` with why."""
+    moved = speaker is not None and "location" in changes and changes["location"] != speaker.location
+    form, problem = _speaker_form(speaker, changes, topics)
+    if problem:
+        raise ValueError(problem)
+    saved = form.save(commit=False)
+    if speaker is None:
+        saved.created_by = user
+    if "source_url" in changes:
+        saved.source_url = changes["source_url"]
+    if moved:
+        saved.location_coordinates = None
+        saved.latitude = saved.longitude = None
+    saved.save()
+    form.save_m2m()
+    return saved
+
+
+def _set_remote(speaker, remote, user):
+    """``remote`` as a "Presents remotely" tag, the one place the directory says it. ``false`` takes off
+    everyone's, so ``find_speakers`` stops calling them remote."""
+    from auctions.models import SpeakerTag
+
+    if remote:
+        SpeakerTag.objects.get_or_create(speaker=speaker, user=user, tag="remote")
+    elif remote is not None:
+        SpeakerTag.objects.filter(speaker=speaker, tag="remote").delete()
+
+
+def _update_speaker_problem(params: dict[str, Any]) -> str:
+    speaker = _speaker(params, "speaker")
+    if speaker is None:
+        return "There is no live speaker by that slug."
+    return _speaker_changes(params, speaker)[3]
+
+
+def add_speaker(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add somebody to the speaker directory, as ``SpeakerCreateView`` does: a public page, added by the
+    approver, placed on the map by the same geocoding signal.
+    """
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    changes, topics, remote, problem = _speaker_changes(params)
+    if problem:
+        return _error(problem)
+    try:
+        with transaction.atomic():
+            speaker = _save_speaker(None, changes, topics, request.user)
+            _set_remote(speaker, remote, request.user)
+    except ValueError as error:
+        return _error(str(error))
+    return _ok(f"Added {speaker.slug} to the speaker directory.", page_url=speaker.get_absolute_url())
+
+
+def update_speaker(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Correct a speaker's public details. Only the fields a step names change; a new location is
+    geocoded again.
+    """
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    speaker = _speaker(params, "speaker")
+    if speaker is None:
+        return _error("There is no live speaker by that slug.")
+    changes, topics, remote, problem = _speaker_changes(params, speaker)
+    if problem:
+        return _error(problem)
+    try:
+        with transaction.atomic():
+            speaker = _save_speaker(speaker, changes, topics, request.user)
+            _set_remote(speaker, remote, request.user)
+    except ValueError as error:
+        return _error(str(error))
+    return _ok(f"Updated {speaker.slug}.", page_url=speaker.get_absolute_url())
 
 
 def find_duplicate_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -2361,6 +2589,147 @@ def set_interest(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{'Added' if created else 'Updated'} the interest {interest.name}: {kind}, offering {offers}.")
 
 
+def _blocked_email(params: dict[str, Any]) -> tuple[str, str]:
+    """The address ``block_email_address`` names, lowercased, and why it can't be blocked (or ``""``)."""
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    email = _str(params, "email").strip().lower()
+    if not email:
+        return "", "Say which email address to block."
+    if len(email) > 254:
+        return "", "That address is longer than an email address can be (254 characters)."
+    try:
+        validate_email(email)
+    except ValidationError:
+        return "", "That isn't an email address."
+    return email, ""
+
+
+def _block_email_problem(params: dict[str, Any]) -> str:
+    """Refuse, when proposed, an address that isn't one or is already blocked."""
+    from auctions.models import BlockedEmailAddress
+
+    email, problem = _blocked_email(params)
+    if problem:
+        return problem
+    return "That address is already blocked." if BlockedEmailAddress.blocks(email) else ""
+
+
+def block_email_address(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Block one contact-form sender (:class:`auctions.models.BlockedEmailAddress`). The answer never
+    repeats the address: the approver read it on the proposal."""
+    from auctions.models import BlockedEmailAddress
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    email, problem = _blocked_email(params)
+    if problem:
+        return _error(problem)
+    if BlockedEmailAddress.blocks(email):
+        return _ok("That address was already blocked.")
+    _row, created = BlockedEmailAddress.objects.get_or_create(email=email)
+    if not created:
+        return _ok("That address was already blocked.")
+    return _ok("Blocked that address: the contact form now ignores it.")
+
+
+def _blocked_domain(params: dict[str, Any]) -> tuple[str, str]:
+    """The domain ``block_email_domain`` names, normalized, and why it can't be blocked (or ``""``)."""
+    from auctions.models import BlockedEmailDomain
+
+    domain = BlockedEmailDomain.normalize(_str(params, "domain"))
+    if not domain:
+        return "", "Say which domain to block."
+    labels = domain.split(".")
+    if len(domain) > 253 or len(labels) < 2 or not all(_DOMAIN_LABEL.fullmatch(label) for label in labels):
+        return "", "That isn't a domain: give one like example.com."
+    if len(labels) == 2 and len(labels[0]) <= 3 and len(labels[1]) == 2:
+        return "", "That is a whole country's suffix (like co.uk), not one domain."
+    if any(shared == domain or shared.endswith(f".{domain}") for shared in FREE_MAIL_DOMAINS):
+        return "", "That domain is shared by everyone who uses it: block the sender's address instead."
+    return domain, ""
+
+
+_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+#: Webmail and ISP domains a block would cut off whole crowds of real members along with one pest.
+#: A domain these sit under (yahoo.co.uk under co.uk) is refused too.
+FREE_MAIL_DOMAINS = frozenset(
+    {
+        "163.com",
+        "aol.com",
+        "att.net",
+        "bellsouth.net",
+        "charter.net",
+        "comcast.net",
+        "cox.net",
+        "earthlink.net",
+        "fastmail.com",
+        "gmail.com",
+        "gmx.com",
+        "gmx.de",
+        "googlemail.com",
+        "hey.com",
+        "hotmail.co.uk",
+        "hotmail.com",
+        "icloud.com",
+        "live.com",
+        "mac.com",
+        "mail.com",
+        "mail.ru",
+        "me.com",
+        "msn.com",
+        "optonline.net",
+        "outlook.com",
+        "pm.me",
+        "proton.me",
+        "protonmail.com",
+        "qq.com",
+        "rocketmail.com",
+        "sbcglobal.net",
+        "shaw.ca",
+        "sympatico.ca",
+        "verizon.net",
+        "web.de",
+        "yahoo.ca",
+        "yahoo.co.uk",
+        "yahoo.com",
+        "yandex.ru",
+        "ymail.com",
+        "zoho.com",
+    }
+)
+
+
+def _block_domain_problem(params: dict[str, Any]) -> str:
+    """Refuse, when proposed, a domain that isn't one, is shared webmail, or is already blocked."""
+    from auctions.models import BlockedEmailDomain
+
+    domain, problem = _blocked_domain(params)
+    if problem:
+        return problem
+    return "That domain is already blocked." if BlockedEmailDomain.blocks(f"x@{domain}") else ""
+
+
+def block_email_domain(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Block one domain from the contact form (:class:`auctions.models.BlockedEmailDomain`), its
+    subdomains too, for signed-out senders."""
+    from auctions.models import BlockedEmailDomain
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    domain, problem = _blocked_domain(params)
+    if problem:
+        return _error(problem)
+    if BlockedEmailDomain.blocks(f"x@{domain}"):
+        return _ok("That domain was already blocked.")
+    _row, created = BlockedEmailDomain.objects.get_or_create(domain=domain)
+    if not created:
+        return _ok("That domain was already blocked.")
+    return _ok("Blocked that domain: the contact form now ignores signed-out senders from it.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -2607,6 +2976,51 @@ APPROVAL_ONLY: dict[str, Action] = {
             resolver=decline_speaker_claim,
         ),
         Action(
+            name="add_speaker",
+            description=(
+                "Add a speaker to the speaker directory as a public page, e.g. one a club's website lists. "
+                "Public details only, never an email or phone number. Refused when the name looks like "
+                "somebody already listed; update_speaker that page instead."
+            ),
+            params={
+                "name": "string, required. As you'd print it on a meeting flyer.",
+                "location": "string, required. Roughly where they travel from; a town and state is plenty.",
+                "topics": "string, optional. Comma-separated topic names from the directory's list.",
+                "talks": "string, optional. The talks they offer, one per line.",
+                "bio": "string, optional. A paragraph about them.",
+                "website": "string, optional. Their own website.",
+                "facebook_page": "string, optional. Their Facebook page.",
+                "remote": "boolean, optional. true when they present remotely.",
+                "source_url": "string, optional. The page this speaker was found on.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="Add a speaker",
+            resolver=add_speaker,
+        ),
+        Action(
+            name="update_speaker",
+            description=(
+                "Correct a speaker's public details. Only the fields you name change; an empty value clears "
+                "one. topics replaces their topics. A new location is placed on the map again."
+            ),
+            params={
+                "speaker": "string, required. The slug of the speaker's page.",
+                "name": "string, optional. As you'd print it on a meeting flyer.",
+                "location": "string, optional. Roughly where they travel from.",
+                "topics": "string, optional. Comma-separated topic names from the directory's list, replacing theirs.",
+                "talks": "string, optional. The talks they offer, one per line.",
+                "bio": "string, optional. A paragraph about them.",
+                "website": "string, optional. Their own website.",
+                "facebook_page": "string, optional. Their Facebook page.",
+                "remote": "boolean, optional. true when they present remotely, false when they don't.",
+                "source_url": "string, optional. The page this speaker was found on.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Update a speaker",
+            resolver=update_speaker,
+        ),
+        Action(
             name="add_palette_shortcut",
             description=(
                 "Answer one phrase from the command palette straight from the page catalogue, with no "
@@ -2618,6 +3032,31 @@ APPROVAL_ONLY: dict[str, Action] = {
             idempotent=True,
             confirm_template="Add a command palette shortcut",
             resolver=add_palette_shortcut,
+        ),
+        Action(
+            name="block_email_address",
+            description=(
+                "Block one sender from the contact form: they still see the usual thanks, and nothing reaches "
+                "the owner. Matched ignoring case; one already blocked is refused."
+            ),
+            params={"email": "string, required. The sender's email address."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Block a contact form sender",
+            resolver=block_email_address,
+        ),
+        Action(
+            name="block_email_domain",
+            description=(
+                "Block one email domain, and its subdomains, from the contact form for signed-out senders: they "
+                "still see the usual thanks, and nothing reaches the owner. Shared webmail and a domain "
+                "already blocked are refused."
+            ),
+            params={"domain": "string, required. Like example.com."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Block a contact form domain",
+            resolver=block_email_domain,
         ),
         # The species gaps page's buttons and the backfill command's answers.
         *admin_species.APPROVAL_ONLY,
@@ -2639,7 +3078,11 @@ PROPOSAL_CHECKS = {
     "merge_speakers": lambda arguments: _speaker_pair(arguments)[2],
     "link_speaker_to_account": _claim_problem,
     "decline_speaker_claim": lambda arguments: _speaker_and_claimant(arguments)[3],
+    "add_speaker": lambda arguments: _speaker_changes(arguments)[3],
+    "update_speaker": _update_speaker_problem,
     "add_palette_shortcut": _shortcut_problem,
+    "block_email_address": _block_email_problem,
+    "block_email_domain": _block_domain_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
 }
@@ -3108,8 +3551,8 @@ ADMIN_TOOLS: dict[str, Action] = {
             name="list_clubs",
             description=(
                 "The whole club directory, prospects included: each club's number, name, abbreviation, "
-                "website, Facebook page, meeting place (listed clubs only), contact method, whether it has "
-                "a contact email, outreach stage, interests, other_software and the start date of its "
+                "website, Facebook page, meeting place (listed clubs only), contact method, its contact "
+                "email (club_contact_email), outreach stage, interests, other_software and the start date of its "
                 "latest real auction. Pass name (and homepage) to ask whether one club is "
                 "already here, the same check add_club makes, before proposing add_club or update_club."
             ),

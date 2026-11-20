@@ -103,7 +103,7 @@ def _lots_section():
 
 
 def _account_section():
-    """The navbar's account rows: Invoices, Feedback, Account.
+    """The navbar's account rows: Invoices, Feedback, Feature requests, Account.
 
     The web folded its settings pages behind one **Account** row (``auctions/account_nav.py``) that
     lands where you were last, and each of those pages carries the Account setup sidebar, which is the
@@ -116,6 +116,7 @@ def _account_section():
         [
             _row("Invoices", reverse("my_invoices"), "bi-bag"),
             _row("Feedback", reverse("feedback"), "bi-chat-heart"),
+            _row("Feature requests", reverse("feature_requests"), "bi-lightbulb"),
             _row("Account", reverse("account_setup"), "bi-person-gear"),
         ],
         title="Account",

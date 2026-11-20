@@ -748,6 +748,8 @@ ASSISTANT_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("ASSISTANT_ENABLED_F
 # On: the palette takes people to pages and never writes, for everybody, whatever each has chosen.
 # The kill switch for a write that misfires during somebody's auction, read on every request.
 # Default on since 2026-10: answering moved to /ai/, and the palette only opens pages.
+# A picture added by link is fetched once to check it comes back as one (auctions.image_links).
+CHECK_IMAGE_LINKS = True
 ASSISTANT_NAVIGATE_ONLY = parse_bool_env(os.environ.get("ASSISTANT_NAVIGATE_ONLY") or None, default=True)
 # The AI boxes on the auction and club admin pages, and the palette on any auction or club page the
 # person runs, do things ("lot 12 sold to 34 for $5"), each behind a countdown, whatever the switch

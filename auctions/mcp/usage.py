@@ -32,6 +32,36 @@ CONVERSATION_GAP = timedelta(minutes=15)
 
 FAILURE_OUTCOMES = frozenset({"error", "unknown_tool", "bad_request"})
 
+#: Steps shown from each end of one conversation; the middle becomes one "N more" line.
+CONVERSATION_ENDS = 15
+
+#: Characters of one recent search's arguments, and of its result facts, in the report. With
+#: :data:`STEP_CHARS` and :data:`CONVERSATION_ENDS` it keeps ``mcp_usage`` under the connector's
+#: ``tools.MAX_RESULT_CHARS`` however long a conversation ran.
+SEARCH_CHARS = 160
+
+#: Characters of one conversation step.
+STEP_CHARS = 200
+
+
+def _clip(text: str, limit: int = SEARCH_CHARS) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _steps(calls: list[str]) -> list[str]:
+    """One conversation's steps: a run of identical calls as one with a count, and only the two ends."""
+    runs: list[list[Any]] = []
+    for step in calls:
+        if runs and runs[-1][0] == step:
+            runs[-1][1] += 1
+        else:
+            runs.append([step, 1])
+    steps = [step if times == 1 else f"{step} (x{times})" for step, times in runs]
+    if len(steps) > 2 * CONVERSATION_ENDS:
+        hidden = len(steps) - 2 * CONVERSATION_ENDS
+        steps = [*steps[:CONVERSATION_ENDS], f"... {hidden} more", *steps[-CONVERSATION_ENDS:]]
+    return steps
+
 
 @lru_cache(maxsize=1)
 def catalog_version() -> str:
@@ -101,6 +131,12 @@ def result_metadata(answer: dict[str, Any]) -> dict[str, Any]:
     if groups:
         facts["results"] = groups
     return facts
+
+
+def _clip_facts(facts: Any) -> Any:
+    """Result facts as they are when short, else their JSON cut to :data:`SEARCH_CHARS`."""
+    text = json.dumps(facts, ensure_ascii=False, separators=(",", ":"), default=str)
+    return facts if len(text) <= SEARCH_CHARS else _clip(text)
 
 
 def _connection(credential) -> str:
@@ -259,9 +295,10 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
         step = f"{row['tool']}({row['arguments'][:120]})"
         if row["outcome"] != MCPCall.OK:
             step += f" -> {row['outcome']}: {row['detail'][:120]}"
-        story["calls"].append(step)
+        story["calls"].append(_clip(step, STEP_CHARS))
     for story in stories:
         story.pop("_last", None)
+        story["calls"] = _steps(story["calls"])
         story["started"] = timezone.localtime(story["started"]).strftime("%a %d %b %H:%M")
     asked = LLMUsage.objects.filter(createdon__gte=since, tools_offered="ai")
     ai_requests = asked.exclude(request_id="").values("request_id").distinct().count()
@@ -307,9 +344,9 @@ def report(days: int = 7, conversations: int = 20) -> dict[str, Any]:
         "recent_searches": [
             {
                 "tool": row["tool"],
-                "arguments": row["arguments"],
+                "arguments": _clip(row["arguments"]),
                 "outcome": row["outcome"],
-                "result": row["result_metadata"],
+                "result": _clip_facts(row["result_metadata"]),
                 "catalog_version": row["catalog_version"],
             }
             for row in calls

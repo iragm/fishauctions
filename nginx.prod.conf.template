@@ -13,8 +13,9 @@ server {
 # (mostly bots hitting the raw server IP). Do NOT give this a server_name; the
 # previous `server_name --;` was leftover corruption from a botched sed.
 server {
-    listen 443 ssl http2 default_server;
-    listen [::]:443 ssl http2 default_server;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    http2 on;
 
     include /config/nginx/ssl.conf;
 
@@ -33,8 +34,9 @@ server {
 # wildcard that matches every host, which swallows all traffic and makes the
 # catch-all 404 block above dead code.
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
 
     server_name __SITE_DOMAIN__;
 

@@ -1274,7 +1274,7 @@ def feature_emails(self):
 
 @shared_task(bind=True, ignore_result=True)
 def club_emails(self):
-    """The monthly-auction and club-tools emails (auctions/club_emails.py). Daily, 10:40am Eastern."""
+    """The once-per-club emails (auctions/club_emails.py). Daily, 10:40am Eastern."""
     from auctions import club_emails as emails
 
     _safely("club emails", emails.send_club_emails)

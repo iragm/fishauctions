@@ -152,6 +152,29 @@ class AIAgentBannerTests(StandardTestCase):
         self.client.login(username="no_lots", password="testpassword")
         self.assertNotContains(self.client.get(self.auction_url), "data-ai-agent-banner")
 
+    def test_not_interested_hides_it_for_good(self):
+        self.client.login(username="my_lot", password="testpassword")
+        self.assertContains(self.client.get(self.auction_url), reverse("hide_ai_agent_banner"))
+        response = self.client.post(reverse("hide_ai_agent_banner"), headers={"HX-Request": "true"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        self.assertTrue(UserData.objects.get(user=self.user).hide_ai_agent_banner)
+        self.assertNotContains(self.client.get(self.auction_url), "data-ai-agent-banner")
+
+    def test_not_interested_without_htmx_goes_back(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("hide_ai_agent_banner"), HTTP_REFERER=f"http://testserver{self.auction_url}"
+        )
+        self.assertRedirects(response, f"http://testserver{self.auction_url}", fetch_redirect_response=False)
+        response = self.client.post(reverse("hide_ai_agent_banner"), HTTP_REFERER="https://elsewhere.example.com/")
+        self.assertEqual(response.url, reverse("home"))
+
+    def test_not_interested_needs_an_account(self):
+        response = self.client.post(reverse("hide_ai_agent_banner"))
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(UserData.objects.filter(hide_ai_agent_banner=True).exists())
+
     def test_on_a_club_page_it_is_for_the_people_who_run_the_club(self):
         club = Club.objects.create(name="Harbor Aquarium Society", active=True)
         ClubMember.objects.create(club=club, user=self.user, permission_admin=True)

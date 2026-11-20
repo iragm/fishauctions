@@ -1355,6 +1355,7 @@ EXCLUDED: dict[str, str] = {
     "species_approve": _API,
     "species_rejection_delete": _API,
     "species_duplicate_dismiss": _API,
+    "hide_ai_agent_banner": "The banner's own Not interested button; it hides that banner and is no page.",
     "species_merge": _API,
     "api_club_species_lookup": _API,
     "api_club_species_common_names": _API,

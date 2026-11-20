@@ -24,7 +24,7 @@ import logging
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Exists, OuterRef, Q, Subquery
+from django.db.models import Exists, F, OuterRef, Q, Subquery
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
@@ -109,10 +109,10 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         return self.origin[0] is not None
 
     def get_queryset(self):
-        """Listed clubs in alphabetical order, annotated with what's coming up.
+        """Listed clubs, nearest first when the viewer's location is known, annotated with what's coming up.
 
-        Alphabetical rather than newest-first: people scan a club list for a name they half-know, and clubs
-        are added rarely enough that recency would look random.
+        Otherwise alphabetical rather than newest-first: people scan a club list for a name they half-know,
+        and clubs are added rarely enough that recency would look random. Clubs with no pin go last.
         """
         upcoming = _upcoming_events_subquery()
         queryset = (
@@ -127,6 +127,7 @@ class ClubFinderView(LocationMixin, HTMxTableView):
         latitude, longitude = self.origin
         if latitude is not None:
             queryset = queryset.annotate(distance=distance_to(latitude, longitude))
+            return queryset.order_by(F("distance").asc(nulls_last=True), "name")
         return queryset.order_by("name")
 
     def get_filterset_kwargs(self, filterset_class):

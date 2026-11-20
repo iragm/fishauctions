@@ -229,7 +229,12 @@ class OutreachQueueTests(Helpers):
         names = [row["name"] for row in result["clubs"]]
         self.assertLess(names.index("«Aware club»"), names.index("«Cold club»"))
         self.assertTrue(rows["«Cold club»"]["has_contact_email"])
-        self.assertNotIn("sec@cold.test", json.dumps(admin.private_result(result)))
+        # The club's own address is the one that leaves (feature request #42), under its own key only.
+        cleaned = admin.private_result({"structuredContent": result, "content": []}, "outreach_queue")
+        cleaned = cleaned["structuredContent"]
+        cold_row = next(row for row in cleaned["clubs"] if row["name"] == "«Cold club»")
+        self.assertEqual(cold_row[admin.CLUB_CONTACT_KEY], "sec@cold.test")
+        self.assertEqual(json.dumps(cleaned).count("sec@cold.test"), 1)
         self.assertTrue(rows["«Cold club»"]["admin_url"].endswith(f"/admin/auctions/club/{cold.pk}/change/"))
         self.assertIsNotNone(mga.pk and stale.pk)
 
