@@ -221,6 +221,18 @@ class SupportFormDeliveryTests(TestCase):
             self.assertContains(response, "your message is on its way")
         self.assertFalse(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
 
+    def test_a_blocked_sender_looks_sent_but_sends_nothing(self):
+        from post_office.models import Email
+
+        from auctions.models import BlockedEmailAddress
+
+        BlockedEmailAddress.objects.create(email=" Pest@Example.org ")
+        response = self.client.post(self.url, {**self.body, "email": "PEST@example.ORG"}, follow=True)
+        self.assertContains(response, "your message is on its way")
+        self.assertFalse(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
+        self.client.post(self.url, {**self.body, "email": "other@example.org"})
+        self.assertTrue(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
+
     def test_a_lookalike_domain_is_not_blocked(self):
         from post_office.models import Email
 
@@ -311,6 +323,17 @@ class SupportFormSignedInTests(StandardTestCase):
         self.client.force_login(self.user)
         self.client.post(reverse("support"), {"message": "hello"})
         self.assertTrue(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
+
+    def test_a_blocked_sender_is_blocked_signed_in_too(self):
+        from post_office.models import Email
+
+        from auctions.models import BlockedEmailAddress
+
+        BlockedEmailAddress.objects.create(email=self.user.email.upper())
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("support"), {"message": "hello"}, follow=True)
+        self.assertContains(response, "your message is on its way")
+        self.assertFalse(Email.objects.filter(to=[settings.ADMINS[0][1]]).exists())
 
     def test_a_signed_in_account_with_no_email_is_still_asked_for_one(self):
         # There is nothing to reply to otherwise, which is the point of the form.

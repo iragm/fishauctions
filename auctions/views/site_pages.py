@@ -51,6 +51,7 @@ from auctions.models import (
     AssistantSkillRequest,
     Auction,
     AuctionTOS,
+    BlockedEmailAddress,
     BlockedEmailDomain,
     Invoice,
     Lot,
@@ -131,9 +132,13 @@ class SupportView(FormView):
         blocked = not honeypot and not form.sender_is_known and BlockedEmailDomain.blocks(form.sender_email)
         if blocked:
             logger.info("Contact form: dropped a message from a blocked email domain")
+        # A blocked sender, typed in or signed in: the account's own address counts here.
+        elif not honeypot and BlockedEmailAddress.blocks(form.sender_email):
+            blocked = True
+            logger.info("Contact form: dropped a message from a blocked sender")
         if honeypot or blocked:
-            # The honeypot, or a blocked domain: a bot gets the same answer as a person, so it has nothing
-            # to learn.
+            # The honeypot, or a blocked domain or sender: a bot gets the same answer as a person, so it
+            # has nothing to learn.
             messages.success(
                 self.request,
                 f"Thanks - your message is on its way. We'll reply to {form.sender_email}.",
