@@ -111,9 +111,9 @@ this only quotes its opening sentence.
   Keeps a club's event list, its Google Calendar, and its Discord events in step.
 - **`club_health.py`** (390 lines)
   Whether a club is still running auctions here, judged against its own cadence.
-- **`club_import.py`** (244 lines)
+- **`club_import.py`** (264 lines)
   Getting a list of aquarium clubs onto this site from a curated CSV.
-  `ImportedClub`, `IngestReport`, `domain_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
+  `ImportedClub`, `IngestReport`, `domain_of`, `path_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
 - **`club_matching.py`** (317 lines)
   Which club does this belong to? Name normalisation, initialisms, and the auction backlog.
   `normalize`, `initials`, `derived_abbreviation`, `similarity`, `is_hand_written`, `best_match`, `Suggestion`, `suggest_clubs`
@@ -123,7 +123,7 @@ this only quotes its opening sentence.
 - **`command_palette.py`** (1669 lines)
   Shared logic for the command palette, behind the JSON views.
   `resolve_page`, `app_destinations_for_prompt`, `app_deep_link_by_name`, `page_verb_items`, `default_items`, `search`, `with_ask_ai`, `log_search`
-- **`consumers.py`** (506 lines)
+- **`consumers.py`** (510 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
 - **`context_processors.py`** (377 lines)
@@ -170,7 +170,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6746 lines)
+- **`forms.py`** (6755 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -199,6 +199,9 @@ this only quotes its opening sentence.
 - **`html_sanitize.py`** (200 lines)
   Sanitizing the rich text people paste into Summernote.
   `sanitize_summernote_html`, `remove_html_color_tags`
+- **`image_links.py`** (91 lines)
+  A picture added by link is fetched once, here, to see that it really comes back as a picture.
+  `public_host`, `problem`
 - **`lifecycle.py`** (547 lines)
   Phase 9: measuring buyers, sellers and people with no account (``docs/phase_9.md``).
 - **`llm.py`** (763 lines)
@@ -361,7 +364,7 @@ this only quotes its opening sentence.
   What the assistant does when nobody is looking at a page.
 - **`test_auction_admin_views.py`** (840 lines)
   Regression tests for auction-admin and lot-management views with thin coverage: the add-to-calendar
-- **`test_auction_links.py`** (659 lines)
+- **`test_auction_links.py`** (686 lines)
   Auction join links, the lot list's behaviour, and the Cloudflare image pipeline.
   `AuctionJoinLinksUserTests`, `AuctionTOSEmailChangeGuardTests`, `LinkAccountsCommandTests`, `LotListUXTests`, `CloudflareImagesTests`
 - **`test_auction_misc.py`** (592 lines)
@@ -432,7 +435,7 @@ this only quotes its opening sentence.
   `map_payload`, `ClubFinderTests`, `ClubAddTests`
 - **`test_club_health.py`** (554 lines)
   Tests for the club lifecycle rollup and the outreach queue.
-- **`test_club_import.py`** (200 lines)
+- **`test_club_import.py`** (215 lines)
   Phase 8: importing a curated club list, and never publishing anything by accident.
   `csv_text`, `HostTests`, `ReadCsvTests`, `FindExistingTests`, `IngestTests`
 - **`test_club_integration_views.py`** (759 lines)
@@ -505,7 +508,7 @@ this only quotes its opening sentence.
 - **`test_email_send_sites.py`** (372 lines)
   Every templated email, sent through post_office with real model objects, the way the site sends it.
   `SendSiteTests`, `SuiteMailBackendTests`
-- **`test_endauctions.py`** (902 lines)
+- **`test_endauctions.py`** (960 lines)
   Tests for the ``endauctions`` command and the websocket consumers.
   `LotEndauctionsMethodsTests`, `WebsocketClientDisconnectTests`, `WebSocketConsumerTests`, `HasEverGrantedPermissionTests`
 - **`test_error_pages.py`** (35 lines)
@@ -531,12 +534,18 @@ this only quotes its opening sentence.
 - **`test_history_tools.py`** (108 lines)
   ``recent_changes`` and ``club_history``: the filters, and a superuser reading every auction or club.
   `HistoryToolTests`
+- **`test_image_links.py`** (84 lines)
+  A picture added by link is fetched once and refused unless it comes back as one (:mod:`auctions.image_links`).
+  `answer`, `ImageLinkTests`
 - **`test_invoice_adjustments.py`** (101 lines)
   Adjustments on the invoice page save one row at a time: a new row, a change, a delete, a blank row,
   `InvoiceAdjustmentSaveTests`, `InvoicePageAdjustmentTests`
 - **`test_invoice_models.py`** (254 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`, `InvoiceNotificationNoteTests`
+- **`test_join_reminder.py`** (61 lines)
+  The "you looked but didn't join" reminder in ``auctiontos_notifications``: no distance to compare, and one
+  `JoinReminderTests`
 - **`test_label_layout.py`** (331 lines)
   Every lot label preset, rendered with worst-case lots and held to the layout rules.
   `PlacedText`, `laid_out_text`, `squeezed`, `LabelLayoutTests`, `LabelUnitTests`, `LabelMeasurementTests`
@@ -598,7 +607,7 @@ this only quotes its opening sentence.
 - **`test_mcp_resources.py`** (350 lines)
   The addressable reads and the recipes: ``resources/templates/list``, ``prompts/*``, completions.
   `ResourceCatalogueTests`, `ResourceEndpointTests`, `PromptTests`, `PromptEndpointTests`
-- **`test_mcp_usage.py`** (233 lines)
+- **`test_mcp_usage.py`** (264 lines)
   What agents ask ``/mcp/`` for (:mod:`auctions.mcp.usage`), ``mcp_usage`` on ``/mcp/admin/``, and the
   `RecordingTests`, `ChatGPTTextTests`, `UsageReportTests`
 - **`test_mcp_widgets.py`** (197 lines)
@@ -902,7 +911,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 - **`auction_promos.py`** (335 lines)
   Tell nearby users about a promoted auction, once each: by email, or by push for app users who chose push.
   `promotion_window`, `auctions_to_promote`, `user_timezone`, `is_last_chance`, `is_send_time`, `recipients`, `is_quiet`, `was_in_the_weekly_email`, `when_text`, `Command`
-- **`auctiontos_notifications.py`** (309 lines)
+- **`auctiontos_notifications.py`** (322 lines)
   The participant emails that follow joining an auction, run every few minutes by cron: welcome,
   `send_tos_notification`, `Command`
 - **`backfill_lot_species.py`** (384 lines)
@@ -1055,7 +1064,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`transport.py`** (169 lines)
   The HTTP end of the MCP server: one view, at ``/mcp/``. Nothing here knows what a tool is.
   `MCPEndpointView`, `AdminMCPEndpointView`
-- **`usage.py`** (358 lines)
+- **`usage.py`** (395 lines)
   Recording what agents ask ``/mcp/`` for, and reading it back for ``mcp_usage`` on ``/mcp/admin/``.
   `catalog_version`, `result_metadata`, `outcome_of`, `record`, `report`, `admin_report`
 - **`verification.py`** (28 lines)
@@ -1167,7 +1176,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1169 lines)
+- **`auction_pages.py`** (1184 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
@@ -1225,7 +1234,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`logistics.py`** (95 lines)
   Online auctions after bidding: the logistics page, its tap to cross a name off, its scanner, and the admin's
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionLogisticsScan`, `AuctionPostEndBanner`
-- **`lot_pages.py`** (1363 lines)
+- **`lot_pages.py`** (1366 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.
@@ -1276,7 +1285,7 @@ This will make sure the app is always imported when
 - **`_env.py`** (74 lines)
   Helpers for parsing environment variables in settings.
   `parse_bool_env`, `require_secure_prod_secrets`, `env_has_real_value`
-- **`asgi.py`** (69 lines)
+- **`asgi.py`** (80 lines)
   `LogWebsocketExceptions`
 - **`asgi_old.py`** (25 lines)
   ASGI config for fishauctions project.
@@ -1289,12 +1298,12 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1320 lines)
+- **`settings.py`** (1322 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
   `CacheBustedStaticFilesStorage`
-- **`test_runner.py`** (104 lines)
+- **`test_runner.py`** (112 lines)
   The test runner: the cheap password hasher, mail kept in memory, and the timezone reset between tests.
   `test_settings`, `reset_timezone_between_tests`, `apply_test_settings`, `FastParallelTestSuite`, `FastTestRunner`
 - **`urls.py`** (94 lines)

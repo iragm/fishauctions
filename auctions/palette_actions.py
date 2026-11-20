@@ -10759,7 +10759,7 @@ def _image_echo(image) -> dict[str, Any]:
 def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     """Put a picture on a lot from a URL (``LotImage.url``), through ``CreateImageForm``.
 
-    Nothing is fetched server-side, so no SSRF. ``image_source`` defaults to ``RANDOM``, so an agent's
+    The form fetches the link once (``auctions.image_links``, public addresses only). ``image_source`` defaults to ``RANDOM``, so an agent's
     picture is never labelled as the seller's own photo of the item.
     """
     from .forms import CreateImageForm

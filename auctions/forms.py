@@ -435,7 +435,11 @@ def add_bootstrap_classes(form):
 
 
 def validate_image_url(url):
-    """Validate that `url` is http(s) with an image extension. No request is made (avoids SSRF)."""
+    """Validate that `url` is http(s) with an image extension, and that it comes back as a picture.
+
+    The fetch is :func:`auctions.image_links.problem` (public addresses only), off with
+    ``CHECK_IMAGE_LINKS``, as the test suite runs.
+    """
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
@@ -448,6 +452,12 @@ def validate_image_url(url):
             "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
         )
         raise forms.ValidationError(msg)
+    if getattr(settings, "CHECK_IMAGE_LINKS", True):
+        from auctions import image_links
+
+        problem = image_links.problem(url)
+        if problem:
+            raise forms.ValidationError(problem, code="image_link")
     return url
 
 
