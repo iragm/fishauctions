@@ -362,6 +362,64 @@ class WebsocketClientDisconnectTests(TestCase):
             consumer.connect()
         self.assertFalse([record for record in captured.records if record.levelno >= logging_module.ERROR])
 
+    def test_a_tab_closed_during_the_history_replay_stops_it_quietly(self):
+        import logging as logging_module
+
+        from auctions.consumers import ClientDisconnected, LotConsumer
+        from auctions.models import ChatSubscription, LotHistory
+
+        user = User.objects.create_user(username="ws_replay", password="testpassword", email="replay@example.com")
+        lot = Lot.objects.create(
+            lot_name="A chatty lot", date_end=timezone.now() + datetime.timedelta(days=3), user=user, quantity=1
+        )
+        for number in range(3):
+            LotHistory.objects.create(lot=lot, user=user, message=f"message {number}", changed_price=False)
+
+        class FakeChannelLayer:
+            async def group_add(self, group, channel):
+                return None
+
+            async def group_send(self, group, message):
+                return None
+
+        consumer = LotConsumer()
+        consumer.scope = {"url_route": {"kwargs": {"lot_number": lot.pk}}, "user": user}
+        consumer.channel_name = "test.channel"
+        consumer.channel_layer = FakeChannelLayer()
+        subscriptions = ChatSubscription.objects.filter(lot=lot).count()
+        with (
+            patch.object(LotConsumer, "accept"),
+            patch.object(LotConsumer, "send", side_effect=ClientDisconnected) as send,
+            self.assertLogs("auctions.consumers", level="INFO") as captured,
+        ):
+            consumer.connect()
+        self.assertEqual(send.call_count, 1)
+        self.assertFalse([record for record in captured.records if record.levelno >= logging_module.ERROR])
+        # The rest of connect() didn't run for a socket that's gone.
+        self.assertEqual(ChatSubscription.objects.filter(lot=lot).count(), subscriptions)
+
+    def test_the_asgi_wrapper_logs_a_crash_but_not_a_closed_tab(self):
+        import logging as logging_module
+
+        from asgiref.sync import async_to_sync
+
+        from auctions.consumers import ClientDisconnected
+        from fishauctions.asgi import LogWebsocketExceptions
+
+        def app_raising(error):
+            async def app(scope, receive, send):
+                raise error
+
+            return LogWebsocketExceptions(app)
+
+        with self.assertLogs("auctions.websocket", level="INFO") as captured:
+            with self.assertRaises(ClientDisconnected):
+                async_to_sync(app_raising(ClientDisconnected()))({"path": "/ws/lots/1/"}, None, None)
+        self.assertFalse([record for record in captured.records if record.levelno >= logging_module.ERROR])
+        with self.assertLogs("auctions.websocket", level="ERROR"):
+            with self.assertRaises(ValueError):
+                async_to_sync(app_raising(ValueError("boom")))({"path": "/ws/lots/1/"}, None, None)
+
 
 @unittest.skipUnless(CHANNELS_TESTING_AVAILABLE, "channels.testing requires daphne (test-only dependency)")
 class WebSocketConsumerTests(TransactionTestCase):

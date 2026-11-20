@@ -18,7 +18,13 @@ from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 
-from auctions.consumers import AuctionConsumer, BuyingConsumer, LotConsumer, UserConsumer  # noqa: E402
+from auctions.consumers import (  # noqa: E402
+    AuctionConsumer,
+    BuyingConsumer,
+    ClientDisconnected,
+    LotConsumer,
+    UserConsumer,
+)
 
 websocket_error_logger = logging.getLogger("auctions.websocket")
 
@@ -30,7 +36,8 @@ class LogWebsocketExceptions:
     crashing consumer -- the channel-layer read timeout that silently broke in-person bidding, for one
     -- failed invisibly. This logs with a traceback to the ``auctions.websocket`` logger, which is wired
     to mail_admins, then re-raises, so connection behavior is unchanged. Only ``Exception`` is caught,
-    so task cancellation passes through untouched.
+    so task cancellation passes through untouched, and ``ClientDisconnected`` (a closed tab) is re-raised
+    at INFO.
     """
 
     def __init__(self, app):
@@ -39,6 +46,10 @@ class LogWebsocketExceptions:
     async def __call__(self, scope, receive, send):
         try:
             return await self.app(scope, receive, send)
+        except ClientDisconnected:
+            # A closed tab is routine: not worth an email.
+            websocket_error_logger.info("Websocket client went away (path=%s)", scope.get("path"))
+            raise
         except Exception:
             websocket_error_logger.exception("Unhandled exception in websocket ASGI app (path=%s)", scope.get("path"))
             raise

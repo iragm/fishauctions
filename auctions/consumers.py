@@ -212,6 +212,10 @@ class LotConsumer(WebsocketConsumer):
                             "timestamp": history.timestamp.isoformat(),
                         }
                     )
+                except ClientDisconnected:
+                    # The tab closed mid-replay: nobody is left to send the rest of it, or anything below, to.
+                    logger.info("client went away while the lot's chat history was replaying")
+                    return
                 except Exception as e:
                     logger.exception(e)
             try:
