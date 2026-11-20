@@ -73,6 +73,35 @@ class ImageLinkTests(TestCase):
         self.assertFalse(valid)
         get.assert_not_called()
 
+    def test_an_ipv6_address_wrapping_a_private_ipv4_one_is_never_fetched(self):
+        for wrapped in (
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::127.0.0.1",
+            "::ffff:0:7f00:1",
+            "64:ff9b::a00:5",
+            "64:ff9b:1::5db8:d822",
+            "2002:a00:5::1",
+            "fec0::1",
+            "ff02::1",
+        ):
+            with self.subTest(wrapped):
+                valid, _form, get = self.check(answer(), addresses=[(10, 1, 6, "", (wrapped, 0, 0, 0))])
+                self.assertFalse(valid)
+                get.assert_not_called()
+
+    def test_an_ipv4_mapped_public_address_is_fetched_over_ipv4(self):
+        valid, _form, get = self.check(answer(), addresses=[(10, 1, 6, "", ("::ffff:93.184.216.34", 0, 0, 0))])
+        self.assertTrue(valid)
+        self.assertEqual(get.call_args.args[1], "93.184.216.34")
+
+    def test_a_nat64_or_6to4_public_address_is_fetched_as_given(self):
+        for wrapped in ("64:ff9b::5db8:d822", "2002:5db8:d822::1"):
+            with self.subTest(wrapped):
+                valid, _form, get = self.check(answer(), addresses=[(10, 1, 6, "", (wrapped, 0, 0, 0))])
+                self.assertTrue(valid)
+                self.assertEqual(get.call_args.args[1], wrapped)
+
     def test_a_declared_huge_file_is_refused(self):
         valid, form, _get = self.check(answer(length=image_links.MAX_BYTES + 1))
         self.assertFalse(valid)

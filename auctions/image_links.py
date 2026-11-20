@@ -38,6 +38,37 @@ TOO_BIG = "That picture is too big to link to, so upload a smaller copy instead.
 FETCH_ERRORS = (urllib3.exceptions.HTTPError, OSError, ValueError)
 
 
+#: IPv6 ranges whose last 32 bits are an IPv4 address a translator may route to: IPv4-compatible,
+#: IPv4-translated (SIIT) and NAT64. ``is_global`` judges the IPv6 form, so these are judged by the IPv4 one.
+_EMBEDS_IPV4 = tuple(ipaddress.ip_network(n) for n in ("::/96", "::ffff:0:0:0/96", "64:ff9b::/96"))
+#: Local-use NAT64: wraps addresses of the server's own network.
+_LOCAL_NAT64 = ipaddress.ip_network("64:ff9b:1::/48")
+
+
+def _as_checked(address: ipaddress.IPv4Address | ipaddress.IPv6Address):
+    """The address to judge and connect to: the IPv4 address an IPv6 one carries, else itself.
+
+    IPv4-mapped, IPv4-compatible, IPv4-translated, NAT64 and 6to4 addresses are judged by the IPv4
+    address inside them, which older Pythons' ``is_global`` doesn't do. ``None`` for local-use NAT64
+    and the deprecated site-local range, which are never public.
+    """
+    if address.version == 4:
+        return address
+    if address.ipv4_mapped:
+        return address.ipv4_mapped
+    if address.sixtofour:
+        return address.sixtofour
+    if address in _LOCAL_NAT64 or address.is_site_local:
+        return None
+    if any(address in network for network in _EMBEDS_IPV4):
+        return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return address
+
+
+def _is_public(address) -> bool:
+    return address is not None and address.is_global and not address.is_multicast
+
+
 def public_address(host: str, port: int) -> str:
     """One address for ``host``, resolved once, or ``""`` unless every address it resolves to is public."""
     if not host:
@@ -52,9 +83,11 @@ def public_address(host: str, port: int) -> str:
             address = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
         except ValueError:
             return ""
-        if not address.is_global:
+        checked = _as_checked(address)
+        if not _is_public(checked):
             return ""
-        addresses.append(str(address))
+        # A mapped address is the IPv4 one in another spelling: connect to what was checked.
+        addresses.append(str(address.ipv4_mapped if address.version == 6 and address.ipv4_mapped else address))
     return addresses[0] if addresses else ""
 
 

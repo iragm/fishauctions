@@ -199,7 +199,7 @@ this only quotes its opening sentence.
 - **`html_sanitize.py`** (200 lines)
   Sanitizing the rich text people paste into Summernote.
   `sanitize_summernote_html`, `remove_html_color_tags`
-- **`image_links.py`** (167 lines)
+- **`image_links.py`** (200 lines)
   A picture added by link is fetched once, here, to see that it really comes back as a picture.
   `public_address`, `public_host`, `problem`
 - **`lifecycle.py`** (547 lines)
@@ -533,7 +533,7 @@ this only quotes its opening sentence.
 - **`test_history_tools.py`** (108 lines)
   ``recent_changes`` and ``club_history``: the filters, and a superuser reading every auction or club.
   `HistoryToolTests`
-- **`test_image_links.py`** (179 lines)
+- **`test_image_links.py`** (208 lines)
   A picture added by link is fetched once and refused unless it comes back as one (:mod:`auctions.image_links`).
   `answer`, `ImageLinkTests`, `PinnedConnectionTests`, `UnchangedLinkTests`
 - **`test_invoice_adjustments.py`** (101 lines)
@@ -1166,7 +1166,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 Every view on the site, split by the part of it the view belongs to.
 
-- **`account.py`** (730 lines)
+- **`account.py`** (728 lines)
   The reader's own account: profile, username, preferences, notifications, deletion.
 - **`admin_checklist.py`** (1053 lines)
   The admin setup checklist: the one page that says what a new site still needs.

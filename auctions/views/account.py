@@ -723,8 +723,6 @@ class HideAiAgentBannerView(LoginRequiredMixin, View):
         if request.headers.get("HX-Request"):
             return HttpResponse("")
         back = request.META.get("HTTP_REFERER", "")
-        if not url_has_allowed_host_and_scheme(
-            back, allowed_hosts={request.get_host()}, require_https=request.is_secure()
-        ):
-            back = reverse("home")
-        return redirect(back)
+        if url_has_allowed_host_and_scheme(back, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+            return redirect(back)
+        return redirect(reverse("home"))
