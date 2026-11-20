@@ -56,7 +56,8 @@ there to approve.
   (`oidc.Validator._check_and_set_request_resource`) refuses to add the admin `resource` to a grant or
   refresh token that never named it; the toolkit alone would allow that.
 - **Nothing private leaves**: every answer goes through `admin.private_result` (contact-detail keys
-  dropped at any depth, emails, phones, keys and public IPs scrubbed), because the agents reading
+  dropped at any depth, emails, phones, keys and public IPs scrubbed; the one exception is a club's
+  own published address under `club_contact_email`, for outreach drafts), because the agents reading
   here also read strangers' text and may push to a public repo. No resources, no prompts. Pictures
   (`read_waiting_page`'s scans) pass unscrubbed: transcribing them is the owner's daily routine.
 - `backup_database` queues an offsite backup (`auctions/backups.py`), at most one per six hours: it copies
