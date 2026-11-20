@@ -64,5 +64,13 @@ class FeatureRequestsPageTests(TestCase):
         self._send()
         self.assertFalse(AssistantSkillRequest.objects.filter(skill="Sort lots by price").exists())
 
+    def test_a_superuser_has_no_daily_limit(self):
+        owner = User.objects.create_superuser("requests_owner", "requests_owner@example.com", "pw")
+        self.client.force_login(owner)
+        for number in range(10):
+            AssistantSkillRequest.objects.create(user=owner, skill=f"idea {number}", reason="r")
+        self._send()
+        self.assertTrue(AssistantSkillRequest.objects.filter(user=owner, skill="Sort lots by price").exists())
+
     def test_the_support_page_links_here(self):
         self.assertIn(reverse("feature_requests"), self.client.get(reverse("support")).content.decode())

@@ -180,7 +180,7 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
 
     template_name = "feature_requests.html"
     form_class = FeatureRequestForm
-    #: Requests one person may send in a day.
+    #: Requests one person may send in a day. Superusers have no limit.
     PER_DAY = 10
     #: How each status reads to the person who asked.
     STATUS_LABELS = {
@@ -211,7 +211,11 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
         from auctions import palette_actions
 
         since = timezone.now() - timedelta(days=1)
-        if AssistantSkillRequest.objects.filter(user=self.request.user, createdon__gte=since).count() >= self.PER_DAY:
+        if (
+            not self.request.user.is_superuser
+            and AssistantSkillRequest.objects.filter(user=self.request.user, createdon__gte=since).count()
+            >= self.PER_DAY
+        ):
             messages.error(self.request, "That's a lot for one day; send the rest tomorrow.")
             return self.form_invalid(form)
         self.request.assistant_surface = "requests page"

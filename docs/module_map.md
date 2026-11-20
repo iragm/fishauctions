@@ -516,7 +516,7 @@ this only quotes its opening sentence.
 - **`test_feature_emails.py`** (285 lines)
   Feature emails (``auctions/feature_emails.py``), the outreach queue and ``record_outreach`` on
   `Helpers`, `CapTests`, `SendTests`, `OutreachQueueTests`, `ResultsTests`
-- **`test_feature_requests_page.py`** (68 lines)
+- **`test_feature_requests_page.py`** (76 lines)
   /requests/: the web form for bug reports and feature requests, writing the same queue as request_feature.
   `FeatureRequestsPageTests`
 - **`test_form_filter_fixes.py`** (413 lines)
@@ -1256,7 +1256,7 @@ Every view on the site, split by the part of it the view belongs to.
   Auction night: setting winners, the lot queue, and volunteers.
 - **`site_admin.py`** (507 lines)
   The superuser's dashboard: traffic, signups, referrers, the user map.
-- **`site_pages.py`** (818 lines)
+- **`site_pages.py`** (822 lines)
   Pages that belong to the site rather than to an auction or club: the FAQ, support, requests, the promo site,
 - **`speakers.py`** (807 lines)
   The speaker directory: who will come and talk to a club, and what about.
