@@ -3,7 +3,9 @@ finding and merging duplicate speakers (``auctions.speaker_duplicates`` and the 
 """
 
 import json
+from unittest.mock import patch
 
+from django import forms
 from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase, override_settings
 from django.test.client import Client
@@ -729,6 +731,33 @@ class AddAndUpdateSpeakerStepTests(TestCase):
         self.assertEqual(list(speaker.topics.all()), [self.topic])
         self.assertFalse(SpeakerTag.objects.filter(speaker=speaker, tag="remote").exists())
         self.assertIn("at least one", self.admin.update_speaker(self.request, {"speaker": speaker.slug})["error"])
+
+    def test_remote_false_takes_off_everyones_remote_tag(self):
+        speaker = Speaker.objects.create(name="Rae Remote", location="Boston, MA")
+        tagger = User.objects.create_user("othertagger", "othertagger@example.com", "pw")
+        SpeakerTag.objects.create(speaker=speaker, user=tagger, tag="remote")
+        SpeakerTag.objects.create(speaker=speaker, user=tagger, tag="engaging")
+        result = self.admin.update_speaker(self.request, {"speaker": speaker.slug, "remote": "false"})
+        self.assertTrue(result.get("ok"), result)
+        self.assertFalse(SpeakerTag.objects.filter(speaker=speaker, tag="remote").exists())
+        self.assertTrue(SpeakerTag.objects.filter(speaker=speaker, tag="engaging").exists())
+
+    def test_the_steps_go_through_the_speaker_form(self):
+        from auctions.forms import SpeakerForm
+
+        def refuse_name(form):
+            msg = "refused by the form"
+            raise forms.ValidationError(msg)
+
+        speaker = Speaker.objects.create(name="Formy Speaker", location="Boston, MA")
+        with patch.object(SpeakerForm, "clean_name", refuse_name):
+            added = self.admin.add_speaker(self.request, {"name": "New Person", "location": "Boston"})
+            updated = self.admin.update_speaker(self.request, {"speaker": speaker.slug, "bio": "x"})
+            checked = self.admin.PROPOSAL_CHECKS["add_speaker"]({"name": "New Person", "location": "Boston"})
+        self.assertIn("refused by the form", added["error"])
+        self.assertIn("refused by the form", updated["error"])
+        self.assertIn("refused by the form", checked)
+        self.assertFalse(Speaker.objects.filter(name="New Person").exists())
 
     def test_they_are_for_superusers_only(self):
         from django.core.exceptions import PermissionDenied

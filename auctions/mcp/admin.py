@@ -222,8 +222,9 @@ PRIVATE_KEYS = frozenset(
 )
 
 
-#: The one key whose email passes :func:`private`: a club's ``Club.contact_email``, set by
-#: :func:`club_contact` and nothing else. Only a bare address passes; anything else is redacted.
+#: The one key whose email passes :func:`private_result`: a club's ``Club.contact_email``, set by
+#: :func:`club_contact` and nothing else, in :data:`CLUB_CONTACT_TOOLS` only. Only a bare address
+#: passes; anything else is redacted.
 CLUB_CONTACT_KEY = "club_contact_email"
 
 _BARE_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
@@ -244,17 +245,39 @@ def _with_club_contact(tool: str, structured: dict[str, Any]) -> dict[str, Any]:
     return {**structured, "club": {**club, CLUB_CONTACT_KEY: email if _BARE_EMAIL.fullmatch(email) else ""}}
 
 
-def _private_item(key: Any, item: Any) -> Any:
-    if key == CLUB_CONTACT_KEY and isinstance(item, str) and _BARE_EMAIL.fullmatch(item):
-        return item
-    return private(item)
+#: The tools whose results carry :data:`CLUB_CONTACT_KEY`, and where: ``"club"`` is the result's one club,
+#: ``"clubs"`` each of its rows. Anywhere else, and in any other tool's result, the key is scrubbed.
+CLUB_CONTACT_TOOLS = {"list_clubs": "clubs", "outreach_queue": "clubs", "describe_club": "club"}
+
+
+def _club_contacts(tool: str, structured: dict[str, Any]) -> dict[Any, str]:
+    """The bare club addresses ``tool``'s result carries under :data:`CLUB_CONTACT_KEY`, by row (``None``
+    for the one club), read before :func:`private` scrubs them so they can be put back."""
+    where = CLUB_CONTACT_TOOLS.get(tool)
+    found = structured.get(where) if where else None
+    rows = {None: found} if where == "club" else dict(enumerate(found)) if isinstance(found, list) else {}
+    return {
+        index: row[CLUB_CONTACT_KEY]
+        for index, row in rows.items()
+        if isinstance(row, dict)
+        and isinstance(row.get(CLUB_CONTACT_KEY), str)
+        and _BARE_EMAIL.fullmatch(row[CLUB_CONTACT_KEY])
+    }
+
+
+def _restore_club_contacts(tool: str, structured: dict[str, Any], contacts: dict[Any, str]) -> dict[str, Any]:
+    where = CLUB_CONTACT_TOOLS.get(tool)
+    for index, email in contacts.items():
+        row = structured.get(where) if index is None else structured[where][index]
+        row[CLUB_CONTACT_KEY] = email
+    return structured
 
 
 def private(value: Any) -> Any:
-    """``value`` with :data:`PRIVATE_KEYS` removed and every string through :func:`redact`, except a club's
-    contact email under :data:`CLUB_CONTACT_KEY`."""
+    """``value`` with :data:`PRIVATE_KEYS` removed and every string through :func:`redact`. The club contact
+    exemption is :func:`private_result`'s, for :data:`CLUB_CONTACT_TOOLS` only."""
     if isinstance(value, dict):
-        return {key: _private_item(key, item) for key, item in value.items() if str(key).lower() not in PRIVATE_KEYS}
+        return {key: private(item) for key, item in value.items() if str(key).lower() not in PRIVATE_KEYS}
     if isinstance(value, list):
         return [private(item) for item in value]
     if isinstance(value, str):
@@ -275,7 +298,9 @@ def private_result(result: dict[str, Any], tool: str = "") -> dict[str, Any]:
         dict(block) for block in result.get("content") or [] if block.get("type") != "image" or tool in PICTURE_TOOLS
     ]
     if isinstance(structured, dict):
-        structured = private(_with_club_contact(tool, structured))
+        structured = _with_club_contact(tool, structured)
+        contacts = _club_contacts(tool, structured)
+        structured = _restore_club_contacts(tool, private(structured), contacts)
         result = {**result, "structuredContent": structured}
         if content and content[0].get("type") == "text":
             content[0]["text"] = json.dumps(structured, indent=2, default=str)
@@ -1989,17 +2014,67 @@ def _speaker_changes(params: dict[str, Any], speaker=None):
     remote = palette_actions._flag(params, "remote") if "remote" in params else None
     if speaker is not None and not changes and topics is None and remote is None:
         return {}, None, None, "Name at least one thing to change."
+    problem = _speaker_form(speaker, changes, topics)[1]
+    if problem:
+        return {}, None, None, problem
     return changes, topics, remote, ""
 
 
-def _set_remote(speaker, user, remote):
-    """``remote`` as the approver's own "Presents remotely" tag, the one place the directory says it."""
+def _speaker_form(speaker, changes: dict[str, Any], topics):
+    """``SpeakerForm`` (the add and edit pages' form) bound to ``speaker``'s details with ``changes`` on
+    top, so its clean methods judge a step as they judge the page, as ``(form, "")`` or ``(form, why)``.
+
+    ``source_url`` isn't on the form; the caller sets it on the saved instance.
+    """
+    from django.forms.models import model_to_dict
+
+    from auctions.forms import SpeakerForm
+    from auctions.models import Speaker
+
+    instance = speaker if speaker is not None else Speaker()
+    fields = [field for field in SpeakerForm._meta.fields if field != "image"]
+    data = model_to_dict(instance, fields=fields)
+    data["topics"] = [topic.pk for topic in (topics if topics is not None else data.get("topics") or [])]
+    data.update({field: value for field, value in changes.items() if field in fields})
+    if "location" in changes and changes["location"] != instance.location:
+        # The old pin would stay where they no longer are; the post_save signal geocodes the new place.
+        data["location_coordinates"] = ""
+    data = {field: value for field, value in data.items() if value is not None}
+    form = SpeakerForm(data=data, instance=instance)
+    if form.is_valid():
+        return form, ""
+    field, errors = next(iter(form.errors.items()))
+    return form, f"{field}: {errors[0]}" if field != "__all__" else errors[0]
+
+
+def _save_speaker(speaker, changes: dict[str, Any], topics, user):
+    """Save through :func:`_speaker_form`, as the add and edit pages do, or raise ``ValueError`` with why."""
+    moved = speaker is not None and "location" in changes and changes["location"] != speaker.location
+    form, problem = _speaker_form(speaker, changes, topics)
+    if problem:
+        raise ValueError(problem)
+    saved = form.save(commit=False)
+    if speaker is None:
+        saved.created_by = user
+    if "source_url" in changes:
+        saved.source_url = changes["source_url"]
+    if moved:
+        saved.location_coordinates = None
+        saved.latitude = saved.longitude = None
+    saved.save()
+    form.save_m2m()
+    return saved
+
+
+def _set_remote(speaker, remote, user):
+    """``remote`` as a "Presents remotely" tag, the one place the directory says it. ``false`` takes off
+    everyone's, so ``find_speakers`` stops calling them remote."""
     from auctions.models import SpeakerTag
 
     if remote:
         SpeakerTag.objects.get_or_create(speaker=speaker, user=user, tag="remote")
     elif remote is not None:
-        SpeakerTag.objects.filter(speaker=speaker, user=user, tag="remote").delete()
+        SpeakerTag.objects.filter(speaker=speaker, tag="remote").delete()
 
 
 def _update_speaker_problem(params: dict[str, Any]) -> str:
@@ -2013,18 +2088,17 @@ def add_speaker(request, params: dict[str, Any]) -> dict[str, Any]:
     """Add somebody to the speaker directory, as ``SpeakerCreateView`` does: a public page, added by the
     approver, placed on the map by the same geocoding signal.
     """
-    from auctions.models import Speaker
-
     if not request.user.is_superuser:
         raise PermissionDenied
     changes, topics, remote, problem = _speaker_changes(params)
     if problem:
         return _error(problem)
-    with transaction.atomic():
-        speaker = Speaker.objects.create(created_by=request.user, **changes)
-        if topics:
-            speaker.topics.set(topics)
-        _set_remote(speaker, request.user, remote)
+    try:
+        with transaction.atomic():
+            speaker = _save_speaker(None, changes, topics, request.user)
+            _set_remote(speaker, remote, request.user)
+    except ValueError as error:
+        return _error(str(error))
     return _ok(f"Added {speaker.slug} to the speaker directory.", page_url=speaker.get_absolute_url())
 
 
@@ -2040,18 +2114,12 @@ def update_speaker(request, params: dict[str, Any]) -> dict[str, Any]:
     changes, topics, remote, problem = _speaker_changes(params, speaker)
     if problem:
         return _error(problem)
-    with transaction.atomic():
-        moved = "location" in changes and changes["location"] != speaker.location
-        for field, value in changes.items():
-            setattr(speaker, field, value)
-        if moved:
-            # The old pin would stay where they no longer are; the post_save signal geocodes the new place.
-            speaker.location_coordinates = None
-            speaker.latitude = speaker.longitude = None
-        speaker.save()
-        if topics is not None:
-            speaker.topics.set(topics)
-        _set_remote(speaker, request.user, remote)
+    try:
+        with transaction.atomic():
+            speaker = _save_speaker(speaker, changes, topics, request.user)
+            _set_remote(speaker, remote, request.user)
+    except ValueError as error:
+        return _error(str(error))
     return _ok(f"Updated {speaker.slug}.", page_url=speaker.get_absolute_url())
 
 

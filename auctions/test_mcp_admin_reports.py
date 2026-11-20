@@ -39,7 +39,7 @@ class Helpers(StandardTestCase):
         request.user = self.owner
         result = admin_reports.__dict__[name](request, params or {})
         self.assertTrue(result.get("ok"), result)
-        return admin.private(result)
+        return admin.private_result({"structuredContent": result, "content": []}, name)["structuredContent"]
 
     def view(self, url, *, session="", user=None, referrer="", agent=BROWSER, title="", minutes_ago=0, source=""):
         row = PageView.objects.create(

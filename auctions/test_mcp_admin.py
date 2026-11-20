@@ -205,27 +205,41 @@ class NoContactDetailsLeaveTests(AdminEndpointCase):
     club's own contact email, under ``admin.CLUB_CONTACT_KEY``, for drafting outreach."""
 
     def test_a_clubs_own_address_passes_and_a_members_never_does(self):
-        cleaned = admin.private(
-            {
-                "clubs": [
-                    {
-                        "club_contact_email": "secretary@club.example",
-                        "contact_email": "secretary@club.example",
-                        "note": "or ask member@home.example",
-                        "members": [{"email": "member@home.example", "club_contact_email": "a@b.example x"}],
-                    }
-                ],
-                "email": "member@home.example",
-            }
-        )
+        structured = {
+            "clubs": [
+                {
+                    "club_contact_email": "secretary@club.example",
+                    "contact_email": "secretary@club.example",
+                    "note": "or ask member@home.example",
+                    "members": [{"email": "member@home.example", "club_contact_email": "deep@club.example"}],
+                },
+                {"club_contact_email": "a@b.example x"},
+            ],
+            "email": "member@home.example",
+        }
+        cleaned = admin.private_result({"structuredContent": structured, "content": []}, "list_clubs")
+        cleaned = cleaned["structuredContent"]
         club = cleaned["clubs"][0]
         self.assertEqual(club["club_contact_email"], "secretary@club.example")
         self.assertNotIn("contact_email", club)
         self.assertNotIn("email", cleaned)
         text = json.dumps(cleaned)
         self.assertNotIn("member@home.example", text)
-        # Only a bare address passes; anything more under that key is scrubbed like everything else.
+        # Only a bare address in a row passes; deeper, or with more in it, it is scrubbed like everything else.
+        self.assertNotIn("deep@club.example", text)
         self.assertNotIn("a@b.example", text)
+
+    def test_another_tools_club_contact_key_is_scrubbed(self):
+        structured = {
+            "club": {"club_contact_email": "secretary@club.example"},
+            "clubs": [{"club_contact_email": "x@club.example"}],
+        }
+        for tool in ("describe_person", "list_people", ""):
+            cleaned = admin.private_result({"structuredContent": structured, "content": []}, tool)
+            text = json.dumps(cleaned)
+            self.assertNotIn("secretary@club.example", text, tool)
+            self.assertNotIn("x@club.example", text, tool)
+        self.assertNotIn("secretary@club.example", json.dumps(admin.private(structured)))
 
     def test_describe_club_shows_the_clubs_address_but_not_a_members(self):
         from auctions.models import Club, ClubMember
