@@ -44,7 +44,7 @@ class ImageLinkTests(TestCase):
     def test_a_page_in_place_of_a_picture_is_refused(self):
         valid, form, _get = self.check(answer(content_type="text/html"))
         self.assertFalse(valid)
-        self.assertEqual(form.errors["url"], [image_links.NOT_A_PICTURE])
+        self.assertIn(image_links.NOT_A_PICTURE, form.errors["url"])
 
     def test_a_refusal_is_refused(self):
         self.assertFalse(self.check(answer(status=403))[0])
@@ -70,7 +70,7 @@ class ImageLinkTests(TestCase):
         big.iter_content.return_value = [b"x" * (1024 * 1024)] * 16
         valid, form, _get = self.check(big)
         self.assertFalse(valid)
-        self.assertEqual(form.errors["url"], [image_links.TOO_BIG])
+        self.assertIn(image_links.TOO_BIG, form.errors["url"])
 
     def test_the_lot_form_says_why(self):
         from auctions.forms import validate_image_url

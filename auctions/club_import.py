@@ -114,13 +114,32 @@ def domain_of(url: str) -> str:
     return host.removeprefix("www.")
 
 
-_HOME_PAGES = {"home", "index", "default", "main", "welcome"}
+#: Last path segments that are one of a club's own pages, not a different group: the front page, and
+#: the pages every club site has (``/join``, ``/contact``). ``/groups/killifish`` stays a path.
+_HOME_PAGES = {
+    "home",
+    "index",
+    "default",
+    "main",
+    "welcome",
+    "join",
+    "join-us",
+    "membership",
+    "members",
+    "contact",
+    "contact-us",
+    "about",
+    "about-us",
+    "events",
+    "calendar",
+    "meetings",
+}
 
 
 def path_of(url: str) -> str:
     """The meaningful part of a URL's path, lowercased; ``""`` for a site's front page.
 
-    ``/``, ``/home``, ``/index.html`` and the like are the front page, so they are ``""``.
+    ``/``, ``/home``, ``/index.html``, ``/join`` and the like are the club's own site, so they are ``""``.
     """
     if not url:
         return ""
