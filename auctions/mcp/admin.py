@@ -2589,6 +2589,47 @@ def set_interest(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{'Added' if created else 'Updated'} the interest {interest.name}: {kind}, offering {offers}.")
 
 
+def _blocked_email(params: dict[str, Any]) -> tuple[str, str]:
+    """The address ``block_email_address`` names, lowercased, and why it can't be blocked (or ``""``)."""
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    email = _str(params, "email").strip().lower()
+    if not email:
+        return "", "Say which email address to block."
+    try:
+        validate_email(email)
+    except ValidationError:
+        return "", "That isn't an email address."
+    return email, ""
+
+
+def _block_email_problem(params: dict[str, Any]) -> str:
+    """Refuse, when proposed, an address that isn't one or is already blocked."""
+    from auctions.models import BlockedEmailAddress
+
+    email, problem = _blocked_email(params)
+    if problem:
+        return problem
+    return "That address is already blocked." if BlockedEmailAddress.blocks(email) else ""
+
+
+def block_email_address(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Block one contact-form sender (:class:`auctions.models.BlockedEmailAddress`). The answer never
+    repeats the address: the approver read it on the proposal."""
+    from auctions.models import BlockedEmailAddress
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    email, problem = _blocked_email(params)
+    if problem:
+        return _error(problem)
+    if BlockedEmailAddress.blocks(email):
+        return _ok("That address was already blocked.")
+    BlockedEmailAddress.objects.create(email=email)
+    return _ok("Blocked that address: the contact form now ignores it.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -2892,6 +2933,18 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Add a command palette shortcut",
             resolver=add_palette_shortcut,
         ),
+        Action(
+            name="block_email_address",
+            description=(
+                "Block one sender from the contact form: they still see the usual thanks, and nothing reaches "
+                "the owner. Matched ignoring case; one already blocked is refused."
+            ),
+            params={"email": "string, required. The sender's email address."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Block a contact form sender",
+            resolver=block_email_address,
+        ),
         # The species gaps page's buttons and the backfill command's answers.
         *admin_species.APPROVAL_ONLY,
     ]
@@ -2915,6 +2968,7 @@ PROPOSAL_CHECKS = {
     "add_speaker": lambda arguments: _speaker_changes(arguments)[3],
     "update_speaker": _update_speaker_problem,
     "add_palette_shortcut": _shortcut_problem,
+    "block_email_address": _block_email_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
 }

@@ -674,6 +674,42 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertAlmostEqual(club.latitude, 42.36)
         self.assertIn("Boston, MA, USA", proposal.results[0]["said"])
 
+    def test_a_contact_form_sender_is_blocked_only_once_approved(self):
+        from auctions.models import BlockedEmailAddress
+
+        result = self.propose("block_email_address", {"email": "  Pest@Example.COM "})
+        self.assertFalse(result["isError"], result)
+        self.assertNotIn("pest@example.com", json.dumps(result).lower())
+        self.assertFalse(BlockedEmailAddress.objects.exists())
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertTrue(BlockedEmailAddress.blocks("pest@example.com"))
+        self.assertNotIn("pest", proposal.results[0]["said"].lower())
+
+    def test_a_bad_or_already_blocked_address_is_refused_and_approval_is_idempotent(self):
+        from auctions.models import BlockedEmailAddress
+
+        BlockedEmailAddress.objects.create(email="pest@example.com")
+        for arguments, expected in (
+            ({}, "Say which"),
+            ({"email": "not an address"}, "isn't an email"),
+            ({"email": "PEST@example.com"}, "already blocked"),
+        ):
+            with self.subTest(expected=expected):
+                result = self.propose("block_email_address", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+                self.assertNotIn("pest@", result["content"][0]["text"].lower())
+        self.assertFalse(AgentProposal.objects.exists())
+        # Blocked by hand between proposing and approving: the step still succeeds, once.
+        BlockedEmailAddress.objects.all().delete()
+        self.assertFalse(self.propose("block_email_address", {"email": "pest@example.com"})["isError"])
+        BlockedEmailAddress.objects.create(email="pest@example.com")
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailAddress.objects.count(), 1)
+
     def test_a_club_already_on_the_site_is_refused_when_proposed(self):
         Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org/")
         for arguments in (
