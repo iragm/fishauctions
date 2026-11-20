@@ -209,7 +209,7 @@ this only quotes its opening sentence.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
   `current`, `ContextFilter`, `set_user`, `RequestContextMiddleware`, `UserContextMiddleware`, `connect_celery`
-- **`login_code.py`** (340 lines)
+- **`login_code.py`** (348 lines)
   Sign in with an emailed code: no password, no username, and the code is the verification.
   `address_is_free`, `counts_for`, `account_for_code`, `create_account`, `prepare_existing_account`, `CodeSignInProcess`, `CustomRequestLoginCodeForm`, `CodeConfirmForm`, `CodeRequestView`, `CodeConfirmView`
 - **`logistics.py`** (375 lines)
@@ -563,7 +563,7 @@ this only quotes its opening sentence.
 - **`test_location_check.py`** (174 lines)
   The far-from-pickup location check, its "yes, my location is accurate" box, and the setup box for experienced creators.
   `LocationCheckTests`, `ConfirmBoxTests`, `SetupBoxTests`
-- **`test_login_code.py`** (232 lines)
+- **`test_login_code.py`** (238 lines)
   Sign in with an emailed code (auctions/login_code.py): existing accounts, new ones, club-added people,
   `LoginCodeTests`
 - **`test_login_required_dispatch.py`** (59 lines)
@@ -1097,7 +1097,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
 - **`urls.py`** (141 lines)
-- **`views.py`** (1588 lines)
+- **`views.py`** (1589 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`

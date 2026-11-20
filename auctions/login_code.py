@@ -13,7 +13,7 @@ exists. This module adds the one thing it won't do, and closes two holes it leav
   (or a Facebook login that brought no address); the account waits, unverified, and can never sign
   in. A code sign-in verifies that address, which would let the stranger's password or social login
   into the real owner's account and its club rows. So an unverified account that has never signed in
-  loses both first (the app's Google sign-in does the same, ``mobile/views.py``). One that has signed
+  loses both first (the app's Google sign-in strips the password on the same grounds, ``mobile/views.py``). One that has signed
   in before belongs to whoever used it, and keeps its password: an old admin account with no address
   row must not lose the password it uses at ``/admin/``.
 - **An unverified second address doesn't count.** allauth would sign into an account that merely
@@ -21,7 +21,7 @@ exists. This module adds the one thing it won't do, and closes two holes it leav
 
 Accounts made here start with no promotional mail; the one box on the code page turns on news of
 auctions near them, and the username is ``member`` plus digits rather than anything a club typed.
-Nothing is sent to an address with no account that the site has marked as bouncing. Two confirms at
+A bounce doesn't block a code: the person is asking for this mail, and a sign-in clears it. Two confirms at
 once for the same new address (a double tap) share one account, through a database lock.
 
 The views replace allauth's at the same two paths and names (``fishauctions/urls.py`` lists them
@@ -38,7 +38,7 @@ from allauth.account.stages import LoginByCodeStage, LoginStageController
 from allauth.account.views import ConfirmLoginCodeView, RequestLoginCodeView
 from django import forms
 from django.contrib.auth.models import User
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.decorators import method_decorator
@@ -58,17 +58,6 @@ PROMO_FLAGS = (
 NEARBY_AUCTION_FLAGS = ("email_me_about_new_auctions", "email_me_about_new_in_person_auctions")
 
 
-def _address_bounces(email):
-    """True when the site marked *email* bad and never saw it work since."""
-    from auctions.models import AuctionTOS, ClubMember
-
-    statuses = set(AuctionTOS.objects.filter(email__iexact=email).values_list("email_address_status", flat=True))
-    statuses |= set(
-        ClubMember.objects.filter(email__iexact=email, is_deleted=False).values_list("email_address_status", flat=True)
-    )
-    return "BAD" in statuses and "VALID" not in statuses
-
-
 def _email_lock(email):
     """A MariaDB named lock on *email*, held until released or the connection ends."""
     from contextlib import contextmanager
@@ -80,8 +69,12 @@ def _email_lock(email):
         name = f"login_code:{email.lower()}"[:64]
         with connection.cursor() as cursor:
             cursor.execute("SELECT GET_LOCK(%s, 10)", [name])
+            acquired = cursor.fetchone()[0] == 1
+        if not acquired:
+            yield False
+            return
         try:
-            yield
+            yield True
         finally:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT RELEASE_LOCK(%s)", [name])
@@ -155,9 +148,19 @@ def create_account(request, email, wants_auction_email=False):
     user.email = email
     user.first_name, user.last_name = _name_from_club_rows(email)
     # Public on bids and chat, so nothing the person didn't choose; they can change it.
-    user.username = adapter.generate_unique_username(["member"])
     user.set_unusable_password()
-    user.save()
+    for _ in range(5):
+        # Every new account starts from the same base name, so two at once can pick the same one.
+        user.username = adapter.generate_unique_username(["member"])
+        try:
+            with transaction.atomic():
+                user.save()
+            break
+        except IntegrityError:
+            user.pk = None
+    else:
+        msg = "no free member username"
+        raise IntegrityError(msg)
     # An unverified copy of the address on someone else's account is a squatter's; it goes.
     EmailAddress.objects.filter(email__iexact=email, verified=False).exclude(user=user).delete()
     EmailAddress.objects.create(user=user, email=email, primary=True, verified=True)
@@ -213,7 +216,9 @@ class CodeSignInProcess(LoginCodeVerificationProcess):
     def send_by_email(self, email, skip_enumeration_mails=False):
         if self.user is not None or self.stage.login.signup:
             return super().send_by_email(email, skip_enumeration_mails=skip_enumeration_mails)
-        if address_is_free(email) and not _address_bounces(email):
+        # A code already promised to this address keeps coming on a resend, even if an account took
+        # the address since: the confirm step signs in to that account instead.
+        if self.state.get(NEW_ACCOUNT_KEY) or address_is_free(email):
             self.state[NEW_ACCOUNT_KEY] = True
             code = self.generate_code()
             get_adapter().send_mail("account/email/login_code", email, {"request": self.request, "code": code})
@@ -228,7 +233,9 @@ class CodeSignInProcess(LoginCodeVerificationProcess):
         if self.user is None:
             if not self.state.get(NEW_ACCOUNT_KEY):
                 return self._give_up()
-            with _email_lock(email):
+            with _email_lock(email) as locked:
+                if not locked:
+                    return self._give_up()
                 if address_is_free(email):
                     user = create_account(self.request, email, wants_auction_email=wants)
                 else:
@@ -332,7 +339,8 @@ class CodeConfirmView(ConfirmLoginCodeView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["opt_in_form"] = CodeConfirmForm()
+        # Bound on a re-render, so a mistyped code doesn't untick the box.
+        context["opt_in_form"] = CodeConfirmForm(self.request.POST if self.request.method == "POST" else None)
         return context
 
 

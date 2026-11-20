@@ -220,7 +220,8 @@ class MobileGoogleAuthView(APIView):
             user.set_unusable_password()
             user.save(update_fields=["password"])
         if user is None:
-            base = email.split("@")[0][:30] or "user"
+            # Usernames are public; the address's local part would publish half of it.
+            base = "member"
             username = base
             suffix = 1
             while User.objects.filter(username=username).exists():

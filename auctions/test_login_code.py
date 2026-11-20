@@ -195,7 +195,7 @@ class LoginCodeTests(StandardTestCase):
         self.assertEqual(user.email, "not-theirs@example.com")
         self.assertFalse(EmailAddress.objects.filter(user=other, email="not-theirs@example.com").exists())
 
-    def test_no_mail_to_an_address_that_bounces(self):
+    def test_a_bounced_address_still_gets_its_code_and_the_bounce_clears(self):
         AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
@@ -205,9 +205,15 @@ class LoginCodeTests(StandardTestCase):
             manually_added=True,
             bidder_number="779",
         )
-        response = self.request_code("bounces@example.com")
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(len(mail.outbox), 0)
+        self.request_code("bounces@example.com")
+        self.confirm(self.code_from_mail())
+        self.assertIsNotNone(self.signed_in_user())
+        self.assertFalse(AuctionTOS.objects.filter(email="bounces@example.com", email_address_status="BAD").exists())
+
+    def test_a_mistyped_code_keeps_the_box_ticked(self):
+        self.request_code("ticks@example.com")
+        page = self.confirm("WRONG1", email_me_about_auctions="on")
+        self.assertContains(page, "checked")
 
     # Entry points
 
