@@ -2634,6 +2634,73 @@ def block_email_address(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok("Blocked that address: the contact form now ignores it.")
 
 
+def _blocked_domain(params: dict[str, Any]) -> tuple[str, str]:
+    """The domain ``block_email_domain`` names, normalized, and why it can't be blocked (or ``""``)."""
+    from django.core.exceptions import ValidationError
+
+    from auctions.models import BlockedEmailDomain
+
+    row = BlockedEmailDomain(domain=_str(params, "domain"))
+    if not row.normalize(row.domain):
+        return "", "Say which domain to block."
+    try:
+        row.full_clean(validate_unique=False)
+    except ValidationError:
+        return "", "That isn't a domain: give one like example.com."
+    if row.domain in FREE_MAIL_DOMAINS:
+        return "", "That domain is shared by everyone who uses it: block the sender's address instead."
+    return row.domain, ""
+
+
+#: Webmail domains a block would cut off whole crowds of real members along with one pest.
+FREE_MAIL_DOMAINS = frozenset(
+    {
+        "aol.com",
+        "comcast.net",
+        "gmail.com",
+        "googlemail.com",
+        "hotmail.com",
+        "icloud.com",
+        "live.com",
+        "mac.com",
+        "me.com",
+        "msn.com",
+        "outlook.com",
+        "proton.me",
+        "protonmail.com",
+        "yahoo.com",
+    }
+)
+
+
+def _block_domain_problem(params: dict[str, Any]) -> str:
+    """Refuse, when proposed, a domain that isn't one, is shared webmail, or is already blocked."""
+    from auctions.models import BlockedEmailDomain
+
+    domain, problem = _blocked_domain(params)
+    if problem:
+        return problem
+    return "That domain is already blocked." if BlockedEmailDomain.blocks(f"x@{domain}") else ""
+
+
+def block_email_domain(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Block one domain from the contact form (:class:`auctions.models.BlockedEmailDomain`), its
+    subdomains too, for signed-out senders."""
+    from auctions.models import BlockedEmailDomain
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    domain, problem = _blocked_domain(params)
+    if problem:
+        return _error(problem)
+    if BlockedEmailDomain.blocks(f"x@{domain}"):
+        return _ok("That domain was already blocked.")
+    _row, created = BlockedEmailDomain.objects.get_or_create(domain=domain)
+    if not created:
+        return _ok("That domain was already blocked.")
+    return _ok(f"Blocked {domain}: the contact form now ignores signed-out senders from it.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -2949,6 +3016,19 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Block a contact form sender",
             resolver=block_email_address,
         ),
+        Action(
+            name="block_email_domain",
+            description=(
+                "Block one email domain, and its subdomains, from the contact form for signed-out senders: they "
+                "still see the usual thanks, and nothing reaches the owner. Shared webmail and a domain "
+                "already blocked are refused."
+            ),
+            params={"domain": "string, required. Like example.com."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Block a contact form domain",
+            resolver=block_email_domain,
+        ),
         # The species gaps page's buttons and the backfill command's answers.
         *admin_species.APPROVAL_ONLY,
     ]
@@ -2973,6 +3053,7 @@ PROPOSAL_CHECKS = {
     "update_speaker": _update_speaker_problem,
     "add_palette_shortcut": _shortcut_problem,
     "block_email_address": _block_email_problem,
+    "block_email_domain": _block_domain_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
 }
