@@ -206,9 +206,9 @@ this only quotes its opening sentence.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
   `current`, `ContextFilter`, `set_user`, `RequestContextMiddleware`, `UserContextMiddleware`, `connect_celery`
-- **`login_code.py`** (293 lines)
+- **`login_code.py`** (340 lines)
   Sign in with an emailed code: no password, no username, and the code is the verification.
-  `address_is_free`, `counts_for`, `create_account`, `prepare_existing_account`, `CodeSignInProcess`, `CustomRequestLoginCodeForm`, `CodeConfirmForm`, `CodeRequestView`, `CodeConfirmView`
+  `address_is_free`, `counts_for`, `account_for_code`, `create_account`, `prepare_existing_account`, `CodeSignInProcess`, `CustomRequestLoginCodeForm`, `CodeConfirmForm`, `CodeRequestView`, `CodeConfirmView`
 - **`logistics.py`** (375 lines)
   After an online auction: who comes to which pickup, and how far along the club is.
 - **`mailchimp.py`** (656 lines)
@@ -239,7 +239,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17144 lines)
+- **`palette_actions.py`** (17149 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -555,7 +555,7 @@ this only quotes its opening sentence.
 - **`test_location_check.py`** (174 lines)
   The far-from-pickup location check, its "yes, my location is accurate" box, and the setup box for experienced creators.
   `LocationCheckTests`, `ConfirmBoxTests`, `SetupBoxTests`
-- **`test_login_code.py`** (193 lines)
+- **`test_login_code.py`** (232 lines)
   Sign in with an emailed code (auctions/login_code.py): existing accounts, new ones, club-added people,
   `LoginCodeTests`
 - **`test_login_required_dispatch.py`** (59 lines)

@@ -9,15 +9,20 @@ exists. This module adds the one thing it won't do, and closes two holes it leav
   account made at request time would collect somebody's invoices before they proved the inbox.
   Signing in then runs ``signals.on_sign_in`` like any other route, which claims every AuctionTOS
   and ClubMember row a club wrote for that address.
-- **A squatter's password dies.** Anyone can sign up with somebody else's address and a password;
-  the account waits, unverified and unusable. A code sign-in verifies that address, which would make
-  the stranger's password work on the real owner's account, so it is made unusable first (the app's
-  Google sign-in does the same, ``mobile/views.py``).
+- **A squatter's way back in dies.** Anyone can sign up with somebody else's address and a password
+  (or a Facebook login that brought no address); the account waits, unverified, and can never sign
+  in. A code sign-in verifies that address, which would let the stranger's password or social login
+  into the real owner's account and its club rows. So an unverified account that has never signed in
+  loses both first (the app's Google sign-in does the same, ``mobile/views.py``). One that has signed
+  in before belongs to whoever used it, and keeps its password: an old admin account with no address
+  row must not lose the password it uses at ``/admin/``.
 - **An unverified second address doesn't count.** allauth would sign into an account that merely
   listed the address, unverified, beside its own. Here such an address belongs to nobody yet.
 
 Accounts made here start with no promotional mail; the one box on the code page turns on news of
-auctions near them. Nothing is sent to an address the site has marked as bouncing.
+auctions near them, and the username is ``member`` plus digits rather than anything a club typed.
+Nothing is sent to an address with no account that the site has marked as bouncing. Two confirms at
+once for the same new address (a double tap) share one account, through a database lock.
 
 The views replace allauth's at the same two paths and names (``fishauctions/urls.py`` lists them
 first), so every ``{% url %}`` and allauth redirect lands here.
@@ -64,6 +69,26 @@ def _address_bounces(email):
     return "BAD" in statuses and "VALID" not in statuses
 
 
+def _email_lock(email):
+    """A MariaDB named lock on *email*, held until released or the connection ends."""
+    from contextlib import contextmanager
+
+    from django.db import connection
+
+    @contextmanager
+    def held():
+        name = f"login_code:{email.lower()}"[:64]
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 10)", [name])
+        try:
+            yield
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT RELEASE_LOCK(%s)", [name])
+
+    return held()
+
+
 def address_is_free(email):
     """No account, active or not, has *email* as its own or as a verified extra address."""
     if User.objects.filter(email__iexact=email).exists():
@@ -73,9 +98,21 @@ def address_is_free(email):
 
 def counts_for(user, email):
     """Whether *email* signs in to *user*: their own address, or an extra one they verified."""
+    if not user.is_active:
+        return False
     if (user.email or "").lower() == email.lower():
         return True
     return EmailAddress.objects.filter(user=user, email__iexact=email, verified=True).exists()
+
+
+def account_for_code(email):
+    """The account a code for *email* signs in to, or None: verified matches first."""
+    from allauth.account.internal.userkit import filter_users_by_email
+
+    users = filter_users_by_email(email, is_active=True, prefer_verified=True, for_login=True)
+    verified = set(EmailAddress.objects.filter(email__iexact=email, verified=True).values_list("user_id", flat=True))
+    users.sort(key=lambda u: (u.pk not in verified, u.pk))
+    return next((u for u in users if counts_for(u, email)), None)
 
 
 def _name_from_club_rows(email):
@@ -103,6 +140,9 @@ def _name_from_club_rows(email):
     if not candidates:
         return "", ""
     name = max(candidates, key=lambda c: c[0])[1].strip()
+    if "@" in name:
+        # A club that typed the address as the name.
+        return "", ""
     first, _, last = name.partition(" ")
     return first[:30], last.strip()[:150]
 
@@ -114,7 +154,8 @@ def create_account(request, email, wants_auction_email=False):
     user = adapter.new_user(request)
     user.email = email
     user.first_name, user.last_name = _name_from_club_rows(email)
-    adapter.populate_username(request, user)
+    # Public on bids and chat, so nothing the person didn't choose; they can change it.
+    user.username = adapter.generate_unique_username(["member"])
     user.set_unusable_password()
     user.save()
     # An unverified copy of the address on someone else's account is a squatter's; it goes.
@@ -131,14 +172,20 @@ def create_account(request, email, wants_auction_email=False):
 
 
 def prepare_existing_account(user, email):
-    """Before a code verifies *email* on *user*: kill a password nobody proved, and make sure allauth
-    has an address row to verify (older accounts can lack one)."""
+    """Before a code verifies *email* on *user*: shut out a squatter, and make sure allauth has an
+    address row to verify (older accounts can lack one)."""
+    from allauth.socialaccount.models import SocialAccount
+
     address = EmailAddress.objects.filter(user=user, email__iexact=email).first()
     if address is None:
         address = EmailAddress.objects.create(
             user=user, email=email, primary=not user.emailaddress_set.filter(primary=True).exists()
         )
-    if not address.verified and user.has_usable_password():
+    if address.verified or user.last_login is not None:
+        return
+    # Unverified and never signed in: whatever credential it holds, the inbox's owner didn't set.
+    SocialAccount.objects.filter(user=user).delete()
+    if user.has_usable_password():
         user.set_unusable_password()
         user.save(update_fields=["password"])
 
@@ -175,26 +222,27 @@ class CodeSignInProcess(LoginCodeVerificationProcess):
 
     def finish(self, redirect_url):
         email = self.state.get("email")
-        user = self.user
-        if user is None:
-            if not (email and self.state.get(NEW_ACCOUNT_KEY)):
-                self.abort()
-                return HttpResponseRedirect(reverse("account_request_login_code"))
-            wants = bool(self.state.get(WANTS_AUCTION_EMAIL_KEY))
-            if address_is_free(email):
-                user = create_account(self.request, email, wants_auction_email=wants)
-            else:
-                # Someone made an account with this address while the code was out.
-                user = next((u for u in _active_users_for(email) if counts_for(u, email)), None)
-                if user is None:
-                    self.abort()
-                    return HttpResponseRedirect(reverse("account_request_login_code"))
-            self._user = user
-            self.state["user_id"] = user_id_to_str(user)
+        wants = bool(self.state.get(WANTS_AUCTION_EMAIL_KEY))
+        if not email:
+            return self._give_up()
+        if self.user is None:
+            if not self.state.get(NEW_ACCOUNT_KEY):
+                return self._give_up()
+            with _email_lock(email):
+                if address_is_free(email):
+                    user = create_account(self.request, email, wants_auction_email=wants)
+                else:
+                    # An account got this address while the code was out (or a double tap made it).
+                    user = account_for_code(email)
         else:
-            wants = bool(self.state.get(WANTS_AUCTION_EMAIL_KEY))
-            if wants:
+            # Re-checked: the account may have changed its address or been closed since the code went out.
+            user = self.user if counts_for(self.user, email) else None
+            if user is not None and wants:
                 _turn_on_nearby_auction_email(user)
+        if user is None:
+            return self._give_up()
+        self._user = user
+        self.state["user_id"] = user_id_to_str(user)
         prepare_existing_account(user, email)
         response = super().finish(redirect_url)
         from auctions.services import clear_email_bounce
@@ -202,11 +250,9 @@ class CodeSignInProcess(LoginCodeVerificationProcess):
         clear_email_bounce(user)
         return response
 
-
-def _active_users_for(email):
-    from allauth.account.internal.userkit import filter_users_by_email
-
-    return filter_users_by_email(email, is_active=True, prefer_verified=True, for_login=True)
+    def _give_up(self):
+        self.abort()
+        return HttpResponseRedirect(reverse("account_request_login_code"))
 
 
 def _turn_on_nearby_auction_email(user):
@@ -229,10 +275,10 @@ class CustomRequestLoginCodeForm(RequestLoginCodeForm):
 
     def clean_email(self):
         email = super().clean_email()
-        user = getattr(self, "_user", None)
-        if email and user is not None and not counts_for(user, email):
-            # Listed, unverified, beside another address: not this person's account.
-            self._user = None
+        if email:
+            # allauth takes the first of a set; an address listed, unverified, beside another one
+            # doesn't count, so look through them all.
+            self._user = account_for_code(email)
         return email
 
 
@@ -276,7 +322,8 @@ class CodeConfirmView(ConfirmLoginCodeView):
         self._process = CodeSignInProcess.resume(self.stage)
         if not self._process:
             return HttpResponseRedirect(reverse("account_request_login_code"))
-        if request.method == "POST" and request.POST.get("action", "verify") == "verify":
+        resending = request.POST.get("action") == "resend" and self._process.can_resend
+        if request.method == "POST" and not resending:
             opt_in = CodeConfirmForm(request.POST)
             self._process.state[WANTS_AUCTION_EMAIL_KEY] = (
                 opt_in.is_valid() and opt_in.cleaned_data["email_me_about_auctions"]

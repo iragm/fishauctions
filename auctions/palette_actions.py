@@ -16726,6 +16726,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "CodeRequestView": (
+        "Emails a sign-in code to whoever types an address; an assistant is already signed in, and a code "
+        "proves an inbox to a browser, not to an agent."
+    ),
+    "CodeConfirmView": "Signs a browser in with the emailed code; an assistant is already signed in.",
     "ClubSquareDuesView": (
         "Offers one Square payment taken outside the site at a time, beside the member list, so a person "
         "can judge whether the buyer is the member it names before renewing; an assistant adds or renews "
@@ -17097,7 +17102,7 @@ NOT_A_SKILL: dict[str, str] = {
 #: equality alone would match nothing and silently pass. ``donation_views`` is a module of its own
 #: that sends mail in a club's name, so leaving it out left five user-facing writes in none of the
 #: three tables. ``app_links``, ``apple_notifications`` and ``passkit_views`` are still outside.
-AUDITED_VIEW_MODULES = ("auctions.views", "auctions.donation_views")
+AUDITED_VIEW_MODULES = ("auctions.views", "auctions.donation_views", "auctions.login_code")
 
 
 def postable_views() -> dict[str, list[str]]:

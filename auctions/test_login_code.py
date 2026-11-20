@@ -7,6 +7,7 @@ from allauth.account.models import EmailAddress
 from django.contrib.auth.models import User
 from django.core import mail
 from django.urls import reverse
+from django.utils import timezone
 
 from auctions.models import AuctionTOS, Invoice, UserData
 from auctions.tests import StandardTestCase
@@ -80,6 +81,44 @@ class LoginCodeTests(StandardTestCase):
         self.assertFalse(squatter.has_usable_password())
         self.assertTrue(EmailAddress.objects.get(user=squatter, email="victim@example.com").verified)
 
+    def test_a_squatters_social_login_goes_too(self):
+        from allauth.socialaccount.models import SocialAccount
+
+        squatter = self.make_user("victim2@example.com", verified=False)
+        SocialAccount.objects.create(user=squatter, provider="facebook", uid="123")
+        self.request_code("victim2@example.com")
+        self.confirm(self.code_from_mail())
+        self.assertEqual(self.signed_in_user(), squatter)
+        self.assertFalse(SocialAccount.objects.filter(user=squatter).exists())
+
+    def test_an_account_that_has_signed_in_keeps_its_password(self):
+        # An old admin account with no address row, used at /admin/.
+        user = User.objects.create_user("old_admin", "old-admin@example.com", "admin-pass-123")
+        User.objects.filter(pk=user.pk).update(last_login=timezone.now())
+        self.request_code("old-admin@example.com")
+        self.confirm(self.code_from_mail())
+        self.assertEqual(self.signed_in_user(), user)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("admin-pass-123"))
+
+    def test_an_address_changed_while_the_code_was_out_signs_in_nobody(self):
+        user = self.make_user("moving@example.com")
+        self.request_code("moving@example.com")
+        User.objects.filter(pk=user.pk).update(email="moved@example.com")
+        EmailAddress.objects.filter(user=user).update(email="moved@example.com")
+        self.confirm(self.code_from_mail())
+        self.assertIsNone(self.signed_in_user())
+        self.assertEqual(
+            list(EmailAddress.objects.filter(user=user).values_list("email", flat=True)), ["moved@example.com"]
+        )
+
+    def test_an_account_made_while_the_code_was_out_is_used_not_duplicated(self):
+        self.request_code("racing@example.com")
+        existing = self.make_user("racing@example.com")
+        self.confirm(self.code_from_mail())
+        self.assertEqual(self.signed_in_user(), existing)
+        self.assertEqual(User.objects.filter(email="racing@example.com").count(), 1)
+
     def test_inactive_account_gets_nothing(self):
         user = self.make_user("gone@example.com")
         User.objects.filter(pk=user.pk).update(is_active=False)
@@ -144,7 +183,7 @@ class LoginCodeTests(StandardTestCase):
         tos.refresh_from_db()
         self.assertEqual(tos.user, user)
         self.assertEqual((user.first_name, user.last_name), ("Pat", "Example"))
-        self.assertTrue(user.username.lower().startswith("pat"))
+        self.assertTrue(user.username.startswith("member"))
 
     def test_an_unverified_extra_address_belongs_to_nobody(self):
         other = self.make_user("mine@example.com")
