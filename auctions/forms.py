@@ -2001,7 +2001,7 @@ class AuctionJoin(forms.ModelForm):
                     'data-bs-target="#leave-auction-modal"><i class="bi bi-x-lg"></i> Leave</button>'
                 )
             )
-            if auction.multi_location:
+            if auction.all_location_count > 1:
                 self.helper.layout.append(
                     HTML(
                         "<script>(function () {"
@@ -2062,14 +2062,13 @@ class AuctionJoin(forms.ModelForm):
             )
         else:
             del self.fields["hold_for_second_pickup"]
-        if self.auction.multi_location:
+        # Counting mail too: one place and mail is still a choice to make.
+        if self.auction.all_location_count > 1:
             self.fields["pickup_location"].label = "Yes, I will be at "
         else:
-            # single location auction
             self.fields["pickup_location"].widget = HiddenInput()
-            if self.auction.all_location_count == 1:  # # number_of_locations excludes the default location
-                location = auction.location_qs[0]
-                self.fields["pickup_location"].initial = location
+            if self.auction.all_location_count == 1:
+                self.fields["pickup_location"].initial = auction.locations[0]
 
     def _missing_detail_link(self, user, auction):
         """A link to the contact page in place of Join when a missing phone or mailing address would refuse it.
