@@ -693,6 +693,7 @@ class AdminJobProposalTests(AdminEndpointCase):
         for arguments, expected in (
             ({}, "Say which"),
             ({"email": "not an address"}, "isn't an email"),
+            ({"email": "a" * 250 + "@example.com"}, "longer than"),
             ({"email": "PEST@example.com"}, "already blocked"),
         ):
             with self.subTest(expected=expected):
@@ -706,6 +707,17 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertFalse(self.propose("block_email_address", {"email": "pest@example.com"})["isError"])
         BlockedEmailAddress.objects.create(email="pest@example.com")
         proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailAddress.objects.count(), 1)
+
+    def test_a_block_racing_another_reports_already_blocked(self):
+        from auctions.models import BlockedEmailAddress
+
+        self.assertFalse(self.propose("block_email_address", {"email": "pest@example.com"})["isError"])
+        BlockedEmailAddress.objects.create(email="pest@example.com")
+        with mock.patch.object(BlockedEmailAddress, "blocks", return_value=False):
+            proposal = self.approve()
         self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
         self.assertIn("already blocked", proposal.results[0]["said"])
         self.assertEqual(BlockedEmailAddress.objects.count(), 1)

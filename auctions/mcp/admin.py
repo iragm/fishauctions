@@ -2597,6 +2597,8 @@ def _blocked_email(params: dict[str, Any]) -> tuple[str, str]:
     email = _str(params, "email").strip().lower()
     if not email:
         return "", "Say which email address to block."
+    if len(email) > 254:
+        return "", "That address is longer than an email address can be (254 characters)."
     try:
         validate_email(email)
     except ValidationError:
@@ -2626,7 +2628,9 @@ def block_email_address(request, params: dict[str, Any]) -> dict[str, Any]:
         return _error(problem)
     if BlockedEmailAddress.blocks(email):
         return _ok("That address was already blocked.")
-    BlockedEmailAddress.objects.create(email=email)
+    _row, created = BlockedEmailAddress.objects.get_or_create(email=email)
+    if not created:
+        return _ok("That address was already blocked.")
     return _ok("Blocked that address: the contact form now ignores it.")
 
 
