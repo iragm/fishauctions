@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Sign In{% endblock %}
+{% block content %}
+    <h3>Enter the code sent to {{ email }}</h3>
+    <form id="confirm-login-code" method="POST" action="{% url 'account_confirm_login_code' %}" style="max-width: 28rem;">
+      {% csrf_token %}
+      {{ verify_form | crispy }}
+      {{ opt_in_form | crispy }}
+      {{ redirect_field }}
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <button id="confirm-login-code-submit" class="btn btn-success text-dark" type="submit">Sign In</button>
+        {% if can_resend %}<button class="btn btn-link" type="submit" form="resend-login-code">Send a new code</button>{% endif %}
+        <a class="btn btn-link" href="{{ login_url }}">Other ways to sign in</a>
+      </div>
+    </form>
+    <form id="resend-login-code" method="POST" action="{% url 'account_confirm_login_code' %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="resend">
+      {{ redirect_field }}
+    </form>
+{% endblock %}

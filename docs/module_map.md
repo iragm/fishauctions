@@ -23,7 +23,7 @@ this only quotes its opening sentence.
 
 ## `auctions/`
 
-- **`account_adapter.py`** (33 lines)
+- **`account_adapter.py`** (46 lines)
   Site-specific allauth account adapter: which address its rate limits count against, and who its
   `FishAuctionsAccountAdapter`
 - **`account_deletion.py`** (458 lines)
@@ -209,6 +209,9 @@ this only quotes its opening sentence.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
   `current`, `ContextFilter`, `set_user`, `RequestContextMiddleware`, `UserContextMiddleware`, `connect_celery`
+- **`login_code.py`** (348 lines)
+  Sign in with an emailed code: no password, no username, and the code is the verification.
+  `address_is_free`, `counts_for`, `account_for_code`, `create_account`, `prepare_existing_account`, `CodeSignInProcess`, `CustomRequestLoginCodeForm`, `CodeConfirmForm`, `CodeRequestView`, `CodeConfirmView`
 - **`logistics.py`** (375 lines)
   After an online auction: who comes to which pickup, and how far along the club is.
 - **`mailchimp.py`** (656 lines)
@@ -239,7 +242,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17258 lines)
+- **`palette_actions.py`** (17263 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -560,6 +563,9 @@ this only quotes its opening sentence.
 - **`test_location_check.py`** (174 lines)
   The far-from-pickup location check, its "yes, my location is accurate" box, and the setup box for experienced creators.
   `LocationCheckTests`, `ConfirmBoxTests`, `SetupBoxTests`
+- **`test_login_code.py`** (238 lines)
+  Sign in with an emailed code (auctions/login_code.py): existing accounts, new ones, club-added people,
+  `LoginCodeTests`
 - **`test_login_required_dispatch.py`** (59 lines)
   Signed-out visitors are turned away, not handed a 500, by views that override ``dispatch``.
   `AnonymousDispatchTests`
@@ -816,7 +822,7 @@ this only quotes its opening sentence.
 - **`test_template_hygiene.py`** (141 lines)
   Guards against the template mistakes that produce a wrong page without an error.
   `TemplateTagsAreParseableTests`, `TemplateLintTests`, `OneModalContainerPerPageTests`
-- **`test_tenancy.py`** (416 lines)
+- **`test_tenancy.py`** (417 lines)
   Three guards that hold whether or not anyone remembered.
   `RouteAuthorizationTests`, `TenancyInvariantTests`, `BidderNumberTests`
 - **`test_timezones.py`** (85 lines)
@@ -1091,7 +1097,7 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
 - **`urls.py`** (141 lines)
-- **`views.py`** (1588 lines)
+- **`views.py`** (1589 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -1299,7 +1305,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1322 lines)
+- **`settings.py`** (1330 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.
@@ -1307,7 +1313,7 @@ This will make sure the app is always imported when
 - **`test_runner.py`** (112 lines)
   The test runner: the cheap password hasher, mail kept in memory, and the timezone reset between tests.
   `test_settings`, `reset_timezone_between_tests`, `apply_test_settings`, `FastParallelTestSuite`, `FastTestRunner`
-- **`urls.py`** (94 lines)
+- **`urls.py`** (98 lines)
 - **`uvicorn_worker.py`** (15 lines)
   Custom gunicorn worker that runs uvicorn on the stdlib asyncio loop.
   `AsyncioUvicornWorker`

@@ -4,6 +4,7 @@ from django.urls import URLPattern, include, path
 from oauth2_provider import urls as oauth2_urls
 from oauth2_provider.urls import metadata_urlpatterns
 
+from auctions import login_code
 from auctions.mcp.auth import throttle_registration
 from auctions.mcp.consent import ConsentView
 
@@ -84,6 +85,9 @@ urlpatterns = [
     path("api/mobile/", include("auctions.mobile.urls")),
     path("summernote/", include("django_summernote.urls")),
     path("admin/", admin.site.urls),
+    # Ahead of allauth's own two, at the same paths and names: see auctions/login_code.py.
+    path("login/code/", login_code.request_login_code, name="account_request_login_code"),
+    path("login/code/confirm/", login_code.confirm_login_code, name="account_confirm_login_code"),
     path("", include("allauth.urls")),
     # path("__debug__/", include(debug_toolbar.urls)),
 ]

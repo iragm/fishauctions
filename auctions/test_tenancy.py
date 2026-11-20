@@ -40,6 +40,7 @@ PUBLIC_ROUTE_NAMES = frozenset(
         # only the caller's own requests. The library's pages show only what visible_documents lets them read.
         "feature_requests",
         "account_login", "account_signup", "account_logout", "account_inactive", "account_email",
+        "account_request_login_code", "account_confirm_login_code",
         "account_email_verification_sent", "account_reset_password", "account_reset_password_done",
         "account_reset_password_from_key", "account_reset_password_from_key_done", "account_set_password",
         "account_change_password", "account_delete", "account_deleted", "socialaccount_connections",

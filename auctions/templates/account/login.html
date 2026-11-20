@@ -15,6 +15,7 @@
       in the app. Each provider appears only when this deployment has configured it — a site with
       none of them just shows the password form below.
     {% endcomment %}
+    <a id="sign-in-code" class="btn btn-success text-dark mb-2" rel="nofollow" href="{% url 'account_request_login_code' %}{% if redirect_field_value %}?next={{ redirect_field_value|urlencode }}{% endif %}">Email me a sign-in code</a>
     {% if not request.is_mobile_app %}
       <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">
       {% if GOOGLE_LOGIN_ENABLED %}
