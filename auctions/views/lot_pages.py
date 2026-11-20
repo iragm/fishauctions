@@ -837,7 +837,7 @@ class LotValidation(LoginRequiredMixin):
         image_url = form.cleaned_data.get("image_url")
         if image_url:
             try:
-                validate_image_url(image_url)
+                validate_image_url(image_url, fetch="image_url" in form.changed_data)
                 # check direct images on this lot (not delegated via use_images_from) for is_primary
                 LotImage.objects.create(
                     lot_number=lot,

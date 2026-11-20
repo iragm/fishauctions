@@ -434,11 +434,12 @@ def add_bootstrap_classes(form):
         field.widget.attrs["class"] = f"{existing_class} {css_class}".strip()
 
 
-def validate_image_url(url):
+def validate_image_url(url, fetch=True):
     """Validate that `url` is http(s) with an image extension, and that it comes back as a picture.
 
     The fetch is :func:`auctions.image_links.problem` (public addresses only), off with
-    ``CHECK_IMAGE_LINKS``, as the test suite runs.
+    ``CHECK_IMAGE_LINKS``, as the test suite runs, and skipped with ``fetch=False`` when an edit
+    form posts back the link it already had.
     """
     from urllib.parse import urlparse
 
@@ -452,7 +453,7 @@ def validate_image_url(url):
             "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
         )
         raise forms.ValidationError(msg)
-    if getattr(settings, "CHECK_IMAGE_LINKS", True):
+    if fetch and getattr(settings, "CHECK_IMAGE_LINKS", True):
         from auctions import image_links
 
         problem = image_links.problem(url)
@@ -2305,7 +2306,7 @@ class CreateImageForm(forms.ModelForm):
         url = self.cleaned_data.get("url")
         if not url:
             return url
-        return validate_image_url(url)
+        return validate_image_url(url, fetch=url != (self.instance.url if self.instance.pk else None))
 
     def clean_image(self):
         """Fully decode a new upload so a broken image is a field error rather than a 500 (ImageField only
@@ -6351,7 +6352,7 @@ class SpeakerForm(forms.ModelForm):
         url = self.cleaned_data.get("url")
         if not url:
             return url
-        return validate_image_url(url)
+        return validate_image_url(url, fetch=url != (self.instance.url if self.instance.pk else None))
 
     def clean_image(self):
         """Reject corrupt uploads as a field error (see CreateImageForm.clean_image)."""
