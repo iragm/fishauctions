@@ -34,7 +34,7 @@ def backwards(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0534_blockedemaildomain"),
+        ("auctions", "0535_blockedemailaddress"),
         ("post_office", "0011_models_help_text"),
     ]
 
