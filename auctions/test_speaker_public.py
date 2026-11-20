@@ -738,3 +738,72 @@ class AddAndUpdateSpeakerStepTests(TestCase):
             self.admin.add_speaker(self.request, {"name": "Kim Killi", "location": "Boston"})
         with self.assertRaises(PermissionDenied):
             self.admin.update_speaker(self.request, {"speaker": "x", "bio": "y"})
+
+
+class FindSpeakersToolTests(TestCase):
+    """``find_speakers``: the speaker directory on ``/mcp/`` and in the palette, public fields only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("finder", "finder@example.com", "pw")
+        cls.tagger = User.objects.create_user("tagger", "tagger@example.com", "pw")
+        cichlids = SpeakerTopic.objects.get_or_create(name="Dwarf Cichlids")[0]
+        plants = SpeakerTopic.objects.get_or_create(name="Plants")[0]
+        cls.remote = Speaker.objects.create(
+            name="Remote, Rita", location="Columbus, Ohio", email="rita@example.com", phone="555-0100"
+        )
+        cls.remote.topics.add(cichlids)
+        SpeakerTag.objects.create(speaker=cls.remote, user=cls.tagger, tag="remote")
+        cls.local = Speaker.objects.create(name="Local Larry", location="Albany, NY", latitude=42.6, longitude=-73.8)
+        cls.local.topics.add(cichlids)
+        cls.plants = Speaker.objects.create(name="Plant Pat", location="Toledo, Ohio")
+        cls.plants.topics.add(plants)
+        Speaker.objects.create(name="Hidden Hank", location="Ohio", visibility=Speaker.VISIBILITY_HIDDEN).topics.add(
+            cichlids
+        )
+
+    def find(self, **params):
+        from auctions import palette_actions
+
+        request = RequestFactory().get("/")
+        request.user = self.user
+        return palette_actions.find_speakers(request, params)
+
+    def names(self, **params):
+        return [row["name"] for row in self.find(**params)["speakers"]]
+
+    def test_it_is_a_public_read_on_mcp(self):
+        from auctions import palette_actions
+        from auctions.mcp import tools
+
+        action = palette_actions.get_action("find_speakers")
+        self.assertTrue(action.lookup)
+        self.assertIn("find_speakers", {tool["name"] for tool in tools.tool_descriptors(self.user, writes=False)})
+
+    def test_a_topic_and_remote(self):
+        self.assertEqual(self.names(topic="cichlids", remote=True), ["«Rita Remote»"])
+        self.assertEqual(self.names(topic="cichlids", remote="false"), ["«Local Larry»"])
+        self.assertEqual(sorted(self.names(topic="cichlids")), ["«Local Larry»", "«Rita Remote»"])
+
+    def test_a_place(self):
+        self.assertEqual(sorted(self.names(location="Ohio")), ["«Plant Pat»", "«Rita Remote»"])
+        self.assertEqual(self.names(location="Ohio", topic="plants"), ["«Plant Pat»"])
+
+    def test_near_me(self):
+        from auctions.models import UserData
+
+        UserData.objects.filter(user=self.user).update(latitude=42.7, longitude=-73.7)
+        self.user = User.objects.get(pk=self.user.pk)
+        result = self.find(near_me=True, distance=50)
+        self.assertEqual([row["name"] for row in result["speakers"]], ["«Local Larry»"])
+        self.assertIn("miles_away", result["speakers"][0])
+
+    def test_only_public_fields_and_only_listed_speakers(self):
+        result = self.find(topic="cichlids")
+        text = json.dumps(result)
+        self.assertNotIn("rita@example.com", text)
+        self.assertNotIn("555-0100", text)
+        self.assertNotIn("Hank", text)
+        row = next(row for row in result["speakers"] if "Rita" in row["name"])
+        self.assertTrue(row["presents_remotely"])
+        self.assertEqual(row["topics"], ["Dwarf Cichlids"])

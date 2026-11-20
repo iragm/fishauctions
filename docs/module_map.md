@@ -236,7 +236,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17144 lines)
+- **`palette_actions.py`** (17254 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -756,9 +756,8 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speaker_public.py`** (740 lines)
+- **`test_speaker_public.py`** (809 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
-  `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`, `AddAndUpdateSpeakerStepTests`
 - **`test_speakers.py`** (1454 lines)
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
