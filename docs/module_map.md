@@ -439,9 +439,9 @@ this only quotes its opening sentence.
 - **`test_club_interests.py`** (111 lines)
   Clubs that keep something other than fish: what their interests change.
   `ClubInterestTests`
-- **`test_club_ledger.py`** (1118 lines)
+- **`test_club_ledger.py`** (1168 lines)
   The club ledger on a cash basis: what a paid invoice freezes, and how dues reverse.
-  `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerOutstandingInvoiceTests`
+  `ClubMoneyLedgerCashBasisTests`, `PaidInvoiceFreezeTests`, `InvoiceAbsorbLedgerTests`, `ClubMembershipDuesReversalTests`, `MakeClubAdminAssignsAuctionsTests`, `BapTop10ChartTests`, `ClubTreasurerReportViewTests`, `ClubTreasurerReportPromptTests`, `ClubTreasurerOutstandingInvoiceTests`
 - **`test_club_linking.py`** (602 lines)
   The gate before creating an auction, and the repair queue for the auctions created before it.
   `MissingContactInfoTests`, `AuctionCreationGateTests`, `ClubNameMatchingTests`, `SuggestClubsTests`, `UnlinkedAuctionsPageTests`, `MakeClubAdminButtonTests`, `SuggestionShapeTests`
@@ -1205,7 +1205,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_pages.py`** (664 lines)
   A club's public page, the two links that identify a member on it, and the answer link in a club email.
   `ClubDetailView`, `ClubMemberByUUIDView`, `ClubMemberByNumberView`, `ClubAdminView`, `ClubCadenceAnswerView`
-- **`club_reports.py`** (830 lines)
+- **`club_reports.py`** (852 lines)
   What a club's officers read: history, stats, the treasurer's report, money in and out.
   `ClubHistoryView`, `ClubStatsView`, `ClubTreasurerReportView`, `ClubTreasurerReportExportView`, `ClubMoneyCreateView`, `ClubMoneyBalanceView`, `ClubMemberCSVImportView`, `ClubMemberCSVExportView`
 - **`discord.py`** (972 lines)

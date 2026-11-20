@@ -979,6 +979,56 @@ class ClubTreasurerReportViewTests(TestCase):
         self.assertTrue(ClubMoney.objects.filter(club=self.club, category=ClubMoney.CATEGORY_ADJUSTMENT).exists())
 
 
+class ClubTreasurerReportPromptTests(TestCase):
+    """The two lines above the report: on-site payments when none is set up, and the latest auction's stats."""
+
+    def setUp(self):
+        self.treasurer = User.objects.create_user(username="prompt_treasurer", password="pw", email="pt@example.com")
+        self.club = Club.objects.create(name="Prompt Club")
+        ClubMember.objects.create(club=self.club, user=self.treasurer, permission_money=True)
+        self.client.force_login(self.treasurer)
+        self.url = reverse("club_treasurer_report", kwargs={"slug": self.club.slug})
+        self.settings_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+
+    def auction(self, ended_hours_ago, club=None, **fields):
+        end = timezone.now() - datetime.timedelta(hours=ended_hours_ago)
+        return Auction.objects.create(
+            created_by=self.treasurer,
+            title=fields.pop("title", "Spring swap"),
+            is_online=True,
+            date_start=end - datetime.timedelta(days=1),
+            date_end=end,
+            club=club if club is not None else self.club,
+            **fields,
+        )
+
+    def test_no_payments_links_the_payment_settings_instead_of_the_disclaimer(self):
+        response = self.client.get(self.url)
+        self.assertContains(response, "Enable on-site payments to get more complete data here")
+        self.assertContains(response, f'href="{self.settings_url}"')
+        self.assertNotContains(response, "not financial software")
+
+    def test_any_payment_kind_keeps_the_disclaimer(self):
+        from unittest import mock
+
+        with mock.patch.object(Club, "can_accept_square", new_callable=mock.PropertyMock, return_value=True):
+            response = self.client.get(self.url)
+        self.assertContains(response, "not financial software")
+        self.assertNotContains(response, "Enable on-site payments")
+
+    def test_a_club_auction_that_just_ended_links_its_stats(self):
+        auction = self.auction(ended_hours_ago=5)
+        response = self.client.get(self.url)
+        self.assertContains(response, "Looking for Spring swap numbers?")
+        self.assertContains(response, reverse("auction_stats", kwargs={"slug": auction.slug}))
+
+    def test_no_stats_line_after_two_days_or_for_another_clubs_auction(self):
+        self.auction(ended_hours_ago=60)
+        self.assertNotContains(self.client.get(self.url), "numbers?")
+        self.auction(ended_hours_ago=2, club=Club.objects.create(name="Other Club"), title="Elsewhere")
+        self.assertNotContains(self.client.get(self.url), "numbers?")
+
+
 class ClubTreasurerOutstandingInvoiceTests(TestCase):
     """The treasurer report's outstanding invoices: owed after payments."""
 
