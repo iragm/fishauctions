@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Sign In{% endblock %}
+{% block content %}
+    <h3>Sign In</h3>
+    <form id="request-login-code" method="POST" action="{% url 'account_request_login_code' %}" style="max-width: 28rem;">
+      {% csrf_token %}
+      {{ form | crispy }}
+      {{ redirect_field }}
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <button id="request-login-code-submit" class="btn btn-success text-dark" type="submit">Email me a code</button>
+        <a class="btn btn-link" href="{{ login_url }}">Other ways to sign in</a>
+      </div>
+    </form>
+{% endblock %}

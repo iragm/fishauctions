@@ -415,7 +415,15 @@ LOGIN_URL = "/login/"
 ACCOUNT_FORMS = {
     "signup": "auctions.forms.CustomSignupForm",
     "reset_password": "auctions.forms.CustomResetPasswordForm",
+    "request_login_code": "auctions.login_code.CustomRequestLoginCodeForm",
 }
+# Sign in with an emailed code, including for an address with no account yet: see auctions/login_code.py.
+# The code proves the inbox, so it satisfies the mandatory verification below. Three tries make a
+# guess hopeless, which is what lets the code live long enough for slow mail.
+ACCOUNT_LOGIN_BY_CODE_ENABLED = True
+ACCOUNT_LOGIN_BY_CODE_TIMEOUT = 10 * 60
+ACCOUNT_LOGIN_BY_CODE_MAX_ATTEMPTS = 3
+ACCOUNT_LOGIN_BY_CODE_SUPPORTS_RESEND = True
 ACCOUNT_USERNAME_VALIDATORS = "auctions.validators.USERNAME_VALIDATORS"
 # ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_LOGIN_METHODS = {"username", "email"}
