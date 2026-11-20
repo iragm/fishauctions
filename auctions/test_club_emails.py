@@ -379,6 +379,42 @@ class IconEmailTests(Helpers):
         self.assertEqual(self.sent(send), [])
         self.assertFalse(ClubEmail.objects.filter(club=self.club, kind="add_icon").exists())
 
+    def test_a_dormant_club_isnt_asked(self, send):
+        self.auction("Spring auction", posted_days_ago=400)
+        self.auction("Fall auction", posted_days_ago=100)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_test_auctions_dont_count(self, send):
+        # A recent tryout doesn't make a dormant club active, nor an old one start the clock.
+        self.auction("Spring auction", posted_days_ago=100)
+        self.auction("Test auction", posted_days_ago=2)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+        self.auction("Test auction", posted_days_ago=30)
+        self.auction("Summer auction", posted_days_ago=0)
+        Auction.objects.filter(title="Spring auction").delete()
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [], "the first real auction is less than a day old")
+
+    def test_a_creator_who_cant_edit_the_club_hands_it_to_one_who_can(self, send):
+        viewer = User.objects.create_user("ce_viewer", "ce_viewer@example.com", "pw")
+        ClubMember.objects.create(club=self.club, user=viewer, name="Ce Viewer", permission_view=True)
+        self.auction("Spring auction", posted_days_ago=5, creator=viewer)
+        club_emails.send_club_emails()
+        self.assertEqual(
+            sorted(self.sent(send)),
+            sorted([(self.creator.email, "club_email_add_icon"), (self.helper.email, "club_email_add_icon")]),
+        )
+
+    def test_nobody_who_can_edit_leaves_the_club_unclaimed(self, send):
+        ClubMember.objects.filter(club=self.club).update(permission_admin=False, permission_edit_club=False)
+        ClubMember.objects.filter(club=self.club).update(permission_view=True)
+        self.auction("Spring auction", posted_days_ago=5)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+        self.assertFalse(ClubEmail.objects.filter(club=self.club, kind="add_icon").exists())
+
 
 class IconTemplateTests(Helpers):
     def test_it_renders(self):
