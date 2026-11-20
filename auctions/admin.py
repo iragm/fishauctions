@@ -26,6 +26,7 @@ from .models import (
     AuctionTOS,
     BapAward,
     Bid,
+    BlockedEmailAddress,
     BlockedEmailDomain,
     Category,
     ChunkedJobState,
@@ -1610,6 +1611,14 @@ class BlockedEmailDomainAdmin(admin.ModelAdmin):
 
     list_display = ("domain", "createdon")
     search_fields = ("domain",)
+
+
+@admin.register(BlockedEmailAddress)
+class BlockedEmailAddressAdmin(admin.ModelAdmin):
+    """Senders the contact form silently ignores, signed in or not."""
+
+    list_display = ("email", "createdon")
+    search_fields = ("email",)
 
 
 # Imported to register their pages: moderation queue and advertising.

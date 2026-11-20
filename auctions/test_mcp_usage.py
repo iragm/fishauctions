@@ -228,6 +228,37 @@ class UsageReportTests(AdminEndpointCase):
         self.assertGreater(tools["my_context"]["average_chars"], 0)
         self.assertIn("/mcp/admin/ tool calls in 7 days", result["content"][0]["text"])
 
+    def test_a_long_conversation_fits_under_the_result_limit(self):
+        from auctions.mcp.tools import MAX_RESULT_CHARS
+
+        long_words = "x" * 580
+        MCPCall.objects.bulk_create(
+            MCPCall(
+                user=self.user, client="ChatGPT", connection="oauth-1", method="tools/call",
+                tool=("find_lot", "search_help", "list_lots")[i % 3],
+                arguments=json.dumps({"query": f"{i} {long_words}"})[:600], outcome=MCPCall.ERROR,
+                detail="y" * 300, result_metadata={"results": {"lots": {"returned": 20, "first_results": [{"id": n} for n in range(20)]}}},
+            )
+            for i in range(400)
+        )  # fmt: skip
+        result = self.call("mcp_usage")
+        text = result["content"][0]["text"]
+        self.assertNotIn("result_too_large", text)
+        self.assertLess(len(text), MAX_RESULT_CHARS)
+        found = result["structuredContent"]
+        (story,) = found["recent_conversations"]
+        self.assertEqual(len(story["calls"]), 31)
+        self.assertIn("more", story["calls"][15])
+        for search in found["recent_searches"]:
+            self.assertLessEqual(len(search["arguments"]), 200)
+            result = search["result"]
+            self.assertLessEqual(len(result if isinstance(result, str) else json.dumps(result)), 200)
+
+    def test_identical_calls_in_a_row_are_one_step_with_a_count(self):
+        from auctions.mcp import usage
+
+        self.assertEqual(usage._steps(["a()", "a()", "a()", "b()", "a()"]), ["a() (x3)", "b()", "a()"])
+
     def test_only_the_owner_can_read_it(self):
         response = self.rpc("tools/call", {"name": "mcp_usage", "arguments": {}}, key=self.member_key)
         self.assertEqual(response.status_code, 403)

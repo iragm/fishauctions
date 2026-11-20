@@ -7,16 +7,26 @@ page: names are typed by members, so ``<``, ``>`` and ``&`` are escaped and a ti
 ``<script>`` element. The template tags that call this are in ``templatetags/seo_tags.py``.
 """
 
+import html
 import json
 
+from django.templatetags.static import static
 from django.urls import reverse
+from django.utils.html import strip_tags
 from django.utils.safestring import mark_safe
+from django.utils.text import Truncator
 
 from auctions.models import Club
 
 _ESCAPES = {ord("<"): "\\u003C", ord(">"): "\\u003E", ord("&"): "\\u0026"}
 ONLINE_MODE = "https://schema.org/OnlineEventAttendanceMode"
 OFFLINE_MODE = "https://schema.org/OfflineEventAttendanceMode"
+#: Characters of an auction's rules quoted as its description.
+DESCRIPTION_CHARS = 300
+#: The picture for an auction whose club has no icon: the site's own.
+SITE_IMAGE = "android-chrome-512x512.png"
+#: The sentence a new auction's rules start with; an auction still showing it has no description yet.
+RULES_PLACEHOLDER = "You should remove this line and edit this section to suit your auction."
 
 
 def script_tag(data):
@@ -48,6 +58,17 @@ def auction_summary(auction):
     return " · ".join(part for part in (when, who, "Online" if auction.is_online else "In person") if part)
 
 
+def auction_description(auction):
+    """The auction's rules as one plain paragraph, cut to :data:`DESCRIPTION_CHARS`; its summary line if
+    the rules are empty or still the placeholder."""
+    rules = auction.summernote_description or ""
+    if RULES_PLACEHOLDER not in rules:
+        text = " ".join(html.unescape(strip_tags(rules)).split())
+        if text:
+            return Truncator(text).chars(DESCRIPTION_CHARS)
+    return auction_summary(auction)
+
+
 def auction_event(request, auction):
     """The Event for a promoted auction, or None."""
     if not auction.promote_this_auction or auction.is_deleted:
@@ -65,25 +86,37 @@ def auction_event(request, auction):
     }
     if auction.date_end:
         event["endDate"] = auction.date_end.astimezone(zone).isoformat()
+    else:
+        # An in-person auction has no end time; it ends the day it starts.
+        event["endDate"] = auction.date_start.astimezone(zone).date().isoformat()
+    event["description"] = auction_description(auction)
+    club = auction.club if auction.club_id else None
     if auction.is_online:
         event["location"] = {"@type": "VirtualLocation", "url": url}
     else:
         place = {}
-        # PickupLocation.address is never shown to the public ("won't be shown to users"), so only the
-        # location's name and the auction's own region go out.
+        # PickupLocation.address is never shown to the public ("won't be shown to users"), so the address
+        # is the auction's own region (or its club's), and the pin is the one its Directions button opens.
         first = next((loc for loc in auction.physical_locations if loc.name), None)
+        region = auction.location or (club.location if club else "") or ""
         if first:
-            place = {"name": first.name, "address": auction.location or ""}
-        elif auction.club_id and auction.club.location:
-            place = {"name": auction.club.name, "address": auction.club.location}
+            place = {"name": first.name, "address": region}
+        elif club and club.location:
+            place = {"name": club.name, "address": club.location}
         place = {key: value for key, value in place.items() if value}
+        pinned = next((loc for loc in auction.physical_locations if loc.latitude or loc.longitude), None)
+        if place and pinned:
+            place["geo"] = {"@type": "GeoCoordinates", "latitude": pinned.latitude, "longitude": pinned.longitude}
         if place:
             event["location"] = {"@type": "Place", **place}
-    club = auction.club if auction.club_id else None
     if club:
         event["organizer"] = _organizer(request, club)
-        if club.icon:
-            event["image"] = _absolute(request, club.icon_display_url)
+        # The club puts the auction on, which is the nearest thing an auction has to a performer.
+        event["performer"] = _organizer(request, club)
+    if club and club.icon:
+        event["image"] = _absolute(request, club.icon_display_url)
+    else:
+        event["image"] = _absolute(request, static(SITE_IMAGE))
     return event
 
 

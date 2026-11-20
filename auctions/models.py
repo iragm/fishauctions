@@ -12204,8 +12204,8 @@ class PageView(CachedPropertiesMixin, models.Model):
     """One row per page opened.
 
     **Repeat views are history, not duplicates.** ``remove_duplicate_views`` merged them and was removed:
-    it only reached anonymous rows and had no time window. Nothing purges this table; its readers carry
-    a window and an owner.
+    it only reached anonymous rows and had no time window. Nothing purges this table but bots' rows
+    (migration 0232, ``tasks.delete_bot_page_views``); its readers carry a window and an owner.
 
     Inert columns: ``total_time`` and ``counter`` (disabled heartbeat), ``notification_sent`` (no
     writer), ``duplicate_check_completed`` (the removed job).
@@ -12747,6 +12747,10 @@ class UserData(CachedPropertiesMixin, models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
+    hide_ai_agent_banner = models.BooleanField(default=False)
+    hide_ai_agent_banner.help_text = (
+        'Set by "Not interested in AI features" on the connect-an-AI-agent banner of the auction and club pages.'
+    )
     last_weekly_promo_sent_at = models.DateTimeField(null=True, blank=True)
     last_weekly_promo_sent_at.help_text = (
         "When the retired weekly promo email last went to this user. auction_promos won't email about an "
@@ -15908,3 +15912,27 @@ class BlockedEmailDomain(models.Model):
         parts = domain.split(".")
         candidates = [".".join(parts[i:]) for i in range(len(parts))]
         return cls.objects.filter(domain__in=candidates).exists()
+
+
+class BlockedEmailAddress(models.Model):
+    """One sender the contact form ignores, typed in or on their signed-in account: they see the usual
+    thanks and nothing is sent. Matched ignoring case. Edited in the admin."""
+
+    email = models.EmailField(max_length=254, unique=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["email"]
+        verbose_name_plural = "blocked email addresses"
+
+    def __str__(self):
+        return self.email
+
+    def save(self, *args, **kwargs):
+        self.email = (self.email or "").strip().lower()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def blocks(cls, email: str) -> bool:
+        email = (email or "").strip()
+        return bool(email) and cls.objects.filter(email__iexact=email).exists()

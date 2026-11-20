@@ -26,6 +26,9 @@ def test_settings():
 
     ``ASSISTANT_NAVIGATE_ONLY`` is on in production, which takes every write out of the palette; the
     suite turns it off so the palette's write path stays tested, and tests the switch by overriding it.
+
+    ``CHECK_IMAGE_LINKS`` fetches every picture added by link; the suite has no network, so it is off and
+    ``test_image_links`` turns it on with the fetch mocked.
     """
     from django.conf import settings
 
@@ -33,7 +36,12 @@ def test_settings():
         **getattr(settings, "POST_OFFICE", {}),
         "BACKENDS": {"default": "django.core.mail.backends.locmem.EmailBackend"},
     }
-    return override_settings(PASSWORD_HASHERS=FAST_HASHERS, POST_OFFICE=post_office, ASSISTANT_NAVIGATE_ONLY=False)
+    return override_settings(
+        PASSWORD_HASHERS=FAST_HASHERS,
+        POST_OFFICE=post_office,
+        ASSISTANT_NAVIGATE_ONLY=False,
+        CHECK_IMAGE_LINKS=False,
+    )
 
 
 def reset_timezone_between_tests():

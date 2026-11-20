@@ -837,7 +837,7 @@ class LotValidation(LoginRequiredMixin):
         image_url = form.cleaned_data.get("image_url")
         if image_url:
             try:
-                validate_image_url(image_url)
+                validate_image_url(image_url, fetch="image_url" in form.changed_data)
                 # check direct images on this lot (not delegated via use_images_from) for is_primary
                 LotImage.objects.create(
                     lot_number=lot,
@@ -845,8 +845,11 @@ class LotValidation(LoginRequiredMixin):
                     is_primary=not LotImage.objects.filter(lot_number=lot).exists(),
                     image_source="RANDOM",
                 )
-            except ValidationError:
-                messages.error(self.request, "The image URL provided was not valid and will not be used.")
+            except ValidationError as error:
+                if error.code == "image_link":
+                    messages.error(self.request, error.messages[0])
+                else:
+                    messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
         pasted_image = form.cleaned_data.get("pasted_image")

@@ -152,9 +152,16 @@ document.addEventListener("DOMContentLoaded", function() {
 {% block content %}
 {% include "club_ribbon.html" %}
 
+{% if payments_enabled %}
 <div class="text-dark bg-warning p-3 rounded mb-3">
   This site is not financial software, data shown here are for reference only. It's up to you to verify the accuracy of your club's records
 </div>
+{% else %}
+<div class="alert alert-info mb-3"><i class="bi bi-info-circle"></i> <a href="{% url 'club_membership_settings' slug=club.slug %}">Enable on-site payments to get more complete data here</a></div>
+{% endif %}
+{% if recent_auction %}
+<div class="alert alert-info mb-3"><i class="bi bi-info-circle"></i> Looking for {{ recent_auction.title }} numbers? <a href="{% url 'auction_stats' slug=recent_auction.slug %}">See detailed stats here</a></div>
+{% endif %}
 
 <div id="club-money-banner" class="alert d-none"></div>
 

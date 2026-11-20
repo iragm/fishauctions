@@ -156,6 +156,33 @@ class AuctionJoinLinksUserTests(StandardTestCase):
         )
         self.assertRedirects(response, "/lots/", fetch_redirect_response=False)
 
+    def test_one_place_and_mail_shows_the_picker(self):
+        """One in-person location and mail is a choice: nothing is filled in behind the person's back."""
+        mail = PickupLocation.objects.create(
+            name="by mail", auction=self.open_auction, pickup_by_mail=True, pickup_time=timezone.now()
+        )
+        self.client.force_login(self.fresh_user)
+        url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
+        form = self.client.get(url).context["form"]
+        self.assertFalse(form.fields["pickup_location"].widget.is_hidden)
+        self.assertIsNone(form.initial.get("pickup_location"))
+        self.assertEqual(set(form.fields["pickup_location"].queryset), {self.open_location, mail})
+
+    def test_one_location_is_filled_in_hidden(self):
+        self.client.force_login(self.fresh_user)
+        form = self.client.get(reverse("auction_main", kwargs={"slug": self.open_auction.slug})).context["form"]
+        self.assertTrue(form.fields["pickup_location"].widget.is_hidden)
+        self.assertEqual(form.initial.get("pickup_location"), self.open_location)
+
+    def test_an_error_on_a_hidden_field_is_shown(self):
+        """A Join refused on a field the page doesn't show says so rather than appearing to do nothing."""
+        self.client.force_login(self.fresh_user)
+        url = reverse("auction_main", kwargs={"slug": self.open_auction.slug})
+        response = self.client.post(url, {"time_spent_reading_rules": "5"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Choose a pickup location to join.", [str(m) for m in response.context["messages"]])
+        self.assertFalse(AuctionTOS.objects.filter(auction=self.open_auction, user=self.fresh_user).exists())
+
     def test_recommended_lots_can_exclude_a_lot(self):
         from auctions.filters import get_recommended_lots
 

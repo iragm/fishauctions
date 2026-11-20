@@ -208,6 +208,16 @@ class ClubFinderTests(TestCase):
         # Two degrees of latitude is about 138 miles.
         self.assertNotContains(response, "Planted Tank Club")
 
+    def test_nearest_clubs_come_first_when_the_location_is_known(self):
+        def order():
+            names = [row["name"] for row in map_payload(self.client.get(reverse("clubs")))]
+            return [name for name in names if name in ("Listed Aquarium Society", "Planted Tank Club")]
+
+        self.assertEqual(order(), ["Listed Aquarium Society", "Planted Tank Club"])
+        self.client.cookies["latitude"] = "44.0"
+        self.client.cookies["longitude"] = "-73.0"
+        self.assertEqual(order(), ["Planted Tank Club", "Listed Aquarium Society"])
+
     def test_a_radius_with_no_location_set_does_not_empty_the_page(self):
         response = self.client.get(reverse("clubs"), {"query": "within 50 miles"})
         self.assertContains(response, "Listed Aquarium Society")

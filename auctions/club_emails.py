@@ -1,4 +1,4 @@
-"""Three emails to clubs that already use the site, each once per club ever.
+"""Four emails to clubs that already use the site, each once per club ever.
 
 * ``monthly_invite`` (:func:`monthly_invite_due`): a club ran a big auction here, one with "annual" in
   its title or a gross over :data:`BIG_GROSS`, and it ended at least :data:`AFTER_AUCTION` ago (and no
@@ -16,6 +16,10 @@
 * ``thanks`` (:func:`thanks_due`): a club that has finished :data:`THANKS_AFTER` real auctions here, one
   within :data:`THANKS_ACTIVE`. A thank you to its latest auction's creator that asks them to tell
   another club about the site. No link and no referral code: it's a nudge, not a program.
+* ``add_icon`` (:func:`add_icon_due`): a club with no icon, :data:`ICON_AFTER` after its first real auction
+  was made, while its latest was made within :data:`ICON_ACTIVE`. One line to its latest auction's
+  creator, or the club's editors if they can't edit it (:func:`add_icon_recipients`), linking the club's
+  edit page.
 
 The claim is a ``ClubEmail`` row per club and kind, inserted before sending. Each person it goes to also
 gets a ``FeatureEmail`` row of the same kind, so ``feature_email_results`` reports them beside the
@@ -26,7 +30,7 @@ email in the last :data:`RECENT`, is skipped. A club nobody could be sent to tod
 Nothing goes before ``CLUB_EMAILS_START`` (blank means no wait), while feature emails are paused, or
 past :data:`PER_RUN` clubs in a day. Only club staff get one: someone who has left the club (or holds no
 club permission) is dropped from the recipients, and a club nobody is left to send to isn't claimed.
-``club_tools`` goes only to people who can edit the club. A "monthly" answer is only recorded from someone
+``club_tools`` and ``add_icon`` go only to people who can edit the club. A "monthly" answer is only recorded from someone
 with the club's ``permission_view``.
 """
 
@@ -63,6 +67,10 @@ THANKS_ACTIVE = datetime.timedelta(days=180)
 PER_RUN = 25
 #: Someone who had any feature email this recently waits a day or two: never two in one morning.
 RECENT = datetime.timedelta(days=7)
+#: How long after a club's first auction is made before it's asked for an icon.
+ICON_AFTER = datetime.timedelta(hours=24)
+#: A club's latest real auction is at most this old for ``add_icon`` to go.
+ICON_ACTIVE = datetime.timedelta(days=60)
 ANNUAL = re.compile(r"\bannual\b", re.IGNORECASE)
 TOKEN_SALT = "club-cadence"
 TOKEN_MAX_AGE = 60 * 60 * 24 * 365
@@ -287,10 +295,60 @@ def thanks_context(club, auction, user, domain) -> dict:
     return {"subject": f"Thanks, {club.name}", "club": club, "auction": auction}
 
 
+def add_icon_due(now=None):
+    """``(club, latest real auction)`` for each club with no icon whose first real auction is
+    :data:`ICON_AFTER` old and whose latest was made within :data:`ICON_ACTIVE`: a club that stopped
+    using the site long ago isn't asked."""
+    from auctions.models import Auction, Club, ClubEmail
+
+    now = now or timezone.now()
+    asked = ClubEmail.objects.filter(kind="add_icon").values_list("club_id", flat=True)
+    clubs = (
+        Club.objects.filter(Q(icon="") | Q(icon__isnull=True))
+        .exclude(pk__in=asked)
+        .filter(auctions__is_deleted=False, auctions__date_posted__gte=now - ICON_ACTIVE)
+        .distinct()
+    )
+    for club in clubs:
+        auctions = _real(
+            Auction.objects.filter(club=club, is_deleted=False)
+            .select_related("club", "created_by__userdata")
+            .order_by("-date_posted")
+        )
+        if not auctions or auctions[0].date_posted < now - ICON_ACTIVE or auctions[-1].date_posted > now - ICON_AFTER:
+            continue
+        latest = next((auction for auction in auctions if auction.created_by_id), None)
+        if latest is not None:
+            yield club, latest
+
+
+def add_icon_recipients(auction) -> list:
+    """The latest auction's creator when they can edit the club (``club_edit``'s permission), else the
+    club's staff who can. Nobody means the club is skipped, unclaimed."""
+    from auctions.models import ClubMember
+
+    editors = [
+        member.user
+        for member in ClubMember.objects.filter(club=auction.club, is_deleted=False, user__isnull=False)
+        .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+        .select_related("user__userdata")
+        .order_by("pk")
+    ]
+    if auction.created_by_id in {editor.pk for editor in editors}:
+        return [auction.created_by]
+    return editors
+
+
+def add_icon_context(club, auction, user, domain) -> dict:
+    edit_url = _url(domain, reverse("club_edit", kwargs={"slug": club.slug}), "add_icon")
+    return {"subject": f"An icon for {club.name}", "club": club, "auction": auction, "edit_url": edit_url}
+
+
 KINDS = {
     "monthly_invite": (monthly_invite_due, lambda auction: [auction.created_by], monthly_invite_context),
     "club_tools": (club_tools_due, club_tools_recipients, club_tools_context),
     "thanks": (thanks_due, lambda auction: [auction.created_by], thanks_context),
+    "add_icon": (add_icon_due, add_icon_recipients, add_icon_context),
 }
 
 

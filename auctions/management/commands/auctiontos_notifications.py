@@ -4,6 +4,7 @@ join an auction someone looked at.
 """
 
 import datetime
+import logging
 
 from django.conf import settings
 from django.contrib.sites.models import Site
@@ -29,6 +30,8 @@ LOCATION_CHECK_MILES = 100
 #: How long after joining that question is asked, and after how long it's too late to bother.
 LOCATION_CHECK_DELAY = datetime.timedelta(hours=1)
 LOCATION_CHECK_WINDOW = datetime.timedelta(days=2)
+
+logger = logging.getLogger(__name__)
 
 _TOS_PUSH_TITLES = {
     "online_auction_welcome": "You're in — {auction}",
@@ -200,73 +203,88 @@ class Command(BaseCommand):
             user__userdata__send_reminder_emails_about_joining_auctions=True,
         )
         for campaign in join_auction_reminder:
-            email = campaign.user.email
-            lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction).distinct()
-            campaign.email_sent = True
-            campaign.save()
-            send_email = True
-            # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
-            userData = campaign.user.userdata
-            latitude = userData.latitude
-            longitude = userData.longitude
-            if latitude and longitude:
-                qs = Auction.objects.filter(pk=campaign.auction.pk)
-                qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
-                auction = qs.first()
-                if auction and auction.is_online and auction.distance > userData.email_me_about_new_auctions_distance:
-                    send_email = False
-                if (
-                    auction
-                    and not auction.is_online
-                    and auction.distance > userData.email_me_about_new_in_person_auctions_distance
-                ):
-                    send_email = False
-            else:  # user has no location:
-                send_email = False
-            if campaign.auction.closed:
-                send_email = False
-            if not campaign.auction.is_online and campaign.auction.started:
-                send_email = False
-            user_has_already_joined = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
-            # A row the club added still has a location to pick, which is what the reminder asks for.
-            if user_has_already_joined and not user_has_already_joined.needs_pickup_location:
-                send_email = False
-            if not send_email:
-                campaign.result = "ERR"
-                campaign.save()
-            else:
-                current_site = Site.objects.get_current()
-                ctx = {
-                    "domain": current_site.domain,
-                    "auction": campaign.auction,
-                    "uuid": campaign.uuid,
-                    "lots": lots,
-                    "user": campaign.user,
-                    "unsubscribe": userData.unsubscribe_link,
-                    "mailing_address": settings.MAILING_ADDRESS,
-                }
-                campaign_kwargs = {
-                    "sender": campaign.auction.sender_email_with_name,
-                    "template": "join_auction_reminder",
-                    "context": ctx,
-                }
-                if not email_routing_enabled():
-                    campaign_kwargs["headers"] = {"Reply-to": campaign.auction.created_by.email}
-                    ctx["reply_to_email"] = campaign.auction.created_by.email
-                # A good push: short, time-limited (the auction is about to start or close), and it
-                # only has one thing to say. The URL is the campaign's tracked link, so a tap still
-                # marks the campaign VIEWED exactly like clicking the email would.
-                notify_user(
-                    campaign.user,
-                    category=CATEGORY_AUCTION_REMINDER,
-                    title="Don't miss this auction",
-                    body=f"You looked at lots in {campaign.auction.title} but haven't joined yet.",
-                    url=f"https://{campaign.link}",
-                    # Bound by default argument: both names are loop variables, and a deferred
-                    # call would otherwise mail the last campaign of the loop to everybody.
-                    send_email=lambda email=email, campaign_kwargs=campaign_kwargs: mail.send(email, **campaign_kwargs),
-                    auction_pk=campaign.auction.pk,
+            try:
+                self.remind_to_join(campaign)
+            except Exception:
+                # One bad row mustn't stop everyone else's reminders, or the rest of this run.
+                logger.exception("Join reminder for campaign %s failed", campaign.pk)
+                AuctionCampaign.objects.filter(pk=campaign.pk).update(email_sent=True, result="ERR")
+
+    def remind_to_join(self, campaign):
+        """One "you looked but didn't join" reminder, if it's still worth sending."""
+        email = campaign.user.email
+        lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction).distinct()
+        campaign.email_sent = True
+        campaign.save()
+        send_email = True
+        # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
+        userData = campaign.user.userdata
+        latitude = userData.latitude
+        longitude = userData.longitude
+        if latitude and longitude:
+            qs = Auction.objects.filter(pk=campaign.auction.pk)
+            qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
+            auction = qs.first()
+            if auction:
+                limit = (
+                    userData.email_me_about_new_auctions_distance
+                    if auction.is_online
+                    else userData.email_me_about_new_in_person_auctions_distance
                 )
+                if auction.distance is None:
+                    # No placed pickup location: an in-person auction can't be shown to be near, so it
+                    # isn't sent; an online one (mail, unplaced spots) skips the check.
+                    if not auction.is_online:
+                        send_email = False
+                elif limit is not None and auction.distance > limit:
+                    # No distance setting: no check.
+                    send_email = False
+        else:  # user has no location:
+            send_email = False
+        if campaign.auction.closed:
+            send_email = False
+        if not campaign.auction.is_online and campaign.auction.started:
+            send_email = False
+        user_has_already_joined = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
+        # A row the club added still has a location to pick, which is what the reminder asks for.
+        if user_has_already_joined and not user_has_already_joined.needs_pickup_location:
+            send_email = False
+        if not send_email:
+            campaign.result = "ERR"
+            campaign.save()
+        else:
+            current_site = Site.objects.get_current()
+            ctx = {
+                "domain": current_site.domain,
+                "auction": campaign.auction,
+                "uuid": campaign.uuid,
+                "lots": lots,
+                "user": campaign.user,
+                "unsubscribe": userData.unsubscribe_link,
+                "mailing_address": settings.MAILING_ADDRESS,
+            }
+            campaign_kwargs = {
+                "sender": campaign.auction.sender_email_with_name,
+                "template": "join_auction_reminder",
+                "context": ctx,
+            }
+            if not email_routing_enabled():
+                campaign_kwargs["headers"] = {"Reply-to": campaign.auction.created_by.email}
+                ctx["reply_to_email"] = campaign.auction.created_by.email
+            # A good push: short, time-limited (the auction is about to start or close), and it
+            # only has one thing to say. The URL is the campaign's tracked link, so a tap still
+            # marks the campaign VIEWED exactly like clicking the email would.
+            notify_user(
+                campaign.user,
+                category=CATEGORY_AUCTION_REMINDER,
+                title="Don't miss this auction",
+                body=f"You looked at lots in {campaign.auction.title} but haven't joined yet.",
+                url=f"https://{campaign.link}",
+                # Bound by default argument: both names are loop variables, and a deferred
+                # call would otherwise mail the last campaign of the loop to everybody.
+                send_email=lambda email=email, campaign_kwargs=campaign_kwargs: mail.send(email, **campaign_kwargs),
+                auction_pk=campaign.auction.pk,
+            )
 
     def send_location_checks(self, base_qs):
         """Ask someone who joined from far away whether their map marker is right, until they say it is."""

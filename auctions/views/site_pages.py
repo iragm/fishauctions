@@ -51,6 +51,7 @@ from auctions.models import (
     AssistantSkillRequest,
     Auction,
     AuctionTOS,
+    BlockedEmailAddress,
     BlockedEmailDomain,
     Invoice,
     Lot,
@@ -131,9 +132,13 @@ class SupportView(FormView):
         blocked = not honeypot and not form.sender_is_known and BlockedEmailDomain.blocks(form.sender_email)
         if blocked:
             logger.info("Contact form: dropped a message from a blocked email domain")
+        # A blocked sender, typed in or signed in: the account's own address counts here.
+        elif not honeypot and BlockedEmailAddress.blocks(form.sender_email):
+            blocked = True
+            logger.info("Contact form: dropped a message from a blocked sender")
         if honeypot or blocked:
-            # The honeypot, or a blocked domain: a bot gets the same answer as a person, so it has nothing
-            # to learn.
+            # The honeypot, or a blocked domain or sender: a bot gets the same answer as a person, so it
+            # has nothing to learn.
             messages.success(
                 self.request,
                 f"Thanks - your message is on its way. We'll reply to {form.sender_email}.",
@@ -180,7 +185,7 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
 
     template_name = "feature_requests.html"
     form_class = FeatureRequestForm
-    #: Requests one person may send in a day.
+    #: Requests one person may send in a day. Superusers have no limit.
     PER_DAY = 10
     #: How each status reads to the person who asked.
     STATUS_LABELS = {
@@ -211,7 +216,11 @@ class FeatureRequestsView(LoginRequiredMixin, FormView):
         from auctions import palette_actions
 
         since = timezone.now() - timedelta(days=1)
-        if AssistantSkillRequest.objects.filter(user=self.request.user, createdon__gte=since).count() >= self.PER_DAY:
+        if (
+            not self.request.user.is_superuser
+            and AssistantSkillRequest.objects.filter(user=self.request.user, createdon__gte=since).count()
+            >= self.PER_DAY
+        ):
             messages.error(self.request, "That's a lot for one day; send the rest tomorrow.")
             return self.form_invalid(form)
         self.request.assistant_surface = "requests page"

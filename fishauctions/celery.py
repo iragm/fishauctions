@@ -59,6 +59,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
+    # One-shot: delete page views bots wrote before the beacon refused them. Disables itself when done.
+    "delete_bot_page_views": {
+        "task": "auctions.tasks.delete_bot_page_views",
+        "schedule": 60.0,  # Run every minute
+    },
     # One-shot: fill in PageView.auction on lot views written before the beacon sent it, so the
     # `auction_id OR lot.auction_id` in Auction.page_views can go. Disables its own row when done.
     "backfill_page_view_auctions": {

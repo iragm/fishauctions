@@ -47,7 +47,6 @@ from auctions.models import (
     Invoice,
     Lot,
     LotHistory,
-    PickupLocation,
 )
 from auctions.sample_auction import offer_sample_data
 from auctions.services import (
@@ -987,12 +986,10 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                 context["leave_paid_club"] = None if context["leave_problem"] else paid_club_for(tos)
             else:
                 context["hasChosenLocation"] = False
-                if not self.auction.multi_location:
-                    existingTos = PickupLocation.objects.filter(auction=self.auction).first()
+                existingTos = self._only_location()
         else:
             context["hasChosenLocation"] = False
-            if not self.auction.multi_location:
-                existingTos = PickupLocation.objects.filter(auction=self.auction).first()
+            existingTos = self._only_location()
         context["show_club_join_message"] = bool(
             self.request.user.is_authenticated
             and self.auction.is_club_managed
@@ -1040,17 +1037,18 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
                     extra_tags="safe",
                 )
 
-        context["form"] = AuctionJoin(
-            user=self.request.user,
-            auction=self.auction,
-            next_url=self.request.GET.get("next"),
-            joined=context.get("joined", False),
-            initial={
-                "user": getattr(self.request.user, "id", None),
-                "auction": self.auction.pk,
-                "pickup_location": existingTos,
-            },
-        )
+        if "form" not in kwargs:
+            context["form"] = AuctionJoin(
+                user=self.request.user,
+                auction=self.auction,
+                next_url=self.request.GET.get("next"),
+                joined=context.get("joined", False),
+                initial={
+                    "user": getattr(self.request.user, "id", None),
+                    "auction": self.auction.pk,
+                    "pickup_location": existingTos,
+                },
+            )
         context["rewrite_url"] = self.rewrite_url
         if self.auction.club:
             from auctions.email_routing import email_routing_enabled
@@ -1064,6 +1062,23 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
         if context.get("joined") and context["leave_problem"]:
             context["leave_contact_email"] = self._organizer_email(context["auction_contact_email"])
         return context
+
+    def _only_location(self):
+        """The location a hidden picker fills in: the auction's only one, mail included, else ``None``."""
+        return self.auction.locations[0] if self.auction.all_location_count == 1 else None
+
+    def form_invalid(self, form):
+        """Errors on fields the page doesn't show become messages, so pressing Join never does nothing."""
+        for name, errors in form.errors.items():
+            field = form.fields.get(name)
+            if field is not None and not field.widget.is_hidden:
+                continue
+            if name == "pickup_location":
+                messages.error(self.request, "Choose a pickup location to join.")
+            else:
+                for error in errors:
+                    messages.error(self.request, error)
+        return super().form_invalid(form)
 
     def _organizer_email(self, club_email):
         """Who "Email the organizer" writes to: the club's address, else the auction's routed one, else the

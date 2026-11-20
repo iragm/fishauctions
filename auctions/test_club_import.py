@@ -139,6 +139,26 @@ class FindExistingTests(TestCase):
         found = ImportedClub(name="The Virginia Aquarium Society, Inc.", homepage="https://www.asv.example/home")
         self.assertEqual(find_existing(found, [club]), club)
 
+    def test_a_sub_page_of_a_parent_site_is_not_the_parent(self):
+        parent = Club.objects.create(name="Regional Aquarium Society", homepage="https://parent.example/")
+        found = ImportedClub(name="Killifish Study Group", homepage="https://parent.example/groups/killifish")
+        self.assertIsNone(find_existing(found, [parent]))
+
+    def test_a_page_every_club_site_has_is_the_club(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", homepage="https://harbor.example/")
+        found = ImportedClub(name="Something else entirely", homepage="http://harbor.example/join")
+        self.assertEqual(find_existing(found, [club]), club)
+
+    def test_the_same_sub_page_is_the_same_club(self):
+        club = Club.objects.create(name="Killifish Study Group", homepage="https://parent.example/groups/killifish/")
+        found = ImportedClub(name="Killie Group", homepage="http://www.parent.example/groups/killifish")
+        self.assertEqual(find_existing(found, [club]), club)
+
+    def test_a_sub_page_falls_through_to_the_name(self):
+        club = Club.objects.create(name="Killifish Study Group", homepage="https://parent.example/")
+        found = ImportedClub(name="Killifish Study Group", homepage="https://parent.example/groups/killifish")
+        self.assertEqual(find_existing(found, [club]), club)
+
     def test_a_close_name_with_no_domain_still_matches(self):
         club = Club.objects.create(name="Greater Seattle Aquarium Society", abbreviation="GSAS")
         self.assertEqual(find_existing(ImportedClub(name="GSAS"), [club]), club)

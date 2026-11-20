@@ -44,6 +44,8 @@ class Helpers(StandardTestCase):
         # Club staff only get club emails (club_emails._send_to_club), so the fixtures are members.
         ClubMember.objects.create(club=self.club, user=self.creator, name="Ce Creator", permission_admin=True)
         ClubMember.objects.create(club=self.club, user=self.helper, name="Ce Helper", permission_edit_club=True)
+        # The icon email has its own tests (IconEmailTests); here it would claim the creator first.
+        ClubEmail.objects.create(club=self.club, kind="add_icon")
 
     def auction(self, title="Spring auction", ended_days_ago=30, posted_days_ago=None, creator=None):
         now = timezone.now()
@@ -106,7 +108,10 @@ class MonthlyInviteTests(Helpers):
         self.auction("Annual auction", ended_days_ago=30)
         club_emails.send_club_emails()
         self.assertEqual(self.sent(send), [])
-        self.assertFalse(ClubEmail.objects.filter(club=self.club).exists(), "the club can still be asked later")
+        self.assertFalse(
+            ClubEmail.objects.filter(club=self.club).exclude(kind="add_icon").exists(),
+            "the club can still be asked later",
+        )
 
     def test_someone_who_just_had_a_feature_email_waits(self, send):
         FeatureEmail.objects.create(user=self.creator, kind="dues")
@@ -127,7 +132,7 @@ class MonthlyInviteTests(Helpers):
         self.auction("Annual auction", ended_days_ago=30)
         club_emails.send_club_emails()
         self.assertFalse(FeatureEmail.objects.filter(user=self.creator, kind="monthly_invite").exists())
-        self.assertFalse(ClubEmail.objects.filter(club=self.club).exists())
+        self.assertFalse(ClubEmail.objects.filter(club=self.club).exclude(kind="add_icon").exists())
 
     def test_the_buttons_carry_the_answer_and_the_source(self, send):
         auction = self.auction("Annual auction", ended_days_ago=30)
@@ -330,4 +335,95 @@ class ThanksTemplateTests(Helpers):
         club_emails.send_club_emails()
         email = Email.objects.get(to=self.creator.email, subject="Thanks, Cichlid society")
         self.assertIn("Know of another club", email.message)
+        self.assertNotIn("{%", email.message)
+
+
+@patch(SEND)
+class IconEmailTests(Helpers):
+    def setUp(self):
+        super().setUp()
+        ClubEmail.objects.filter(club=self.club, kind="add_icon").delete()
+        # Big or monthly auctions earn the other emails; these tests are about the icon alone.
+        for kind in ("monthly_invite", "club_tools", "thanks"):
+            ClubEmail.objects.create(club=self.club, kind=kind)
+
+    def test_waits_a_day_after_the_first_auction(self, send):
+        self.auction("Spring auction", posted_days_ago=0)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_goes_once_to_the_latest_auctions_creator(self, send):
+        self.auction("Spring auction", posted_days_ago=400)
+        self.auction("Fall auction", posted_days_ago=3, creator=self.helper)
+        self.assertEqual(club_emails.send_club_emails(), 1)
+        self.assertEqual(self.sent(send), [(self.helper.email, "club_email_add_icon")])
+        self.assertTrue(ClubEmail.objects.filter(club=self.club, kind="add_icon").exists())
+        context = send.call_args.kwargs["context"]
+        self.assertIn(reverse("club_edit", kwargs={"slug": self.club.slug}), context["edit_url"])
+        send.reset_mock()
+        FeatureEmail.objects.all().update(sent_on=timezone.now() - 30 * DAY)
+        self.auction("Winter auction", posted_days_ago=2)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_a_club_with_an_icon_isnt_asked(self, send):
+        Club.objects.filter(pk=self.club.pk).update(icon="club_icons/icon.png")
+        self.auction("Spring auction", posted_days_ago=5)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_nobody_who_opted_out(self, send):
+        UserData.objects.filter(user=self.creator).update(email_me_about_new_features=False)
+        self.auction("Spring auction", posted_days_ago=5)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+        self.assertFalse(ClubEmail.objects.filter(club=self.club, kind="add_icon").exists())
+
+    def test_a_dormant_club_isnt_asked(self, send):
+        self.auction("Spring auction", posted_days_ago=400)
+        self.auction("Fall auction", posted_days_ago=100)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+
+    def test_test_auctions_dont_count(self, send):
+        # A recent tryout doesn't make a dormant club active, nor an old one start the clock.
+        self.auction("Spring auction", posted_days_ago=100)
+        self.auction("Test auction", posted_days_ago=2)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+        self.auction("Test auction", posted_days_ago=30)
+        self.auction("Summer auction", posted_days_ago=0)
+        Auction.objects.filter(title="Spring auction").delete()
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [], "the first real auction is less than a day old")
+
+    def test_a_creator_who_cant_edit_the_club_hands_it_to_one_who_can(self, send):
+        viewer = User.objects.create_user("ce_viewer", "ce_viewer@example.com", "pw")
+        ClubMember.objects.create(club=self.club, user=viewer, name="Ce Viewer", permission_view=True)
+        self.auction("Spring auction", posted_days_ago=5, creator=viewer)
+        club_emails.send_club_emails()
+        self.assertEqual(
+            sorted(self.sent(send)),
+            sorted([(self.creator.email, "club_email_add_icon"), (self.helper.email, "club_email_add_icon")]),
+        )
+
+    def test_nobody_who_can_edit_leaves_the_club_unclaimed(self, send):
+        ClubMember.objects.filter(club=self.club).update(permission_admin=False, permission_edit_club=False)
+        ClubMember.objects.filter(club=self.club).update(permission_view=True)
+        self.auction("Spring auction", posted_days_ago=5)
+        club_emails.send_club_emails()
+        self.assertEqual(self.sent(send), [])
+        self.assertFalse(ClubEmail.objects.filter(club=self.club, kind="add_icon").exists())
+
+
+class IconTemplateTests(Helpers):
+    def test_it_renders(self):
+        ClubEmail.objects.filter(club=self.club, kind="add_icon").delete()
+        for kind in ("monthly_invite", "club_tools", "thanks"):
+            ClubEmail.objects.create(club=self.club, kind=kind)
+        self.auction("Spring auction", posted_days_ago=5)
+        club_emails.send_club_emails()
+        email = Email.objects.filter(to=self.creator.email).latest("id")
+        self.assertEqual(email.subject, "An icon for Cichlid society")
+        self.assertIn("/edit/", email.message)
         self.assertNotIn("{%", email.message)
