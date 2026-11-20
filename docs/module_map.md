@@ -308,9 +308,9 @@ this only quotes its opening sentence.
 - **`square_offsite.py`** (338 lines)
   Square payments taken in a connected account without this site: a club's own Payment Link or register.
   `square_time`, `order_source`, `record_payment`, `purge`, `record_refund`, `next_dues_payment`, `resolve_dues_payment`, `invoice_payment_hint`
-- **`structured_data.py`** (114 lines)
+- **`structured_data.py`** (147 lines)
   schema.org Event data (JSON-LD) for the auction page and the club page, so a search engine can show
-  `script_tag`, `club_url`, `auction_summary`, `auction_event`, `club_events`
+  `script_tag`, `club_url`, `auction_summary`, `auction_description`, `auction_event`, `club_events`
 - **`tables.py`** (1836 lines)
   The ``django_tables2`` tables behind every list on the site.
 - **`tasks.py`** (2044 lines)
@@ -782,6 +782,9 @@ this only quotes its opening sentence.
 - **`test_stats_and_browse_views.py`** (631 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
   `fake_cached_stats`, `AuctionStatsChartTests`, `RecommendedLotsTests`, `NoLotAuctionsTests`, `AuctionNotificationsTests`, `LotListViewTests`, `RenderAdTests`, `ClubMemberMergeAutocompleteTests`, `SiteAdminDashboardTests`, `UserAndLotChartTests`
+- **`test_structured_data.py`** (63 lines)
+  The auction page's schema.org Event (``auctions/structured_data.py``): the fields Google asks for.
+  `AuctionEventTests`
 - **`test_support.py`** (57 lines)
   Support code shared by the test modules. Holds no tests of its own.
   `isolated_cache`, `mcp_only_page`
