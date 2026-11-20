@@ -757,9 +757,9 @@ this only quotes its opening sentence.
 - **`test_source_code.py`** (324 lines)
   The source code reader: what it can serve, and -- much more to the point -- what it cannot.
   `FakeResponse`, `fake_get`, `SourceTestCase`, `RepositorySettingTests`, `TheArchiveIsTheAllowlistTests`, `ReadingTests`, `ContentSearchTests`, `ReadSourceToolTests`
-- **`test_speaker_public.py`** (661 lines)
+- **`test_speaker_public.py`** (740 lines)
   The public speaker directory: adding yourself, "This is me" claims, what search engines see, and
-  `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`
+  `SelfAddTests`, `ClaimTests`, `SearchEngineTests`, `DuplicateTests`, `AdminToolTests`, `NecMemberStillSeesTheirPartsTests`, `ReviewFindingTests`, `ClubAdminsAddSpeakersTests`, `SignedInReadersTests`, `AddAndUpdateSpeakerStepTests`
 - **`test_speakers.py`** (1420 lines)
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
@@ -1018,7 +1018,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (3238 lines)
+- **`admin.py`** (3413 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_reports.py`** (1657 lines)
   Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.

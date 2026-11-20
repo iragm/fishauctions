@@ -659,3 +659,82 @@ class SignedInReadersTests(TestCase):
         self.assertEqual(response.content, b"")
         self.comment.refresh_from_db()
         self.assertTrue(self.comment.is_deleted)
+
+
+class AddAndUpdateSpeakerStepTests(TestCase):
+    """``add_speaker`` and ``update_speaker``: approval-only steps an agent proposes from a club's website."""
+
+    def setUp(self):
+        from auctions.mcp import admin
+
+        self.admin = admin
+        self.owner = User.objects.create_superuser("speakerowner", "speakerowner@example.com", "pw")
+        self.request = RequestFactory().get("/")
+        self.request.user = self.owner
+        self.topic = SpeakerTopic.objects.get_or_create(name="Killifish")[0]
+
+    def test_they_are_approval_only_and_checked(self):
+        from auctions import palette_actions
+
+        for name in ("add_speaker", "update_speaker"):
+            self.assertIn(name, self.admin.APPROVAL_ONLY)
+            self.assertIn(name, self.admin.PROPOSAL_CHECKS)
+            self.assertNotIn(name, palette_actions.ACTIONS)
+        check = self.admin.PROPOSAL_CHECKS["add_speaker"]
+        self.assertIn("name", check({"location": "Providence, RI"}))
+        self.assertIn("location", check({"name": "Kim Killi"}))
+        self.assertIn("no topic called", check({"name": "Kim Killi", "location": "Boston", "topics": "Lizards"}))
+        self.assertEqual(check({"name": "Kim Killi", "location": "Boston", "topics": "killifish"}), "")
+        self.assertIn("no live speaker", self.admin.PROPOSAL_CHECKS["update_speaker"]({"speaker": "nobody"}))
+
+    def test_add_speaker_makes_a_public_page(self):
+        result = self.admin.add_speaker(
+            self.request,
+            {
+                "name": "Kim Killi",
+                "location": "Boston, MA",
+                "topics": "Killifish",
+                "talks": "Annual killies",
+                "website": "example.org/kim",
+                "remote": True,
+                "source_url": "https://club.example.org/speakers",
+            },
+        )
+        self.assertTrue(result.get("ok"), result)
+        speaker = Speaker.objects.get(name="Kim Killi")
+        self.assertEqual(speaker.visibility, Speaker.VISIBILITY_PUBLIC)
+        self.assertEqual(speaker.created_by, self.owner)
+        self.assertEqual(speaker.programs, "Annual killies")
+        self.assertEqual(speaker.website, "https://example.org/kim")
+        self.assertEqual(speaker.source_url, "https://club.example.org/speakers")
+        self.assertEqual(list(speaker.topics.all()), [self.topic])
+        self.assertTrue(SpeakerTag.objects.filter(speaker=speaker, tag="remote").exists())
+
+    def test_add_speaker_refuses_somebody_already_listed(self):
+        existing = Speaker.objects.create(name="Killi, Kim")
+        result = self.admin.add_speaker(self.request, {"name": "Kim Killi", "location": "Boston"})
+        self.assertIn(existing.slug, result["error"])
+        self.assertEqual(Speaker.objects.count(), 1)
+
+    def test_update_speaker_changes_only_what_it_names(self):
+        speaker = Speaker.objects.create(name="Kim Killi", bio="Keeps killies.", location="Boston, MA")
+        SpeakerTag.objects.create(speaker=speaker, user=self.owner, tag="remote")
+        result = self.admin.update_speaker(
+            self.request, {"speaker": speaker.slug, "topics": "Killifish", "remote": "false", "location": "Albany, NY"}
+        )
+        self.assertTrue(result.get("ok"), result)
+        speaker.refresh_from_db()
+        self.assertEqual(speaker.bio, "Keeps killies.")
+        self.assertEqual(speaker.location, "Albany, NY")
+        self.assertEqual(list(speaker.topics.all()), [self.topic])
+        self.assertFalse(SpeakerTag.objects.filter(speaker=speaker, tag="remote").exists())
+        self.assertIn("at least one", self.admin.update_speaker(self.request, {"speaker": speaker.slug})["error"])
+
+    def test_they_are_for_superusers_only(self):
+        from django.core.exceptions import PermissionDenied
+
+        self.request.user = User.objects.create_user("notowner", "notowner@example.com", "pw")
+        with self.assertRaises(PermissionDenied):
+            self.admin.add_speaker(self.request, {"name": "Kim Killi", "location": "Boston"})
+        with self.assertRaises(PermissionDenied):
+            self.admin.update_speaker(self.request, {"speaker": "x", "bio": "y"})

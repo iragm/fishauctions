@@ -1895,6 +1895,134 @@ def decline_speaker_claim(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok("Declined.")
 
 
+#: ``add_speaker``/``update_speaker`` parameter -> (``Speaker`` field, longest value; ``None`` is unbounded).
+#: The directory's public fields only: contact details a club website lists stay off a scraped record.
+SPEAKER_FIELDS = {
+    "name": ("name", 200),
+    "bio": ("bio", None),
+    "talks": ("programs", None),
+    "website": ("website", 500),
+    "facebook_page": ("facebook_page", 500),
+    "location": ("location", 500),
+    "source_url": ("source_url", 500),
+}
+_SPEAKER_URL_FIELDS = ("website", "facebook_page", "source_url")
+
+
+def _speaker_changes(params: dict[str, Any], speaker=None):
+    """``add_speaker``/``update_speaker``'s fields as ``(changes, topics, remote, "")``, or a reason last.
+
+    Only what the step names changes; ``topics`` is ``None`` when it names none and ``remote`` is ``None``
+    when it doesn't say. Topics are the directory's closed vocabulary, matched by name in any case.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import URLValidator
+
+    from auctions import speaker_duplicates
+    from auctions.models import SpeakerTopic
+
+    changes = {}
+    for param, (field, length) in SPEAKER_FIELDS.items():
+        if param not in params:
+            continue
+        value = _str(params, param)
+        if param in _SPEAKER_URL_FIELDS and value:
+            value = club_onboarding.web_address(value)
+            try:
+                URLValidator()(value)
+            except ValidationError:
+                return {}, None, None, f"{param} isn't a web address."
+        changes[field] = value[:length] if length else value
+    if "name" in changes and not changes["name"]:
+        return {}, None, None, "A speaker needs a name."
+    if speaker is None:
+        if not changes.get("name"):
+            return {}, None, None, "A speaker needs a name."
+        if not changes.get("location"):
+            return {}, None, None, "A speaker needs a location: roughly where they travel from."
+    if "name" in changes:
+        exclude = speaker.pk if speaker is not None else None
+        existing = speaker_duplicates.possible_matches(changes["name"], exclude_pk=exclude)
+        if existing:
+            return {}, None, None, f"That looks like {existing[0].slug}, already in the directory; update_speaker it."
+    topics = None
+    if "topics" in params:
+        names = [name.strip() for name in _str(params, "topics").split(",") if name.strip()]
+        found = {topic.name.casefold(): topic for topic in SpeakerTopic.objects.all()}
+        unknown = [name for name in names if name.casefold() not in found]
+        if unknown:
+            known = ", ".join(sorted(topic.name for topic in found.values()))
+            return {}, None, None, f"There is no topic called {unknown[0]}. The topics are: {known}."
+        topics = [found[name.casefold()] for name in names]
+    remote = palette_actions._flag(params, "remote") if "remote" in params else None
+    if speaker is not None and not changes and topics is None and remote is None:
+        return {}, None, None, "Name at least one thing to change."
+    return changes, topics, remote, ""
+
+
+def _set_remote(speaker, user, remote):
+    """``remote`` as the approver's own "Presents remotely" tag, the one place the directory says it."""
+    from auctions.models import SpeakerTag
+
+    if remote:
+        SpeakerTag.objects.get_or_create(speaker=speaker, user=user, tag="remote")
+    elif remote is not None:
+        SpeakerTag.objects.filter(speaker=speaker, user=user, tag="remote").delete()
+
+
+def _update_speaker_problem(params: dict[str, Any]) -> str:
+    speaker = _speaker(params, "speaker")
+    if speaker is None:
+        return "There is no live speaker by that slug."
+    return _speaker_changes(params, speaker)[3]
+
+
+def add_speaker(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Add somebody to the speaker directory, as ``SpeakerCreateView`` does: a public page, added by the
+    approver, placed on the map by the same geocoding signal.
+    """
+    from auctions.models import Speaker
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    changes, topics, remote, problem = _speaker_changes(params)
+    if problem:
+        return _error(problem)
+    with transaction.atomic():
+        speaker = Speaker.objects.create(created_by=request.user, **changes)
+        if topics:
+            speaker.topics.set(topics)
+        _set_remote(speaker, request.user, remote)
+    return _ok(f"Added {speaker.slug} to the speaker directory.", page_url=speaker.get_absolute_url())
+
+
+def update_speaker(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Correct a speaker's public details. Only the fields a step names change; a new location is
+    geocoded again.
+    """
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    speaker = _speaker(params, "speaker")
+    if speaker is None:
+        return _error("There is no live speaker by that slug.")
+    changes, topics, remote, problem = _speaker_changes(params, speaker)
+    if problem:
+        return _error(problem)
+    with transaction.atomic():
+        moved = "location" in changes and changes["location"] != speaker.location
+        for field, value in changes.items():
+            setattr(speaker, field, value)
+        if moved:
+            # The old pin would stay where they no longer are; the post_save signal geocodes the new place.
+            speaker.location_coordinates = None
+            speaker.latitude = speaker.longitude = None
+        speaker.save()
+        if topics is not None:
+            speaker.topics.set(topics)
+        _set_remote(speaker, request.user, remote)
+    return _ok(f"Updated {speaker.slug}.", page_url=speaker.get_absolute_url())
+
+
 def find_duplicate_speakers(request, params: dict[str, Any]) -> dict[str, Any]:
     """Open "This is me" requests, then pairs of speakers that are probably one person, each with the
     proposal step that would settle it.
@@ -2607,6 +2735,51 @@ APPROVAL_ONLY: dict[str, Action] = {
             resolver=decline_speaker_claim,
         ),
         Action(
+            name="add_speaker",
+            description=(
+                "Add a speaker to the speaker directory as a public page, e.g. one a club's website lists. "
+                "Public details only, never an email or phone number. Refused when the name looks like "
+                "somebody already listed; update_speaker that page instead."
+            ),
+            params={
+                "name": "string, required. As you'd print it on a meeting flyer.",
+                "location": "string, required. Roughly where they travel from; a town and state is plenty.",
+                "topics": "string, optional. Comma-separated topic names from the directory's list.",
+                "talks": "string, optional. The talks they offer, one per line.",
+                "bio": "string, optional. A paragraph about them.",
+                "website": "string, optional. Their own website.",
+                "facebook_page": "string, optional. Their Facebook page.",
+                "remote": "boolean, optional. true when they present remotely.",
+                "source_url": "string, optional. The page this speaker was found on.",
+            },
+            danger=DANGER_CONFIRM,
+            confirm_template="Add a speaker",
+            resolver=add_speaker,
+        ),
+        Action(
+            name="update_speaker",
+            description=(
+                "Correct a speaker's public details. Only the fields you name change; an empty value clears "
+                "one. topics replaces their topics. A new location is placed on the map again."
+            ),
+            params={
+                "speaker": "string, required. The slug of the speaker's page.",
+                "name": "string, optional. As you'd print it on a meeting flyer.",
+                "location": "string, optional. Roughly where they travel from.",
+                "topics": "string, optional. Comma-separated topic names from the directory's list, replacing theirs.",
+                "talks": "string, optional. The talks they offer, one per line.",
+                "bio": "string, optional. A paragraph about them.",
+                "website": "string, optional. Their own website.",
+                "facebook_page": "string, optional. Their Facebook page.",
+                "remote": "boolean, optional. true when they present remotely, false when they don't.",
+                "source_url": "string, optional. The page this speaker was found on.",
+            },
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Update a speaker",
+            resolver=update_speaker,
+        ),
+        Action(
             name="add_palette_shortcut",
             description=(
                 "Answer one phrase from the command palette straight from the page catalogue, with no "
@@ -2639,6 +2812,8 @@ PROPOSAL_CHECKS = {
     "merge_speakers": lambda arguments: _speaker_pair(arguments)[2],
     "link_speaker_to_account": _claim_problem,
     "decline_speaker_claim": lambda arguments: _speaker_and_claimant(arguments)[3],
+    "add_speaker": lambda arguments: _speaker_changes(arguments)[3],
+    "update_speaker": _update_speaker_problem,
     "add_palette_shortcut": _shortcut_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
