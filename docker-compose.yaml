@@ -223,9 +223,9 @@ services:
     # A pinned tag rather than :latest, so a routine pull can't drag in a swag/nginx release that
     # reorganizes its config includes and breaks the site. NGINX_IMAGE selects dev (nginx) or prod
     # (swag) and NGINX_TAG pins the version; both tags still get rebuilds on `docker compose pull`,
-    # so patches flow without major jumps. The 1.27 default only exists for the dev image -- with
+    # so patches flow without major jumps. The 1.30 default only exists for the dev image -- with
     # swag, NGINX_TAG MUST be set in .env, and update.sh refuses to deploy otherwise.
-    image: ${NGINX_IMAGE-nginx}:${NGINX_TAG-1.27}
+    image: ${NGINX_IMAGE-nginx}:${NGINX_TAG-1.30}
     volumes:
       # the root conf file is set for dev, but for production use:
       # NGINX_CONF='./nginx.prod.conf'
