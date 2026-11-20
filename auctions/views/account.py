@@ -22,6 +22,7 @@ from django.db.models import (
 from django.db.models.base import Model as Model
 from django.http import (
     Http404,
+    HttpResponse,
     JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect
@@ -706,3 +707,24 @@ class GetUserIgnoreCategory(APIView):
                 item["selected"] = True
             results.append(item)
         return JsonResponse({"results": results}, safe=False)
+
+
+class HideAiAgentBannerView(LoginRequiredMixin, View):
+    """ "Not interested in AI features" on the connect-an-AI-agent banner: hides it for this account for good.
+
+    The banner posts here with htmx and is swapped for nothing; without htmx it goes back where it came from.
+    """
+
+    def post(self, request, *args, **kwargs):
+        userdata = request.user.userdata
+        if not userdata.hide_ai_agent_banner:
+            userdata.hide_ai_agent_banner = True
+            userdata.save(update_fields=["hide_ai_agent_banner"])
+        if request.headers.get("HX-Request"):
+            return HttpResponse("")
+        back = request.META.get("HTTP_REFERER", "")
+        if not url_has_allowed_host_and_scheme(
+            back, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            back = reverse("home")
+        return redirect(back)

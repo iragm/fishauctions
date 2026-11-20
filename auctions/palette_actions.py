@@ -16881,6 +16881,10 @@ NOT_A_SKILL: dict[str, str] = {
         "Reads an invoice or lot label held up to a camera at the pickup table, checking those lots in. "
         "It needs the physical barcode in front of the volunteer; a caller without one has nothing to scan."
     ),
+    "HideAiAgentBannerView": (
+        "Hides the connect-an-AI-agent banner for the person who pressed it. It changes what two pages "
+        "show one person and nothing else, and an agent asked to do it is the thing the banner points at."
+    ),
     "AuctionPageAction": (
         "The auction page's banner buttons. Most hide a setup prompt, which changes what one page "
         "shows one person and nothing else. The other two are site staff trusting an auction's "

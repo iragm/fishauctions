@@ -12747,6 +12747,10 @@ class UserData(CachedPropertiesMixin, models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
+    hide_ai_agent_banner = models.BooleanField(default=False)
+    hide_ai_agent_banner.help_text = (
+        'Set by "Not interested in AI features" on the connect-an-AI-agent banner of the auction and club pages.'
+    )
     last_weekly_promo_sent_at = models.DateTimeField(null=True, blank=True)
     last_weekly_promo_sent_at.help_text = (
         "When the retired weekly promo email last went to this user. auction_promos won't email about an "
