@@ -231,8 +231,13 @@ class Command(BaseCommand):
                     if auction.is_online
                     else userData.email_me_about_new_in_person_auctions_distance
                 )
-                # No distance (only mail or unplaced locations) or no limit set: can't tell, so no check.
-                if auction.distance is not None and limit is not None and auction.distance > limit:
+                if auction.distance is None:
+                    # No placed pickup location: an in-person auction can't be shown to be near, so it
+                    # isn't sent; an online one (mail, unplaced spots) skips the check.
+                    if not auction.is_online:
+                        send_email = False
+                elif limit is not None and auction.distance > limit:
+                    # No distance setting: no check.
                     send_email = False
         else:  # user has no location:
             send_email = False

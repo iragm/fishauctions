@@ -1,5 +1,5 @@
-"""The "you looked but didn't join" reminder in ``auctiontos_notifications``: no distance to compare, and one
-bad campaign, must not stop the run."""
+"""The "you looked but didn't join" reminder in ``auctiontos_notifications``: an unknown distance stops an
+in-person auction's and skips an online one's check, and one bad campaign must not stop the run."""
 
 import datetime
 from unittest.mock import patch
@@ -45,12 +45,31 @@ class JoinReminderTests(TestCase):
         AuctionCampaign.objects.filter(pk=campaign.pk).update(timestamp=timezone.now() - datetime.timedelta(hours=48))
         return user
 
-    def test_an_auction_with_no_distance_is_not_checked_against_one(self):
+    def emailed(self):
         with patch(MAIL_SEND) as send:
             call_command("auctiontos_notifications")
-        emailed = [call.args[0] for call in send.call_args_list if call.args]
+        return [call.args[0] for call in send.call_args_list if call.args]
+
+    def test_an_in_person_auction_with_no_distance_is_not_sent(self):
+        self.assertNotIn(self.viewer.email, self.emailed())
+        campaign = AuctionCampaign.objects.get(user=self.viewer)
+        self.assertTrue(campaign.email_sent)
+        self.assertEqual(campaign.result, "ERR")
+
+    def test_an_online_auction_with_no_distance_is_not_checked_against_one(self):
+        Auction.objects.filter(pk=self.auction.pk).update(is_online=True)
+        self.assertIn(self.viewer.email, self.emailed())
+
+    def test_no_distance_setting_means_no_distance_check(self):
+        PickupLocation.objects.create(
+            name="far hall", auction=self.auction, latitude=10.0, longitude=10.0, pickup_time=self.auction.date_start
+        )
+        self.viewer.userdata.email_me_about_new_in_person_auctions_distance = None
+        self.viewer.userdata.save()
+        far = self.viewer_named("far_viewer")
+        emailed = self.emailed()
         self.assertIn(self.viewer.email, emailed)
-        self.assertTrue(AuctionCampaign.objects.get(user=self.viewer).email_sent)
+        self.assertNotIn(far.email, emailed, "the default limit still applies")
 
     def test_one_bad_campaign_does_not_stop_the_rest(self):
         second = self.viewer_named("second_viewer")
