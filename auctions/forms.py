@@ -435,7 +435,11 @@ def add_bootstrap_classes(form):
 
 
 def validate_image_url(url):
-    """Validate that `url` is http(s) with an image extension. No request is made (avoids SSRF)."""
+    """Validate that `url` is http(s) with an image extension, and that it comes back as a picture.
+
+    The fetch is :func:`auctions.image_links.problem` (public addresses only), off with
+    ``CHECK_IMAGE_LINKS``, as the test suite runs.
+    """
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
@@ -448,6 +452,12 @@ def validate_image_url(url):
             "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
         )
         raise forms.ValidationError(msg)
+    if getattr(settings, "CHECK_IMAGE_LINKS", True):
+        from auctions import image_links
+
+        problem = image_links.problem(url)
+        if problem:
+            raise forms.ValidationError(problem, code="image_link")
     return url
 
 
@@ -2001,7 +2011,7 @@ class AuctionJoin(forms.ModelForm):
                     'data-bs-target="#leave-auction-modal"><i class="bi bi-x-lg"></i> Leave</button>'
                 )
             )
-            if auction.multi_location:
+            if auction.all_location_count > 1:
                 self.helper.layout.append(
                     HTML(
                         "<script>(function () {"
@@ -2062,14 +2072,13 @@ class AuctionJoin(forms.ModelForm):
             )
         else:
             del self.fields["hold_for_second_pickup"]
-        if self.auction.multi_location:
+        # Counting mail too: one place and mail is still a choice to make.
+        if self.auction.all_location_count > 1:
             self.fields["pickup_location"].label = "Yes, I will be at "
         else:
-            # single location auction
             self.fields["pickup_location"].widget = HiddenInput()
-            if self.auction.all_location_count == 1:  # # number_of_locations excludes the default location
-                location = auction.location_qs[0]
-                self.fields["pickup_location"].initial = location
+            if self.auction.all_location_count == 1:
+                self.fields["pickup_location"].initial = auction.locations[0]
 
     def _missing_detail_link(self, user, auction):
         """A link to the contact page in place of Join when a missing phone or mailing address would refuse it.

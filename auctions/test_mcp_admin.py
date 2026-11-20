@@ -201,7 +201,44 @@ class NothingWritesTests(AdminEndpointCase):
 
 class NoContactDetailsLeaveTests(AdminEndpointCase):
     """An agent here can also read text strangers typed and may be able to push somewhere public, so
-    no address, phone number or email ever reaches it, however much a superuser could see."""
+    no address, phone number or email ever reaches it, however much a superuser could see -- except a
+    club's own contact email, under ``admin.CLUB_CONTACT_KEY``, for drafting outreach."""
+
+    def test_a_clubs_own_address_passes_and_a_members_never_does(self):
+        cleaned = admin.private(
+            {
+                "clubs": [
+                    {
+                        "club_contact_email": "secretary@club.example",
+                        "contact_email": "secretary@club.example",
+                        "note": "or ask member@home.example",
+                        "members": [{"email": "member@home.example", "club_contact_email": "a@b.example x"}],
+                    }
+                ],
+                "email": "member@home.example",
+            }
+        )
+        club = cleaned["clubs"][0]
+        self.assertEqual(club["club_contact_email"], "secretary@club.example")
+        self.assertNotIn("contact_email", club)
+        self.assertNotIn("email", cleaned)
+        text = json.dumps(cleaned)
+        self.assertNotIn("member@home.example", text)
+        # Only a bare address passes; anything more under that key is scrubbed like everything else.
+        self.assertNotIn("a@b.example", text)
+
+    def test_describe_club_shows_the_clubs_address_but_not_a_members(self):
+        from auctions.models import Club, ClubMember
+
+        club = Club.objects.create(
+            name="Contactable Aquarium Society", contact_email="board@club.example", outreach_stage=Club.LISTED
+        )
+        ClubMember.objects.create(club=club, name="A member", email="member-private@home.example")
+        result = self.call("describe_club", {"club": club.name})
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(result["structuredContent"]["club"]["club_contact_email"], "board@club.example")
+        text = json.dumps(result)
+        self.assertNotIn("member-private@home.example", text)
 
     def test_people_come_back_without_their_contact_details(self):
         from auctions.models import AuctionTOS
@@ -853,7 +890,7 @@ class AdminJobProposalTests(AdminEndpointCase):
                 self.assertTrue(result["isError"])
                 self.assertIn(expected, result["content"][0]["text"])
 
-    def test_the_club_directory_lists_prospects_without_their_contact_address(self):
+    def test_the_club_directory_lists_prospects_with_only_the_clubs_own_address(self):
         from auctions.models import Club
 
         harbor = Club.objects.create(
@@ -872,9 +909,8 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertEqual(clubs[0]["stage"], Club.PROSPECT)
         self.assertTrue(clubs[0]["has_contact_email"])
         self.assertTrue(clubs[0]["contact_email_at_homepage_domain"])
-        text = json.dumps(result)
-        for secret in ("membership", "Member Lane"):
-            self.assertNotIn(secret, text)
+        self.assertEqual(clubs[0]["club_contact_email"], "membership@harboraquarium.example.org")
+        self.assertNotIn("Member Lane", json.dumps(result))
         listed = self.call("list_clubs", {"stage": "Approved and listed"})["structuredContent"]["clubs"]
         self.assertNotIn(harbor.pk, [club["club"] for club in listed])
         self.assertIn("Bay Library", json.dumps(listed))

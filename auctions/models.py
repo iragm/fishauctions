@@ -15908,3 +15908,27 @@ class BlockedEmailDomain(models.Model):
         parts = domain.split(".")
         candidates = [".".join(parts[i:]) for i in range(len(parts))]
         return cls.objects.filter(domain__in=candidates).exists()
+
+
+class BlockedEmailAddress(models.Model):
+    """One sender the contact form ignores, typed in or on their signed-in account: they see the usual
+    thanks and nothing is sent. Matched ignoring case. Edited in the admin."""
+
+    email = models.EmailField(max_length=254, unique=True)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["email"]
+        verbose_name_plural = "blocked email addresses"
+
+    def __str__(self):
+        return self.email
+
+    def save(self, *args, **kwargs):
+        self.email = (self.email or "").strip().lower()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def blocks(cls, email: str) -> bool:
+        email = (email or "").strip()
+        return bool(email) and cls.objects.filter(email__iexact=email).exists()

@@ -202,7 +202,9 @@ def redact(text: str) -> str:
 #
 # Agents on this endpoint also read text members wrote, and some of them can push to a public
 # repository. So the contact details a superuser can see never leave: an agent talked into copying
-# what it read somewhere public has no address, phone number or email to copy.
+# what it read somewhere public has no address, phone number or email to copy. One exemption, by the
+# owner's decision, for drafting outreach: a club's own published contact email, under
+# CLUB_CONTACT_KEY and set only from Club.contact_email. A member's or user's never leaves.
 
 #: Result keys dropped at any depth.
 PRIVATE_KEYS = frozenset(
@@ -220,10 +222,30 @@ PRIVATE_KEYS = frozenset(
 )
 
 
+#: The one key whose email passes :func:`private`: a club's ``Club.contact_email``, set by
+#: :func:`club_contact` and nothing else. Only a bare address passes; anything else is redacted.
+CLUB_CONTACT_KEY = "club_contact_email"
+
+_BARE_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+
+
+def club_contact(club) -> str:
+    """The club's own contact email for :data:`CLUB_CONTACT_KEY`, or ``""``."""
+    email = (club.contact_email or "").strip()
+    return email if _BARE_EMAIL.fullmatch(email) else ""
+
+
+def _private_item(key: Any, item: Any) -> Any:
+    if key == CLUB_CONTACT_KEY and isinstance(item, str) and _BARE_EMAIL.fullmatch(item):
+        return item
+    return private(item)
+
+
 def private(value: Any) -> Any:
-    """``value`` with :data:`PRIVATE_KEYS` removed and every string through :func:`redact`."""
+    """``value`` with :data:`PRIVATE_KEYS` removed and every string through :func:`redact`, except a club's
+    contact email under :data:`CLUB_CONTACT_KEY`."""
     if isinstance(value, dict):
-        return {key: private(item) for key, item in value.items() if str(key).lower() not in PRIVATE_KEYS}
+        return {key: _private_item(key, item) for key, item in value.items() if str(key).lower() not in PRIVATE_KEYS}
     if isinstance(value, list):
         return [private(item) for item in value]
     if isinstance(value, str):
@@ -1551,8 +1573,8 @@ def _last_real_auctions(clubs) -> dict[int, Any]:
 def _club_row(club, last_auction=None) -> dict[str, Any]:
     """One club as ``list_clubs`` shows it. Club admins and imports typed these, so they're fenced.
 
-    No contact address leaves this endpoint (:func:`private`), so only whether there is one and whether
-    it is at the club's own website's domain. An unlisted club's meeting place may be somebody's house
+    The club's own contact email is the one address that leaves this endpoint (:data:`CLUB_CONTACT_KEY`),
+    with whether it is at the club's own website's domain. An unlisted club's meeting place may be somebody's house
     and was never published, so only listed clubs show theirs.
     """
     from auctions import club_import
@@ -1571,6 +1593,7 @@ def _club_row(club, last_auction=None) -> dict[str, Any]:
         "location": palette_actions.untrusted_short(club.location or "") if listed else "",
         "on_the_map": club.latitude is not None and club.longitude is not None,
         "has_contact_email": bool(email),
+        CLUB_CONTACT_KEY: club_contact(club),
         "contact_email_at_homepage_domain": bool(email_domain and email_domain == homepage_domain),
         "contact_method": club.contact_method,
         "stage": club.outreach_stage,
@@ -3108,8 +3131,8 @@ ADMIN_TOOLS: dict[str, Action] = {
             name="list_clubs",
             description=(
                 "The whole club directory, prospects included: each club's number, name, abbreviation, "
-                "website, Facebook page, meeting place (listed clubs only), contact method, whether it has "
-                "a contact email, outreach stage, interests, other_software and the start date of its "
+                "website, Facebook page, meeting place (listed clubs only), contact method, its contact "
+                "email (club_contact_email), outreach stage, interests, other_software and the start date of its "
                 "latest real auction. Pass name (and homepage) to ask whether one club is "
                 "already here, the same check add_club makes, before proposing add_club or update_club."
             ),

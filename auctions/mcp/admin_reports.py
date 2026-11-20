@@ -19,7 +19,7 @@ Each answers a question the owner would otherwise decide by feel, and says so in
 ``outreach_outcomes``    clubs contacted 60+ days ago that then ran a real auction, by club health stage
 ``tools_vs_retention``   whether clubs using more club tools are still running auctions
 ``club_funnel``          clubs out there, probably active, tried the site, ran a real auction, ran one lately
-``outreach_queue``       the next clubs to email, which email, and how to reach each (no address)
+``outreach_queue``       the next clubs to email, which email, and how to reach each (the club's own address)
 ``feature_email_results``  feature emails sent, clicked, opted out and bounced, per kind
 =======================  ==========================================================================
 
@@ -1279,8 +1279,9 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     Not running auctions here (``COLD_STAGES``), not folded or not interested, reachable somehow, and not
     contacted in :data:`RECONTACT_DAYS`. Clubs with members here come first, then those that tried and
     stopped, then the rest; email before web form before Facebook. Version ``b`` (don't ask them to
-    switch) goes to a club marked ``other_software`` or stalled on ``uses_other``. No address leaves: the
-    row says which door to knock on and links the club's admin page, where the owner reads it.
+    switch) goes to a club marked ``other_software`` or stalled on ``uses_other``. The row says which door to
+    knock on, carries the club's own contact email (``admin.CLUB_CONTACT_KEY``, the one address that leaves
+    this endpoint) and links the club's admin page.
 
     ``lapsed=true`` is the other list: clubs that ran real auctions here and stopped or are late
     (``LAPSED_STAGES``), longest silent first, for the owner to write to by hand. Their last auction's
@@ -1288,6 +1289,8 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
     """
     from auctions.club_health import ClubHealth, is_test_auction
     from auctions.models import Auction, Club
+
+    from .admin import CLUB_CONTACT_KEY, club_contact
 
     now = timezone.now()
     days = max(30, min(_int(params, "days_since_contact", RECONTACT_DAYS) or RECONTACT_DAYS, 3650))
@@ -1349,6 +1352,7 @@ def outreach_queue(request, params: dict[str, Any]) -> dict[str, Any]:
                 "other_software": club.other_software,
                 "contact_method": club.contact_method or ("email" if club.contact_email else ""),
                 "has_contact_email": bool((club.contact_email or "").strip()),
+                CLUB_CONTACT_KEY: club_contact(club),
                 "homepage": fence(club.homepage or ""),
                 "facebook_page": fence(club.facebook_page or ""),
                 "last_contacted": club.date_contacted.date().isoformat() if club.date_contacted else None,
@@ -1627,7 +1631,7 @@ READS: list[Action] = [
             "The clubs to email this week, one email each: not running auctions here, reachable, not folded, "
             "and not contacted in two years. Each row says which email (a introduces the site, b is for a "
             "club with its own system or possibly on MyGroupAuctions), how to reach it, the nearest club "
-            "running auctions here, and its admin page. No address is shown."
+            "running auctions here, its admin page, and the club's own contact email (club_contact_email)."
         ),
         params={
             "limit": "integer, optional, default 10, at most 50. How many clubs.",

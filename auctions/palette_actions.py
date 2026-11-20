@@ -3777,6 +3777,8 @@ def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
         "abbreviation": club.abbreviation,
         "description": untrusted(plain_text(club.description, limit=DESCRIPTION_LIMIT)),
         "contact_email": club.contact_email,
+        # The same address under the one key /mcp/admin/ lets through (mcp.admin.CLUB_CONTACT_KEY).
+        "club_contact_email": club.contact_email or "",
         "membership_enabled": club.enable_membership,
         "annual_membership_fee": club.membership_annual_fee,
         "your_membership_expires": membership.membership_expiration_date if membership else None,
@@ -10759,7 +10761,7 @@ def _image_echo(image) -> dict[str, Any]:
 def add_lot_image(request, params: dict[str, Any]) -> dict[str, Any]:
     """Put a picture on a lot from a URL (``LotImage.url``), through ``CreateImageForm``.
 
-    Nothing is fetched server-side, so no SSRF. ``image_source`` defaults to ``RANDOM``, so an agent's
+    The form fetches the link once (``auctions.image_links``, public addresses only). ``image_source`` defaults to ``RANDOM``, so an agent's
     picture is never labelled as the seller's own photo of the item.
     """
     from .forms import CreateImageForm
