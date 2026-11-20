@@ -722,6 +722,59 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertIn("already blocked", proposal.results[0]["said"])
         self.assertEqual(BlockedEmailAddress.objects.count(), 1)
 
+    def test_a_contact_form_domain_is_blocked_only_once_approved(self):
+        from auctions.models import BlockedEmailDomain
+
+        result = self.propose("block_email_domain", {"domain": "  @Spam-Leads.EXAMPLE. "})
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(BlockedEmailDomain.blocks("pest@spam-leads.example"))
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertTrue(BlockedEmailDomain.objects.filter(domain="spam-leads.example").exists())
+        self.assertTrue(BlockedEmailDomain.blocks("anyone@mail.spam-leads.example"))
+        self.assertNotIn("spam-leads", proposal.results[0]["said"])
+
+    def test_a_unicode_domain_is_stored_as_the_ascii_it_resolves_to(self):
+        from auctions.models import BlockedEmailDomain
+
+        self.assertFalse(self.propose("block_email_domain", {"domain": "Bücher.example"})["isError"])
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertTrue(BlockedEmailDomain.objects.filter(domain="xn--bcher-kva.example").exists())
+
+    def test_a_bad_shared_or_already_blocked_domain_is_refused_and_approval_is_idempotent(self):
+        from auctions.models import BlockedEmailDomain
+
+        BlockedEmailDomain.objects.create(domain="spam-leads.example")
+        for arguments, expected in (
+            ({}, "Say which"),
+            ({"domain": "  "}, "Say which"),
+            ({"domain": "localhost"}, "isn't a domain"),
+            ({"domain": "pest@spam.example"}, "isn't a domain"),
+            ({"domain": "*.spam.example"}, "isn't a domain"),
+            ({"domain": "a" * 250 + ".example"}, "isn't a domain"),
+            ({"domain": ".spam.example"}, "isn't a domain"),
+            ({"domain": "spam..example"}, "isn't a domain"),
+            ({"domain": ".".join(["é" * 15 + "a" * 10] * 9) + ".ex"}, "isn't a domain"),
+            ({"domain": "co.uk"}, "country's suffix"),
+            ({"domain": "GMail.com"}, "shared by everyone"),
+            ({"domain": "sbcglobal.net"}, "shared by everyone"),
+            ({"domain": "SPAM-LEADS.example"}, "already blocked"),
+            ({"domain": "mail.spam-leads.example"}, "already blocked"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.propose("block_email_domain", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+        # Blocked by hand between proposing and approving: the step still succeeds, once.
+        BlockedEmailDomain.objects.filter(domain="spam-leads.example").delete()
+        self.assertFalse(self.propose("block_email_domain", {"domain": "spam-leads.example"})["isError"])
+        BlockedEmailDomain.objects.create(domain="spam-leads.example")
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailDomain.objects.filter(domain="spam-leads.example").count(), 1)
+
     def test_a_club_already_on_the_site_is_refused_when_proposed(self):
         Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org/")
         for arguments in (
