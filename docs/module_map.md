@@ -426,7 +426,7 @@ this only quotes its opening sentence.
   The monthly-auction and club-tools emails (``auctions/club_emails.py``), the page that takes a club's
 - **`test_club_events.py`** (3092 lines)
   Tests for club events, Google Calendar sync, and Discord events.
-- **`test_club_finder.py`** (297 lines)
+- **`test_club_finder.py`** (307 lines)
   Tests for the public club finder: what it lists, and what it refuses to say about a club.
   `map_payload`, `ClubFinderTests`, `ClubAddTests`
 - **`test_club_health.py`** (554 lines)
@@ -1193,7 +1193,7 @@ Every view on the site, split by the part of it the view belongs to.
 - **`club_api_keys.py`** (405 lines)
   Club API keys, and the page that documents the API they open.
   `ClubAPIKeyListView`, `ClubAPIKeyCreateView`, `club_api_documentation_context`, `ClubAPIKeyDetailView`, `ClubAPIKeyRevokeView`, `ClubAPIKeyFieldMapCreateView`, `ClubAPIKeyFieldMapDeleteView`, `ClubMemberMapView`, `SelfServeContactLinkView`
-- **`club_finder.py`** (230 lines)
+- **`club_finder.py`** (231 lines)
   The public club finder: a map of clubs, and the same clubs as a filtered list.
   `ClubFinderView`, `ClubAddView`
 - **`club_integrations.py`** (1249 lines)
