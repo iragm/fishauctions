@@ -114,6 +114,24 @@ def domain_of(url: str) -> str:
     return host.removeprefix("www.")
 
 
+_HOME_PAGES = {"home", "index", "default", "main", "welcome"}
+
+
+def path_of(url: str) -> str:
+    """The meaningful part of a URL's path, lowercased; ``""`` for a site's front page.
+
+    ``/``, ``/home``, ``/index.html`` and the like are the front page, so they are ``""``.
+    """
+    if not url:
+        return ""
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    parts = [part for part in urlparse(url).path.lower().split("/") if part]
+    if parts and parts[-1].rsplit(".", 1)[0] in _HOME_PAGES:
+        parts.pop()
+    return "/".join(parts)
+
+
 def is_a_club_host(url: str) -> bool:
     """Whether a URL could be a club's own website rather than a page about it somewhere else."""
     host = domain_of(url)
@@ -184,13 +202,15 @@ def find_existing(found: ImportedClub, clubs):
     """The club already on this site that ``found`` is, or ``None``.
 
     Domain first, name second: two rows pointing at the same host are the same club, whatever decade's
-    spelling they use. The name fallback's threshold is high enough that "Boston" and "Bristol Aquarium
+    spelling they use, unless one is a sub-page of the site (a sub-group of a parent society) and the
+    paths differ; those fall through to the name. The name fallback's threshold is high enough that "Boston" and "Bristol Aquarium
     Society" stay two clubs.
     """
     domain = domain_of(found.homepage)
     if domain:
+        path = path_of(found.homepage)
         for club in clubs:
-            if domain_of(club.homepage or "") == domain:
+            if domain_of(club.homepage or "") == domain and path_of(club.homepage or "") == path:
                 return club
     match, _score = club_matching.best_match(found.name, clubs)
     return match
