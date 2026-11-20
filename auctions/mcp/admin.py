@@ -235,6 +235,15 @@ def club_contact(club) -> str:
     return email if _BARE_EMAIL.fullmatch(email) else ""
 
 
+def _with_club_contact(tool: str, structured: dict[str, Any]) -> dict[str, Any]:
+    """``describe_club``'s ``contact_email`` (``Club.contact_email``) under :data:`CLUB_CONTACT_KEY`, here only."""
+    club = structured.get("club")
+    if tool != "describe_club" or not isinstance(club, dict) or not isinstance(club.get("contact_email"), str):
+        return structured
+    email = club["contact_email"].strip()
+    return {**structured, "club": {**club, CLUB_CONTACT_KEY: email if _BARE_EMAIL.fullmatch(email) else ""}}
+
+
 def _private_item(key: Any, item: Any) -> Any:
     if key == CLUB_CONTACT_KEY and isinstance(item, str) and _BARE_EMAIL.fullmatch(item):
         return item
@@ -266,7 +275,7 @@ def private_result(result: dict[str, Any], tool: str = "") -> dict[str, Any]:
         dict(block) for block in result.get("content") or [] if block.get("type") != "image" or tool in PICTURE_TOOLS
     ]
     if isinstance(structured, dict):
-        structured = private(structured)
+        structured = private(_with_club_contact(tool, structured))
         result = {**result, "structuredContent": structured}
         if content and content[0].get("type") == "text":
             content[0]["text"] = json.dumps(structured, indent=2, default=str)

@@ -144,6 +144,11 @@ class FindExistingTests(TestCase):
         found = ImportedClub(name="Killifish Study Group", homepage="https://parent.example/groups/killifish")
         self.assertIsNone(find_existing(found, [parent]))
 
+    def test_a_page_every_club_site_has_is_the_club(self):
+        club = Club.objects.create(name="Harbor Aquarium Society", homepage="https://harbor.example/")
+        found = ImportedClub(name="Something else entirely", homepage="http://harbor.example/join")
+        self.assertEqual(find_existing(found, [club]), club)
+
     def test_the_same_sub_page_is_the_same_club(self):
         club = Club.objects.create(name="Killifish Study Group", homepage="https://parent.example/groups/killifish/")
         found = ImportedClub(name="Killie Group", homepage="http://www.parent.example/groups/killifish")

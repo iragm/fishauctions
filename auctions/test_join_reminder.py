@@ -24,6 +24,8 @@ class JoinReminderTests(TestCase):
             created_by=self.creator,
             title="In person, mail only",
             is_online=False,
+            # Otherwise online bidding opens a week before the start (signals.py), which counts as started.
+            online_bidding="disable",
             date_start=now + datetime.timedelta(days=2),
             date_end=now + datetime.timedelta(days=3),
         )

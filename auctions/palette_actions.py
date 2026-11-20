@@ -3777,8 +3777,6 @@ def describe_club(request, params: dict[str, Any]) -> dict[str, Any]:
         "abbreviation": club.abbreviation,
         "description": untrusted(plain_text(club.description, limit=DESCRIPTION_LIMIT)),
         "contact_email": club.contact_email,
-        # The same address under the one key /mcp/admin/ lets through (mcp.admin.CLUB_CONTACT_KEY).
-        "club_contact_email": club.contact_email or "",
         "membership_enabled": club.enable_membership,
         "annual_membership_fee": club.membership_annual_fee,
         "your_membership_expires": membership.membership_expiration_date if membership else None,

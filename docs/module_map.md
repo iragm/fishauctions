@@ -111,7 +111,7 @@ this only quotes its opening sentence.
   Keeps a club's event list, its Google Calendar, and its Discord events in step.
 - **`club_health.py`** (390 lines)
   Whether a club is still running auctions here, judged against its own cadence.
-- **`club_import.py`** (264 lines)
+- **`club_import.py`** (283 lines)
   Getting a list of aquarium clubs onto this site from a curated CSV.
   `ImportedClub`, `IngestReport`, `domain_of`, `path_of`, `is_a_club_host`, `read_csv`, `find_existing`, `ingest`
 - **`club_matching.py`** (317 lines)
@@ -239,7 +239,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17146 lines)
+- **`palette_actions.py`** (17144 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -435,7 +435,7 @@ this only quotes its opening sentence.
   `map_payload`, `ClubFinderTests`, `ClubAddTests`
 - **`test_club_health.py`** (554 lines)
   Tests for the club lifecycle rollup and the outreach queue.
-- **`test_club_import.py`** (215 lines)
+- **`test_club_import.py`** (220 lines)
   Phase 8: importing a curated club list, and never publishing anything by accident.
   `csv_text`, `HostTests`, `ReadCsvTests`, `FindExistingTests`, `IngestTests`
 - **`test_club_integration_views.py`** (759 lines)
@@ -543,7 +543,7 @@ this only quotes its opening sentence.
 - **`test_invoice_models.py`** (254 lines)
   Invoice models: what an invoice contains, when it is created, and when it notifies.
   `InvoiceModelTests`, `InvoiceCreateViewTests`, `InvoiceNotificationDueTests`, `InvoiceNotificationNoteTests`
-- **`test_join_reminder.py`** (61 lines)
+- **`test_join_reminder.py`** (63 lines)
   The "you looked but didn't join" reminder in ``auctiontos_notifications``: no distance to compare, and one
   `JoinReminderTests`
 - **`test_label_layout.py`** (331 lines)
@@ -1027,7 +1027,7 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (3261 lines)
+- **`admin.py`** (3270 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_reports.py`** (1661 lines)
   Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
