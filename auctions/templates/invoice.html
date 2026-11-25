@@ -329,7 +329,9 @@ document.addEventListener("DOMContentLoaded", function() {
     {% endif %}
   </div>
 {% endif %}
-<div id="invoice-totals" hx-get="{{ request.path }}" hx-trigger="adjustmentSaved from:body" hx-select="#invoice-totals" hx-select-oob="#invoice-summary-short" hx-swap="outerHTML">
+{% comment %}Redrawn after every adjustment save. The wrapper stays on the page and only its inside is swapped, so queue last holds: a save landing while a redraw is in flight still gets its own, rather than the total staying one save behind.{% endcomment %}
+<div id="invoice-totals-wrap" hx-get="{{ request.path }}" hx-trigger="adjustmentSaved from:body" hx-sync="this:queue last" hx-select="#invoice-totals" hx-select-oob="#invoice-summary-short" hx-swap="innerHTML">
+<div id="invoice-totals">
 <div class="table-responsive">
 <table class="table">
   <tr>
@@ -401,6 +403,7 @@ document.addEventListener("DOMContentLoaded", function() {
   {% endfor %}
   {% include "auctions/partials/invoice_final_total_row.html" %}
 </table>
+</div>
 </div>
 </div>
 {%if invoice.lots_sold %}

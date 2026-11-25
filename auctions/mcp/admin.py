@@ -47,7 +47,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from django.conf import settings
 from django.core.cache import cache
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
@@ -63,8 +63,8 @@ logger = logging.getLogger(__name__)
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
-    "list_feature_requests, read_logs, list_app_crashes, site_health, "
+    "dashboard, species_dashboard, species_backfill, lots_by_species and species_flags for the species list's upkeep, "
+    "list_feature_requests, list_proposals, read_logs, list_app_crashes, site_health, "
     "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects, untrusted_auction_creators, and seventeen growth "
     "reports (signup_funnel, entry_page_outcomes, club_retention, unclaimed_people, dead_ends, "
     "help_search_misses, referrers_without_club, seller_reach, feature_adoption_by_club, "
@@ -473,6 +473,15 @@ def list_feature_requests(request, params: dict[str, Any]) -> dict[str, Any]:
     statuses = dict(AssistantSkillRequest.STATUS_CHOICES)
     wanted = _str(params, "status", AssistantSkillRequest.STATUS_PLANNED).lower()
     rows = AssistantSkillRequest.objects.all()
+    number = palette_actions._int(params, "request")
+    if params.get("request") not in (None, ""):
+        # One request by number, whatever its status.
+        if not number:
+            return _error("request is a feature request number.")
+        rows = rows.filter(pk=number)
+        if not rows.exists():
+            return _error(f"There is no feature request {number}.")
+        wanted = "all"
     if wanted != "all":
         if wanted not in statuses:
             return _need("Which status? One of: all, " + ", ".join(statuses) + ".")
@@ -500,6 +509,55 @@ def list_feature_requests(request, params: dict[str, Any]) -> dict[str, Any]:
     if offset + limit < total:
         result["next_offset"] = offset + limit
     return _ok(summary, **result)
+
+
+def list_proposals(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change proposals and where each stands: waiting, done, stopped on an error, or rejected, with what
+    each step answered when it ran. Never who proposed or decided."""
+    from auctions.models import AgentProposal
+
+    statuses = dict(AgentProposal.STATUS_CHOICES)
+    rows = AgentProposal.objects.all()
+    wanted = _str(params, "status", "all").lower()
+    if params.get("proposal") not in (None, ""):
+        number = palette_actions._int(params, "proposal")
+        if not number or not rows.filter(pk=number).exists():
+            return _error(f"There is no proposal {params.get('proposal')}.")
+        rows = rows.filter(pk=number)
+        wanted = "all"
+    if wanted != "all":
+        if wanted not in statuses:
+            return _need("Which status? One of: all, " + ", ".join(statuses) + ".")
+        rows = rows.filter(status=wanted)
+    limit, offset = palette_actions._slice(params)
+    total = rows.count()
+    found = [
+        {
+            "proposal": row.pk,
+            # Written by an agent that reads strangers' text.
+            "summary": palette_actions.untrusted_short(row.summary),
+            "status": row.status,
+            "status_means": statuses.get(row.status, row.status),
+            "steps": len(row.steps or []),
+            "proposed_on": row.createdon.isoformat(),
+            "decided_on": row.decided_on.isoformat() if row.decided_on else None,
+            "results": [
+                {
+                    "tool": result.get("tool"),
+                    "ok": result.get("ok"),
+                    "said": palette_actions.untrusted(result.get("said")),
+                }
+                for result in (row.results or [])
+                if isinstance(result, dict)
+            ],
+        }
+        for row in rows[offset : offset + limit]
+    ]
+    result = {"proposals": found, "total": total}
+    if offset + limit < total:
+        result["next_offset"] = offset + limit
+    summary = f"{total} proposal{'s' if total != 1 else ''}" + (f" {wanted}." if wanted != "all" else ".")
+    return _ok(summary + palette_actions._showing(total, limit, offset), **result)
 
 
 # --- read_logs ---------------------------------------------------------------------------------------
@@ -2264,14 +2322,66 @@ def add_palette_shortcut(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _club_and_account(params: dict[str, Any]):
-    """``make_club_admin``'s club and account as ``(club, user, "")``, or ``(None, None, why not)``."""
+    """``make_club_admin``'s club and account as ``(club, user, "")``, or ``(None, None, why not)``. An
+    email address with no account yet comes back as the address in ``user``'s place."""
+    from auctions.models import account_for_email, clean_email_address
+
     club = _club(params)
     if club is None:
         return None, None, "There is no one club by that number or name."
     user = _account(params, "user")
-    if user is None:
+    if user is not None:
+        # First, so an old username that looks like an address still finds its own account.
+        return club, user, ""
+    typed = _str(params, "user")
+    if "@" not in typed:
         return None, None, "There is no active account by that number or username."
-    return club, user, ""
+    try:
+        email = clean_email_address(typed)
+    except ValidationError:
+        return None, None, "That isn't an email address."
+    return club, account_for_email(email) or email, ""
+
+
+def _club_admin_by_email(request, club, email: str, admin: bool) -> dict[str, Any]:
+    """``make_club_admin`` for an address nobody has signed up with: a member row holding the address and
+    the admin role, which ``ClubMember.save`` / ``signals.on_sign_in`` link to the account when it
+    signs up. Taking admin away clears the role on every live row with that address."""
+    from auctions.models import ClubHistory, ClubMember
+
+    rows = list(ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False))
+    if not admin:
+        changed = [row for row in rows if row.permission_admin]
+        for row in changed:
+            row.permission_admin = False
+            row.save()
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action="Removed admin permissions from a member without an account through an approved proposal.",
+                applies_to="MEMBERS",
+                member=row,
+            )
+        if not changed:
+            return _ok(f"That address had no admin role in {club.name}.")
+        return _ok(f"That address is no longer an admin of {club.name}.")
+    if any(row.permission_admin for row in rows):
+        return _ok(f"That address was already an admin of {club.name}; it takes effect when they sign up.")
+    # No name: anything made from the address would carry it into names the admin endpoint reads.
+    member = rows[0] if rows else ClubMember(club=club, email=email, source="manually_added")
+    member.permission_admin = True
+    member.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action="Granted admin permissions to a member without an account through an approved proposal, before they signed up.",
+        applies_to="MEMBERS",
+        member=member,
+    )
+    return _ok(
+        f"Nobody has signed up with that address yet, so it is a member of {club.name} with admin rights, "
+        "and becomes an admin the moment they sign up with it."
+    )
 
 
 def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -2285,6 +2395,10 @@ def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return _error(problem)
     all_roles = palette_actions._flag(params, "all_roles")
+    if isinstance(user, str):
+        if all_roles:
+            return _error("all_roles needs an account; that address has none yet.")
+        return _club_admin_by_email(request, club, user, palette_actions._flag(params, "admin") is not False)
     if palette_actions._flag(params, "admin") is False:
         from auctions.views.base import CLUB_PERMISSION_FIELDS
 
@@ -2868,7 +2982,10 @@ APPROVAL_ONLY: dict[str, Action] = {
             ),
             params={
                 "club": "string, required. The club's number, or its exact name.",
-                "user": "string, required. The account's username, or its number.",
+                "user": (
+                    "string, required. The account's username, its number, or an email address; an address "
+                    "nobody has signed up with yet is granted when they do."
+                ),
                 "admin": "boolean, optional, default true. false removes their admin rights.",
                 "all_roles": "boolean, optional, default false. Needs admin false; removes every club role, not only admin.",
             },
@@ -3426,11 +3543,28 @@ ADMIN_TOOLS: dict[str, Action] = {
             ),
             params={
                 "status": "string, optional, default planned. new, planned, done, declined or all.",
+                "request": "integer, optional. Just this request, by number, whatever its status.",
                 "limit": "integer, optional, default 15.",
                 "offset": "integer, optional, default 0.",
             },
             danger=DANGER_SAFE,
             resolver=list_feature_requests,
+        ),
+        Action(
+            name="list_proposals",
+            description=(
+                "Change proposals made with propose_change and where each stands: pending (waiting for "
+                "the owner), applied, failed (stopped on an error) or rejected, with what each step "
+                "answered when it ran. Newest first. Never says who proposed or decided."
+            ),
+            params={
+                "status": "string, optional, default all. pending, applied, failed, rejected or all.",
+                "proposal": "integer, optional. Just this proposal, by number.",
+                "limit": "integer, optional, default 15.",
+                "offset": "integer, optional, default 0.",
+            },
+            danger=DANGER_SAFE,
+            resolver=list_proposals,
         ),
         Action(
             name="read_logs",

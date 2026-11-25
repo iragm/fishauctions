@@ -218,8 +218,14 @@ class InvoiceAdjustmentSave(LoginRequiredMixin, View):
             response["HX-Trigger"] = "adjustmentSaved"
             return response
 
+        if existing is not None and not request.POST.get("amount"):
+            # Mid-typing ("", "12." reads as empty) on a saved row: nothing to save yet. Delete removes it.
+            return HttpResponse(status=204)
         form = InvoiceAdjustmentForm(request.POST, instance=existing, invoice=invoice)
         form.fields["notes"].required = False
+        if existing is not None and form.is_valid() and not form.has_changed():
+            # Typing pauses and the change on leaving the field post the same values again.
+            return HttpResponse(status=204)
         if not form.is_valid():
             if not existing and not request.POST.get("amount"):
                 # A new row with no amount yet: nothing to save, and nothing to report.

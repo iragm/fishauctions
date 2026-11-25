@@ -32,7 +32,7 @@ this only quotes its opening sentence.
 - **`account_export.py`** (311 lines)
   "Download my data": everything this site holds about one person, as one JSON file.
   `export`, `filename`
-- **`account_merge.py`** (425 lines)
+- **`account_merge.py`** (427 lines)
   Merging two accounts one person owns: what moves, what is dropped, and the request that gates it.
   `MergeRefused`, `find_user`, `pending_request`, `pending_against`, `request_merge`, `cancel_request`, `decline_request`, `merge_summary`, `accept_merge`, `merge_accounts`
 - **`account_nav.py`** (201 lines)
@@ -222,7 +222,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15938 lines)
+- **`models.py`** (15967 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -242,11 +242,11 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17263 lines)
+- **`palette_actions.py`** (17301 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
-- **`palette_routes.py`** (2083 lines)
+- **`palette_routes.py`** (2119 lines)
   Every named URL, as a :class:`Route` the palette assistant can reach or an :data:`EXCLUDED` entry
 - **`passkit_views.py`** (188 lines)
   Apple PassKit web service: the endpoints installed Wallet passes talk to.
@@ -278,7 +278,7 @@ this only quotes its opening sentence.
   `SampleResult`, `load_fixture`, `auction_has_lots`, `offer_sample_data`, `scaled_price`, `load_sample_data`
 - **`serializers.py`** (871 lines)
   DRF serializers for the club API.
-- **`services.py`** (1772 lines)
+- **`services.py`** (1824 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
@@ -306,6 +306,8 @@ this only quotes its opening sentence.
 - **`species_categories.py`** (421 lines)
   Turn a species' taxonomy into one of the site's :class:`~auctions.models.Category` rows.
   `normalize_category_name`, `CategoryResolver`, `hint_for`, `assign_categories`
+- **`species_flags.py`** (129 lines)
+  Readers flagging a lot's scientific name as wrong, and the seller's answer.
 - **`species_matching.py`** (1290 lines)
   Turn a typed lot name into a short list of species to pick from, or nothing.
 - **`species_stats.py`** (322 lines)
@@ -777,6 +779,9 @@ this only quotes its opening sentence.
   Tests for the speaker directory: the NEC WordPress import, visibility, the list and map view,
 - **`test_species.py`** (5160 lines)
   Tests for scientific names on lots: matching, the picker, labels, and genus BAP points.
+- **`test_species_flags.py`** (371 lines)
+  Readers flagging a lot's species (``auctions/species_flags.py``), and the batch of feature requests built
+  `SpeciesFlagTests`, `SpeciesFlagsOnTheAdminEndpointTests`, `RequestAndProposalStatusTests`, `MakeClubAdminByEmailTests`, `GoToPageLotAddressTests`, `LinkClubBannerTests`, `ClubAuctionBannerTests`, `InvoiceTotalsFollowTypingTests`, `ReviewFixTests`, `MakeClubAdminUsernameWithAtTests`
 - **`test_species_page.py`** (132 lines)
   The public species page and the numbers behind it (``auctions/species_stats.py``).
   `SpeciesPageTests`
@@ -864,7 +869,7 @@ this only quotes its opening sentence.
 - **`uptime.py`** (142 lines)
   When the server and each container last started, and the longest stretch with no page views.
   `host_booted`, `container_started`, `record_start`, `longest_quiet`, `uptime`
-- **`urls.py`** (1406 lines)
+- **`urls.py`** (1407 lines)
   Every URL on the site, and the one place a new one has to be declared.
 - **`usability_report.py`** (276 lines)
   The usability measurements for the dashboard.
@@ -1034,12 +1039,12 @@ The library: documents people upload, read into text, and searched from ``/libra
 
 The site's Model Context Protocol server, and the tool catalogue behind it.
 
-- **`admin.py`** (3689 lines)
+- **`admin.py`** (3823 lines)
   ``/mcp/admin/``: the site as its superusers' agents read it, and the changes they may only propose.
 - **`admin_reports.py`** (1661 lines)
   Seventeen reports on ``/mcp/admin/`` that each settle one growth decision, read-only and with nobody named.
-- **`admin_species.py`** (1012 lines)
-  The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
+- **`admin_species.py`** (1100 lines)
+  The species list's upkeep on ``/mcp/admin/``: five reads, and nine changes only a proposal makes.
 - **`auth.py`** (410 lines)
   Who is calling ``/mcp/``, and what they may do.
 - **`cimd.py`** (75 lines)
@@ -1146,8 +1151,8 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 
 ## `auctions/templatetags/`
 
-- **`auction_nav_tags.py`** (36 lines)
-  `auction_nav_groups`, `ai_agent_banner`
+- **`auction_nav_tags.py`** (54 lines)
+  `auction_nav_groups`, `ai_agent_banner`, `club_auction_banner`
 - **`bap_filters.py`** (9 lines)
   `get_attr`
 - **`club_nav_tags.py`** (102 lines)
@@ -1183,7 +1188,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1184 lines)
+- **`auction_pages.py`** (1223 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
@@ -1235,13 +1240,13 @@ Every view on the site, split by the part of it the view belongs to.
 - **`help.py`** (138 lines)
   The public help at /help/: the index, one guide, and the sitemap that lets search engines find them.
   `HelpIndexView`, `HelpGuideView`, `AuctionHelp`, `SitemapView`
-- **`invoices.py`** (467 lines)
+- **`invoices.py`** (473 lines)
   Invoices as a person reads them: the list, one invoice, and the no-login link.
   `Invoices`, `InvoiceCreateView`, `InvoiceAdjustmentSave`, `InvoiceView`, `InvoiceNoLoginView`, `SquarePaymentSuccessView`
 - **`logistics.py`** (95 lines)
   Online auctions after bidding: the logistics page, its tap to cross a name off, its scanner, and the admin's
   `AuctionLogistics`, `AuctionLogisticsMark`, `AuctionLogisticsScan`, `AuctionPostEndBanner`
-- **`lot_pages.py`** (1366 lines)
+- **`lot_pages.py`** (1402 lines)
   One lot: its page, its photos, and creating or editing it.
 - **`moderation.py`** (224 lines)
   The copyright policy page, the notice form, and the report button on a lot.

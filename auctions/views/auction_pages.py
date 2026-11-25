@@ -43,6 +43,7 @@ from auctions.forms import (
 from auctions.models import (
     Auction,
     AuctionTOS,
+    Club,
     ClubMember,
     Invoice,
     Lot,
@@ -54,7 +55,9 @@ from auctions.services import (
     CONTACT_GATE_NEEDS_PHONE,
     DEFAULT_AUCTION_DESCRIPTION,
     LEAVE_REFUSALS,
+    can_start_club_auction,
     clone_auction,
+    clubs_to_link,
     ensure_club_admin,
     finish_new_auction,
     join_auction,
@@ -689,6 +692,12 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
         # For suggesting auction names in auction_create_form.html.
         context["club"] = ""
         club = userData.club
+        asked = self.request.GET.get("club")
+        if asked:
+            named = Club.objects.filter(slug=asked).first()
+            if named and can_start_club_auction(self.request.user, named):
+                club = named
+                context["club_slug"] = named.slug
         if club:
             context["club"] = str(club)
             if club.abbreviation:
@@ -710,7 +719,8 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
         """Create the auction: ``?clone=true`` copies ``cloned_from`` via :func:`auctions.services.clone_auction`,
         ``?online`` makes an online one, otherwise in-person.
         """
-        if "clone" in str(self.request.GET):
+        # Keys, not str(GET): a ?club= slug may contain "online" or "clone".
+        if "clone" in self.request.GET:
             source = Auction.objects.filter(slug=form.cleaned_data["cloned_from"], is_deleted=False).first()
             # you still don't get to clone auctions that aren't yours...
             if source and source.permission_check(self.request.user):
@@ -728,7 +738,7 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
         auction.created_by = self.request.user
         auction.promote_this_auction = False  # all auctions start not promoted
         auction.date_start = form.cleaned_data["date_start"]
-        auction.is_online = "online" in str(self.request.GET)
+        auction.is_online = self.request.GET.get("type") == "online" or "online" in self.request.GET
         for name, value in Auction.starting_values(auction.is_online).items():
             setattr(auction, name, value)
         if not auction.summernote_description:
@@ -750,6 +760,11 @@ class AuctionCreateView(LoginRequiredMixin, FormFrictionMixin, CreateView):
                 auction.date_online_bidding_starts = auction.date_start - run_duration
             if not auction.date_online_bidding_ends:
                 auction.date_online_bidding_ends = auction.date_start
+        # The club page's "Create a new club auction" names its club; only one this person may file in.
+        asked = self.request.GET.get("club")
+        club = Club.objects.filter(slug=asked).first() if asked else None
+        if club and can_start_club_auction(self.request.user, club):
+            auction.club = club
         auction.save()
         if not auction.is_online:
             # let's route in-person auctions to the rule page next
@@ -769,6 +784,7 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
         "dismiss_promo_banner": ("dismissed_promo_banner", "auction", "admin"),
         "dismiss_customize_event_banner": ("dismissed_customize_event_banner", "auction", "admin"),
         "dismiss_club_managed_banner": ("dismissed_club_managed_banner", "auction", "admin"),
+        "dismiss_link_club_banner": ("dismissed_link_club_banner", "auction", "creator"),
         "dismiss_paypal_banner": ("dismissed_paypal_banner", "auction", "creator"),
         "dismiss_square_banner": ("dismissed_square_banner", "auction", "creator"),
         "never_show_paypal_connect": ("never_show_paypal_connect", "userdata", "creator"),
@@ -801,6 +817,27 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
                 request.user, self.auction.club, "permission_manage_auctions"
             ):
                 raise PermissionDenied()
+        elif action == "link_club":
+            # Only a club the banner offered this person; the same rule decides both.
+            club = next(
+                (
+                    club
+                    for club in clubs_to_link(self.auction, request.user)
+                    if str(club.pk) == request.POST.get("club")
+                ),
+                None,
+            )
+            if club is None:
+                raise PermissionDenied()
+            link_auction_to_club(
+                self.auction, club, note="from the auction page", actor=request.user, grant_admin=False
+            )
+            # What a club auction gets when it is created that way (services.finish_new_auction).
+            _add_club_admins_as_auction_tos(self.auction, request.user)
+            if self.auction.use_scientific_name and not club.keeps_aquatic:
+                self.auction.use_scientific_name = False
+                self.auction.save(update_fields=["use_scientific_name"])
+            messages.success(request, f"This is now a {club.name} auction.")
         elif action == "trust_creator" and request.user.is_superuser and self.auction.created_by:
             userdata = self.auction.created_by.userdata
             userdata.is_trusted = True
@@ -943,6 +980,8 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             and check_club_permission(self.request.user, self.auction.club, "permission_manage_auctions")
             and self.auction.offers_club_managed_switch
         )
+        # "This auction isn't linked to a club": see services.clubs_to_link.
+        context["link_club_offers"] = clubs_to_link(self.auction, self.request.user)
         # Superusers: offer "make club admin"; see creator_club_admin_offer for which club.
         if self.request.user.is_superuser:
             offer = creator_club_admin_offer(self.auction)

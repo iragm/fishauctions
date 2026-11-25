@@ -106,6 +106,7 @@ REPOINTED = frozenset(
         "auctions.Species.added_by",
         "auctions.SpeciesSearchCache.created_by",
         "auctions.SpeciesNameVote.user",
+        "auctions.SpeciesFlag.confirmed_by",
         "auctions.TapToPayAttempt.created_by",
         # Self-bans and duplicates this makes are removed afterwards.
         "auctions.UserBan.banned_user",
@@ -136,6 +137,7 @@ REPOINTED_UNLESS_DUPLICATE = {
     "auctions.SignInStitch.user": ("session_id",),
     "auctions.SpeakerClaim.user": ("speaker",),
     "auctions.SpeakerTag.user": ("speaker", "tag"),
+    "auctions.SpeciesFlag.user": ("lot", "species"),
     "auctions.UserLabelPrefs.user": (),
     "authtoken.Token.user": (),
 }
