@@ -1,8 +1,8 @@
-"""The species list's upkeep on ``/mcp/admin/``: four reads, and nine changes only a proposal makes.
+"""The species list's upkeep on ``/mcp/admin/``: five reads, and nine changes only a proposal makes.
 
 Everything on the species gaps page and in ``manage.py backfill_lot_species``, for an agent that can't
 press a button or answer a prompt, plus fixing lots matched to the wrong species. The reads,
-:func:`species_dashboard`, :func:`species_backfill`, :func:`lots_by_species` and :func:`find_species`, write nothing (``record=False`` keeps even the cache's hit counter still). Each change is an
+:func:`species_dashboard`, :func:`species_backfill`, :func:`lots_by_species`, :func:`find_species` and :func:`species_flags` (readers' 'Report incorrect species'), write nothing (``record=False`` keeps even the cache's hit counter still). Each change is an
 ``APPROVAL_ONLY`` step for :func:`auctions.mcp.admin.propose_change`: it runs only when a person
 approves it, through the same :mod:`auctions.species_admin` function the page's button calls, and each
 is checked once when proposed (:data:`PROPOSAL_CHECKS`) so a bad number reaches the agent while it can
@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.core.exceptions import PermissionDenied
+from django.db.models import F
 
 from auctions import palette_actions, species_admin
 from auctions.palette_actions import DANGER_CONFIRM, DANGER_SAFE, Action, _error, _int, _need, _ok, _str
@@ -399,6 +400,69 @@ def lots_by_species(request, params: dict[str, Any]) -> dict[str, Any]:
         f"{total} lot name and species pairs."
         + palette_actions._showing(total, limit, offset)
         + " Propose change_lots_species to move any of them to another species.",
+        **result,
+    )
+
+
+def species_flags(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Lots readers flagged as carrying the wrong species (``auctions/species_flags.py``), one row per lot
+    and flagged species, newest flag first. Who flagged is never said."""
+    from django.db.models import Count, Max, Min
+
+    from auctions import species_flags as flags
+    from auctions.models import Lot, Species, SpeciesFlag
+
+    _superuser(request)
+    wanted = (_str(params, "status") or "open").lower()
+    if wanted not in ("open", "confirmed", "changed", "all"):
+        return _error("status is open, confirmed, changed or all.")
+    rows = SpeciesFlag.objects.filter(lot__is_deleted=False)
+    if wanted == "confirmed":
+        rows = rows.filter(confirmed_on__isnull=False)
+    elif wanted == "open":
+        rows = rows.filter(confirmed_on__isnull=True, species_id=F("lot__species_id"))
+    elif wanted == "changed":
+        rows = rows.filter(confirmed_on__isnull=True).exclude(species_id=F("lot__species_id"))
+    grouped = (
+        rows.values("lot", "species")
+        .annotate(flags=Count("pk"), first=Min("createdon"), last=Max("createdon"), confirmed=Max("confirmed_on"))
+        .order_by("-last", "lot")
+    )
+    limit, offset = palette_actions._slice(params)
+    total = grouped.count()
+    page = list(grouped[offset : offset + limit])
+    lots = {lot.pk: lot for lot in Lot.objects.filter(pk__in={row["lot"] for row in page}).select_related("auction")}
+    wanted_species = {row["species"] for row in page} | {lot.species_id for lot in lots.values() if lot.species_id}
+    found = {
+        species.pk: species for species in Species.objects.filter(pk__in=wanted_species).select_related("category")
+    }
+    out = []
+    for row in page:
+        lot = lots.get(row["lot"])
+        if lot is None or row["species"] not in found:
+            continue
+        flag = SpeciesFlag(species_id=row["species"], confirmed_on=row["confirmed"])
+        out.append(
+            {
+                "lot_id": lot.pk,
+                "lot_number": lot.lot_number_display,
+                "lot_name": untrusted_short(lot.lot_name),
+                "auction": lot.auction.slug if lot.auction_id else None,
+                "flagged_species": _echo(found[row["species"]]),
+                "species_now": _echo(found[lot.species_id]) if lot.species_id in found else None,
+                "flags": row["flags"],
+                "first_flagged": row["first"].isoformat(),
+                "last_flagged": row["last"].isoformat(),
+                "status": flags.status(flag, lot.species_id),
+            }
+        )
+    result = {"rows": out, "total": total}
+    if offset + limit < total:
+        result["next_offset"] = offset + limit
+    return _ok(
+        f"{total} flagged lot and species pairs ({wanted})."
+        + palette_actions._showing(total, limit, offset)
+        + " The seller sees only a note on the lot page; set_lot_species or change_lots_species fixes one by proposal.",
         **result,
     )
 
@@ -881,6 +945,21 @@ READS: list[Action] = [
         },
         danger=DANGER_SAFE,
         resolver=lots_by_species,
+    ),
+    Action(
+        name="species_flags",
+        description=(
+            "Lots signed-in readers flagged as carrying the wrong species, one row per lot and flagged "
+            "species, newest first, with how many flagged it and whether the seller kept it (confirmed), "
+            "changed it, or hasn't answered (open). Never says who flagged."
+        ),
+        params={
+            "status": "string, optional, default open. open, confirmed, changed or all.",
+            "limit": "integer, optional, default 15.",
+            "offset": "integer, optional, default 0.",
+        },
+        danger=DANGER_SAFE,
+        resolver=species_flags,
     ),
     Action(
         name="find_species",

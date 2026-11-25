@@ -25,6 +25,8 @@ from django.db.models.base import Model as Model
 from django.db.models.functions import TruncDate
 from django.http import (
     Http404,
+    HttpResponse,
+    HttpResponseBadRequest,
     HttpResponseRedirect,
     JsonResponse,
 )
@@ -43,6 +45,7 @@ from django.views.generic.edit import (
 )
 from webpush.models import PushInformation
 
+from auctions import species_flags
 from auctions.form_friction import FormFrictionMixin
 from auctions.forms import (
     IMAGE_PROCESSING_EXCEPTIONS,
@@ -548,6 +551,7 @@ class ViewLot(DetailView):
         )
         # The history modal button; LotPageViewHistoryView re-checks the same rule.
         context["show_page_view_history"] = can_see_lot_page_view_history(self.request.user, lot)
+        context.update(species_flags.context(lot, self.request.user))
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
@@ -573,6 +577,38 @@ class ViewLot(DetailView):
             if lot.feedback_rating == 0 and lot.date_end and timezone.now() > lot.date_end + timedelta(days=2):
                 context["show_feedback_dialog"] = True
         return context
+
+
+class LotSpeciesFlagView(LoginRequiredMixin, View):
+    """The lot page's species flag: a reader's "Report incorrect species", and the seller's "Fix" and
+    "Label correct" (``auctions/species_flags.py`` has the rules). Answers htmx with the fragment again,
+    or the whole page after a fix, since the name under the lot's title changed."""
+
+    def post(self, request, pk):
+        lot = get_object_or_404(Lot.objects.select_related("auction", "species"), pk=pk, is_deleted=False)
+        what = request.POST.get("do", "")
+        context = {}
+        if what == "report":
+            species_flags.report(lot, request.user)
+        elif what == "correct":
+            species_flags.confirm(request, lot)
+        elif what == "fix":
+            result = species_flags.fix(request, lot, request.POST.get("species", ""))
+            if result.get("ok"):
+                if request.headers.get("HX-Request"):
+                    response = HttpResponse("")
+                    response["HX-Refresh"] = "true"
+                    return response
+                return redirect(lot.lot_link)
+            context["species_fix_error"] = result.get("error") or result.get("more_info_needed") or ""
+            context["species_fix_choices"] = [option["value"] for option in result.get("options") or []]
+        else:
+            return HttpResponseBadRequest()
+        if not request.headers.get("HX-Request"):
+            return redirect(lot.lot_link)
+        lot.refresh_from_db()
+        context.update(species_flags.context(lot, request.user))
+        return render(request, "lot_species_flag.html", context)
 
 
 class ViewLotSimple(ViewLot, AuctionViewMixin):

@@ -1,6 +1,7 @@
 {# Club page header. Navigation now lives in the club sidebar (club_sidebar.html). #}
 {# In single club mode the single club's name is the navbar brand, so don't repeat it here. #}
 {% load auction_nav_tags %}{% if view.club_sidebar_can_view %}{% ai_agent_banner "club" %}{% endif %}
+{% club_auction_banner club %}
 {% if not single_club_mode or club.name != navbar_brand %}
 <h3 class="d-flex align-items-center gap-2">
   {% if club.icon %}

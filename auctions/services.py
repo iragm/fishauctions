@@ -1444,6 +1444,58 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
     _add_club_admins_as_auction_tos(auction, created_by)
 
 
+def clubs_to_link(auction, user):
+    """The clubs the auction page offers to file a club-less *auction* under, for its creator: every club
+    they may file auctions in (the edit form's own rule: admin, edit club or manage auctions). Empty for
+    a superuser, whose list would be every club, once dismissed, and in single-club mode."""
+    from django.conf import settings
+    from django.db.models import Q
+
+    from .models import Club
+
+    if (
+        auction.club_id
+        or auction.dismissed_link_club_banner
+        or not user.is_authenticated
+        or user.is_superuser
+        or auction.created_by_id != user.pk
+        or getattr(settings, "SINGLE_CLUB_MODE", False)
+    ):
+        return []
+    ids = (
+        ClubMember.objects.filter(user=user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
+        .values_list("club_id", flat=True)
+    )
+    return list(Club.objects.filter(pk__in=ids).order_by("name"))
+
+
+def club_needs_an_auction(club, now=None):
+    """True when *club* has no current auction: none at all, or its latest ended over a day ago. An
+    in-person auction with no end counts from its start."""
+    from datetime import timedelta
+
+    from django.db.models import Q
+
+    now = now or timezone.now()
+    cutoff = now - timedelta(hours=24)
+    current = Auction.objects.filter(club=club, is_deleted=False).filter(
+        Q(date_end__gt=cutoff) | Q(date_end__isnull=True, date_start__gt=cutoff)
+    )
+    return not current.exists()
+
+
+def can_start_club_auction(user, club) -> bool:
+    """Whether *user* may create an auction for *club*: the create page's gate and the club's own."""
+    from .views.base import check_club_permission
+
+    if not user.is_authenticated:
+        return False
+    if not (user.is_superuser or getattr(getattr(user, "userdata", None), "can_create_club_auctions", False)):
+        return False
+    return check_club_permission(user, club, "permission_manage_auctions")
+
+
 def link_auction_to_club(auction, club, *, note, actor=None, grant_admin=True):
     """Attach an auction to a club after the fact, and optionally make its creator a club admin.
 

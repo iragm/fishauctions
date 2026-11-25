@@ -329,7 +329,8 @@ document.addEventListener("DOMContentLoaded", function() {
     {% endif %}
   </div>
 {% endif %}
-<div id="invoice-totals" hx-get="{{ request.path }}" hx-trigger="adjustmentSaved from:body" hx-select="#invoice-totals" hx-select-oob="#invoice-summary-short" hx-swap="outerHTML">
+{% comment %}Redrawn after every adjustment save. queue last: a save landing while the last redraw is in flight still gets its own, rather than being dropped and leaving the total one save behind.{% endcomment %}
+<div id="invoice-totals" hx-get="{{ request.path }}" hx-trigger="adjustmentSaved from:body" hx-sync="this:queue last" hx-select="#invoice-totals" hx-select-oob="#invoice-summary-short" hx-swap="outerHTML">
 <div class="table-responsive">
 <table class="table">
   <tr>

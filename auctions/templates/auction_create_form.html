@@ -37,11 +37,11 @@ $( document ).ready(function() {
 
 $(".submit-button").click(function(event){
     if (this.id == "auction-online") {
-        $("#auction-form").attr("action", "?type=online");
+        $("#auction-form").attr("action", "?type=online{% if club_slug %}&club={{ club_slug|urlencode }}{% endif %}");
         $('#auction-form').submit();
         return true
     } else if (this.id == "auction-offline") {
-        $("#auction-form").attr("action", "?type=offline");
+        $("#auction-form").attr("action", "?type=offline{% if club_slug %}&club={{ club_slug|urlencode }}{% endif %}");
         $('#auction-form').submit();
         return true
     } else {

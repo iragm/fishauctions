@@ -1,0 +1,7 @@
+{% comment %}See auction_nav_tags.club_auction_banner.{% endcomment %}
+{% if show %}
+<div class="alert alert-info d-flex flex-wrap align-items-center gap-2 py-2">
+  <span>{{ club.name }} has no upcoming auction.</span>
+  <a class="btn btn-sm btn-primary" href="{% url 'create_auction' %}?club={{ club.slug|urlencode }}"><i class="bi bi-plus-circle"></i> Create a new club auction</a>
+</div>
+{% endif %}

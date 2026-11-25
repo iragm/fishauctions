@@ -34,3 +34,21 @@ def ai_agent_banner(context, kind="auction"):
         # "Not interested" is stored on the account, so it is offered only to someone signed in.
         "can_hide": signed_in,
     }
+
+
+@register.inclusion_tag("club_auction_banner.html", takes_context=True)
+def club_auction_banner(context, club):
+    """On every club page: "Create a new club auction", for someone who may (services.can_start_club_auction)
+    while the club has no current one (services.club_needs_an_auction)."""
+    from auctions import services
+
+    request = context.get("request")
+    user = getattr(request, "user", None)
+    show = bool(
+        club
+        and getattr(club, "pk", None)
+        and user is not None
+        and services.can_start_club_auction(user, club)
+        and services.club_needs_an_auction(club)
+    )
+    return {"show": show, "club": club}

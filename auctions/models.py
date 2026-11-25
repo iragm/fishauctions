@@ -4134,6 +4134,30 @@ class SpeciesNameVote(models.Model):
         indexes = [models.Index(fields=["search_text", "species"])]
 
 
+class SpeciesFlag(models.Model):
+    """A signed-in reader saying a lot's scientific name is wrong. The seller is never told; the lot page
+    shows them one line and two buttons (``auctions/species_flags.py``).
+
+    A flag is about the species the lot carried when it was made, so changing the lot's species settles it
+    without touching the row, and "label correct" settles the ones still open by stamping ``confirmed_on``.
+    """
+
+    lot = models.ForeignKey("Lot", on_delete=models.CASCADE, related_name="species_flags")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    species = models.ForeignKey(Species, on_delete=models.CASCADE, related_name="flags")
+    species.help_text = "The species the lot carried when it was flagged."
+    createdon = models.DateTimeField(auto_now_add=True)
+    confirmed_on = models.DateTimeField(null=True, blank=True)
+    confirmed_on.help_text = "When the seller or an auction admin said the species is right."
+    confirmed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+    def __str__(self):
+        return f"{self.lot_id}: not {self.species}"
+
+    class Meta:
+        unique_together = ("lot", "user", "species")
+
+
 def _slugify_auction_title(value):
     """Slugify an auction title, removing ``-auctions``/``-contact`` suffixes that collide with club email
     routing aliases.
@@ -4471,6 +4495,11 @@ class Auction(CachedPropertiesMixin, models.Model):
     enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
     dismissed_square_banner = models.BooleanField(default=False, blank=True)
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
+    dismissed_link_club_banner = models.BooleanField(
+        default=False,
+        blank=True,
+        help_text='Set when the creator chose "Don\'t show again" on "This auction isn\'t linked to a club." Not cloned.',
+    )
     dismissed_club_managed_banner = models.BooleanField(
         default=False,
         blank=True,
