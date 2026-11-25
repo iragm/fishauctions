@@ -1348,6 +1348,25 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.approve()
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
 
+    def test_species_lookups_have_their_own_hourly_budget(self):
+        from auctions.mcp import admin
+
+        with (
+            self.settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}),
+            mock.patch.object(admin, "ADMIN_READS_PER_HOUR", 1),
+            mock.patch.object(admin, "LOOKUP_READS_PER_HOUR", 3),
+        ):
+            from django.core.cache import cache
+
+            cache.clear()
+            self.data(self.call("species_dashboard", {}))
+            self.assertTrue(self.call("species_dashboard", {})["isError"])
+            for _ in range(3):
+                self.data(self.call("find_species", {"name": "Tropheus"}))
+            refused = self.call("find_species", {"name": "Tropheus"})
+            self.assertTrue(refused["isError"])
+            self.assertIn("find_species lookups", refused["content"][0]["text"])
+
     def test_find_species_reads_the_list_past_a_misspelt_genus(self):
         self.assertIn("find_species", self.listed())
         data, writes = self.writes_during("find_species", {"name": "Tropheuss duboisi"})
