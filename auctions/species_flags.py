@@ -5,12 +5,13 @@ emailed or notified: the seller (or an auction admin) only sees, on that same pa
 other people flagged it, with **Fix** (pick another species, through the same code as
 ``set_lot_species``, so the lot's category, its species vote and, for an auction admin, the remembered
 answer all follow) and **Label correct** (stamps the open flags). A flag names the species the lot had
-when it was made, so a lot whose species changed by any route has nothing open. Superusers read every
+when it was made, so a lot whose species changed by any route has nothing open on its new one. Superusers read every
 flag on ``/mcp/admin/`` (``species_flags``).
 
-Fixing follows the lot's edit rule loosened by one step: the seller may fix after lot submission closes
-but not once a bid is in or the lot sold (a different species can mean different breeder points);
-auction admins always may.
+Fixing follows the lot's edit rule loosened by one step, here and in ``set_lot_species`` alike
+(:func:`seller_may_fix`): while a flag is open the seller may fix after lot submission closes, but not
+once a bid is in or the lot sold (a different species can mean different breeder points); auction admins
+always may. Flags on a species the lot no longer carries are kept, and open again if it goes back to it.
 """
 
 from __future__ import annotations
@@ -34,10 +35,18 @@ def can_settle(lot, user) -> bool:
     return _signed_in(user) and (lot.is_owned_by(user) or is_admin(lot, user))
 
 
+def seller_may_fix(lot) -> bool:
+    """The one loosening of the seller's edit rule: a flagged species may be fixed after lot submission
+    closes, never once a bid is in or the lot sold. ``set_lot_species`` asks this too."""
+    return not lot.cannot_change_reason and open_flags(lot).exists()
+
+
 def can_fix(lot, user) -> bool:
     if is_admin(lot, user):
         return True
-    return lot.is_owned_by(user) and not lot.cannot_change_reason
+    if not lot.is_owned_by(user):
+        return False
+    return not lot.cannot_be_edited_reason or seller_may_fix(lot)
 
 
 def can_report(lot, user) -> bool:

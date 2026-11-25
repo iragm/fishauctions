@@ -321,3 +321,51 @@ class InvoiceTotalsFollowTypingTests(StandardTestCase):
         self.assertIn('hx-trigger="input delay:600ms, change, submit"', row)
         page = get_template("invoice.html").template.source
         self.assertIn('hx-trigger="adjustmentSaved from:body" hx-sync="this:queue last"', page)
+        self.assertIn('hx-swap="innerHTML"', page)
+
+
+class ReviewFixTests(SpeciesFlagTests):
+    """What the adversarial review found."""
+
+    def close_submission(self):
+        Auction.objects.filter(pk=self.online_auction.pk).update(
+            lot_submission_end_date=timezone.now() - datetime.timedelta(days=1)
+        )
+
+    def test_after_submission_closes_the_seller_fixes_only_a_flagged_species_on_both_surfaces(self):
+        self.close_submission()
+        self.client.force_login(self.userB)
+        self.client.post(self.url(), {"do": "fix", "species": "Labidochromis caeruleus"}, HTTP_HX_REQUEST="true")
+        self.flagged.refresh_from_db()
+        self.assertEqual(self.flagged.species, self.cherry)
+        request = RequestFactory().get("/")
+        request.user = self.userB
+        request.palette_page = {}
+        params = {"lot_id": self.flagged.pk, "species": "Labidochromis caeruleus"}
+        self.assertIn("error", palette_actions.run_action(request, "set_lot_species", params))
+        self.report(self.reader)
+        result = palette_actions.run_action(request, "set_lot_species", params)
+        self.assertTrue(result.get("ok"), result)
+
+    def test_status_all_counts_a_reopened_flag_as_open(self):
+        self.report(self.reader)
+        self.client.force_login(self.userB)
+        self.client.post(self.url(), {"do": "correct"})
+        self.report(self.reader2)
+        superuser = User.objects.create_superuser("su", "su@example.com", "x")
+        request = RequestFactory().get("/")
+        request.user = superuser
+        from auctions.mcp import admin_species
+
+        rows = admin_species.species_flags(request, {"status": "all"})["rows"]
+        self.assertEqual((rows[0]["flags"], rows[0]["unanswered"], rows[0]["status"]), (2, 1, "open"))
+
+
+class MakeClubAdminUsernameWithAtTests(MakeClubAdminByEmailTests):
+    def test_a_username_that_looks_like_an_address_finds_its_account(self):
+        club = Club.objects.create(name="Harbor Aquarium Society")
+        odd = User.objects.create_user(username="bob@shop.example", password="x", email="bob@elsewhere.example")
+        self.propose({"club": club.pk, "user": "bob@shop.example"})
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertTrue(ClubMember.objects.get(club=club, user=odd).permission_admin)
+        self.assertFalse(ClubMember.objects.filter(club=club, user__isnull=True).exists())

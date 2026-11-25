@@ -1,4 +1,4 @@
-{% comment %}One adjustment on the invoice page. Each row saves itself a moment after typing stops, and again on change, so the totals below follow as you type; see InvoiceAdjustmentSave. body:queue all keeps a new row's second save behind its first, which hands back the row's pk.{% endcomment %}
+{% comment %}One adjustment on the invoice page. Each row saves itself a moment after typing stops, and again on change, so the totals below follow as you type; see InvoiceAdjustmentSave. body:queue all keeps a new row's second save, and its delete, behind its first, which hands back the row's pk.{% endcomment %}
 <form class="row g-1 mb-1 adjustment-row" hx-post="{% url 'invoice_adjustment_save' pk=invoice.pk %}" hx-trigger="input delay:600ms, change, submit" hx-swap="none" hx-sync="body:queue all">
   <input type="hidden" name="row" value="r{{ row }}">
   <input type="hidden" name="adjustment" id="adj-pk-r{{ row }}" value="{{ adjustment.pk|default:'' }}">
@@ -18,6 +18,6 @@
     <input type="text" class="form-control form-control-sm" name="notes" aria-label="Notes" maxlength="150" placeholder="ex: membership fee" value="{{ adjustment.notes|default:'' }}">
   </div>
   <div class="col-auto">
-    <button type="button" class="btn btn-danger btn-sm" aria-label="Delete" hx-post="{% url 'invoice_adjustment_save' pk=invoice.pk %}" hx-vals='{"delete": "1"}' hx-include="closest form" hx-target="closest form" hx-swap="delete"><i class="bi bi-trash"></i></button>
+    <button type="button" class="btn btn-danger btn-sm" aria-label="Delete" hx-post="{% url 'invoice_adjustment_save' pk=invoice.pk %}" hx-vals='{"delete": "1"}' hx-sync="body:queue all" hx-include="closest form" hx-target="closest form" hx-swap="delete"><i class="bi bi-trash"></i></button>
   </div>
 </form>

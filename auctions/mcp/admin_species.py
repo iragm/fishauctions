@@ -407,9 +407,8 @@ def lots_by_species(request, params: dict[str, Any]) -> dict[str, Any]:
 def species_flags(request, params: dict[str, Any]) -> dict[str, Any]:
     """Lots readers flagged as carrying the wrong species (``auctions/species_flags.py``), one row per lot
     and flagged species, newest flag first. Who flagged is never said."""
-    from django.db.models import Count, Max, Min
+    from django.db.models import Count, Max, Min, Q
 
-    from auctions import species_flags as flags
     from auctions.models import Lot, Species, SpeciesFlag
 
     _superuser(request)
@@ -425,7 +424,12 @@ def species_flags(request, params: dict[str, Any]) -> dict[str, Any]:
         rows = rows.filter(confirmed_on__isnull=True).exclude(species_id=F("lot__species_id"))
     grouped = (
         rows.values("lot", "species")
-        .annotate(flags=Count("pk"), first=Min("createdon"), last=Max("createdon"), confirmed=Max("confirmed_on"))
+        .annotate(
+            flags=Count("pk"),
+            unanswered=Count("pk", filter=Q(confirmed_on__isnull=True)),
+            first=Min("createdon"),
+            last=Max("createdon"),
+        )
         .order_by("-last", "lot")
     )
     limit, offset = palette_actions._slice(params)
@@ -441,7 +445,10 @@ def species_flags(request, params: dict[str, Any]) -> dict[str, Any]:
         lot = lots.get(row["lot"])
         if lot is None or row["species"] not in found:
             continue
-        flag = SpeciesFlag(species_id=row["species"], confirmed_on=row["confirmed"])
+        if not row["unanswered"]:
+            status = "confirmed"
+        else:
+            status = "open" if row["species"] == lot.species_id else "changed"
         out.append(
             {
                 "lot_id": lot.pk,
@@ -451,9 +458,11 @@ def species_flags(request, params: dict[str, Any]) -> dict[str, Any]:
                 "flagged_species": _echo(found[row["species"]]),
                 "species_now": _echo(found[lot.species_id]) if lot.species_id in found else None,
                 "flags": row["flags"],
+                # Flags since the last "label correct", or all of them if nobody answered.
+                "unanswered": row["unanswered"],
                 "first_flagged": row["first"].isoformat(),
                 "last_flagged": row["last"].isoformat(),
-                "status": flags.status(flag, lot.species_id),
+                "status": status,
             }
         )
     result = {"rows": out, "total": total}

@@ -832,6 +832,11 @@ class AuctionPageAction(LoginRequiredMixin, AuctionViewMixin, View):
             link_auction_to_club(
                 self.auction, club, note="from the auction page", actor=request.user, grant_admin=False
             )
+            # What a club auction gets when it is created that way (services.finish_new_auction).
+            _add_club_admins_as_auction_tos(self.auction, request.user)
+            if self.auction.use_scientific_name and not club.keeps_aquatic:
+                self.auction.use_scientific_name = False
+                self.auction.save(update_fields=["use_scientific_name"])
             messages.success(request, f"This is now a {club.name} auction.")
         elif action == "trust_creator" and request.user.is_superuser and self.auction.created_by:
             userdata = self.auction.created_by.userdata

@@ -10454,7 +10454,11 @@ def _species_lot(request, params):
     if not (owns or is_admin):
         return None, False, _error(f"{lot.lot_name} isn't your lot.")
     if not is_admin and lot.cannot_be_edited_reason:
-        return None, False, _error(str(lot.cannot_be_edited_reason))
+        from .species_flags import seller_may_fix
+
+        # Readers flagged its species: the seller may still fix it (species_flags.seller_may_fix).
+        if not seller_may_fix(lot):
+            return None, False, _error(str(lot.cannot_be_edited_reason))
     return lot, is_admin, None
 
 

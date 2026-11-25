@@ -2322,17 +2322,18 @@ def _club_and_account(params: dict[str, Any]):
     club = _club(params)
     if club is None:
         return None, None, "There is no one club by that number or name."
-    typed = _str(params, "user")
-    if "@" in typed:
-        try:
-            email = clean_email_address(typed)
-        except ValidationError:
-            return None, None, "That isn't an email address."
-        return club, account_for_email(email) or email, ""
     user = _account(params, "user")
-    if user is None:
+    if user is not None:
+        # First, so an old username that looks like an address still finds its own account.
+        return club, user, ""
+    typed = _str(params, "user")
+    if "@" not in typed:
         return None, None, "There is no active account by that number or username."
-    return club, user, ""
+    try:
+        email = clean_email_address(typed)
+    except ValidationError:
+        return None, None, "That isn't an email address."
+    return club, account_for_email(email) or email, ""
 
 
 def _club_admin_by_email(request, club, email: str, admin: bool) -> dict[str, Any]:
@@ -2350,7 +2351,7 @@ def _club_admin_by_email(request, club, email: str, admin: bool) -> dict[str, An
             ClubHistory.objects.create(
                 club=club,
                 user=request.user,
-                action=f"Removed admin permissions from {row.name or 'a member'} through an approved proposal.",
+                action="Removed admin permissions from a member without an account through an approved proposal.",
                 applies_to="MEMBERS",
                 member=row,
             )
@@ -2359,14 +2360,14 @@ def _club_admin_by_email(request, club, email: str, admin: bool) -> dict[str, An
         return _ok(f"That address is no longer an admin of {club.name}.")
     if any(row.permission_admin for row in rows):
         return _ok(f"That address was already an admin of {club.name}; it takes effect when they sign up.")
+    # No name: anything made from the address would carry it into names the admin endpoint reads.
     member = rows[0] if rows else ClubMember(club=club, email=email, source="manually_added")
-    member.name = member.name or email.split("@")[0]
     member.permission_admin = True
     member.save()
     ClubHistory.objects.create(
         club=club,
         user=request.user,
-        action=f"Granted admin permissions to {member.name} through an approved proposal, before they signed up.",
+        action="Granted admin permissions to a member without an account through an approved proposal, before they signed up.",
         applies_to="MEMBERS",
         member=member,
     )
