@@ -315,14 +315,21 @@ def private_result(result: dict[str, Any], tool: str = "") -> dict[str, Any]:
 #: on production; an agent in a loop must not become the runaway query that takes the site down.
 ADMIN_READS_PER_HOUR = 300
 
+#: Reads that are one indexed lookup, not a dashboard: a budget of their own, so a species clean-up
+#: that looks up thousands of names doesn't use up the hour's dashboard reads.
+LOOKUP_READS = frozenset({"find_species"})
+LOOKUP_READS_PER_HOUR = 3000
 
-def within_admin_budget(request) -> bool:
+
+def within_admin_budget(request, name: str = "") -> bool:
     credential = getattr(request, "mcp_credential", None)
+    lookup = name in LOOKUP_READS
     key = (
-        f"mcp-admin-reads-{getattr(credential, 'kind', '')}-{getattr(getattr(credential, 'token', None), 'pk', 'none')}"
+        f"mcp-admin-{'lookups' if lookup else 'reads'}-{getattr(credential, 'kind', '')}-"
+        f"{getattr(getattr(credential, 'token', None), 'pk', 'none')}"
     )
     count = cache.get_or_set(key, 0, timeout=3600)
-    if count >= ADMIN_READS_PER_HOUR:
+    if count >= (LOOKUP_READS_PER_HOUR if lookup else ADMIN_READS_PER_HOUR):
         return False
     try:
         cache.incr(key)
@@ -3801,11 +3808,12 @@ def call_tool(request, name: str, arguments: Any) -> dict[str, Any] | None:
     unknown = sorted(key for key in arguments if not action.accepts(key))
     if unknown:
         return tools._result(f"I don't understand “{unknown[0]}” for {action.name}.", is_error=True)
-    if tools.read_only(action) and not within_admin_budget(request):
-        return tools._result(
-            f"{ADMIN_READS_PER_HOUR} dashboard, log and health reads in an hour is the limit. Try later.",
-            is_error=True,
-        )
+    if tools.read_only(action) and not within_admin_budget(request, action.name):
+        if action.name in LOOKUP_READS:
+            limit = f"{LOOKUP_READS_PER_HOUR} {action.name} lookups"
+        else:
+            limit = f"{ADMIN_READS_PER_HOUR} dashboard, log and health reads"
+        return tools._result(f"{limit} in an hour is the limit. Try later.", is_error=True)
     result = _run_approval_only(action, request, arguments)
     if "error" in result:
         return tools._result(str(result["error"]), is_error=True)
