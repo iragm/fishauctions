@@ -147,9 +147,7 @@ class CeleryTasksTestCase(TestCase):
     @patch("auctions.tasks.schedule_auction_stats_update")
     @patch("auctions.tasks.connections")
     @patch("auctions.models.Auction.recalculate_stats", side_effect=ValueError("bad data"))
-    def test_update_auction_stats_keeps_connection_on_ordinary_error(
-        self, mock_recalc, mock_connections, mock_schedule
-    ):
+    def test_update_auction_stats_drops_connection_on_any_error(self, mock_recalc, mock_connections, mock_schedule):
         now = timezone.now()
         Auction.objects.create(
             title="Bad stats",
@@ -158,7 +156,36 @@ class CeleryTasksTestCase(TestCase):
             date_start=now - datetime.timedelta(days=1),
         )
         tasks.update_auction_stats()
-        mock_connections.all.assert_not_called()
+        mock_connections.all.assert_called_once()
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    @patch("auctions.tasks.connections")
+    def test_update_auction_stats_drops_connection_on_raw_mysql_out_of_sync(self, mock_connections, mock_schedule):
+        # Production's shape (2026-11-25): the soft limit fires inside a query, and what reaches the task
+        # is MySQLdb's own 2014 from cursor.close(), with the time limit only as its context.
+        import MySQLdb
+
+        def soft_limit_then_out_of_sync():
+            try:
+                raise SoftTimeLimitExceeded()
+            except SoftTimeLimitExceeded:
+                raise MySQLdb.ProgrammingError(2014, "Commands out of sync") from None
+
+        broken = MagicMock(in_atomic_block=False, closed_in_transaction=False)
+        mock_connections.all.return_value = [broken]
+        now = timezone.now()
+        auction = Auction.objects.create(
+            title="Out of sync",
+            is_deleted=False,
+            next_update_due=now - datetime.timedelta(minutes=10),
+            date_start=now - datetime.timedelta(days=1),
+        )
+        with patch.object(Auction, "recalculate_stats", side_effect=lambda: soft_limit_then_out_of_sync()):
+            tasks.update_auction_stats()
+        broken.close.assert_called_once()
+        auction.refresh_from_db()
+        self.assertGreater(auction.next_update_due, now + datetime.timedelta(hours=23))
         mock_schedule.assert_called_once()
 
     @patch("auctions.tasks.schedule_auction_stats_update")

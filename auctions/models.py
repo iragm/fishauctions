@@ -6317,13 +6317,24 @@ class Auction(CachedPropertiesMixin, models.Model):
         """Calculate and return referrers chart data"""
         from django.contrib.sites.models import Site
 
-        views = (
-            self.page_views.exclude(referrer__isnull=True)
-            .exclude(referrer__startswith=Site.objects.get_current().domain)
-            .exclude(referrer__exact="")
-            .values("referrer")
-            .annotate(count=Count("referrer"))
-        )
+        domain = Site.objects.get_current().domain
+        counts = {}
+        for part in self.page_view_parts:
+            rows = (
+                part.exclude(referrer__isnull=True)
+                .exclude(referrer__startswith=domain)
+                .exclude(referrer__exact="")
+                .values("referrer")
+                .annotate(count=Count("referrer"))
+                .order_by()
+            )
+            for row in rows:
+                counts[row["referrer"]] = counts.get(row["referrer"], 0) + row["count"]
+        # A view the backfill moves between the two reads counts twice; a chart can carry that.
+        views = [
+            {"referrer": referrer, "count": count}
+            for referrer, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
         labels = []
         data = []
         other = 0
@@ -6642,25 +6653,44 @@ class Auction(CachedPropertiesMixin, models.Model):
         """
         return PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
 
+    @property
+    def page_view_parts(self):
+        """``page_views`` as disjoint querysets that each have an index, for readers over all of an
+        auction's views (no date bound): the OR in ``page_views`` scanned PageView past the stats task's
+        time limit. Older rows that name only one of its lots come first, so a row the backfill moves
+        between the two reads is seen twice (callers dedupe) rather than missed. Once the backfill has
+        finished there are none, and only rows that name this auction are read.
+        """
+        from auctions.tasks import PAGE_VIEW_BACKFILL_JOB
+
+        direct = PageView.objects.filter(auction=self)
+        if ChunkedJobState.objects.filter(name=PAGE_VIEW_BACKFILL_JOB, finished__isnull=False).exists():
+            return (direct,)
+        return (PageView.objects.filter(auction__isnull=True, lot_number__auction=self), direct)
+
     @cached_property
     def unique_views(self):
         """Distinct visitors to the rules page or lots: distinct users plus anonymous sessions that never appear
         with a user. Removes the structural double count of signing in. Returns total and breakdown.
         """
-        all_views = self.page_views
-        logged_in = all_views.filter(user__isnull=False).values("user").distinct().count()
-        # Not exclude(session_id__in=subquery): MariaDB's NOT IN anti-join full-scanned PageView. Two
-        # DISTINCT sets diffed in Python.
-        user_sessions = set(
-            all_views.filter(user__isnull=False, session_id__isnull=False)
-            .values_list("session_id", flat=True)
-            .distinct()
-        )
-        anonymous_sessions = set(
-            all_views.filter(user__isnull=True, session_id__isnull=False)
-            .values_list("session_id", flat=True)
-            .distinct()
-        )
+        users, user_sessions, anonymous_sessions = set(), set(), set()
+        # Not exclude(session_id__in=subquery): MariaDB's NOT IN anti-join full-scanned PageView. DISTINCT
+        # sets from each part, diffed in Python.
+        for views in self.page_view_parts:
+            users.update(views.filter(user__isnull=False).values_list("user", flat=True).order_by().distinct())
+            user_sessions.update(
+                views.filter(user__isnull=False, session_id__isnull=False)
+                .values_list("session_id", flat=True)
+                .order_by()
+                .distinct()
+            )
+            anonymous_sessions.update(
+                views.filter(user__isnull=True, session_id__isnull=False)
+                .values_list("session_id", flat=True)
+                .order_by()
+                .distinct()
+            )
+        logged_in = len(users)
         anonymous = len(anonymous_sessions - user_sessions)
         return {"total": logged_in + anonymous, "logged_in": logged_in, "anonymous": anonymous}
 
