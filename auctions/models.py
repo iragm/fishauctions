@@ -6330,7 +6330,11 @@ class Auction(CachedPropertiesMixin, models.Model):
             )
             for row in rows:
                 counts[row["referrer"]] = counts.get(row["referrer"], 0) + row["count"]
-        views = [{"referrer": referrer, "count": count} for referrer, count in counts.items()]
+        # A view the backfill moves between the two reads counts twice; a chart can carry that.
+        views = [
+            {"referrer": referrer, "count": count}
+            for referrer, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
         labels = []
         data = []
         other = 0
@@ -6651,15 +6655,18 @@ class Auction(CachedPropertiesMixin, models.Model):
 
     @property
     def page_view_parts(self):
-        """``page_views`` as two disjoint querysets that each have an index: rows that name this auction,
-        and older rows that name only one of its lots. Readers over all of an auction's views (no date
-        bound) use these, because the OR in ``page_views`` scanned PageView past the stats task's time
-        limit.
+        """``page_views`` as disjoint querysets that each have an index, for readers over all of an
+        auction's views (no date bound): the OR in ``page_views`` scanned PageView past the stats task's
+        time limit. Older rows that name only one of its lots come first, so a row the backfill moves
+        between the two reads is seen twice (callers dedupe) rather than missed. Once the backfill has
+        finished there are none, and only rows that name this auction are read.
         """
-        return (
-            PageView.objects.filter(auction=self),
-            PageView.objects.filter(auction__isnull=True, lot_number__auction=self),
-        )
+        from auctions.tasks import PAGE_VIEW_BACKFILL_JOB
+
+        direct = PageView.objects.filter(auction=self)
+        if ChunkedJobState.objects.filter(name=PAGE_VIEW_BACKFILL_JOB, finished__isnull=False).exists():
+            return (direct,)
+        return (PageView.objects.filter(auction__isnull=True, lot_number__auction=self), direct)
 
     @cached_property
     def unique_views(self):

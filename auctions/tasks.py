@@ -1444,7 +1444,8 @@ def ensure_auction_stats_task_scheduled(self):
 
 
 def _drop_database_connections():
-    """Close this thread's connections after a soft time limit or database error interrupted a query.
+    """Close this thread's connections after a task failed. Called after any failure, not only a soft time
+    limit or Django DatabaseError: a limit that fires mid-query reaches the task as MySQLdb's own 2014.
 
     The interrupted query leaves MySQL out of sync (2014), so every later query on that connection fails
     too; Django opens a fresh one on the next query. Inside a transaction ``close()`` only marks the

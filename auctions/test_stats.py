@@ -699,6 +699,20 @@ class ViewsAndWinnersStatsTests(TestCase):
         self.assertEqual(result["labels"], ["https://forum.example/a", "Other"])
         self.assertEqual(result["data"], [[3, 1]])
 
+    def test_lot_only_rows_skipped_once_backfill_finished(self):
+        from auctions.models import ChunkedJobState
+        from auctions.tasks import PAGE_VIEW_BACKFILL_JOB
+
+        auction = self._auction()
+        seller = self._tos(auction)
+        lot = self._lot(auction, seller, price=10)
+        PageView.objects.create(auction=auction, user=None, session_id="direct")
+        PageView.objects.create(lot_number=lot, user=None, session_id="legacy")
+        self.assertEqual(len(auction.page_view_parts), 2)
+        ChunkedJobState.objects.create(name=PAGE_VIEW_BACKFILL_JOB, finished=timezone.now())
+        self.assertEqual(len(auction.page_view_parts), 1)
+        self.assertEqual(Auction.objects.get(pk=auction.pk).unique_views["total"], 1)
+
     def test_admin_declared_winner_counted(self):
         # auctiontos_winner and winning_price, but no winner FK: check-in's shape.
         auction = self._auction()

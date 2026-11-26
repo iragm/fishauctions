@@ -222,7 +222,7 @@ this only quotes its opening sentence.
 - **`model_caching.py`** (79 lines)
   ``@cached_property`` on a model, and the invalidation that makes it safe.
   `InvalidatesRelatedCache`, `CachedPropertiesMixin`
-- **`models.py`** (15990 lines)
+- **`models.py`** (15997 lines)
   The database: 80 models, mostly in one file because 29 of them form a single dependency cycle
 - **`moderation_admin.py`** (175 lines)
   The Django admin for the moderation queue: reports, copyright notices, strikes, and library documents.
@@ -321,7 +321,7 @@ this only quotes its opening sentence.
   `script_tag`, `club_url`, `auction_summary`, `auction_description`, `auction_event`, `club_events`
 - **`tables.py`** (1836 lines)
   The ``django_tables2`` tables behind every list on the site.
-- **`tasks.py`** (2045 lines)
+- **`tasks.py`** (2046 lines)
   Celery tasks for the auctions app. Many wrap the management command of the same name.
 - **`template_a11y.py`** (93 lines)
   Two accessibility rules a template cannot break twice, checked against template source.
@@ -797,7 +797,7 @@ this only quotes its opening sentence.
 - **`test_static_html.py`** (85 lines)
   ``format_html`` is never called with nothing to format, and ``static_html`` only ever takes a literal.
   `misuses`, `StaticHtmlTests`, `StaticHtmlCheckerTests`
-- **`test_stats.py`** (1390 lines)
+- **`test_stats.py`** (1404 lines)
   The numbers on an auction's stats page, and the invoice wording that quotes them.
 - **`test_stats_and_browse_views.py`** (631 lines)
   Regression tests for the auction stats charts, the lot-browsing endpoints, the superuser dashboards and the
