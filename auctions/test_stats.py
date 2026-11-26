@@ -673,6 +673,32 @@ class ViewsAndWinnersStatsTests(TestCase):
         PageView.objects.create(lot_number=lot, user=None, session_id="lotsess")
         self.assertEqual(auction.unique_views["total"], 2)
 
+    def test_views_split_between_auction_and_lot_only_rows_counted_once(self):
+        # A visitor whose older lot views name only the lot and newer ones the auction is one visitor.
+        auction = self._auction()
+        seller = self._tos(auction)
+        lot = self._lot(auction, seller, price=10)
+        user = User.objects.create_user("stats19_split", "sp@example.com", "pw")
+        PageView.objects.create(lot_number=lot, user=user, session_id="split1")
+        PageView.objects.create(lot_number=lot, auction=auction, user=user, session_id="split1")
+        PageView.objects.create(lot_number=lot, user=None, session_id="split1")
+        PageView.objects.create(auction=auction, user=None, session_id="anon2")
+        PageView.objects.create(lot_number=lot, user=None, session_id="anon2")
+        self.assertEqual(auction.unique_views, {"total": 2, "logged_in": 1, "anonymous": 1})
+
+    def test_referrers_add_up_across_auction_and_lot_only_rows(self):
+        auction = self._auction()
+        seller = self._tos(auction)
+        lot = self._lot(auction, seller, price=10)
+        PageView.objects.create(auction=auction, referrer="https://forum.example/a")
+        PageView.objects.create(lot_number=lot, referrer="https://forum.example/a")
+        # Names both, so it is one view, not two.
+        PageView.objects.create(auction=auction, lot_number=lot, referrer="https://forum.example/a")
+        PageView.objects.create(lot_number=lot, referrer="https://other.example/")
+        result = auction.set_stat_referrers()
+        self.assertEqual(result["labels"], ["https://forum.example/a", "Other"])
+        self.assertEqual(result["data"], [[3, 1]])
+
     def test_admin_declared_winner_counted(self):
         # auctiontos_winner and winning_price, but no winner FK: check-in's shape.
         auction = self._auction()
