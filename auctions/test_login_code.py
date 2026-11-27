@@ -10,6 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from auctions.models import AuctionTOS, Invoice, UserData
+from auctions.test_signup_links import _OpenAuctionMixin
 from auctions.tests import StandardTestCase
 
 REQUEST = "account_request_login_code"
@@ -143,11 +144,11 @@ class LoginCodeTests(StandardTestCase):
         self.assertFalse(user.has_usable_password())
         self.assertTrue(EmailAddress.objects.get(user=user).verified)
         userdata = UserData.objects.get(user=user)
-        self.assertFalse(userdata.email_me_about_new_auctions)
-        self.assertFalse(userdata.email_me_about_new_in_person_auctions)
-        self.assertFalse(userdata.email_me_about_new_local_lots)
-        self.assertFalse(userdata.email_me_about_new_lots_ship_to_location)
-        self.assertFalse(userdata.email_me_about_new_features)
+        # The same email settings as any other new account.
+        self.assertEqual(
+            userdata.email_me_about_new_auctions, UserData._meta.get_field("email_me_about_new_auctions").default
+        )
+        self.assertTrue(userdata.email_me_about_new_local_lots)
         self.assertTrue(userdata.email_me_when_people_comment_on_my_lots)
 
     def test_known_and_unknown_addresses_look_the_same(self):
@@ -159,14 +160,6 @@ class LoginCodeTests(StandardTestCase):
         self.assertEqual(known.status_code, unknown.status_code)
         self.assertEqual(known["Location"], unknown["Location"])
         self.assertEqual(mail.outbox[0].subject, known_subject)
-
-    def test_the_box_turns_on_nearby_auction_mail(self):
-        self.request_code("wants-news@example.com")
-        self.confirm(self.code_from_mail(), email_me_about_auctions="on")
-        userdata = UserData.objects.get(user=self.signed_in_user())
-        self.assertTrue(userdata.email_me_about_new_auctions)
-        self.assertTrue(userdata.email_me_about_new_in_person_auctions)
-        self.assertFalse(userdata.email_me_about_new_local_lots)
 
     def test_club_added_person_gets_their_rows_and_name(self):
         tos = AuctionTOS.objects.create(
@@ -210,15 +203,32 @@ class LoginCodeTests(StandardTestCase):
         self.assertIsNotNone(self.signed_in_user())
         self.assertFalse(AuctionTOS.objects.filter(email="bounces@example.com", email_address_status="BAD").exists())
 
-    def test_a_mistyped_code_keeps_the_box_ticked(self):
-        self.request_code("ticks@example.com")
-        page = self.confirm("WRONG1", email_me_about_auctions="on")
-        self.assertContains(page, "checked")
-
     # Entry points
 
     def test_login_page_offers_a_code(self):
         self.assertContains(self.client.get(reverse("account_login")), 'id="sign-in-code"')
+
+    def test_sign_up_is_the_same_page_and_the_password_form_is_kept(self):
+        page = self.client.get(reverse("account_signup"), {"next": "/lots/"})
+        self.assertContains(page, 'id="sign-in-code"')
+        self.assertContains(page, 'id="password-sign-up"')
+        self.assertNotContains(page, 'id="signup_form"')
+        legacy = self.client.get(reverse("account_signup"), {"password": "1"})
+        self.assertContains(legacy, 'id="signup_form"')
+
+    def test_password_sign_in_still_works_without_the_inbox(self):
+        user = self.make_user("lost-inbox@example.com")
+        page = self.client.get(reverse("account_login"))
+        self.assertContains(page, 'id="password-sign-in"')
+        self.client.post(reverse("account_login"), {"login": user.username, "password": "secret-pass-123"})
+        self.assertEqual(self.signed_in_user(), user)
+
+    def test_the_email_box_posts_its_next_along(self):
+        self.make_user("from-login@example.com")
+        mail.outbox.clear()
+        response = self.client.post(reverse(REQUEST), {"email": "from-login@example.com", "next": "/lots/"})
+        response = self.client.post(response["Location"], {"code": self.code_from_mail(), "next": "/lots/"})
+        self.assertEqual(response["Location"], "/lots/")
 
     def test_invoice_button_prefills_the_address(self):
         tos = AuctionTOS.objects.create(
@@ -236,3 +246,103 @@ class LoginCodeTests(StandardTestCase):
         self.assertFalse(User.objects.filter(email="invoice-viewer@example.com").exists())
         form = self.client.get(reverse(REQUEST), {"invoice": str(invoice.no_login_link)})
         self.assertContains(form, 'value="invoice-viewer@example.com"')
+
+
+class AppLoginCodeTests(StandardTestCase):
+    """The app's two endpoints: no session, a challenge instead."""
+
+    code_from_mail = LoginCodeTests.code_from_mail
+    make_user = LoginCodeTests.make_user
+
+    def app_request(self, email):
+        mail.outbox.clear()
+        return self.client.post(reverse("mobile-auth-code-request"), {"email": email}, content_type="application/json")
+
+    def app_confirm(self, challenge, code):
+        return self.client.post(
+            reverse("mobile-auth-code-confirm"), {"challenge": challenge, "code": code}, content_type="application/json"
+        )
+
+    def test_a_new_address_gets_tokens_and_an_account(self):
+        response = self.app_request("app-new@example.com")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(email="app-new@example.com").exists())
+        response = self.app_confirm(response.json()["challenge"], self.code_from_mail())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())
+        user = User.objects.get(email="app-new@example.com")
+        self.assertTrue(EmailAddress.objects.get(user=user).verified)
+
+    def test_an_existing_account_gets_its_own_tokens(self):
+        user = self.make_user("app-old@example.com")
+        challenge = self.app_request("app-old@example.com").json()["challenge"]
+        self.assertEqual(self.app_confirm(challenge, self.code_from_mail()).status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("secret-pass-123"))
+
+    def test_three_wrong_codes_end_the_challenge(self):
+        challenge = self.app_request("app-guess@example.com").json()["challenge"]
+        code = self.code_from_mail()
+        for _ in range(3):
+            self.assertEqual(self.app_confirm(challenge, "WRONG1").status_code, 401)
+        self.assertEqual(self.app_confirm(challenge, code).status_code, 401)
+        self.assertFalse(User.objects.filter(email="app-guess@example.com").exists())
+
+    def test_a_bad_address_is_refused(self):
+        self.assertEqual(self.app_request("not-an-address").status_code, 400)
+
+    def test_config_offers_it(self):
+        self.assertTrue(self.client.get(reverse("mobile-config")).json().get("email_code_sign_in_enabled"))
+
+
+class NameAndReminderTests(_OpenAuctionMixin, StandardTestCase):
+    def nameless(self, email="nameless@example.com"):
+        user = User.objects.create_user(f"member{User.objects.count()}", email, "pw-123456789")
+        EmailAddress.objects.create(user=user, email=email, verified=True, primary=True)
+        return user
+
+    def test_sign_in_takes_the_name_a_club_typed(self):
+        from auctions.signals import on_sign_in
+
+        user = self.nameless("named-by-club@example.com")
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            name="Robin Example",
+            email="named-by-club@example.com",
+            manually_added=True,
+            bidder_number="781",
+        )
+        on_sign_in(user)
+        user.refresh_from_db()
+        self.assertEqual((user.first_name, user.last_name), ("Robin", "Example"))
+
+    def test_joining_asks_a_nameless_person_for_their_name_on_the_join_form(self):
+        from auctions.services import join_auction
+
+        auction = self.open_auction()
+        location = auction.location_qs.first()
+        user = self.nameless()
+        self.assertEqual(join_auction(user, auction, location)[2], "name")
+        self.client.force_login(user)
+        self.assertContains(self.client.get(auction.get_absolute_url()), 'name="first_name"')
+        self.client.post(
+            auction.get_absolute_url(),
+            {
+                "pickup_location": location.pk,
+                "time_spent_reading_rules": 10,
+                "first_name": "Sam",
+                "last_name": "Example",
+            },
+        )
+        user.refresh_from_db()
+        self.assertEqual(user.first_name, "Sam")
+        self.assertTrue(AuctionTOS.objects.filter(user=user, auction=auction).exists())
+
+    def test_reminder_on_dashboards_only_and_not_after_closing(self):
+        user = self.nameless()
+        self.client.force_login(user)
+        self.assertContains(self.client.get(reverse("selling")), 'id="profile-reminder"')
+        self.assertNotContains(self.client.get(reverse("allLots")), 'id="profile-reminder"')
+        self.client.cookies["hide_profile_reminder"] = "true"
+        self.assertNotContains(self.client.get(reverse("selling")), 'id="profile-reminder"')

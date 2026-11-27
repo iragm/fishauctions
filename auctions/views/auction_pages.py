@@ -1142,6 +1142,10 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             return redirect_to_login(request.get_full_path())
         form = self.get_form()
         if form.is_valid():
+            if getattr(form, "asks_name", False):
+                request.user.first_name = form.cleaned_data["first_name"].strip()
+                request.user.last_name = form.cleaned_data["last_name"].strip()
+                request.user.save(update_fields=["first_name", "last_name"])
             _tos, _created, problem = join_auction(
                 request.user,
                 auction,
@@ -1151,6 +1155,9 @@ class AuctionInfo(FormFrictionMixin, FormMixin, DetailView, AuctionViewMixin):
             )
             if problem == "email":
                 return redirect(f"{reverse('reverify_email')}?{urlencode({'next': auction.get_absolute_url()})}")
+            if problem == "name":
+                messages.error(self.request, "Add your name to join")
+                return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
             if problem == "phone_number":
                 messages.error(self.request, "This auction requires a phone number before you can join")
                 return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")

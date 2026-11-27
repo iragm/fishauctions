@@ -1,0 +1,16 @@
+{% load crispy_forms_tags sign_in_tags %}
+{% comment %}The one way in for new and returning people alike: Google, Apple, or an emailed code, which signs in an existing account or makes one (auctions/login_code.py). Used by the sign-in and sign-up pages, so both look the same. Google and Apple are hidden in the app, whose WebView blocks the web OAuth redirect.{% endcomment %}
+<div id="sign-in-choices" style="max-width: 24rem;">
+  {% if not request.is_mobile_app %}
+  {% if GOOGLE_LOGIN_ENABLED %}<a id="sign-in-google" class="btn btn-primary w-100 mb-2" rel="nofollow" href="/google/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}"><i class="bi bi-google"></i> Continue with Google</a>{% endif %}
+  {% if APPLE_LOGIN_ENABLED %}<a id="sign-in-apple" class="btn btn-primary w-100 mb-2" rel="nofollow" href="/apple/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}"><i class="bi bi-apple"></i> Continue with Apple</a>{% endif %}
+  {% endif %}
+  {% login_code_form as code_form %}
+  <form id="request-login-code" method="POST" action="{% url 'account_request_login_code' %}" class="mt-2">
+    {% csrf_token %}
+    {{ code_form | crispy }}
+    {% if redirect_field_value %}<input type="hidden" name="{{ redirect_field_name|default:'next' }}" value="{{ redirect_field_value }}">{% endif %}
+    <button id="sign-in-code" class="btn btn-success text-dark w-100" type="submit"><i class="bi bi-envelope"></i> Continue with email</button>
+  </form>
+  <p class="text-muted small mt-2 mb-0">By continuing you agree to our <a href="{% url 'tos' %}">terms of service</a> and <a href="{% url 'privacy_policy' %}">privacy policy</a>.</p>
+</div>

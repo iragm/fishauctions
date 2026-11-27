@@ -8,6 +8,8 @@ from .views import (
     MobileCheckinJoinView,
     MobileCheckinPingView,
     MobileCheckinSetLocationView,
+    MobileCodeConfirmView,
+    MobileCodeRequestView,
     MobileCommandPaletteLogView,
     MobileCommandPaletteView,
     MobileConfigView,
@@ -53,6 +55,8 @@ urlpatterns = [
     path("crashes/", MobileCrashReportView.as_view(), name="mobile-crashes"),
     # Auth
     path("auth/login/", MobileLoginView.as_view(), name="mobile-auth-login"),
+    path("auth/code/request/", MobileCodeRequestView.as_view(), name="mobile-auth-code-request"),
+    path("auth/code/confirm/", MobileCodeConfirmView.as_view(), name="mobile-auth-code-confirm"),
     # Legacy Google-only endpoint. Superseded by auth/social/ below, which runs allauth's pipeline
     # for all three providers; kept alive until older installs age out.
     path("auth/google/", MobileGoogleAuthView.as_view(), name="mobile-auth-google"),

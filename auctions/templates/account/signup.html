@@ -5,6 +5,12 @@
 {% block title %}{% trans "Signup" %}{% endblock %}
 
 {% block content %}
+    {% comment %}Sign-up is the sign-in page: an emailed code makes the account. The username-and-password form is kept for anyone who wants one, behind ?password=1, and opens on its own when it was just submitted with errors.{% endcomment %}
+    {% if not form.is_bound and not request.GET.password %}
+    <h3>Sign in or create an account</h3>
+    {% include "account/partials/sign_in_choices.html" %}
+    <a id="password-sign-up" class="btn btn-link px-0 mt-3" rel="nofollow" href="{% url 'account_signup' %}?password=1{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}">Create an account with a username and password</a>
+    {% else %}
     <h3>{% trans "Sign Up" %}</h3>
 
     <p>{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
@@ -169,4 +175,5 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 });
 </script>
+{% endif %}
 {% endblock %}

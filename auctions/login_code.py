@@ -19,13 +19,16 @@ exists. This module adds the one thing it won't do, and closes two holes it leav
 - **An unverified second address doesn't count.** allauth would sign into an account that merely
   listed the address, unverified, beside its own. Here such an address belongs to nobody yet.
 
-Accounts made here start with no promotional mail; the one box on the code page turns on news of
-auctions near them, and the username is ``member`` plus digits rather than anything a club typed.
+Accounts made here get the same email settings as any other new account (Ira, 2026-11-26), take
+their name from the newest club-added row for the address, and get ``member`` plus digits as a
+username rather than anything a club typed.
 A bounce doesn't block a code: the person is asking for this mail, and a sign-in clears it. Two confirms at
 once for the same new address (a double tap) share one account, through a database lock.
 
 The views replace allauth's at the same two paths and names (``fishauctions/urls.py`` lists them
-first), so every ``{% url %}`` and allauth redirect lands here.
+first), so every ``{% url %}`` and allauth redirect lands here. The app signs in the same way through
+:func:`start_app_code` and :func:`finish_app_code` (``/api/mobile/auth/code/``): it keeps no
+session, so the pending code lives in the cache under a random challenge instead.
 """
 
 from allauth.account.adapter import get_adapter
@@ -36,7 +39,6 @@ from allauth.account.internal.userkit import user_id_to_str
 from allauth.account.models import EmailAddress, Login
 from allauth.account.stages import LoginByCodeStage, LoginStageController
 from allauth.account.views import ConfirmLoginCodeView, RequestLoginCodeView
-from django import forms
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from django.http import HttpResponseRedirect
@@ -47,15 +49,7 @@ from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 
 NEW_ACCOUNT_KEY = "fa_new_account"
-WANTS_AUCTION_EMAIL_KEY = "fa_wants_auction_email"
-PROMO_FLAGS = (
-    "email_me_about_new_auctions",
-    "email_me_about_new_in_person_auctions",
-    "email_me_about_new_features",
-    "email_me_about_new_local_lots",
-    "email_me_about_new_lots_ship_to_location",
-)
-NEARBY_AUCTION_FLAGS = ("email_me_about_new_auctions", "email_me_about_new_in_person_auctions")
+APP_CODE_CACHE_PREFIX = "app_login_code:"
 
 
 def _email_lock(email):
@@ -141,8 +135,8 @@ def _name_from_club_rows(email):
 
 
 @transaction.atomic
-def create_account(request, email, wants_auction_email=False):
-    """A new account for *email*, verified, passwordless, with promotional mail off."""
+def create_account(request, email):
+    """A new account for *email*: verified, passwordless, named from the club's rows if any."""
     adapter = get_adapter(request)
     user = adapter.new_user(request)
     user.email = email
@@ -164,13 +158,6 @@ def create_account(request, email, wants_auction_email=False):
     # An unverified copy of the address on someone else's account is a squatter's; it goes.
     EmailAddress.objects.filter(email__iexact=email, verified=False).exclude(user=user).delete()
     EmailAddress.objects.create(user=user, email=email, primary=True, verified=True)
-    userdata = user.userdata
-    for flag in PROMO_FLAGS:
-        setattr(userdata, flag, False)
-    if wants_auction_email:
-        for flag in NEARBY_AUCTION_FLAGS:
-            setattr(userdata, flag, True)
-    userdata.save(update_fields=list(PROMO_FLAGS))
     return user
 
 
@@ -191,6 +178,89 @@ def prepare_existing_account(user, email):
     if user.has_usable_password():
         user.set_unusable_password()
         user.save(update_fields=["password"])
+
+
+def resolve_code_account(request, email, *, user=None, new_account=False):
+    """The account a correct code for *email* signs in to, made now if it was promised; None to refuse.
+
+    *user* is the account found when the code was asked for, re-checked here: it may have changed its
+    address or been closed since.
+    """
+    if user is None:
+        if not new_account:
+            return None
+        with _email_lock(email) as locked:
+            if not locked:
+                return None
+            # An account may have got this address while the code was out (or a double tap made it).
+            user = create_account(request, email) if address_is_free(email) else account_for_code(email)
+    elif not counts_for(user, email):
+        user = None
+    if user is not None:
+        prepare_existing_account(user, email)
+    return user
+
+
+def send_code_mail(request, email, code):
+    get_adapter().send_mail("account/email/login_code", email, {"request": request, "code": code})
+
+
+def start_app_code(request, email):
+    """Email a code for the app, and return the challenge the app sends back with it.
+
+    The same answer for every address, so nobody learns which have accounts. ``None`` when allauth's
+    request limits say no.
+    """
+    import secrets
+
+    from allauth.core import ratelimit
+    from django.core.cache import cache
+
+    if not ratelimit.consume(request, action="request_login_code", key=email.lower()):
+        return None
+    challenge = secrets.token_urlsafe(32)
+    user = account_for_code(email)
+    pending = {"email": email, "user_id": user.pk if user else None, "code": "", "attempts": 0}
+    if user is not None or address_is_free(email):
+        pending["code"] = get_adapter().generate_login_code()
+        send_code_mail(request, email, pending["code"])
+    from django.conf import settings
+
+    cache.set(APP_CODE_CACHE_PREFIX + challenge, pending, settings.ACCOUNT_LOGIN_BY_CODE_TIMEOUT)
+    return challenge
+
+
+def finish_app_code(request, challenge, code):
+    """The account signed in by *code* for *challenge*, or None. Three wrong tries end the challenge."""
+    from allauth.account.internal.flows.email_verification import verify_email_indirectly
+    from allauth.core.internal.cryptokit import compare_user_code
+    from django.conf import settings
+    from django.core.cache import cache
+
+    key = APP_CODE_CACHE_PREFIX + (challenge or "")
+    pending = cache.get(key) if challenge else None
+    if not pending:
+        return None
+    if not compare_user_code(actual=code or "", expected=pending["code"]):
+        pending["attempts"] += 1
+        if pending["attempts"] >= settings.ACCOUNT_LOGIN_BY_CODE_MAX_ATTEMPTS:
+            cache.delete(key)
+        else:
+            cache.set(key, pending, settings.ACCOUNT_LOGIN_BY_CODE_TIMEOUT)
+        return None
+    cache.delete(key)
+    email = pending["email"]
+    known = User.objects.filter(pk=pending["user_id"]).first() if pending["user_id"] else None
+    if pending["user_id"] and known is None:
+        return None
+    user = resolve_code_account(request, email, user=known, new_account=pending["user_id"] is None)
+    if user is None:
+        return None
+    verify_email_indirectly(request, user, email)
+    from auctions.services import clear_email_bounce
+
+    clear_email_bounce(user)
+    return user
 
 
 class CodeSignInProcess(LoginCodeVerificationProcess):
@@ -220,37 +290,21 @@ class CodeSignInProcess(LoginCodeVerificationProcess):
         # the address since: the confirm step signs in to that account instead.
         if self.state.get(NEW_ACCOUNT_KEY) or address_is_free(email):
             self.state[NEW_ACCOUNT_KEY] = True
-            code = self.generate_code()
-            get_adapter().send_mail("account/email/login_code", email, {"request": self.request, "code": code})
+            send_code_mail(self.request, email, self.generate_code())
         # Same page either way: nobody learns which addresses have accounts.
         self.add_sent_message({"email": email, "recipient": email})
 
     def finish(self, redirect_url):
         email = self.state.get("email")
-        wants = bool(self.state.get(WANTS_AUCTION_EMAIL_KEY))
         if not email:
             return self._give_up()
-        if self.user is None:
-            if not self.state.get(NEW_ACCOUNT_KEY):
-                return self._give_up()
-            with _email_lock(email) as locked:
-                if not locked:
-                    return self._give_up()
-                if address_is_free(email):
-                    user = create_account(self.request, email, wants_auction_email=wants)
-                else:
-                    # An account got this address while the code was out (or a double tap made it).
-                    user = account_for_code(email)
-        else:
-            # Re-checked: the account may have changed its address or been closed since the code went out.
-            user = self.user if counts_for(self.user, email) else None
-            if user is not None and wants:
-                _turn_on_nearby_auction_email(user)
+        user = resolve_code_account(
+            self.request, email, user=self.user, new_account=bool(self.state.get(NEW_ACCOUNT_KEY))
+        )
         if user is None:
             return self._give_up()
         self._user = user
         self.state["user_id"] = user_id_to_str(user)
-        prepare_existing_account(user, email)
         response = super().finish(redirect_url)
         from auctions.services import clear_email_bounce
 
@@ -260,12 +314,6 @@ class CodeSignInProcess(LoginCodeVerificationProcess):
     def _give_up(self):
         self.abort()
         return HttpResponseRedirect(reverse("account_request_login_code"))
-
-
-def _turn_on_nearby_auction_email(user):
-    from auctions.models import UserData
-
-    UserData.objects.filter(user=user).update(**dict.fromkeys(NEARBY_AUCTION_FLAGS, True))
 
 
 class CustomRequestLoginCodeForm(RequestLoginCodeForm):
@@ -287,12 +335,6 @@ class CustomRequestLoginCodeForm(RequestLoginCodeForm):
             # doesn't count, so look through them all.
             self._user = account_for_code(email)
         return email
-
-
-class CodeConfirmForm(forms.Form):
-    """Only what the confirm page adds to allauth's: the one opt-in box."""
-
-    email_me_about_auctions = forms.BooleanField(required=False, label="Email me about auctions near me")
 
 
 class CodeRequestView(RequestLoginCodeView):
@@ -329,19 +371,7 @@ class CodeConfirmView(ConfirmLoginCodeView):
         self._process = CodeSignInProcess.resume(self.stage)
         if not self._process:
             return HttpResponseRedirect(reverse("account_request_login_code"))
-        resending = request.POST.get("action") == "resend" and self._process.can_resend
-        if request.method == "POST" and not resending:
-            opt_in = CodeConfirmForm(request.POST)
-            self._process.state[WANTS_AUCTION_EMAIL_KEY] = (
-                opt_in.is_valid() and opt_in.cleaned_data["email_me_about_auctions"]
-            )
         return super(ConfirmLoginCodeView, self).dispatch(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # Bound on a re-render, so a mistyped code doesn't untick the box.
-        context["opt_in_form"] = CodeConfirmForm(self.request.POST if self.request.method == "POST" else None)
-        return context
 
 
 request_login_code = CodeRequestView.as_view()

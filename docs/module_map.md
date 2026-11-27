@@ -126,7 +126,7 @@ this only quotes its opening sentence.
 - **`consumers.py`** (510 lines)
   The websocket half of the site: live bidding, chat, and "somebody else just bid".
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
-- **`context_processors.py`** (377 lines)
+- **`context_processors.py`** (417 lines)
   Values every template needs and no view should have to pass.
 - **`crawlers.py`** (81 lines)
   Telling a crawler from a visitor by its User-Agent.
@@ -170,7 +170,7 @@ this only quotes its opening sentence.
 - **`form_friction.py`** (169 lines)
   The view mixin that writes :class:`auctions.friction_models.FormFailure` rows.
   `error_codes`, `abandon_token`, `read_abandon_token`, `FormFrictionMixin`
-- **`forms.py`** (6756 lines)
+- **`forms.py`** (6770 lines)
   Every form on the site.
 - **`free_text_usage.py`** (212 lines)
   What clubs type into invoice adjustment notes and custom lot fields, grouped by common terms.
@@ -209,9 +209,8 @@ this only quotes its opening sentence.
 - **`log_context.py`** (111 lines)
   Who a log line was written for: a short request id and user pk, or the Celery task, on every record.
   `current`, `ContextFilter`, `set_user`, `RequestContextMiddleware`, `UserContextMiddleware`, `connect_celery`
-- **`login_code.py`** (348 lines)
+- **`login_code.py`** (378 lines)
   Sign in with an emailed code: no password, no username, and the code is the verification.
-  `address_is_free`, `counts_for`, `account_for_code`, `create_account`, `prepare_existing_account`, `CodeSignInProcess`, `CustomRequestLoginCodeForm`, `CodeConfirmForm`, `CodeRequestView`, `CodeConfirmView`
 - **`logistics.py`** (375 lines)
   After an online auction: who comes to which pickup, and how far along the club is.
 - **`mailchimp.py`** (656 lines)
@@ -242,7 +241,7 @@ this only quotes its opening sentence.
 - **`notifications.py`** (317 lines)
   Email to mobile-push routing.
   `push_configured`, `user_prefers_push`, `user_has_app_push`, `notify_user`, `notify_running_total`, `send_fcm_message`, `send_fcm_data_message`
-- **`palette_actions.py`** (17301 lines)
+- **`palette_actions.py`** (17306 lines)
   The things the command palette's assist, and ``/mcp/``, are allowed to do.
 - **`palette_assist.py`** (2319 lines)
   Natural-language orchestration for the command palette.
@@ -278,12 +277,12 @@ this only quotes its opening sentence.
   `SampleResult`, `load_fixture`, `auction_has_lots`, `offer_sample_data`, `scaled_price`, `load_sample_data`
 - **`serializers.py`** (871 lines)
   DRF serializers for the club API.
-- **`services.py`** (1824 lines)
+- **`services.py`** (1830 lines)
   Operations that are the same whoever asks: web page, API, app or assistant.
 - **`session_store.py`** (54 lines)
   ``cached_db`` sessions that fall back to the database on a Redis stall and leave Redis after two weeks idle.
   `SessionStore`
-- **`signals.py`** (1106 lines)
+- **`signals.py`** (1140 lines)
   Signal handlers for the auctions app.
 - **`site_checks.py`** (259 lines)
   Checks for the site quietly not doing its job, which no error line would show. Read by ``site_health``.
@@ -565,9 +564,9 @@ this only quotes its opening sentence.
 - **`test_location_check.py`** (174 lines)
   The far-from-pickup location check, its "yes, my location is accurate" box, and the setup box for experienced creators.
   `LocationCheckTests`, `ConfirmBoxTests`, `SetupBoxTests`
-- **`test_login_code.py`** (238 lines)
+- **`test_login_code.py`** (348 lines)
   Sign in with an emailed code (auctions/login_code.py): existing accounts, new ones, club-added people,
-  `LoginCodeTests`
+  `LoginCodeTests`, `AppLoginCodeTests`, `NameAndReminderTests`
 - **`test_login_required_dispatch.py`** (59 lines)
   Signed-out visitors are turned away, not handed a 500, by views that override ``dispatch``.
   `AnonymousDispatchTests`
@@ -1101,8 +1100,8 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
   `BinaryRenderer`, `PdfRenderer`, `PngRenderer`
 - **`serializers.py`** (568 lines)
   Request and response shapes for the mobile app's API under ``/api/mobile/``.
-- **`urls.py`** (141 lines)
-- **`views.py`** (1589 lines)
+- **`urls.py`** (145 lines)
+- **`views.py`** (1641 lines)
   Mobile API views: everything under /api/mobile/.
 
 ## `auctions/mobile/services/`
@@ -1170,6 +1169,9 @@ The site's Model Context Protocol server, and the tool catalogue behind it.
 - **`seo_tags.py`** (58 lines)
   Template tags for what a search engine or a link preview reads: absolute URLs, a plain-text excerpt,
   `absolute_uri`, `plain_excerpt`, `auction_summary`, `auction_json_ld`, `club_json_ld`
+- **`sign_in_tags.py`** (22 lines)
+  The email box on the one sign-in page (``account/partials/sign_in_choices.html``).
+  `login_code_form`
 - **`species_tags.py`** (11 lines)
   `fishbase_citation`
 
@@ -1188,7 +1190,7 @@ Every view on the site, split by the part of it the view belongs to.
   Setting an auction up and running the room: pickup locations, users, check-in.
 - **`auction_extras.py`** (749 lines)
   The rest of an auction's admin surface: label config, bulk printing, no-shows, chat.
-- **`auction_pages.py`** (1223 lines)
+- **`auction_pages.py`** (1230 lines)
   The auction as a thing you join: the TOS, creating one, and the auction's own page.
   `AuctionTOSDelete`, `AuctionTOSAdmin`, `AuctionConfirmView`, `AuctionCreateView`, `AuctionPageAction`, `creator_club_admin_offer`, `AuctionInfo`, `AuctionLeave`, `AuctionSurvey`
 - **`auction_stats.py`** (1081 lines)
@@ -1310,7 +1312,7 @@ This will make sure the app is always imported when
 - **`firebase_config.py`** (88 lines)
   Parse the public Firebase client-config files that ship with the mobile build.
   `load_android_config`, `load_ios_config`, `load_firebase_client_config`
-- **`settings.py`** (1330 lines)
+- **`settings.py`** (1331 lines)
   Django settings for fishauctions. Reads .env; variables are documented in .env.example.
 - **`static_storage.py`** (52 lines)
   Content-hashed names for `/static/`, tolerant of the two things that would break a deploy.

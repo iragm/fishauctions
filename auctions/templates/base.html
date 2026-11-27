@@ -409,8 +409,8 @@
                     </div>
                   </li>
                   {% else %}
+                  {% comment %}One link: the sign-in page makes an account too.{% endcomment %}
                   <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link' rel='nofollow'>Sign in</a>
-                  <a href="{% url 'account_signup' %}?next={% firstof request.path '/' %}" class='nav-link' rel='nofollow'>Create account</a>
                 {% endif %}
                 </ul>
               </div>
@@ -445,6 +445,11 @@
         {% if not has_user_location and location_message and not request.is_mobile_app %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endif %}
+        {% if profile_reminder %}
+        <div id="profile-reminder" class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="{{ profile_reminder.url }}?next={{ request.path|urlencode }}">{{ profile_reminder.text }}</a>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close" onclick="document.cookie = 'hide_profile_reminder=true; max-age=2592000; SameSite=Strict; path=/'"></button>
         </div>
         {% endif %}
         {% if show_android_testers %}

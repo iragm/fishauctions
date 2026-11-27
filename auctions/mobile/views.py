@@ -146,6 +146,56 @@ class MobileLoginView(APIView):
         )
 
 
+class MobileCodeRequestView(APIView):
+    """POST /api/mobile/auth/code/request/ {email} — email a sign-in code; returns {challenge}.
+
+    The same answer for every address, account or not (``auctions.login_code.start_app_code``).
+    """
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from django.core.exceptions import ValidationError
+        from django.core.validators import validate_email
+
+        from auctions.login_code import start_app_code
+
+        email = str(request.data.get("email") or "").strip()
+        try:
+            validate_email(email)
+        except ValidationError:
+            return Response({"email": ["Enter a valid email address."]}, status=status.HTTP_400_BAD_REQUEST)
+        challenge = start_app_code(request._request, email)
+        if challenge is None:
+            return Response({"detail": "Too many codes asked for. Try again in a minute."}, status=429)
+        return Response({"challenge": challenge}, status=status.HTTP_200_OK)
+
+
+class MobileCodeConfirmView(APIView):
+    """POST /api/mobile/auth/code/confirm/ {challenge, code} — issue a JWT pair, making the account if
+    this address had none. Three wrong codes end the challenge."""
+
+    authentication_classes = []
+    permission_classes = []
+    throttle_scope = "mobile_auth"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        from auctions.login_code import finish_app_code
+
+        user = finish_app_code(
+            request._request, str(request.data.get("challenge") or ""), str(request.data.get("code") or "")
+        )
+        if user is None:
+            return Response({"detail": "That code didn't work."}, status=status.HTTP_401_UNAUTHORIZED)
+        on_sign_in(user)
+        refresh = RefreshToken.for_user(user)
+        return Response({"access": str(refresh.access_token), "refresh": str(refresh)}, status=status.HTTP_200_OK)
+
+
 class MobileGoogleAuthView(APIView):
     """POST /api/mobile/auth/google/ — exchange a Google ID token for a JWT pair."""
 
@@ -542,6 +592,8 @@ class MobileConfigView(APIView):
             "terms_url": reverse("tos"),
             # Facebook's id must match the one compiled into the app.
             "apple_sign_in_enabled": bool(settings.APPLE_ALLOWED_AUDIENCES),
+            # The app's email box: auth/code/request/ then auth/code/confirm/.
+            "email_code_sign_in_enabled": True,
             "facebook_app_id": settings.FACEBOOK_APP_ID,
         }
         data["privacy_policy_url"] = reverse("privacy_policy")

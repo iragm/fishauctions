@@ -730,6 +730,39 @@ def link_unattached_rows_for_user(user):
         member.save()
 
 
+def fill_name_from_rows(user):
+    """Give a nameless account the newest name a club typed on one of its rows. True if it now has one.
+
+    Club-added people sign in by a code or Google with no name of their own; the club already wrote
+    it down, so they are never asked for it again.
+    """
+    from auctions.models import AuctionTOS, ClubMember
+
+    if user.first_name or user.last_name:
+        return True
+    candidates = []
+    tos = (
+        AuctionTOS.objects.filter(user=user)
+        .exclude(name__isnull=True)
+        .exclude(name__in=["", "Unknown"])
+        .order_by("-createdon")
+        .first()
+    )
+    if tos:
+        candidates.append((tos.createdon, tos.name))
+    member = ClubMember.objects.filter(user=user, is_deleted=False).exclude(name="").order_by("-createdon").first()
+    if member:
+        candidates.append((member.createdon, member.name))
+    names = [name.strip() for _when, name in sorted(candidates, key=lambda c: c[0], reverse=True)]
+    name = next((n for n in names if n and "@" not in n), "")
+    if not name:
+        return False
+    first, _, last = name.partition(" ")
+    user.first_name, user.last_name = first[:30], last.strip()[:150]
+    user.save(update_fields=["first_name", "last_name"])
+    return True
+
+
 def on_sign_in(user, request=None):
     """Everything signing in does, by any route: the web's ``user_logged_in`` and the app's token logins."""
     from auctions.account_deletion import cancel_deletion
@@ -744,6 +777,7 @@ def on_sign_in(user, request=None):
             "Welcome back!  Your account was scheduled to be deleted, and signing in has cancelled that.",
         )
     link_unattached_rows_for_user(user)
+    fill_name_from_rows(user)
     ensure_single_club_membership_for_user(user)
 
 

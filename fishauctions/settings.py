@@ -314,6 +314,7 @@ TEMPLATES = [
                 "auctions.context_processors.label_print_method",
                 "auctions.context_processors.account_nav",
                 "auctions.context_processors.android_testers",
+                "auctions.context_processors.profile_reminder",
                 "auctions.context_processors.offline_auction",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
