@@ -6,8 +6,10 @@ page load.
 """
 
 import functools
+import re
 
 from django.conf import settings  # import the settings file
+from django.urls import reverse
 
 from auctions import dmca
 from auctions.client_ip import client_ip
@@ -375,3 +377,41 @@ def _offline_auction_slug(request):
     if not opens <= now <= closes:
         return ""
     return auction.slug if auction.permission_check(request.user) else ""
+
+
+PROFILE_REMINDER_DISMISSED_COOKIE = "hide_profile_reminder"
+# Where someone looks at their own things, not a page they came to do something else on: a nudge there
+# is a reminder, anywhere else it is in the way.
+PROFILE_REMINDER_PAGES = frozenset({"selling", "buying", "my_invoices", "account", "userpage"})
+_MADE_UP_USERNAME = re.compile(r"^member\d*$")
+
+
+@once_per_request
+def profile_reminder(request):
+    """One dismissible line asking a signed-in person for what an emailed code didn't: name, address,
+    phone, or a username of their own. Shown on their own dashboards only; closing it hides it for
+    30 days.
+    """
+    user = getattr(request, "user", None)
+    match = getattr(request, "resolver_match", None)
+    if (
+        user is None
+        or not user.is_authenticated
+        or getattr(request, "is_mobile_app", False)
+        or request.COOKIES.get(PROFILE_REMINDER_DISMISSED_COOKIE)
+        or getattr(match, "url_name", "") not in PROFILE_REMINDER_PAGES
+        or not _is_page_load(request)
+    ):
+        return {"profile_reminder": None}
+    if getattr(match, "url_name", "") == "userpage" and match.kwargs.get("slug") != user.username:
+        return {"profile_reminder": None}
+    userdata = getattr(user, "userdata", None)
+    if (
+        not (user.first_name or user.last_name)
+        or not getattr(userdata, "address", "")
+        or not getattr(userdata, "phone_number", "")
+    ):
+        return {"profile_reminder": {"url": reverse("contact_info"), "text": "Add your name, address and phone"}}
+    if _MADE_UP_USERNAME.match(user.username or ""):
+        return {"profile_reminder": {"url": reverse("change_username"), "text": "Choose a username"}}
+    return {"profile_reminder": None}

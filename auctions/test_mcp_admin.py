@@ -1065,7 +1065,7 @@ class AdminJobProposalTests(AdminEndpointCase):
         rows = {club["club"]: club for club in clubs}
         self.assertEqual(rows[harbor.pk]["interests"], ["Reef test"])
         self.assertEqual(rows[harbor.pk]["other_software"], "mygroupauctions")
-        self.assertEqual(rows[harbor.pk]["last_real_auction"], started.date().isoformat())
+        self.assertEqual(rows[harbor.pk]["last_real_auction"], timezone.localtime(started).date().isoformat())
         self.assertIsNone(rows[bare.pk]["last_real_auction"])
         for interest, expected in (("reef TEST", [harbor.pk]), ("none", [bare.pk])):
             with self.subTest(interest=interest):

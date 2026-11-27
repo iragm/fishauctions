@@ -331,6 +331,12 @@ ROUTE_LIST: list[Route] = [
         "Account",
         keywords=["merge accounts", "duplicate account", "two accounts", "combine accounts", "second account"],
     ),
+    _r(
+        "account_change_password",
+        "Change or set my password",
+        "Account",
+        keywords=["password", "set a password", "new password", "lost my email"],
+    ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
     _r("paypal_connect", "Connect PayPal", "Account", keywords=["link paypal", "set up paypal"]),

@@ -32,7 +32,9 @@ class ManageUsersThroughClubTests(TestCase):
     def setUp(self):
         now = timezone.now()
         self.creator = User.objects.create_user(username="auction_creator", password="testpw", email="c@example.com")
-        self.joiner = User.objects.create_user(username="joiner", password="testpw", email="j@example.com")
+        self.joiner = User.objects.create_user(
+            username="joiner", password="testpw", email="j@example.com", first_name="Joe", last_name="Joiner"
+        )
         self.club_admin_user = User.objects.create_user(
             username="club_admin", password="testpw", email="ca@example.com"
         )

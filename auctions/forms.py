@@ -2004,6 +2004,20 @@ class AuctionJoin(forms.ModelForm):
             "pickup_location",
             submit,
         )
+        # Nameless (an emailed code with no club row behind it): asked right here, not on another page.
+        self.asks_name = bool(
+            user
+            and user.is_authenticated
+            and not joined
+            and not (user.first_name or user.last_name)
+            and not AuctionTOS.objects.filter(user=user, auction=auction).exists()
+        )
+        if self.asks_name:
+            self.fields["first_name"] = forms.CharField(max_length=30, label="First name")
+            self.fields["last_name"] = forms.CharField(max_length=150, label="Last name", required=False)
+            self.helper.layout.insert(
+                2, Div(Div("first_name", css_class="col"), Div("last_name", css_class="col"), css_class="row")
+            )
         if joined:
             # Opens auction.html's leave dialog.
             self.helper.layout.append(

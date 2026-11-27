@@ -6,7 +6,7 @@
 <h2 class="h5 mt-4" id="join">1. Join the auction</h2>
 <p>Signing up for the site and joining an auction are two different things. You need both. Without joining, there's no bid button and no way to add lots.</p>
 <ol>
-  <li><strong>{% if help.signed_in %}Sign in.{% else %}<a href="{% url 'account_login' %}">Sign in.</a>{% endif %}</strong> {% ui "Sign in with Google" %} or {% ui "Sign in with Apple" %} is one click.</li>
+  <li><strong>{% if help.signed_in %}Sign in.{% else %}<a href="{% url 'account_login' %}">Sign in.</a>{% endif %}</strong> {% ui "Continue with Google" %} or {% ui "Continue with Apple" %} is one click, or type your email for a code.</li>
   <li><strong>Open {% page "auction_main" "the auction's page" %}.</strong> {% page "auctions" "Auctions" %}, at the top of the page, lists the auctions near you; {% ui "Show all" %} lists the rest.</li>
   <li><strong>Read the rules</strong>, then scroll right to the bottom.</li>
   <li><strong>Pick your pickup location</strong>, if there is more than one.</li>

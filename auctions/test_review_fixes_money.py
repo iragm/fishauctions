@@ -139,7 +139,13 @@ class InvoiceRecalculateFreezeTests(StandardTestCase):
 
 class JoinAuctionOnceTests(StandardTestCase):
     def test_join_twice_makes_one_row(self):
-        joiner = User.objects.create_user(username="joiner", password="testpassword", email="joiner@example.com")
+        joiner = User.objects.create_user(
+            username="joiner",
+            password="testpassword",
+            email="joiner@example.com",
+            first_name="Joe",
+            last_name="Joiner",
+        )
         first, created_first, problem = join_auction(joiner, self.online_auction, self.location)
         second, created_second, problem_again = join_auction(joiner, self.online_auction, self.location)
         self.assertEqual((problem, problem_again), ("", ""))

@@ -27,7 +27,7 @@ class SocialButtonNextTests(TestCase):
 
     def test_navbar_sign_in_links_are_nofollow(self):
         body = self.client.get(reverse("allLots")).content.decode()
-        self.assertIn("class='nav-link' rel='nofollow'>Create account", body)
+        self.assertNotIn("Create account", body)
         self.assertIn("class='nav-link' rel='nofollow'>Sign in", body)
 
 

@@ -314,6 +314,7 @@ TEMPLATES = [
                 "auctions.context_processors.label_print_method",
                 "auctions.context_processors.account_nav",
                 "auctions.context_processors.android_testers",
+                "auctions.context_processors.profile_reminder",
                 "auctions.context_processors.offline_auction",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
@@ -1177,6 +1178,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
         "mobile_auth": "10/min",
+        # Two calls a person, and a room on one venue Wi-Fi signs in together; allauth also limits each address.
+        "mobile_code": "60/min",
         # Sized for admin bulk work: checkout is 2 calls a buyer, labels 1 a lot; 200/hour blocked checkout.
         "mobile_api": "1000/hour",
         # The emergency page asks whether the site is back every 20 seconds, per open tab.

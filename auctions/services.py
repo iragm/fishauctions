@@ -337,8 +337,9 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
     """Sign ``user`` up for ``auction``, or update their existing record.
 
     Shared by the Join button and the assistant. Returns ``(tos, created, problem)``; ``problem`` is
-    ``""``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller words its own
-    way; ``"email"`` sends them to ``reverify_email``. ``hold_for_second_pickup`` (None leaves it alone) can
+    ``""``, ``"name"``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller
+    words its own way; ``"email"`` sends them to ``reverify_email``. A name a club already typed for
+    them is taken from that row instead of asked for (``signals.fill_name_from_rows``). ``hold_for_second_pickup`` (None leaves it alone) can
     always be turned off, but only turned on where the location has a second pickup time and the person
     has no lots to sell.
     """
@@ -346,6 +347,11 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
 
     if join_blocked_by_bounce(user, auction):
         return None, False, "email"
+    from auctions.signals import fill_name_from_rows
+
+    # The organizer needs to know who this is; if a club wrote it down already, that does.
+    if not fill_name_from_rows(user) and not AuctionTOS.objects.filter(user=user, auction=auction).exists():
+        return None, False, "name"
     userdata = user.userdata
     if auction.require_phone_number and not userdata.phone_number:
         return None, False, "phone_number"

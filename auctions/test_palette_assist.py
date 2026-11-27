@@ -2964,6 +2964,8 @@ class JoinAuctionTests(RunActionTestCase):
         self.assertFalse(AuctionTOS.objects.filter(auction=self.in_person_auction, user=self.userB).exists())
 
     def test_with_the_rules_agreed_it_actually_joins(self):
+        self.userB.first_name, self.userB.last_name = "Bea", "Bidder"
+        self.userB.save()
         location = self.in_person_auction.location_qs.first()
         result = self._run(
             "join_auction",

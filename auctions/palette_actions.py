@@ -3121,6 +3121,11 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
             f"you need to validate your email address again at {request.build_absolute_uri(reverse('reverify_email'))}, "
             "then ask me again."
         )
+    if problem == "name":
+        return _error(
+            f"{auction.title} needs your name before you can join. "
+            "Add it on your contact details page, then ask me again."
+        )
     if problem == "phone_number":
         return _error(
             f"{auction.title} needs a phone number on your account before you can join. "
