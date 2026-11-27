@@ -27,7 +27,9 @@ class CheckinBase(TestCase):
     def setUp(self):
         now = timezone.now()
         self.creator = User.objects.create_user(username="venue_admin", password="x", email="admin@example.com")
-        self.arrival = User.objects.create_user(username="arriving", password="x", email="arrive@example.com", first_name="Ari", last_name="Rival")
+        self.arrival = User.objects.create_user(
+            username="arriving", password="x", email="arrive@example.com", first_name="Ari", last_name="Rival"
+        )
         self.venue = Auction.objects.create(
             created_by=self.creator,
             title="Spring Fish Auction",

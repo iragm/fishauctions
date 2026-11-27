@@ -422,7 +422,7 @@ this only quotes its opening sentence.
   `record`, `FakeResponse`, `FakeSession`, `page`, `CaresSyncTests`, `CaresSpeciesTests`, `CaresLotTests`, `CaresBapTests`
 - **`test_celery_tasks.py`** (1340 lines)
   Tests that Celery tasks call their corresponding management commands.
-- **`test_checkin.py`** (638 lines)
+- **`test_checkin.py`** (640 lines)
   Tests for Part 6 — proximity check-in & welcome (mobile ping/join/set-location).
 - **`test_club_announcements.py`** (1143 lines)
   Tests for club announcements, the website-integration snippets, and the embeds.
