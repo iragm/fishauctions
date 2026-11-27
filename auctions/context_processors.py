@@ -407,7 +407,7 @@ def profile_reminder(request):
         return {"profile_reminder": None}
     userdata = getattr(user, "userdata", None)
     if (
-        not (user.first_name and user.last_name)
+        not (user.first_name or user.last_name)
         or not getattr(userdata, "address", "")
         or not getattr(userdata, "phone_number", "")
     ):

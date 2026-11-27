@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+import re
 
 from allauth.account.signals import email_confirmed
 from django.contrib.auth.models import User
@@ -730,6 +731,20 @@ def link_unattached_rows_for_user(user):
         member.save()
 
 
+MADE_UP_NAME = re.compile(r"^member\d*$")
+
+
+def usable_typed_name(name, user=None):
+    """*name* as a person's name, or "" for what isn't one: blank, "Unknown", an address, or a username
+    some code path wrote in place of a name."""
+    name = (name or "").strip()
+    if not name or name == "Unknown" or "@" in name or MADE_UP_NAME.match(name):
+        return ""
+    if user is not None and name == user.username:
+        return ""
+    return name
+
+
 def fill_name_from_rows(user):
     """Give a nameless account the newest name a club typed on one of its rows. True if it now has one.
 
@@ -740,21 +755,13 @@ def fill_name_from_rows(user):
 
     if user.first_name or user.last_name:
         return True
-    candidates = []
-    tos = (
-        AuctionTOS.objects.filter(user=user)
-        .exclude(name__isnull=True)
-        .exclude(name__in=["", "Unknown"])
-        .order_by("-createdon")
-        .first()
-    )
-    if tos:
-        candidates.append((tos.createdon, tos.name))
-    member = ClubMember.objects.filter(user=user, is_deleted=False).exclude(name="").order_by("-createdon").first()
-    if member:
-        candidates.append((member.createdon, member.name))
-    names = [name.strip() for _when, name in sorted(candidates, key=lambda c: c[0], reverse=True)]
-    name = next((n for n in names if n and "@" not in n), "")
+    rows = [
+        (row.createdon, row.name)
+        for model, extra in ((AuctionTOS, {}), (ClubMember, {"is_deleted": False}))
+        for row in model.objects.filter(user=user, **extra).exclude(name__isnull=True).order_by("-createdon")[:20]
+    ]
+    rows.sort(key=lambda r: r[0], reverse=True)
+    name = next((n for n in (usable_typed_name(name, user) for _when, name in rows) if n), "")
     if not name:
         return False
     first, _, last = name.partition(" ")

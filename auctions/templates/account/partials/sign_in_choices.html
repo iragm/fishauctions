@@ -4,6 +4,7 @@
   {% if not request.is_mobile_app %}
   {% if GOOGLE_LOGIN_ENABLED %}<a id="sign-in-google" class="btn btn-primary w-100 mb-2" rel="nofollow" href="/google/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}"><i class="bi bi-google"></i> Continue with Google</a>{% endif %}
   {% if APPLE_LOGIN_ENABLED %}<a id="sign-in-apple" class="btn btn-primary w-100 mb-2" rel="nofollow" href="/apple/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}"><i class="bi bi-apple"></i> Continue with Apple</a>{% endif %}
+  {% if FACEBOOK_LOGIN_ENABLED %}<a id="sign-in-facebook" class="btn btn-primary w-100 mb-2" rel="nofollow" href="/facebook/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}"><i class="bi bi-facebook"></i> Continue with Facebook</a>{% endif %}
   {% endif %}
   {% login_code_form as code_form %}
   <form id="request-login-code" method="POST" action="{% url 'account_request_login_code' %}" class="mt-2">

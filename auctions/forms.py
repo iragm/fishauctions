@@ -2014,7 +2014,7 @@ class AuctionJoin(forms.ModelForm):
         )
         if self.asks_name:
             self.fields["first_name"] = forms.CharField(max_length=30, label="First name")
-            self.fields["last_name"] = forms.CharField(max_length=150, label="Last name")
+            self.fields["last_name"] = forms.CharField(max_length=150, label="Last name", required=False)
             self.helper.layout.insert(
                 2, Div(Div("first_name", css_class="col"), Div("last_name", css_class="col"), css_class="row")
             )

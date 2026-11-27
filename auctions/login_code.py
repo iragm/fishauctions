@@ -126,9 +126,10 @@ def _name_from_club_rows(email):
         candidates.append((member.createdon, member.name))
     if not candidates:
         return "", ""
-    name = max(candidates, key=lambda c: c[0])[1].strip()
-    if "@" in name:
-        # A club that typed the address as the name.
+    from auctions.signals import usable_typed_name
+
+    name = usable_typed_name(max(candidates, key=lambda c: c[0])[1])
+    if not name:
         return "", ""
     first, _, last = name.partition(" ")
     return first[:30], last.strip()[:150]
@@ -220,7 +221,7 @@ def start_app_code(request, email):
         return None
     challenge = secrets.token_urlsafe(32)
     user = account_for_code(email)
-    pending = {"email": email, "user_id": user.pk if user else None, "code": "", "attempts": 0}
+    pending = {"email": email, "user_id": user.pk if user else None, "code": ""}
     if user is not None or address_is_free(email):
         pending["code"] = get_adapter().generate_login_code()
         send_code_mail(request, email, pending["code"])
@@ -241,14 +242,17 @@ def finish_app_code(request, challenge, code):
     pending = cache.get(key) if challenge else None
     if not pending:
         return None
-    if not compare_user_code(actual=code or "", expected=pending["code"]):
-        pending["attempts"] += 1
-        if pending["attempts"] >= settings.ACCOUNT_LOGIN_BY_CODE_MAX_ATTEMPTS:
-            cache.delete(key)
-        else:
-            cache.set(key, pending, settings.ACCOUNT_LOGIN_BY_CODE_TIMEOUT)
+    # Counted atomically and before the check, so guesses sent all at once still get three between them.
+    tries_key = key + ":tries"
+    cache.add(tries_key, 0, settings.ACCOUNT_LOGIN_BY_CODE_TIMEOUT)
+    if cache.incr(tries_key) > settings.ACCOUNT_LOGIN_BY_CODE_MAX_ATTEMPTS:
+        cache.delete(key)
         return None
-    cache.delete(key)
+    if not compare_user_code(actual=code or "", expected=pending["code"]):
+        return None
+    if not cache.delete(key):
+        # Another request with the same code got there first.
+        return None
     email = pending["email"]
     known = User.objects.filter(pk=pending["user_id"]).first() if pending["user_id"] else None
     if pending["user_id"] and known is None:

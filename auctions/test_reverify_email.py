@@ -43,7 +43,13 @@ class ReverifyEmailTests(StandardTestCase):
         self.open_location = PickupLocation.objects.create(
             name="open location", auction=self.open_auction, pickup_time=now + datetime.timedelta(days=2)
         )
-        self.joiner = User.objects.create_user(username="full_inbox", password="testpassword", email="full@example.com")
+        self.joiner = User.objects.create_user(
+            username="full_inbox",
+            password="testpassword",
+            email="full@example.com",
+            first_name="Full",
+            last_name="Inbox",
+        )
         self.address = EmailAddress.objects.create(
             user=self.joiner, email=self.joiner.email, verified=True, primary=True
         )
@@ -230,7 +236,9 @@ class MobileJoinBounceTests(ReverifyEmailTests.__base__):
             date_end=now + datetime.timedelta(hours=6),
         )
         venue.save()
-        joiner = User.objects.create_user(username="app_joiner", password="x", email="app@example.com")
+        joiner = User.objects.create_user(
+            username="app_joiner", password="x", email="app@example.com", first_name="App", last_name="Joiner"
+        )
         joiner.userdata.email_bounced_on = now
         joiner.userdata.save()
         response = self.client.post(

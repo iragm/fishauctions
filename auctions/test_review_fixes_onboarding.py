@@ -48,7 +48,11 @@ class OnboardingTests(StandardTestCase):
         self.in_person_auction.date_end = timezone.now() + datetime.timedelta(days=3)
         self.in_person_auction.save()
         newcomer = get_user_model().objects.create_user(
-            username="newcomer", password="testpassword", email="newcomer@example.com"
+            username="newcomer",
+            password="testpassword",
+            email="newcomer@example.com",
+            first_name="New",
+            last_name="Comer",
         )
         newcomer.emailaddress_set.create(email=newcomer.email, verified=True, primary=True)
         self.client.login(username="newcomer", password="testpassword")

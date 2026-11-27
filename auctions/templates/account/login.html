@@ -24,6 +24,5 @@
           <a class="btn btn-link" href="{% url 'account_reset_password' %}">{% trans "Forgot Password" %}</a>
         </div>
       </form>
-      {% if FACEBOOK_LOGIN_ENABLED and not request.is_mobile_app %}<a id="sign-in-facebook" class="btn btn-link px-0" rel="nofollow" href="/facebook/login/?process=login{% if redirect_field_value %}&next={{ redirect_field_value|urlencode }}{% endif %}">Sign in with Facebook</a>{% endif %}
     </details>
 {% endblock %}

@@ -30,6 +30,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from auctions import dmca, voice
 from auctions.models import (
     Auction,
+    AuctionTOS,
     Club,
     ClubMember,
     Lot,
@@ -154,7 +155,7 @@ class MobileCodeRequestView(APIView):
 
     authentication_classes = []
     permission_classes = []
-    throttle_scope = "mobile_auth"
+    throttle_scope = "mobile_code"
     throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
@@ -180,7 +181,7 @@ class MobileCodeConfirmView(APIView):
 
     authentication_classes = []
     permission_classes = []
-    throttle_scope = "mobile_auth"
+    throttle_scope = "mobile_code"
     throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
@@ -1535,6 +1536,20 @@ class MobileCheckinJoinView(APIView):
         if not auction.in_welcome_window():
             return Response(
                 {"detail": "This auction isn't open for check-in right now."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        from auctions.signals import fill_name_from_rows
+
+        if (
+            not fill_name_from_rows(request.user)
+            and not AuctionTOS.objects.filter(user=request.user, auction=auction).exists()
+        ):
+            # The app falls back to the auction page, whose Join form asks for the name in place.
+            return Response(
+                {
+                    "detail": "Add your name to join.",
+                    "auction_url": request.build_absolute_uri(auction.get_absolute_url()),
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
         if join_blocked_by_bounce(request.user, auction):
             # The app falls back to the auction page, whose Join button leads to reverify_email.

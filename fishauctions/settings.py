@@ -1178,6 +1178,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
         "mobile_auth": "10/min",
+        # Two calls a person, and a room on one venue Wi-Fi signs in together; allauth also limits each address.
+        "mobile_code": "60/min",
         # Sized for admin bulk work: checkout is 2 calls a buyer, labels 1 a lot; 200/hour blocked checkout.
         "mobile_api": "1000/hour",
         # The emergency page asks whether the site is back every 20 seconds, per open tab.

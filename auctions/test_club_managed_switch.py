@@ -87,7 +87,9 @@ class ClubManagedSwitchTests(TestCase):
                 if change == "lot":
                     lot = Lot.objects.create(lot_name="Guppies", auction=self.auction, quantity=1)
                 elif change == "join":
-                    joiner = User.objects.create_user("joiner", "joiner@example.com", "pw")
+                    joiner = User.objects.create_user(
+                        "joiner", "joiner@example.com", "pw", first_name="Joe", last_name="Joiner"
+                    )
                     join_auction(joiner, self.auction, self.location)
                 elif change == "history":
                     self.auction.create_history(applies_to="USERS", action="Edited someone", user=self.owner)
@@ -232,7 +234,7 @@ class SeveralLocationsTests(TestCase):
 class JoinCardTests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user("owner", "owner@example.com", "pw")
-        self.user = User.objects.create_user("bidder", "bidder@example.com", "pw")
+        self.user = User.objects.create_user("bidder", "bidder@example.com", "pw", first_name="Bid", last_name="Der")
         self.auction = make_auction(self.owner, None)
         self.location = self.auction.location_qs.first()
         self.client.force_login(self.user)
