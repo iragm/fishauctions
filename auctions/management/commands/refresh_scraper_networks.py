@@ -1,4 +1,7 @@
-"""Rewrite ``auctions/data/scraper_networks.txt`` from the networks each scraper cloud announces today."""
+"""Rewrite ``auctions/data/scraper_networks.txt`` from the networks each scraper cloud announces today.
+
+Run it in a checkout and commit the result: each web process reads the file once, so it takes effect on deploy.
+"""
 
 import ipaddress
 
@@ -44,7 +47,11 @@ class Command(BaseCommand):
                 message = f"RIPEstat returned no prefixes for AS{asn}"
                 raise RuntimeError(message)
             networks += found
+        header = len(lines)
         for version in (4, 6):
             lines += [str(n) for n in ipaddress.collapse_addresses(n for n in networks if n.version == version)]
-        SCRAPER_NETWORKS_FILE.write_text("\n".join(lines) + "\n")
-        self.stdout.write(f"{len(lines)} lines written to {SCRAPER_NETWORKS_FILE}")
+        # Written beside the file and moved over it, so a process starting up never reads half of one.
+        partial = SCRAPER_NETWORKS_FILE.with_suffix(".partial")
+        partial.write_text("\n".join(lines) + "\n")
+        partial.replace(SCRAPER_NETWORKS_FILE)
+        self.stdout.write(f"{len(lines) - header} networks written to {SCRAPER_NETWORKS_FILE}; commit it")

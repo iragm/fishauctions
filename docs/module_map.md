@@ -128,7 +128,7 @@ this only quotes its opening sentence.
   `check_chat_permissions`, `check_all_permissions`, `post_chat_message`, `broadcast_bid_result`, `LotConsumer`, `UserConsumer`, `BuyingConsumer`, `AuctionConsumer`
 - **`context_processors.py`** (417 lines)
   Values every template needs and no view should have to pass.
-- **`crawlers.py`** (127 lines)
+- **`crawlers.py`** (136 lines)
   Telling a crawler from a visitor by its User-Agent.
   `is_crawler`, `current_chrome_major`, `is_automated_browser`, `parse_networks`, `scraper_networks`, `is_scraper_network`, `is_bot_page_view`
 - **`deploy_window.py`** (135 lines)
@@ -472,7 +472,7 @@ this only quotes its opening sentence.
 - **`test_clubs.py`** (1379 lines)
   Clubs: the model, the pages, and who is allowed to do what inside one.
   `ClubModelTests`, `ClubViewTests`, `ClubPermissionTests`, `ClubMemberUpdateTests`
-- **`test_crawler_sessions.py`** (317 lines)
+- **`test_crawler_sessions.py`** (334 lines)
   Bots kept out of sessions and page views, and a Redis outage that must not cost a visitor a session.
   `IsCrawlerTests`, `desktop_chrome`, `AutomatedBrowserTests`, `ScraperNetworkTests`, `CrawlerSessionTests`, `SessionCacheOutageTests`, `SessionCacheLifetimeTests`
 - **`test_csv_import.py`** (1053 lines)
@@ -997,7 +997,7 @@ The library: documents people upload, read into text, and searched from ``/libra
   `Command`
 - **`purge_bot_users.py`** (24 lines)
   `Command`
-- **`refresh_scraper_networks.py`** (50 lines)
+- **`refresh_scraper_networks.py`** (57 lines)
   Rewrite ``auctions/data/scraper_networks.txt`` from the networks each scraper cloud announces today.
   `announced`, `Command`
 - **`register_discord_commands.py`** (138 lines)

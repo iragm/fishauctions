@@ -3,6 +3,8 @@
 import re
 import time
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.contrib.sessions.models import Session
@@ -44,8 +46,10 @@ GOOGLE_OTHER = (
     "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/157.0.8103.78 Mobile Safari/537.36 (compatible; GoogleOther)"
 )
-# An address in Tencent Cloud Singapore, where most of the scraper farm's beacons come from.
-TENCENT = "43.173.180.114"
+# An address in Tencent Cloud Singapore (43.160.0.0/12), where most of the scraper farm's beacons come from.
+TENCENT = "43.173.0.1"
+# Documentation addresses (RFC 5737, RFC 3849): nobody's.
+PERSON = "198.51.100.7"
 
 
 class IsCrawlerTests(StandardTestCase):
@@ -178,12 +182,12 @@ class AutomatedBrowserTests(StandardTestCase):
 
 class ScraperNetworkTests(StandardTestCase):
     def test_scraper_clouds(self):
-        for ip in (TENCENT, "161.120.181.4", "149.232.135.178", "119.28.16.29", f"::ffff:{TENCENT}"):
+        for ip in (TENCENT, "161.120.176.1", "149.232.128.1", "119.28.0.1", f"::ffff:{TENCENT}"):
             with self.subTest(ip=ip):
                 self.assertTrue(is_scraper_network(ip))
 
     def test_people(self):
-        for ip in ("73.12.40.9", "8.8.8.8", "2600:1700:abcd::1", "127.0.0.1", "", None, "not an address", "unknown"):
+        for ip in (PERSON, "8.8.8.8", "2001:db8::1", "127.0.0.1", "", None, "not an address", "unknown"):
             with self.subTest(ip=ip):
                 self.assertFalse(is_scraper_network(ip))
 
@@ -201,6 +205,19 @@ class ScraperNetworkTests(StandardTestCase):
             self.assertFalse(is_scraper_network("10.0.0.4"))
             self.assertFalse(is_scraper_network("9.255.255.255"))
             self.assertFalse(is_scraper_network("::a00:0"))
+
+    def test_a_missing_or_damaged_list_refuses_nothing(self):
+        for text in (None, "43.173.0.0/1\n"):
+            with self.subTest(text=text), TemporaryDirectory() as folder:
+                path = Path(folder) / "networks.txt"
+                if text:
+                    path.write_text(text)
+                scraper_networks.cache_clear()
+                try:
+                    with patch("auctions.crawlers.SCRAPER_NETWORKS_FILE", path), self.assertLogs("auctions.crawlers"):
+                        self.assertFalse(is_scraper_network(TENCENT))
+                finally:
+                    scraper_networks.cache_clear()
 
     def _beacon(self):
         return self.client.post(
@@ -221,9 +238,9 @@ class ScraperNetworkTests(StandardTestCase):
             reverse("pageview"),
             {"first_view": "true", "url": "/lots/"},
             HTTP_USER_AGENT=BROWSER,
-            REMOTE_ADDR="73.12.40.9",
+            REMOTE_ADDR=PERSON,
         )
-        self.assertTrue(PageView.objects.filter(ip_address="73.12.40.9").exists())
+        self.assertTrue(PageView.objects.filter(ip_address=PERSON).exists())
 
 
 class CrawlerSessionTests(StandardTestCase):

@@ -15,12 +15,15 @@ The list is ``data/scraper_networks.txt``, rewritten by ``manage.py refresh_scra
 
 import bisect
 import ipaddress
+import logging
 import re
 from datetime import date
 from functools import cache
 from pathlib import Path
 
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 CRAWLER_PATTERN = re.compile(
     r"(?<!cu)bot\b|crawl|spider|slurp|externalagent|externalhit|bingpreview|googleother|google-inspectiontool",
@@ -93,7 +96,8 @@ def parse_networks(lines):
     for line in lines:
         line = line.split("#", 1)[0].strip()
         if line:
-            network = ipaddress.ip_network(line, strict=False)
+            # Strict, so a line cut short (``47.96.0.0/1``) raises rather than covering half the internet.
+            network = ipaddress.ip_network(line)
             networks[network.version].append(network)
     ranges = {}
     for version, found in networks.items():
@@ -104,7 +108,12 @@ def parse_networks(lines):
 
 @cache
 def scraper_networks():
-    return parse_networks(SCRAPER_NETWORKS_FILE.read_text().splitlines())
+    """The list, read once per process. A missing or damaged file counts every view rather than failing one."""
+    try:
+        return parse_networks(SCRAPER_NETWORKS_FILE.read_text().splitlines())
+    except (OSError, ValueError):
+        logger.exception("Could not read %s; no page view is refused by address", SCRAPER_NETWORKS_FILE)
+        return {4: [], 6: []}
 
 
 def is_scraper_network(ip):
