@@ -7,15 +7,26 @@ The lookbehind spares CUBOT phones, whose model names end in "BOT".
 run a real browser, execute the page view beacon, and say nothing about being a bot. It is used only
 to keep them out of ``PageView``, never to withhold a session, since a person wrongly caught by it
 must still be able to sign in.
+
+``is_scraper_network`` is the same idea by address: the cloud networks a scraper farm rents from, which
+no visitor browses from. It catches the farm's current browsers, which ``is_automated_browser`` cannot.
+The list is ``data/scraper_networks.txt``, rewritten by ``manage.py refresh_scraper_networks``.
 """
 
+import bisect
+import ipaddress
+import logging
 import re
 from datetime import date
+from functools import cache
+from pathlib import Path
 
 from django.utils import timezone
 
+logger = logging.getLogger(__name__)
+
 CRAWLER_PATTERN = re.compile(
-    r"(?<!cu)bot\b|crawl|spider|slurp|externalagent|externalhit|bingpreview",
+    r"(?<!cu)bot\b|crawl|spider|slurp|externalagent|externalhit|bingpreview|googleother|google-inspectiontool",
     re.IGNORECASE,
 )
 
@@ -44,7 +55,8 @@ LAST_CHROME_FOR_OLD_MACS = {116, 128, 138}
 # A cheap first cut for MariaDB's REGEXP, which the cleanup job runs before is_bot_page_view decides
 # each row: everything the patterns above can match, minus CUBOT's lookbehind.
 SQL_PREFILTER = (
-    r"bot|crawl|spider|slurp|externalagent|externalhit|bingpreview|headlesschrome|lightpanda|"
+    r"bot|crawl|spider|slurp|externalagent|externalhit|bingpreview|googleother|google-inspectiontool|headlesschrome|"
+    r"lightpanda|"
     r"^Mozilla/5\.0 \((Windows NT 10\.0; Win64; x64|Macintosh; Intel Mac OS X 10_15_7)\) AppleWebKit/537\.36 "
     r"\(KHTML, like Gecko\) Chrome/"
 )
@@ -73,6 +85,49 @@ def is_automated_browser(user_agent, today=None):
     if match["os"].startswith("Macintosh") and major in LAST_CHROME_FOR_OLD_MACS:
         return False
     return major <= current_chrome_major(today) - STALE_CHROME_VERSIONS
+
+
+SCRAPER_NETWORKS_FILE = Path(__file__).parent / "data" / "scraper_networks.txt"
+
+
+def parse_networks(lines):
+    """Sorted, merged ``(first, last)`` address ranges for each IP version, from lines of CIDRs."""
+    networks = {4: [], 6: []}
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if line:
+            # Strict, so a line cut short (``47.96.0.0/1``) raises rather than covering half the internet.
+            network = ipaddress.ip_network(line)
+            networks[network.version].append(network)
+    ranges = {}
+    for version, found in networks.items():
+        merged = ipaddress.collapse_addresses(found)
+        ranges[version] = [(int(n.network_address), int(n.broadcast_address)) for n in merged]
+    return ranges
+
+
+@cache
+def scraper_networks():
+    """The list, read once per process. A missing or damaged file counts every view rather than failing one."""
+    try:
+        return parse_networks(SCRAPER_NETWORKS_FILE.read_text().splitlines())
+    except (OSError, ValueError):
+        logger.exception("Could not read %s; no page view is refused by address", SCRAPER_NETWORKS_FILE)
+        return {4: [], 6: []}
+
+
+def is_scraper_network(ip):
+    """Whether an address is in a cloud network that only scrapers browse from."""
+    try:
+        address = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return False
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    ranges = scraper_networks()[address.version]
+    number = int(address)
+    at = bisect.bisect_right(ranges, (number, float("inf"))) - 1
+    return at >= 0 and ranges[at][0] <= number <= ranges[at][1]
 
 
 def is_bot_page_view(user_agent, written):

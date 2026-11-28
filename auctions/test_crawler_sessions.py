@@ -1,6 +1,10 @@
+"""Bots kept out of sessions and page views, and a Redis outage that must not cost a visitor a session."""
+
 import re
 import time
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.contrib.sessions.models import Session
@@ -10,7 +14,16 @@ from django.urls import reverse
 from django.utils import timezone
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from auctions.crawlers import SQL_PREFILTER, current_chrome_major, is_automated_browser, is_bot_page_view, is_crawler
+from auctions.crawlers import (
+    SQL_PREFILTER,
+    current_chrome_major,
+    is_automated_browser,
+    is_bot_page_view,
+    is_crawler,
+    is_scraper_network,
+    parse_networks,
+    scraper_networks,
+)
 from auctions.models import PageView
 from auctions.session_store import CACHE_MAX_AGE, SessionStore
 from auctions.tests import StandardTestCase
@@ -28,6 +41,16 @@ AMAZON = (
     "+https://developer.amazon.com/support/amazonbot) Chrome/119.0.6045.214 Safari/537.36"
 )
 
+# Google's crawler for everything but search: a phone browser that says nothing about being a bot until the end.
+GOOGLE_OTHER = (
+    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/157.0.8103.78 Mobile Safari/537.36 (compatible; GoogleOther)"
+)
+# An address in Tencent Cloud Singapore (43.160.0.0/12), where most of the scraper farm's beacons come from.
+TENCENT = "43.173.0.1"
+# Documentation addresses (RFC 5737, RFC 3849): nobody's.
+PERSON = "198.51.100.7"
+
 
 class IsCrawlerTests(StandardTestCase):
     def _ua(self, user_agent):
@@ -41,6 +64,8 @@ class IsCrawlerTests(StandardTestCase):
             "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)",
             "Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)",
             "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+            GOOGLE_OTHER,
+            "Mozilla/5.0 (compatible; Google-InspectionTool/1.0;)",
         ):
             with self.subTest(user_agent=user_agent):
                 self.assertTrue(self._ua(user_agent))
@@ -131,6 +156,7 @@ class AutomatedBrowserTests(StandardTestCase):
             "Mozilla/5.0 (compatible; meta-externalagent/1.1)",
             "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) BingPreview/1.0b",
             "Some Crawler/1.0",
+            GOOGLE_OTHER,
         ):
             with self.subTest(user_agent=user_agent):
                 self.assertTrue(is_bot_page_view(user_agent, timezone.now()))
@@ -152,6 +178,69 @@ class AutomatedBrowserTests(StandardTestCase):
         response = self.client.get(reverse("allLots"), HTTP_USER_AGENT=desktop_chrome(99))
         self.assertEqual(response.status_code, 200)
         self.assertIn("sessionid", response.cookies)
+
+
+class ScraperNetworkTests(StandardTestCase):
+    def test_scraper_clouds(self):
+        for ip in (TENCENT, "161.120.176.1", "149.232.128.1", "119.28.0.1", f"::ffff:{TENCENT}"):
+            with self.subTest(ip=ip):
+                self.assertTrue(is_scraper_network(ip))
+
+    def test_people(self):
+        for ip in (PERSON, "8.8.8.8", "2001:db8::1", "127.0.0.1", "", None, "not an address", "unknown"):
+            with self.subTest(ip=ip):
+                self.assertFalse(is_scraper_network(ip))
+
+    def test_the_list_has_both_versions(self):
+        ranges = scraper_networks()
+        self.assertGreater(len(ranges[4]), 100)
+        self.assertGreater(len(ranges[6]), 10)
+
+    def test_ranges_are_inclusive_at_both_ends(self):
+        with patch(
+            "auctions.crawlers.scraper_networks", return_value=parse_networks(["10.0.0.0/30 # a note", "#", ""])
+        ):
+            self.assertTrue(is_scraper_network("10.0.0.0"))
+            self.assertTrue(is_scraper_network("10.0.0.3"))
+            self.assertFalse(is_scraper_network("10.0.0.4"))
+            self.assertFalse(is_scraper_network("9.255.255.255"))
+            self.assertFalse(is_scraper_network("::a00:0"))
+
+    def test_a_missing_or_damaged_list_refuses_nothing(self):
+        for text in (None, "43.173.0.0/1\n"):
+            with self.subTest(text=text), TemporaryDirectory() as folder:
+                path = Path(folder) / "networks.txt"
+                if text:
+                    path.write_text(text)
+                scraper_networks.cache_clear()
+                try:
+                    with patch("auctions.crawlers.SCRAPER_NETWORKS_FILE", path), self.assertLogs("auctions.crawlers"):
+                        self.assertFalse(is_scraper_network(TENCENT))
+                finally:
+                    scraper_networks.cache_clear()
+
+    def _beacon(self):
+        return self.client.post(
+            reverse("pageview"), {"first_view": "true", "url": "/lots/"}, HTTP_USER_AGENT=BROWSER, REMOTE_ADDR=TENCENT
+        )
+
+    def test_the_beacon_records_nothing_from_one(self):
+        self.assertEqual(self._beacon().status_code, 200)
+        self.assertFalse(PageView.objects.exists())
+
+    def test_a_signed_in_member_there_is_still_counted(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self._beacon().status_code, 200)
+        self.assertTrue(PageView.objects.filter(user=self.user).exists())
+
+    def test_a_visitor_elsewhere_is_counted(self):
+        self.client.post(
+            reverse("pageview"),
+            {"first_view": "true", "url": "/lots/"},
+            HTTP_USER_AGENT=BROWSER,
+            REMOTE_ADDR=PERSON,
+        )
+        self.assertTrue(PageView.objects.filter(ip_address=PERSON).exists())
 
 
 class CrawlerSessionTests(StandardTestCase):
