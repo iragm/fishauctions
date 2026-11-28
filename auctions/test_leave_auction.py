@@ -29,7 +29,9 @@ class LeaveAuctionTests(TestCase):
         now = timezone.now()
         self.organizer = User.objects.create_user(username="organizer", password="x", email="org@example.com")
         UserData.objects.filter(user=self.organizer).update(email_visible=True)
-        self.leaver = User.objects.create_user(username="leaver", password="x", email="leaver@example.com")
+        self.leaver = User.objects.create_user(
+            username="leaver", password="x", email="leaver@example.com", first_name="Lee", last_name="Ver"
+        )
         self.auction = Auction.objects.create(
             created_by=self.organizer,
             title="Fall Fish Auction",
@@ -185,7 +187,9 @@ class LeaveAuctionTests(TestCase):
         from auctions.mobile.services import checkin
 
         _club, other = self._club_managed()
-        newcomer = User.objects.create_user(username="newcomer", password="x", email="new@example.com")
+        newcomer = User.objects.create_user(
+            username="newcomer", password="x", email="new@example.com", first_name="New", last_name="Comer"
+        )
         tos, _checked_in = checkin.join_auction(newcomer, self.auction)
         tos.refresh_from_db()
         self.assertTrue(tos.created_by_joining)

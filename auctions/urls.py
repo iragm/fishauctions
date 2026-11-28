@@ -281,6 +281,7 @@ urlpatterns = [
     path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
     path("lots/<int:pk>/", views.ViewLot.as_view(), name="lot_by_pk"),
     path("lots/<int:pk>/report/", views.ReportContentCreate.as_view(), name="report_lot"),
+    path("lots/<int:pk>/species-flag/", views.LotSpeciesFlagView.as_view(), name="lot_species_flag"),
     path(
         "lots/edit/<int:pk>/",
         login_required(views.LotUpdate.as_view()),

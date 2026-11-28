@@ -26,7 +26,7 @@
 <p>Bringing fish to sell? Add them on the site first. You skip the line at the door, your bags arrive labelled, and some clubs take a smaller cut{% if help.site.self_added_premium %}. Lots sellers add themselves also sell for about {{ help.site.self_added_premium }}% more here{% endif %}.</p>
 {% if help.auction and not help.auction.is_online %}{% helptip %}{% if help.auction.pre_register_lot_discount_percent %}{{ help.auction.title }} takes {{ help.auction.pre_register_lot_discount_percent }}% less of the price on lots you add yourself.{% else %}{{ help.auction.title }} takes the same cut whoever adds the lot.{% endif %}{% endhelptip %}{% endif %}
 <ol>
-  <li><strong>{% if help.signed_in %}Sign in.{% else %}<a href="{% url 'account_login' %}">Sign in.</a>{% endif %}</strong> {% ui "Sign in with Google" %} or <strong>Apple</strong> is one click.</li>
+  <li><strong>{% if help.signed_in %}Sign in.{% else %}<a href="{% url 'account_login' %}">Sign in.</a>{% endif %}</strong> {% ui "Continue with Google" %} or <strong>Apple</strong> is one click, or type your email for a code.</li>
   <li><strong>Open {% page "auction_main" "the auction's page" %}</strong>, or find it under {% page "auctions" "Auctions" %} at the top of the page.</li>
   <li><strong>Join:</strong> scroll to the bottom and click {% ui "Join auction" %}.</li>
   <li><strong>Click {% page "bulk_add_lots_auto_for_myself" "Add lots" %}</strong> near the top of the page.</li>

@@ -146,7 +146,9 @@ class AuctionHistoryTests(StandardTestCase):
     def test_user_join_creates_history_only_once(self):
         """Test that joining an auction creates history only on first join"""
         # Create a new user who hasn't joined yet
-        User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
+        User.objects.create_user(
+            username="new_user", password="testpassword", email="new@example.com", first_name="New", last_name="User"
+        )
         self.client.login(username="new_user", password="testpassword")
 
         # Get initial history count

@@ -722,6 +722,59 @@ class AdminJobProposalTests(AdminEndpointCase):
         self.assertIn("already blocked", proposal.results[0]["said"])
         self.assertEqual(BlockedEmailAddress.objects.count(), 1)
 
+    def test_a_contact_form_domain_is_blocked_only_once_approved(self):
+        from auctions.models import BlockedEmailDomain
+
+        result = self.propose("block_email_domain", {"domain": "  @Spam-Leads.EXAMPLE. "})
+        self.assertFalse(result["isError"], result)
+        self.assertFalse(BlockedEmailDomain.blocks("pest@spam-leads.example"))
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertTrue(BlockedEmailDomain.objects.filter(domain="spam-leads.example").exists())
+        self.assertTrue(BlockedEmailDomain.blocks("anyone@mail.spam-leads.example"))
+        self.assertNotIn("spam-leads", proposal.results[0]["said"])
+
+    def test_a_unicode_domain_is_stored_as_the_ascii_it_resolves_to(self):
+        from auctions.models import BlockedEmailDomain
+
+        self.assertFalse(self.propose("block_email_domain", {"domain": "Bücher.example"})["isError"])
+        self.assertEqual(self.approve().status, AgentProposal.STATUS_APPLIED)
+        self.assertTrue(BlockedEmailDomain.objects.filter(domain="xn--bcher-kva.example").exists())
+
+    def test_a_bad_shared_or_already_blocked_domain_is_refused_and_approval_is_idempotent(self):
+        from auctions.models import BlockedEmailDomain
+
+        BlockedEmailDomain.objects.create(domain="spam-leads.example")
+        for arguments, expected in (
+            ({}, "Say which"),
+            ({"domain": "  "}, "Say which"),
+            ({"domain": "localhost"}, "isn't a domain"),
+            ({"domain": "pest@spam.example"}, "isn't a domain"),
+            ({"domain": "*.spam.example"}, "isn't a domain"),
+            ({"domain": "a" * 250 + ".example"}, "isn't a domain"),
+            ({"domain": ".spam.example"}, "isn't a domain"),
+            ({"domain": "spam..example"}, "isn't a domain"),
+            ({"domain": ".".join(["é" * 15 + "a" * 10] * 9) + ".ex"}, "isn't a domain"),
+            ({"domain": "co.uk"}, "country's suffix"),
+            ({"domain": "GMail.com"}, "shared by everyone"),
+            ({"domain": "sbcglobal.net"}, "shared by everyone"),
+            ({"domain": "SPAM-LEADS.example"}, "already blocked"),
+            ({"domain": "mail.spam-leads.example"}, "already blocked"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.propose("block_email_domain", arguments)
+                self.assertTrue(result["isError"])
+                self.assertIn(expected, result["content"][0]["text"])
+        self.assertFalse(AgentProposal.objects.exists())
+        # Blocked by hand between proposing and approving: the step still succeeds, once.
+        BlockedEmailDomain.objects.filter(domain="spam-leads.example").delete()
+        self.assertFalse(self.propose("block_email_domain", {"domain": "spam-leads.example"})["isError"])
+        BlockedEmailDomain.objects.create(domain="spam-leads.example")
+        proposal = self.approve()
+        self.assertEqual(proposal.status, AgentProposal.STATUS_APPLIED, proposal.results)
+        self.assertIn("already blocked", proposal.results[0]["said"])
+        self.assertEqual(BlockedEmailDomain.objects.filter(domain="spam-leads.example").count(), 1)
+
     def test_a_club_already_on_the_site_is_refused_when_proposed(self):
         Club.objects.create(name="Harbor Aquarium Society", homepage="https://www.harboraquarium.example.org/")
         for arguments in (
@@ -1012,7 +1065,7 @@ class AdminJobProposalTests(AdminEndpointCase):
         rows = {club["club"]: club for club in clubs}
         self.assertEqual(rows[harbor.pk]["interests"], ["Reef test"])
         self.assertEqual(rows[harbor.pk]["other_software"], "mygroupauctions")
-        self.assertEqual(rows[harbor.pk]["last_real_auction"], started.date().isoformat())
+        self.assertEqual(rows[harbor.pk]["last_real_auction"], timezone.localtime(started).date().isoformat())
         self.assertIsNone(rows[bare.pk]["last_real_auction"])
         for interest, expected in (("reef TEST", [harbor.pk]), ("none", [bare.pk])):
             with self.subTest(interest=interest):
@@ -1294,6 +1347,25 @@ class SpeciesUpkeepTests(AdminEndpointCase):
         self.propose("remember_not_a_species", {"lot_names": ["Sponge filter"]})
         self.approve()
         self.assertIsNone(SpeciesSearchCache.objects.get(search_text=normalize("Sponge filter")).species)
+
+    def test_species_lookups_have_their_own_hourly_budget(self):
+        from auctions.mcp import admin
+
+        with (
+            self.settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}),
+            mock.patch.object(admin, "ADMIN_READS_PER_HOUR", 1),
+            mock.patch.object(admin, "LOOKUP_READS_PER_HOUR", 3),
+        ):
+            from django.core.cache import cache
+
+            cache.clear()
+            self.data(self.call("species_dashboard", {}))
+            self.assertTrue(self.call("species_dashboard", {})["isError"])
+            for _ in range(3):
+                self.data(self.call("find_species", {"name": "Tropheus"}))
+            refused = self.call("find_species", {"name": "Tropheus"})
+            self.assertTrue(refused["isError"])
+            self.assertIn("find_species lookups", refused["content"][0]["text"])
 
     def test_find_species_reads_the_list_past_a_misspelt_genus(self):
         self.assertIn("find_species", self.listed())

@@ -18,9 +18,15 @@ allauth renders its email with the request, so the ``auth`` context processor su
 signed-in visitor, not the recipient. A mail about an address with no account (``unknown_account``,
 ``account_already_exists``) passes no ``user`` of its own, and would greet whoever asked -- a
 stranger's name, sent to someone else. :meth:`render_mail` pins it to nobody unless allauth said who.
+
+A username allauth makes up (code sign-in, a social sign-up with no name) falls back to the
+address's local part, and usernames show on bids, chat and ``/user/<name>``: half of somebody's
+email, published. :meth:`populate_username` falls back to ``member`` instead.
 """
 
+from allauth.account import app_settings
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.account.utils import user_field, user_username
 
 from auctions.client_ip import client_ip
 
@@ -31,3 +37,10 @@ class FishAuctionsAccountAdapter(DefaultAccountAdapter):
 
     def render_mail(self, template_prefix, email, context, headers=None):
         return super().render_mail(template_prefix, email, {"user": None, **context}, headers)
+
+    def populate_username(self, request, user):
+        if not app_settings.USER_MODEL_USERNAME_FIELD or user_username(user):
+            return
+        first_name = user_field(user, "first_name")
+        last_name = user_field(user, "last_name")
+        user_username(user, self.generate_unique_username([first_name, last_name, "member"]))

@@ -1321,7 +1321,8 @@ class GoogleLoginTemplateVisibilityTests(TestCase):
     def test_login_page_shows_google_button_when_oauth_link_is_real(self):
         response = self.client.get(reverse("account_login"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "id='sign-in-google'")
+        self.assertContains(response, 'id="sign-in-google"')
+        self.assertContains(response, "Continue with Google")
 
     @override_settings(GOOGLE_OAUTH_LINK="secret.apps.googleusercontent.com")
     def test_signup_page_hides_gmail_prompt_text_when_oauth_link_is_placeholder(self):

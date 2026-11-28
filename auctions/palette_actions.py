@@ -3121,6 +3121,11 @@ def join_auction(request, params: dict[str, Any]) -> dict[str, Any]:
             f"you need to validate your email address again at {request.build_absolute_uri(reverse('reverify_email'))}, "
             "then ask me again."
         )
+    if problem == "name":
+        return _error(
+            f"{auction.title} needs your name before you can join. "
+            "Add it on your contact details page, then ask me again."
+        )
     if problem == "phone_number":
         return _error(
             f"{auction.title} needs a phone number on your account before you can join. "
@@ -10454,7 +10459,11 @@ def _species_lot(request, params):
     if not (owns or is_admin):
         return None, False, _error(f"{lot.lot_name} isn't your lot.")
     if not is_admin and lot.cannot_be_edited_reason:
-        return None, False, _error(str(lot.cannot_be_edited_reason))
+        from .species_flags import seller_may_fix
+
+        # Readers flagged its species: the seller may still fix it (species_flags.seller_may_fix).
+        if not seller_may_fix(lot):
+            return None, False, _error(str(lot.cannot_be_edited_reason))
     return lot, is_admin, None
 
 
@@ -10498,13 +10507,18 @@ def set_lot_species(request, params: dict[str, Any]) -> dict[str, Any]:
     With no name, re-run the matcher on the lot's name. No language model: the caller already is one.
     Several matches is a question.
     """
-    from .species_matching import suggest_species
-
-    user = request.user
     lot, is_admin, problem = _species_lot(request, params)
     if problem:
         return problem
+    return apply_lot_species(request, lot, is_admin, params)
 
+
+def apply_lot_species(request, lot, is_admin, params: dict[str, Any]) -> dict[str, Any]:
+    """:func:`set_lot_species` once the caller is known to be allowed: also the lot page's "Fix" on a
+    flagged species (``auctions/species_flags.py``), which has its own rule for who may."""
+    from .species_matching import suggest_species
+
+    user = request.user
     if _preference_boolean(params.get("clear")):
         was = lot.species
         if was is None:
@@ -11026,6 +11040,27 @@ def my_requests(request, params: dict[str, Any]) -> dict[str, Any]:
     from .models import AssistantSkillRequest
 
     rows = AssistantSkillRequest.objects.filter(user=request.user)
+    if params.get("request") not in (None, ""):
+        number = _int(params, "request")
+        rows = rows.filter(pk=number) if number else rows.none()
+        row = rows.first()
+        if row is None:
+            return _error(
+                f"Request {params.get('request')} isn't one of yours. my_requests without a number lists yours."
+            )
+        status = REQUEST_STATUS_FOR_ASKER.get(row.status, row.status)
+        return _ok(
+            f"Request {row.pk}, {untrusted_short(row.skill)}: {status}.",
+            requests=[
+                {
+                    "request": row.pk,
+                    "feature": row.skill,
+                    "status": status,
+                    "asked_on": row.createdon.date().isoformat(),
+                    "others_asking": row.others_asking,
+                }
+            ],
+        )
     total = rows.count()
     if not total:
         return _ok("You haven't asked for anything yet. request_feature is how to ask.", requests=[])
@@ -12234,9 +12269,12 @@ register(
         name="my_requests",
         description=(
             "The features the signed-in user has asked for with request_feature, and where each "
-            "stands: received, planned, built or not planned."
+            "stands: received, planned, built or not planned. Give a request number for just that one."
         ),
-        params=dict(PAGING_PARAMS),
+        params={
+            "request": "integer, optional. Just this request, by the number request_feature gave.",
+            **PAGING_PARAMS,
+        },
         danger=DANGER_SAFE,
         resolver=my_requests,
         lookup=True,
@@ -14294,8 +14332,8 @@ register(
         params={
             "page": "string, required. A destination key from find_page, or the page named in plain words.",
             "target": (
-                "string, optional. Which auction / club / lot / person the page is about. "
-                "Omit only when the user is on the page it applies to, or the page needs no subject; "
+                "string, optional. Which auction / club / lot / person the page is about; a lot's own "
+                "page address works for a lot. Omit only when the user is on the page it applies to, or the page needs no subject; "
                 "over a connector there is no current page, so use my_context if it is unclear."
             ),
             "tab": "string, optional, only for club_detail_tab: bap, hap, culture or my-points.",
@@ -16836,6 +16874,11 @@ _PALETTE = "The palette's own endpoint. It is the thing running the skills."
 
 #: Views with no skill, and why.
 NOT_A_SKILL: dict[str, str] = {
+    "CodeRequestView": (
+        "Emails a sign-in code to whoever types an address; an assistant is already signed in, and a code "
+        "proves an inbox to a browser, not to an agent."
+    ),
+    "CodeConfirmView": "Signs a browser in with the emailed code; an assistant is already signed in.",
     "ClubSquareDuesView": (
         "Offers one Square payment taken outside the site at a time, beside the member list, so a person "
         "can judge whether the buyer is the member it names before renewing; an assistant adds or renews "
@@ -16880,6 +16923,11 @@ NOT_A_SKILL: dict[str, str] = {
     "AuctionLogisticsScan": (
         "Reads an invoice or lot label held up to a camera at the pickup table, checking those lots in. "
         "It needs the physical barcode in front of the volunteer; a caller without one has nothing to scan."
+    ),
+    "LotSpeciesFlagView": (
+        "A reader saying the fish in a lot's photos isn't the species named under it, and the seller's "
+        "answer on that page. Judging it means looking at the photos; the seller's fix is the same code as "
+        "set_lot_species, and superusers read the flags with species_flags on the admin endpoint."
     ),
     "HideAiAgentBannerView": (
         "Hides the connect-an-AI-agent banner for the person who pressed it. It changes what two pages "
@@ -17211,7 +17259,7 @@ NOT_A_SKILL: dict[str, str] = {
 #: equality alone would match nothing and silently pass. ``donation_views`` is a module of its own
 #: that sends mail in a club's name, so leaving it out left five user-facing writes in none of the
 #: three tables. ``app_links``, ``apple_notifications`` and ``passkit_views`` are still outside.
-AUDITED_VIEW_MODULES = ("auctions.views", "auctions.donation_views")
+AUDITED_VIEW_MODULES = ("auctions.views", "auctions.donation_views", "auctions.login_code")
 
 
 def postable_views() -> dict[str, list[str]]:

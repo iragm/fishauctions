@@ -884,6 +884,7 @@ class MobileConfigTests(TestCase):
                 # Apple is a boolean (the native audience is the bundle id); Facebook's app id is
                 # public. Neither secret is sent -- see test_exposes_no_secrets.
                 "apple_sign_in_enabled": True,
+                "email_code_sign_in_enabled": True,
                 "facebook_app_id": "1234567890",
                 "brand_name": "Test Auctions",
                 # Hashed where collectstatic has run; see fishauctions/static_storage.py.
@@ -915,6 +916,7 @@ class MobileConfigTests(TestCase):
                 "square_environment",
                 "google_server_client_id",
                 "apple_sign_in_enabled",
+                "email_code_sign_in_enabled",
                 "facebook_app_id",
                 "brand_name",
                 "icon_url",

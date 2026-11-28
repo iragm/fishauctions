@@ -47,7 +47,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from django.conf import settings
 from django.core.cache import cache
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
@@ -63,8 +63,8 @@ logger = logging.getLogger(__name__)
 INSTRUCTIONS = (
     "The site owner's read-only view of this auction site. Every tool here reads: the same reads "
     "the public MCP endpoint offers, with a superuser's reach, plus read_admin_page for any admin "
-    "dashboard, species_dashboard, species_backfill and lots_by_species for the species list's upkeep, "
-    "list_feature_requests, read_logs, list_app_crashes, site_health, "
+    "dashboard, species_dashboard, species_backfill, lots_by_species and species_flags for the species list's upkeep, "
+    "list_feature_requests, list_proposals, read_logs, list_app_crashes, site_health, "
     "palette_shortcut_candidates, mcp_usage, list_clubs, square_reconnects, untrusted_auction_creators, and seventeen growth "
     "reports (signup_funnel, entry_page_outcomes, club_retention, unclaimed_people, dead_ends, "
     "help_search_misses, referrers_without_club, seller_reach, feature_adoption_by_club, "
@@ -315,14 +315,21 @@ def private_result(result: dict[str, Any], tool: str = "") -> dict[str, Any]:
 #: on production; an agent in a loop must not become the runaway query that takes the site down.
 ADMIN_READS_PER_HOUR = 300
 
+#: Reads that are one indexed lookup, not a dashboard: a budget of their own, so a species clean-up
+#: that looks up thousands of names doesn't use up the hour's dashboard reads.
+LOOKUP_READS = frozenset({"find_species"})
+LOOKUP_READS_PER_HOUR = 3000
 
-def within_admin_budget(request) -> bool:
+
+def within_admin_budget(request, name: str = "") -> bool:
     credential = getattr(request, "mcp_credential", None)
+    lookup = name in LOOKUP_READS
     key = (
-        f"mcp-admin-reads-{getattr(credential, 'kind', '')}-{getattr(getattr(credential, 'token', None), 'pk', 'none')}"
+        f"mcp-admin-{'lookups' if lookup else 'reads'}-{getattr(credential, 'kind', '')}-"
+        f"{getattr(getattr(credential, 'token', None), 'pk', 'none')}"
     )
     count = cache.get_or_set(key, 0, timeout=3600)
-    if count >= ADMIN_READS_PER_HOUR:
+    if count >= (LOOKUP_READS_PER_HOUR if lookup else ADMIN_READS_PER_HOUR):
         return False
     try:
         cache.incr(key)
@@ -466,6 +473,15 @@ def list_feature_requests(request, params: dict[str, Any]) -> dict[str, Any]:
     statuses = dict(AssistantSkillRequest.STATUS_CHOICES)
     wanted = _str(params, "status", AssistantSkillRequest.STATUS_PLANNED).lower()
     rows = AssistantSkillRequest.objects.all()
+    number = palette_actions._int(params, "request")
+    if params.get("request") not in (None, ""):
+        # One request by number, whatever its status.
+        if not number:
+            return _error("request is a feature request number.")
+        rows = rows.filter(pk=number)
+        if not rows.exists():
+            return _error(f"There is no feature request {number}.")
+        wanted = "all"
     if wanted != "all":
         if wanted not in statuses:
             return _need("Which status? One of: all, " + ", ".join(statuses) + ".")
@@ -493,6 +509,55 @@ def list_feature_requests(request, params: dict[str, Any]) -> dict[str, Any]:
     if offset + limit < total:
         result["next_offset"] = offset + limit
     return _ok(summary, **result)
+
+
+def list_proposals(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Change proposals and where each stands: waiting, done, stopped on an error, or rejected, with what
+    each step answered when it ran. Never who proposed or decided."""
+    from auctions.models import AgentProposal
+
+    statuses = dict(AgentProposal.STATUS_CHOICES)
+    rows = AgentProposal.objects.all()
+    wanted = _str(params, "status", "all").lower()
+    if params.get("proposal") not in (None, ""):
+        number = palette_actions._int(params, "proposal")
+        if not number or not rows.filter(pk=number).exists():
+            return _error(f"There is no proposal {params.get('proposal')}.")
+        rows = rows.filter(pk=number)
+        wanted = "all"
+    if wanted != "all":
+        if wanted not in statuses:
+            return _need("Which status? One of: all, " + ", ".join(statuses) + ".")
+        rows = rows.filter(status=wanted)
+    limit, offset = palette_actions._slice(params)
+    total = rows.count()
+    found = [
+        {
+            "proposal": row.pk,
+            # Written by an agent that reads strangers' text.
+            "summary": palette_actions.untrusted_short(row.summary),
+            "status": row.status,
+            "status_means": statuses.get(row.status, row.status),
+            "steps": len(row.steps or []),
+            "proposed_on": row.createdon.isoformat(),
+            "decided_on": row.decided_on.isoformat() if row.decided_on else None,
+            "results": [
+                {
+                    "tool": result.get("tool"),
+                    "ok": result.get("ok"),
+                    "said": palette_actions.untrusted(result.get("said")),
+                }
+                for result in (row.results or [])
+                if isinstance(result, dict)
+            ],
+        }
+        for row in rows[offset : offset + limit]
+    ]
+    result = {"proposals": found, "total": total}
+    if offset + limit < total:
+        result["next_offset"] = offset + limit
+    summary = f"{total} proposal{'s' if total != 1 else ''}" + (f" {wanted}." if wanted != "all" else ".")
+    return _ok(summary + palette_actions._showing(total, limit, offset), **result)
 
 
 # --- read_logs ---------------------------------------------------------------------------------------
@@ -2257,14 +2322,66 @@ def add_palette_shortcut(request, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _club_and_account(params: dict[str, Any]):
-    """``make_club_admin``'s club and account as ``(club, user, "")``, or ``(None, None, why not)``."""
+    """``make_club_admin``'s club and account as ``(club, user, "")``, or ``(None, None, why not)``. An
+    email address with no account yet comes back as the address in ``user``'s place."""
+    from auctions.models import account_for_email, clean_email_address
+
     club = _club(params)
     if club is None:
         return None, None, "There is no one club by that number or name."
     user = _account(params, "user")
-    if user is None:
+    if user is not None:
+        # First, so an old username that looks like an address still finds its own account.
+        return club, user, ""
+    typed = _str(params, "user")
+    if "@" not in typed:
         return None, None, "There is no active account by that number or username."
-    return club, user, ""
+    try:
+        email = clean_email_address(typed)
+    except ValidationError:
+        return None, None, "That isn't an email address."
+    return club, account_for_email(email) or email, ""
+
+
+def _club_admin_by_email(request, club, email: str, admin: bool) -> dict[str, Any]:
+    """``make_club_admin`` for an address nobody has signed up with: a member row holding the address and
+    the admin role, which ``ClubMember.save`` / ``signals.on_sign_in`` link to the account when it
+    signs up. Taking admin away clears the role on every live row with that address."""
+    from auctions.models import ClubHistory, ClubMember
+
+    rows = list(ClubMember.objects.filter(club=club, email__iexact=email, is_deleted=False))
+    if not admin:
+        changed = [row for row in rows if row.permission_admin]
+        for row in changed:
+            row.permission_admin = False
+            row.save()
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action="Removed admin permissions from a member without an account through an approved proposal.",
+                applies_to="MEMBERS",
+                member=row,
+            )
+        if not changed:
+            return _ok(f"That address had no admin role in {club.name}.")
+        return _ok(f"That address is no longer an admin of {club.name}.")
+    if any(row.permission_admin for row in rows):
+        return _ok(f"That address was already an admin of {club.name}; it takes effect when they sign up.")
+    # No name: anything made from the address would carry it into names the admin endpoint reads.
+    member = rows[0] if rows else ClubMember(club=club, email=email, source="manually_added")
+    member.permission_admin = True
+    member.save()
+    ClubHistory.objects.create(
+        club=club,
+        user=request.user,
+        action="Granted admin permissions to a member without an account through an approved proposal, before they signed up.",
+        applies_to="MEMBERS",
+        member=member,
+    )
+    return _ok(
+        f"Nobody has signed up with that address yet, so it is a member of {club.name} with admin rights, "
+        "and becomes an admin the moment they sign up with it."
+    )
 
 
 def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
@@ -2278,6 +2395,10 @@ def make_club_admin(request, params: dict[str, Any]) -> dict[str, Any]:
     if problem:
         return _error(problem)
     all_roles = palette_actions._flag(params, "all_roles")
+    if isinstance(user, str):
+        if all_roles:
+            return _error("all_roles needs an account; that address has none yet.")
+        return _club_admin_by_email(request, club, user, palette_actions._flag(params, "admin") is not False)
     if palette_actions._flag(params, "admin") is False:
         from auctions.views.base import CLUB_PERMISSION_FIELDS
 
@@ -2634,6 +2755,102 @@ def block_email_address(request, params: dict[str, Any]) -> dict[str, Any]:
     return _ok("Blocked that address: the contact form now ignores it.")
 
 
+def _blocked_domain(params: dict[str, Any]) -> tuple[str, str]:
+    """The domain ``block_email_domain`` names, normalized, and why it can't be blocked (or ``""``)."""
+    from auctions.models import BlockedEmailDomain
+
+    domain = BlockedEmailDomain.normalize(_str(params, "domain"))
+    if not domain:
+        return "", "Say which domain to block."
+    labels = domain.split(".")
+    if len(domain) > 253 or len(labels) < 2 or not all(_DOMAIN_LABEL.fullmatch(label) for label in labels):
+        return "", "That isn't a domain: give one like example.com."
+    if len(labels) == 2 and len(labels[0]) <= 3 and len(labels[1]) == 2:
+        return "", "That is a whole country's suffix (like co.uk), not one domain."
+    if any(shared == domain or shared.endswith(f".{domain}") for shared in FREE_MAIL_DOMAINS):
+        return "", "That domain is shared by everyone who uses it: block the sender's address instead."
+    return domain, ""
+
+
+_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+#: Webmail and ISP domains a block would cut off whole crowds of real members along with one pest.
+#: A domain these sit under (yahoo.co.uk under co.uk) is refused too.
+FREE_MAIL_DOMAINS = frozenset(
+    {
+        "163.com",
+        "aol.com",
+        "att.net",
+        "bellsouth.net",
+        "charter.net",
+        "comcast.net",
+        "cox.net",
+        "earthlink.net",
+        "fastmail.com",
+        "gmail.com",
+        "gmx.com",
+        "gmx.de",
+        "googlemail.com",
+        "hey.com",
+        "hotmail.co.uk",
+        "hotmail.com",
+        "icloud.com",
+        "live.com",
+        "mac.com",
+        "mail.com",
+        "mail.ru",
+        "me.com",
+        "msn.com",
+        "optonline.net",
+        "outlook.com",
+        "pm.me",
+        "proton.me",
+        "protonmail.com",
+        "qq.com",
+        "rocketmail.com",
+        "sbcglobal.net",
+        "shaw.ca",
+        "sympatico.ca",
+        "verizon.net",
+        "web.de",
+        "yahoo.ca",
+        "yahoo.co.uk",
+        "yahoo.com",
+        "yandex.ru",
+        "ymail.com",
+        "zoho.com",
+    }
+)
+
+
+def _block_domain_problem(params: dict[str, Any]) -> str:
+    """Refuse, when proposed, a domain that isn't one, is shared webmail, or is already blocked."""
+    from auctions.models import BlockedEmailDomain
+
+    domain, problem = _blocked_domain(params)
+    if problem:
+        return problem
+    return "That domain is already blocked." if BlockedEmailDomain.blocks(f"x@{domain}") else ""
+
+
+def block_email_domain(request, params: dict[str, Any]) -> dict[str, Any]:
+    """Block one domain from the contact form (:class:`auctions.models.BlockedEmailDomain`), its
+    subdomains too, for signed-out senders."""
+    from auctions.models import BlockedEmailDomain
+
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    domain, problem = _blocked_domain(params)
+    if problem:
+        return _error(problem)
+    if BlockedEmailDomain.blocks(f"x@{domain}"):
+        return _ok("That domain was already blocked.")
+    _row, created = BlockedEmailDomain.objects.get_or_create(domain=domain)
+    if not created:
+        return _ok("That domain was already blocked.")
+    return _ok("Blocked that domain: the contact form now ignores signed-out senders from it.")
+
+
 #: Changes a proposal may name that no assistant can make directly: they exist so that a person
 #: approving a proposal is the one making them. Never registered, so neither /mcp/ nor the palette
 #: can reach them.
@@ -2765,7 +2982,10 @@ APPROVAL_ONLY: dict[str, Action] = {
             ),
             params={
                 "club": "string, required. The club's number, or its exact name.",
-                "user": "string, required. The account's username, or its number.",
+                "user": (
+                    "string, required. The account's username, its number, or an email address; an address "
+                    "nobody has signed up with yet is granted when they do."
+                ),
                 "admin": "boolean, optional, default true. false removes their admin rights.",
                 "all_roles": "boolean, optional, default false. Needs admin false; removes every club role, not only admin.",
             },
@@ -2949,6 +3169,19 @@ APPROVAL_ONLY: dict[str, Action] = {
             confirm_template="Block a contact form sender",
             resolver=block_email_address,
         ),
+        Action(
+            name="block_email_domain",
+            description=(
+                "Block one email domain, and its subdomains, from the contact form for signed-out senders: they "
+                "still see the usual thanks, and nothing reaches the owner. Shared webmail and a domain "
+                "already blocked are refused."
+            ),
+            params={"domain": "string, required. Like example.com."},
+            danger=DANGER_CONFIRM,
+            idempotent=True,
+            confirm_template="Block a contact form domain",
+            resolver=block_email_domain,
+        ),
         # The species gaps page's buttons and the backfill command's answers.
         *admin_species.APPROVAL_ONLY,
     ]
@@ -2973,6 +3206,7 @@ PROPOSAL_CHECKS = {
     "update_speaker": _update_speaker_problem,
     "add_palette_shortcut": _shortcut_problem,
     "block_email_address": _block_email_problem,
+    "block_email_domain": _block_domain_problem,
     "save_transcription": _transcription_problem,
     **admin_species.PROPOSAL_CHECKS,
 }
@@ -3309,11 +3543,28 @@ ADMIN_TOOLS: dict[str, Action] = {
             ),
             params={
                 "status": "string, optional, default planned. new, planned, done, declined or all.",
+                "request": "integer, optional. Just this request, by number, whatever its status.",
                 "limit": "integer, optional, default 15.",
                 "offset": "integer, optional, default 0.",
             },
             danger=DANGER_SAFE,
             resolver=list_feature_requests,
+        ),
+        Action(
+            name="list_proposals",
+            description=(
+                "Change proposals made with propose_change and where each stands: pending (waiting for "
+                "the owner), applied, failed (stopped on an error) or rejected, with what each step "
+                "answered when it ran. Newest first. Never says who proposed or decided."
+            ),
+            params={
+                "status": "string, optional, default all. pending, applied, failed, rejected or all.",
+                "proposal": "integer, optional. Just this proposal, by number.",
+                "limit": "integer, optional, default 15.",
+                "offset": "integer, optional, default 0.",
+            },
+            danger=DANGER_SAFE,
+            resolver=list_proposals,
         ),
         Action(
             name="read_logs",
@@ -3557,11 +3808,12 @@ def call_tool(request, name: str, arguments: Any) -> dict[str, Any] | None:
     unknown = sorted(key for key in arguments if not action.accepts(key))
     if unknown:
         return tools._result(f"I don't understand “{unknown[0]}” for {action.name}.", is_error=True)
-    if tools.read_only(action) and not within_admin_budget(request):
-        return tools._result(
-            f"{ADMIN_READS_PER_HOUR} dashboard, log and health reads in an hour is the limit. Try later.",
-            is_error=True,
-        )
+    if tools.read_only(action) and not within_admin_budget(request, action.name):
+        if action.name in LOOKUP_READS:
+            limit = f"{LOOKUP_READS_PER_HOUR} {action.name} lookups"
+        else:
+            limit = f"{ADMIN_READS_PER_HOUR} dashboard, log and health reads"
+        return tools._result(f"{limit} in an hour is the limit. Try later.", is_error=True)
     result = _run_approval_only(action, request, arguments)
     if "error" in result:
         return tools._result(str(result["error"]), is_error=True)

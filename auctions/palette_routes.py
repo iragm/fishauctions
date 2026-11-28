@@ -331,6 +331,12 @@ ROUTE_LIST: list[Route] = [
         "Account",
         keywords=["merge accounts", "duplicate account", "two accounts", "combine accounts", "second account"],
     ),
+    _r(
+        "account_change_password",
+        "Change or set my password",
+        "Account",
+        keywords=["password", "set a password", "new password", "lost my email"],
+    ),
     _r("account_delete", "Delete my account", "Account", keywords=["close account", "delete me", "gdpr"]),
     _r("paypal_seller", "My PayPal payout settings", "Account", keywords=["paypal", "get paid", "payout"]),
     _r("paypal_connect", "Connect PayPal", "Account", keywords=["link paypal", "set up paypal"]),
@@ -1254,6 +1260,7 @@ EXCLUDED: dict[str, str] = {
     "document_reindex": "A button on one document's page.",
     "document_delete": "A button on one document's page; delete_document for an agent.",
     "document_feedback": "The report form on one document's page.",
+    "lot_species_flag": "The species flag buttons on one lot's page; it answers with a fragment of that page.",
     "ai_ask": "The answer /ai/ loads into itself; not a page on its own.",
     "library_answer": "The written answer the library page loads into itself; not a page on its own.",
     "document_batch": "One batch of uploaded pages, reached from the library after uploading it.",
@@ -1819,6 +1826,38 @@ def _club_from_hint(user, hint: str):
     return None
 
 
+def _lot_from_url(lots, hint: str):
+    """The lot a pasted lot page address names, from *lots*: ``/lots/<pk>/...`` or
+    ``/auctions/<slug>/lots/<number>/...``, with or without the host. ``None`` when *hint* isn't a lot
+    address at all, ``False`` when it is one for a lot *lots* doesn't hold."""
+    from urllib.parse import urlparse
+
+    from django.db.models import Q
+    from django.urls import Resolver404, resolve
+
+    if "/lots/" not in hint and not hint.startswith("lots/"):
+        return None
+    path = urlparse(hint if "//" in hint or hint.startswith("/") else "/" + hint).path or "/"
+    if not path.endswith("/"):
+        path += "/"
+    try:
+        match = resolve(path)
+    except Resolver404:
+        return None
+    if match.url_name in ("lot_by_pk", "lot_by_pk_and_slug"):
+        return lots.filter(pk=match.kwargs["pk"]).first() or False
+    if match.url_name in ("lot_in_auction", "lot_in_auction_with_slug"):
+        number = str(match.kwargs["custom_lot_number"])
+        which = Q(auction__slug=match.kwargs["slug"]) & (
+            Q(auction__use_seller_dash_lot_numbering=True, custom_lot_number=number)
+            | Q(auction__use_seller_dash_lot_numbering=False, lot_number_int=int(number))
+            if number.isdigit()
+            else Q(auction__use_seller_dash_lot_numbering=True, custom_lot_number=number)
+        )
+        return lots.filter(which).first() or False
+    return None
+
+
 def _lot_from_hint(user, hint: str, auction=None):
     """Find a lot by database id, lot number, or name, within what the user can see."""
     from django.db.models import Q
@@ -1834,6 +1873,9 @@ def _lot_from_hint(user, hint: str, auction=None):
         lots = lots.filter(Q(user=user) | Q(auction__in=command_palette._joined_auctions(user)))
     if auction:
         lots = lots.filter(auction=auction)
+    by_url = _lot_from_url(lots, hint)
+    if by_url is not None:
+        return by_url or None
     if hint.isdigit():
         by_pk = lots.filter(pk=int(hint)).first()
         if by_pk:

@@ -49,7 +49,11 @@ class AuctionJoinLinksUserTests(StandardTestCase):
             name="open location", auction=self.open_auction, pickup_time=now + datetime.timedelta(days=2)
         )
         self.fresh_user = User.objects.create_user(
-            username="fresh_joiner", password="testpassword", email="fresh@example.com"
+            username="fresh_joiner",
+            password="testpassword",
+            email="fresh@example.com",
+            first_name="Fresh",
+            last_name="Joiner",
         )
 
     def _join(self):

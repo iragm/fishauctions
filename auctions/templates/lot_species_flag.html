@@ -1,0 +1,36 @@
+{% comment %}The species flag on a lot page (auctions/species_flags.py): readers report, the seller or an auction admin settles. Swapped whole by LotSpeciesFlagView.{% endcomment %}
+<div id="species-flag">
+{% if species_flagged %}
+<div class="help-note mt-1">
+    <i class="bi bi-flag"></i>
+    <div>
+        Other people have flagged this species as incorrect
+        <div class="d-flex flex-wrap gap-2 mt-1">
+            {% if species_can_fix %}<button type="button" class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#species-fix" aria-expanded="false" aria-controls="species-fix">Fix</button>{% endif %}
+            <form method="post" action="{% url 'lot_species_flag' pk=species_flag_lot.pk %}" hx-post="{% url 'lot_species_flag' pk=species_flag_lot.pk %}" hx-target="#species-flag" hx-swap="outerHTML">
+                {% csrf_token %}<input type="hidden" name="do" value="correct">
+                <button type="submit" class="btn btn-sm btn-secondary">Label correct</button>
+            </form>
+        </div>
+        {% if species_can_fix %}
+        <form id="species-fix" class="collapse{% if species_fix_error %} show{% endif %} mt-2" method="post" action="{% url 'lot_species_flag' pk=species_flag_lot.pk %}" hx-post="{% url 'lot_species_flag' pk=species_flag_lot.pk %}" hx-target="#species-flag" hx-swap="outerHTML">
+            {% csrf_token %}<input type="hidden" name="do" value="fix">
+            <div class="input-group input-group-sm">
+                <input type="text" name="species" class="form-control" maxlength="150" placeholder="Scientific or common name" aria-label="The right species" required>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+            {% if species_fix_error %}<div class="small text-danger mt-1">{{ species_fix_error }}</div>{% endif %}
+            {% if species_fix_choices %}<div class="d-flex flex-wrap gap-2 mt-1">{% for choice in species_fix_choices %}<button type="submit" name="species" value="{{ choice }}" class="btn btn-sm btn-outline-secondary" formnovalidate><i>{{ choice }}</i></button>{% endfor %}</div>{% endif %}
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% elif species_reported %}
+<span class="text-muted small">Reported</span>
+{% elif species_can_report %}
+<form method="post" action="{% url 'lot_species_flag' pk=species_flag_lot.pk %}" hx-post="{% url 'lot_species_flag' pk=species_flag_lot.pk %}" hx-target="#species-flag" hx-swap="outerHTML">
+    {% csrf_token %}<input type="hidden" name="do" value="report">
+    <button type="submit" class="btn btn-link btn-sm text-muted p-0">Report incorrect species</button>
+</form>
+{% endif %}
+</div>

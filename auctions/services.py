@@ -337,8 +337,9 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
     """Sign ``user`` up for ``auction``, or update their existing record.
 
     Shared by the Join button and the assistant. Returns ``(tos, created, problem)``; ``problem`` is
-    ``""``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller words its own
-    way; ``"email"`` sends them to ``reverify_email``. ``hold_for_second_pickup`` (None leaves it alone) can
+    ``""``, ``"name"``, ``"phone_number"``, ``"address"`` or ``"email"``: a missing detail the caller
+    words its own way; ``"email"`` sends them to ``reverify_email``. A name a club already typed for
+    them is taken from that row instead of asked for (``signals.fill_name_from_rows``). ``hold_for_second_pickup`` (None leaves it alone) can
     always be turned off, but only turned on where the location has a second pickup time and the person
     has no lots to sell.
     """
@@ -346,6 +347,11 @@ def join_auction(user, auction, pickup_location, *, time_spent_reading_rules=0, 
 
     if join_blocked_by_bounce(user, auction):
         return None, False, "email"
+    from auctions.signals import fill_name_from_rows
+
+    # The organizer needs to know who this is; if a club wrote it down already, that does.
+    if not fill_name_from_rows(user) and not AuctionTOS.objects.filter(user=user, auction=auction).exists():
+        return None, False, "name"
     userdata = user.userdata
     if auction.require_phone_number and not userdata.phone_number:
         return None, False, "phone_number"
@@ -1442,6 +1448,58 @@ def finish_new_auction(auction, created_by, *, copied_from=None, note=""):
     created_by.userdata.save(update_fields=["last_auction_used"])
     # Also called from PickupLocationsCreate, once a location exists.
     _add_club_admins_as_auction_tos(auction, created_by)
+
+
+def clubs_to_link(auction, user):
+    """The clubs the auction page offers to file a club-less *auction* under, for its creator: every club
+    they may file auctions in (the edit form's own rule: admin, edit club or manage auctions). Empty for
+    a superuser, whose list would be every club, once dismissed, and in single-club mode."""
+    from django.conf import settings
+    from django.db.models import Q
+
+    from .models import Club
+
+    if (
+        auction.club_id
+        or auction.dismissed_link_club_banner
+        or not user.is_authenticated
+        or user.is_superuser
+        or auction.created_by_id != user.pk
+        or getattr(settings, "SINGLE_CLUB_MODE", False)
+    ):
+        return []
+    ids = (
+        ClubMember.objects.filter(user=user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
+        .values_list("club_id", flat=True)
+    )
+    return list(Club.objects.filter(pk__in=ids).order_by("name"))
+
+
+def club_needs_an_auction(club, now=None):
+    """True when *club* has no current auction: none at all, or its latest ended over a day ago. An
+    in-person auction with no end counts from its start."""
+    from datetime import timedelta
+
+    from django.db.models import Q
+
+    now = now or timezone.now()
+    cutoff = now - timedelta(hours=24)
+    current = Auction.objects.filter(club=club, is_deleted=False).filter(
+        Q(date_end__gt=cutoff) | Q(date_end__isnull=True, date_start__gt=cutoff)
+    )
+    return not current.exists()
+
+
+def can_start_club_auction(user, club) -> bool:
+    """Whether *user* may create an auction for *club*: the create page's gate and the club's own."""
+    from .views.base import check_club_permission
+
+    if not user.is_authenticated:
+        return False
+    if not (user.is_superuser or getattr(getattr(user, "userdata", None), "can_create_club_auctions", False)):
+        return False
+    return check_club_permission(user, club, "permission_manage_auctions")
 
 
 def link_auction_to_club(auction, club, *, note, actor=None, grant_admin=True):

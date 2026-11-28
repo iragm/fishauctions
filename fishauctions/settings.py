@@ -314,6 +314,7 @@ TEMPLATES = [
                 "auctions.context_processors.label_print_method",
                 "auctions.context_processors.account_nav",
                 "auctions.context_processors.android_testers",
+                "auctions.context_processors.profile_reminder",
                 "auctions.context_processors.offline_auction",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
@@ -415,7 +416,15 @@ LOGIN_URL = "/login/"
 ACCOUNT_FORMS = {
     "signup": "auctions.forms.CustomSignupForm",
     "reset_password": "auctions.forms.CustomResetPasswordForm",
+    "request_login_code": "auctions.login_code.CustomRequestLoginCodeForm",
 }
+# Sign in with an emailed code, including for an address with no account yet: see auctions/login_code.py.
+# The code proves the inbox, so it satisfies the mandatory verification below. Three tries make a
+# guess hopeless, which is what lets the code live long enough for slow mail.
+ACCOUNT_LOGIN_BY_CODE_ENABLED = True
+ACCOUNT_LOGIN_BY_CODE_TIMEOUT = 10 * 60
+ACCOUNT_LOGIN_BY_CODE_MAX_ATTEMPTS = 3
+ACCOUNT_LOGIN_BY_CODE_SUPPORTS_RESEND = True
 ACCOUNT_USERNAME_VALIDATORS = "auctions.validators.USERNAME_VALIDATORS"
 # ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_LOGIN_METHODS = {"username", "email"}
@@ -1169,6 +1178,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "api_key_default": "1000/hour",
         "mobile_auth": "10/min",
+        # Two calls a person, and a room on one venue Wi-Fi signs in together; allauth also limits each address.
+        "mobile_code": "60/min",
         # Sized for admin bulk work: checkout is 2 calls a buyer, labels 1 a lot; 200/hour blocked checkout.
         "mobile_api": "1000/hour",
         # The emergency page asks whether the site is back every 20 seconds, per open tab.

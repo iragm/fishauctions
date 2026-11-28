@@ -737,7 +737,10 @@ class SocialLoginPageTests(TestCase):
         self.assertNotIn("sign-in-google", html)
         self.assertNotIn("sign-in-apple", html)
         self.assertNotIn("sign-in-facebook", html)
-        self.assertIn("Sign in with your account on this site", html)
+        # The password form is still there, in its <details>, under the email box.
+        self.assertIn('id="password-sign-in"', html)
+        self.assertIn('id="sign-in-local"', html)
+        self.assertIn('id="sign-in-code"', html)
 
     @override_settings(
         APPLE_SIGN_IN_SERVICES_ID=APPLE_SERVICES_ID,

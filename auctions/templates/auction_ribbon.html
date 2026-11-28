@@ -43,6 +43,16 @@
   <small class="text-muted">This message will disappear once you've finished setting up your auction.</small>
 </div>
 {% else %}
+  {% if link_club_offers %}
+  {% comment %}Only the creator, once the checklist is done, with a club they may file auctions in: services.clubs_to_link.{% endcomment %}
+  <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction isn't linked to a club.</h5>
+    <div>
+      {% for club in link_club_offers %}<form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<input type="hidden" name="club" value="{{ club.pk }}"><button type="submit" name="action" value="link_club" class="btn btn-info btn-sm mt-2">Link to {{ club.name }}</button></form>
+      {% endfor %}
+      <form method="post" action="{% url 'auction_page_action' slug=auction.slug %}" class="d-inline">{% csrf_token %}<button type="submit" name="action" value="dismiss_link_club_banner" class="btn btn-secondary btn-sm mt-2">Don't show again</button></form>
+    </div>
+  </div>
+  {% endif %}
   {% if not auction.promote_this_auction and not auction.dismissed_promo_banner %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction is not promoted</h5>
     {% if not auction.created_by.userdata.is_trusted %}
